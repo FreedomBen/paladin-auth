@@ -100,8 +100,8 @@ use crate::app::state::{
     compose_remove_worker_input, compose_rename_dispatch, compose_rename_worker_input,
     compose_settings_dispatch, compose_settings_worker_input, compose_unlock_dispatch,
     compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
-    handle_quit_request, initial_effects_for, run_unlock_worker, AppState, OpenErrorOutcome,
-    UnlockWorkerCompletion,
+    handle_auto_lock_expiry, handle_effect_completion, handle_effect_request, handle_quit_request,
+    initial_effects_for, run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::auto_lock::{
     auto_lock_timer_transition, evaluate_timer_fire, idle_should_arm, lock_on_expiry,
@@ -111,7 +111,9 @@ use crate::auto_lock::{
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
 };
-use crate::effect_ownership::{EffectOwnership, QuitDecision};
+use crate::effect_ownership::{
+    CompleteOutcome, EffectKind, EffectOwnership, EffectStart, LockDecision, QuitDecision,
+};
 use crate::export_dialog::{
     run_export_worker, ExportDialogComponent, ExportDialogInit, ExportDialogMsg,
     ExportDialogOutput, ExportWorkerCompletion,
@@ -1699,21 +1701,46 @@ impl SimpleComponent for AppModel {
                 // `AppMsg::HotpAdvanceWorkerCompleted`. The busy gate
                 // transitions `Unlocked → UnlockedBusy` before the
                 // spawn so a second click on any row is no-op until
-                // the worker returns and rolls the gate back.
+                // the worker returns and rolls the gate back. The
+                // effect-ownership machinery is opened in lockstep via
+                // `handle_effect_request` so the gating projection
+                // (mutating controls off) and the deferred-quit /
+                // deferred-lock tracking pick up this dispatch per
+                // §"In-flight effect ownership".
                 let now = SystemTime::now();
                 let in_progress = match (self.state.as_ref(), self.vault.take()) {
                     (Some(state), Some(pair)) => {
                         if let Some(busy_state) = state.clone().enter_busy() {
-                            let (vault, store) = pair;
-                            Some((
-                                HotpAdvanceWorkerInput {
-                                    vault,
-                                    store,
-                                    account_id: id,
-                                    now,
-                                },
-                                busy_state,
-                            ))
+                            match handle_effect_request(
+                                self.effects.as_mut(),
+                                EffectKind::HotpAdvance,
+                            ) {
+                                EffectStart::Accepted => {
+                                    let (vault, store) = pair;
+                                    Some((
+                                        HotpAdvanceWorkerInput {
+                                            vault,
+                                            store,
+                                            account_id: id,
+                                            now,
+                                        },
+                                        busy_state,
+                                    ))
+                                }
+                                EffectStart::Rejected => {
+                                    // Defensive: the AppState says
+                                    // `Unlocked` but the effects
+                                    // machinery refused the start
+                                    // (another worker already in
+                                    // flight per the same machinery,
+                                    // or a stale completion routed it
+                                    // to `StartupError`). Reinstall
+                                    // the pair untouched so
+                                    // `AppModel.vault` is not lost.
+                                    self.vault = Some(pair);
+                                    None
+                                }
+                            }
                         } else {
                             // Stray dispatch from a non-`Unlocked`
                             // state — reinstall the pair untouched so
@@ -3343,10 +3370,22 @@ impl SimpleComponent for AppModel {
                     let new_state = state.clone().leave_busy().unwrap_or(state);
                     self.state = Some(new_state);
                 }
+                // Release the in-flight effect-ownership gate and
+                // drain any deferred quit / lock requests recorded
+                // while the worker was running. `vault_still_encrypted`
+                // is read off the just-reinstalled pair so an
+                // operation that flipped the mode (none possible from
+                // HOTP advance, but the helper takes the flag
+                // uniformly across every worker class) routes through
+                // `CompleteOutcome::LockDiscarded` correctly.
+                let vault_still_encrypted =
+                    self.vault.as_ref().is_some_and(|(v, _)| v.is_encrypted());
+                let post = handle_effect_completion(self.effects.as_mut(), vault_still_encrypted);
                 let account_id = outcome.account_id;
                 let decision = apply_advance_outcome(outcome);
                 let effect = apply_advance_decision(&mut self.reveal_windows, decision);
                 self.publish_reveal_for(account_id, effect);
+                self.apply_effect_completion_outcome(post, &sender);
             }
             AppMsg::AddWorkerCompleted(completion) => {
                 // Worker-outcome dispatch. Mirrors
@@ -3585,6 +3624,44 @@ impl AppModel {
         self.pending_clipboard = None;
         self.idle_source.disarm();
     }
+
+    /// Apply the typed [`CompleteOutcome`] returned by
+    /// [`handle_effect_completion`] at a worker-completion site.
+    ///
+    /// `Ready` and `LockDiscarded` are no-ops here — the worker's
+    /// own epilogue (refresh list, toast, dialog detach) already
+    /// resumed normal UI handling, and `LockDiscarded` means a
+    /// pending auto-lock was silently dropped because the worker
+    /// converted the vault to plaintext (DESIGN §7 plaintext
+    /// auto-lock no-op).
+    ///
+    /// `LockNow` fires the deferred auto-lock teardown the same way
+    /// the immediate (non-busy) [`AppMsg::AutoLockTimerFired`] path
+    /// does — drop `Vault`, switch to [`AppState::Locked`], discard
+    /// open HOTP reveal windows / search query / open dialogs, and
+    /// re-present [`crate::unlock_dialog::UnlockDialogComponent`].
+    ///
+    /// `QuitNow` fires the deferred quit teardown (same shape as
+    /// `AppMsg::Quit` on the idle path): tear down the ticker and
+    /// auto-lock sources, wipe in-memory reveal / pending-clipboard
+    /// buffers, and quit the GTK application. Per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    fn apply_effect_completion_outcome(
+        &mut self,
+        outcome: CompleteOutcome,
+        sender: &ComponentSender<Self>,
+    ) {
+        match outcome {
+            CompleteOutcome::Ready | CompleteOutcome::LockDiscarded => {}
+            CompleteOutcome::LockNow => {
+                self.lock_on_auto_lock_expiry(sender);
+            }
+            CompleteOutcome::QuitNow => {
+                self.tear_down_for_quit();
+                relm4::main_application().quit();
+            }
+        }
+    }
 }
 
 impl AppModel {
@@ -3698,7 +3775,34 @@ impl AppModel {
 
         match evaluate_timer_fire(&self.idle_source, fired_at) {
             AutoLockFireDecision::Lock => {
-                self.lock_on_auto_lock_expiry(sender);
+                // Route the lock-on-expiry through the effect-ownership
+                // state machine: a worker in flight at fire time defers
+                // the lock to the worker-completion epilogue (where
+                // `handle_effect_completion` resolves the pending flag
+                // against the post-worker vault mode), rather than
+                // yanking `(Vault, Store)` out from under the worker.
+                // `evaluate_timer_fire` only returns `Lock` while the
+                // `IdleSource` is armed, and `IdleSource` arms only on
+                // encrypted vaults, so the helper sees
+                // `vault_is_encrypted = true` here; the `Ignored` arm
+                // is therefore defensive.
+                match handle_auto_lock_expiry(
+                    self.effects.as_mut(),
+                    /* vault_is_encrypted */ true,
+                ) {
+                    LockDecision::Now => self.lock_on_auto_lock_expiry(sender),
+                    // `Deferred` records `pending_lock` on
+                    // `self.effects`; the worker-completion epilogue
+                    // fires `lock_on_auto_lock_expiry` then if the
+                    // returned vault is still encrypted, or discards
+                    // if a `PassphraseRemove` converted the vault to
+                    // plaintext.
+                    //
+                    // `Ignored` is defensive: see comment above.
+                    // The lock is a no-op on plaintext vaults per
+                    // DESIGN §7.
+                    LockDecision::Deferred | LockDecision::Ignored => {}
+                }
             }
             AutoLockFireDecision::Reschedule(delay) => {
                 let send = sender.input_sender().clone();
