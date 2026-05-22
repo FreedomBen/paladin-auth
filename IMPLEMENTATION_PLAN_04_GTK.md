@@ -4347,12 +4347,37 @@ sign-off.
     `libadwaita >= 1.6`, if a Debian-style `libgtk-4-1` /
     `libadwaita-1-0` name slips in, or if a `scripts:` section
     sneaks in.
-  - [ ] Add `packaging/flatpak/paladin-gtk.yml` declaring
+  - [x] Add `packaging/flatpak/paladin-gtk.yml` declaring
     `org.gnome.Platform//47` and the matching SDK, the §11.4 sandbox
     permissions (`xdg-data/paladin:create`,
     `xdg-config/paladin:create`, `--socket=wayland`,
     `--socket=fallback-x11`, `--share=ipc`), no `--share=network`,
-    and exporting the metainfo file to `/usr/share/metainfo/`.
+    and exporting the metainfo file to `/usr/share/metainfo/`
+    (staged inside the Flatpak `/app/share/metainfo/` prefix that
+    flatpak-builder re-exports to the host AppStream pool).
+    Pinned by `tests/packaging_flatpak_manifest_logic.rs`:
+    `flatpak_manifest_exists_at_expected_path`,
+    `flatpak_manifest_starts_with_spdx_license_header`,
+    `flatpak_manifest_declares_app_id_matching_app_constant`,
+    `flatpak_manifest_declares_gnome_runtime_47_and_matching_sdk`,
+    `flatpak_manifest_declares_command_paladin_gtk`,
+    `flatpak_manifest_declares_every_required_finish_arg`,
+    `flatpak_manifest_does_not_declare_any_forbidden_finish_arg`
+    (rejects `--share=network`, `--filesystem=home/host/host-os/
+    host-etc`),
+    `flatpak_manifest_finish_args_are_exactly_the_milestone_7_baseline_set`,
+    `flatpak_manifest_install_steps_cover_every_required_destination`,
+    `flatpak_manifest_binary_install_uses_executable_mode_0755`,
+    `flatpak_manifest_metainfo_install_lands_under_app_share_metainfo`,
+    `flatpak_manifest_uses_locked_offline_cargo_build`, and
+    `flatpak_manifest_module_name_matches_app_id_basename` —
+    together these fail if the runtime / SDK pair drifts off
+    `org.gnome.Platform//47` + `org.gnome.Sdk`, if the sandbox
+    permission set strays from the §11.4 baseline (in either
+    direction), if a `cargo build` invocation loses `--release` /
+    `--locked` / `--offline`, or if any install destination /
+    binary mode drifts from the byte-identical layout the deb / rpm
+    manifests already pin.
   - [ ] Wire AppImage assembly via `linuxdeploy` +
     `linuxdeploy-plugin-gtk` so GTK4 modules, schemas, and pixbuf
     loaders ship inside the bundle; output
