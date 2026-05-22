@@ -2908,7 +2908,7 @@ sign-off.
     `apply_msg_qr_preflight_failure_routes_through_render_inline_error_arm`,
     and
     `apply_msg_qr_preflight_failure_renders_through_compose_inline_error_body`.
-- [ ] `ImportDialogComponent` full implementation (file picker,
+- [x] `ImportDialogComponent` full implementation (file picker,
   format selector, on-conflict selector, passphrase prompt routing,
   merge call, error display).
   - [x] Pick the source file via `gtk::FileDialog` (the GTK 4.10+
@@ -2951,9 +2951,73 @@ sign-off.
 - [ ] `ExportDialogComponent` full implementation (format selector,
   destination picker, overwrite gate, plaintext warning,
   twice-confirm passphrase, `write_secret_file_atomic` call).
-  - [ ] Add a format selector (plaintext `otpauth://` JSON list or
+  - [x] Add a format selector (plaintext `otpauth://` JSON list or
     encrypted Paladin bundle) and pick the destination via
     `gtk::FileDialog`.
+    (`ExportFormatChoice` gains `Default` (returns
+    `PlaintextOtpauth`, mirroring the CLI's no-`--format` behavior)
+    and an `index()` method; new `format_choice_from_index(u32) ->
+    Option<ExportFormatChoice>` round-trips with `index()` so the
+    widget never lands on a `None` slot. The view! macro now mounts
+    an `adw::PreferencesGroup` "Destination" with an `adw::ActionRow`
+    whose suffix "Choose file…" `gtk::Button` opens a
+    `gtk::FileDialog::save` round trip — the picked path returns as
+    `ExportDialogMsg::DestinationPicked(PathBuf)` and is stored
+    verbatim on the new `ExportDialogState` (no canonicalization, so
+    the existing `overwrite_gate_needs_reset` /
+    `plaintext_warning_needs_reset` / `passphrase_needs_reset` raw-
+    path comparisons stay authoritative). A second
+    `adw::PreferencesGroup` "Options" mounts an `adw::ComboRow`
+    "Format" bound to `format_export_dialog_format_labels()`
+    (`["Plaintext otpauth:// JSON list", "Encrypted Paladin
+    bundle"]`); the `connect_selected_notify` callback decodes the
+    selection through `format_choice_from_index` and dispatches
+    `ExportDialogMsg::FormatChanged(ExportFormatChoice)`, ignoring
+    out-of-range indices. `apply_msg` routes both events into
+    `ExportDialogState::set_destination` / `set_format`; Cancel and
+    parent-close emit the distinct `ExportDialogOutput::Cancel` /
+    `Close` variants the existing `AppMsg::ExportDialogAction`
+    dispatch arm now handles via a shared drop-the-controller match.
+    The footer Export button binds
+    `compose_submit_button_sensitive(&state)` (currently destination-
+    presence only; subsequent sub-items extend it with the overwrite
+    gate, plaintext-warning gate, and twice-confirm passphrase gate).
+    Pinned by
+    `tests/export_dialog_logic.rs::format_export_dialog_format_labels_returns_plaintext_then_encrypted`,
+    `format_export_dialog_format_labels_match_export_format_choice_order`,
+    `export_format_choice_index_plaintext_is_zero`,
+    `export_format_choice_index_encrypted_is_one`,
+    `format_choice_from_index_zero_returns_plaintext`,
+    `format_choice_from_index_one_returns_encrypted`,
+    `format_choice_from_index_out_of_range_returns_none`,
+    `format_choice_index_round_trip_across_every_variant`,
+    `export_format_choice_default_is_plaintext_otpauth`,
+    `format_export_dialog_title_is_non_empty`,
+    `format_export_dialog_subtitle_is_non_empty`,
+    `format_export_dialog_destination_group_title_is_non_empty`,
+    `format_export_dialog_destination_row_title_is_non_empty`,
+    `format_export_dialog_destination_row_placeholder_is_non_empty`,
+    `format_export_dialog_choose_destination_label_is_non_empty`,
+    `format_export_dialog_options_group_title_is_non_empty`,
+    `format_export_dialog_format_row_title_is_non_empty`,
+    `format_export_dialog_cancel_label_is_non_empty`,
+    `format_export_dialog_export_label_is_non_empty`,
+    `export_dialog_state_new_has_no_destination`,
+    `export_dialog_state_new_format_matches_default`,
+    `export_dialog_state_set_destination_updates_path`,
+    `export_dialog_state_set_destination_replaces_prior_path`,
+    `export_dialog_state_set_format_updates_format`,
+    `export_dialog_state_set_format_back_to_plaintext_replaces_encrypted`,
+    `compose_destination_row_subtitle_uses_placeholder_when_no_destination`,
+    `compose_destination_row_subtitle_renders_display_path_when_set`,
+    `compose_submit_button_sensitive_false_when_no_destination`,
+    `compose_submit_button_sensitive_true_when_destination_set`,
+    `apply_msg_destination_picked_updates_state_and_emits_no_output`,
+    `apply_msg_format_changed_updates_state_and_emits_no_output`,
+    `apply_msg_cancel_emits_cancel_output`,
+    `apply_msg_close_emits_close_output`,
+    `apply_msg_destination_picked_replaces_prior_destination`, and
+    `export_dialog_output_cancel_is_distinct_from_close`.)
   - [ ] Reject overwriting an existing file unless the user
     confirms an inline overwrite gate (parity with CLI `--force`);
     resolve the overwrite gate before accepting any

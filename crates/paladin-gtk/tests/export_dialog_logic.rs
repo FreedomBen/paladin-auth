@@ -478,3 +478,369 @@ fn export_dialog_component_input_and_output_match_dispatch_edges() {
     }
     assert_types::<ExportDialogComponent>();
 }
+
+// ---------------------------------------------------------------------------
+// Format selector — labels, index <-> ExportFormatChoice round-trip, default
+// ---------------------------------------------------------------------------
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// `ExportDialogComponent` > "Add a format selector (plaintext
+// `otpauth://` JSON list or encrypted Paladin bundle) and pick the
+// destination via `gtk::FileDialog`." The widget binds an
+// `adw::ComboRow` to `format_export_dialog_format_labels()` and reads
+// `ExportFormatChoice` selections back through
+// `format_choice_from_index`; the inverse `ExportFormatChoice::index`
+// keeps the `set_selected` binding aligned with the state machine on
+// every refresh.
+
+#[test]
+fn format_export_dialog_format_labels_returns_plaintext_then_encrypted() {
+    use paladin_gtk::export_dialog::format_export_dialog_format_labels;
+
+    let labels = format_export_dialog_format_labels();
+    assert_eq!(labels.len(), 2);
+    assert_eq!(labels[0], "Plaintext otpauth:// JSON list");
+    assert_eq!(labels[1], "Encrypted Paladin bundle");
+}
+
+#[test]
+fn format_export_dialog_format_labels_match_export_format_choice_order() {
+    use paladin_gtk::export_dialog::{
+        format_choice_from_index, format_export_dialog_format_labels,
+    };
+
+    // Each label index must round-trip back to a real choice so the
+    // widget never lands on a `None` slot.
+    let labels = format_export_dialog_format_labels();
+    for (idx, _label) in labels.iter().enumerate() {
+        let idx_u32 = u32::try_from(idx).expect("label count fits in u32");
+        assert!(
+            format_choice_from_index(idx_u32).is_some(),
+            "label index {idx} must map to an ExportFormatChoice"
+        );
+    }
+}
+
+#[test]
+fn export_format_choice_index_plaintext_is_zero() {
+    assert_eq!(ExportFormatChoice::PlaintextOtpauth.index(), 0);
+}
+
+#[test]
+fn export_format_choice_index_encrypted_is_one() {
+    assert_eq!(ExportFormatChoice::EncryptedPaladin.index(), 1);
+}
+
+#[test]
+fn format_choice_from_index_zero_returns_plaintext() {
+    use paladin_gtk::export_dialog::format_choice_from_index;
+
+    assert_eq!(
+        format_choice_from_index(0),
+        Some(ExportFormatChoice::PlaintextOtpauth)
+    );
+}
+
+#[test]
+fn format_choice_from_index_one_returns_encrypted() {
+    use paladin_gtk::export_dialog::format_choice_from_index;
+
+    assert_eq!(
+        format_choice_from_index(1),
+        Some(ExportFormatChoice::EncryptedPaladin)
+    );
+}
+
+#[test]
+fn format_choice_from_index_out_of_range_returns_none() {
+    use paladin_gtk::export_dialog::format_choice_from_index;
+
+    assert_eq!(format_choice_from_index(2), None);
+    assert_eq!(format_choice_from_index(u32::MAX), None);
+}
+
+#[test]
+fn format_choice_index_round_trip_across_every_variant() {
+    use paladin_gtk::export_dialog::format_choice_from_index;
+
+    for choice in [
+        ExportFormatChoice::PlaintextOtpauth,
+        ExportFormatChoice::EncryptedPaladin,
+    ] {
+        assert_eq!(format_choice_from_index(choice.index()), Some(choice));
+    }
+}
+
+#[test]
+fn export_format_choice_default_is_plaintext_otpauth() {
+    // CLI parity: `paladin export <DEST>` defaults to the plaintext
+    // `otpauth://` JSON list when no `--format` is provided. The
+    // dialog opens on the same format so the user's first interaction
+    // matches the CLI documentation.
+    assert_eq!(
+        ExportFormatChoice::default(),
+        ExportFormatChoice::PlaintextOtpauth
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Dialog title / row labels — non-empty fixed strings the view! binds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_export_dialog_title_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_title;
+
+    assert!(!format_export_dialog_title().is_empty());
+}
+
+#[test]
+fn format_export_dialog_subtitle_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_subtitle;
+
+    assert!(!format_export_dialog_subtitle().is_empty());
+}
+
+#[test]
+fn format_export_dialog_destination_group_title_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_destination_group_title;
+
+    assert!(!format_export_dialog_destination_group_title().is_empty());
+}
+
+#[test]
+fn format_export_dialog_destination_row_title_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_destination_row_title;
+
+    assert!(!format_export_dialog_destination_row_title().is_empty());
+}
+
+#[test]
+fn format_export_dialog_destination_row_placeholder_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_destination_row_placeholder;
+
+    assert!(!format_export_dialog_destination_row_placeholder().is_empty());
+}
+
+#[test]
+fn format_export_dialog_choose_destination_label_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_choose_destination_label;
+
+    assert!(!format_export_dialog_choose_destination_label().is_empty());
+}
+
+#[test]
+fn format_export_dialog_options_group_title_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_options_group_title;
+
+    assert!(!format_export_dialog_options_group_title().is_empty());
+}
+
+#[test]
+fn format_export_dialog_format_row_title_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_format_row_title;
+
+    assert!(!format_export_dialog_format_row_title().is_empty());
+}
+
+#[test]
+fn format_export_dialog_cancel_label_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_cancel_label;
+
+    assert!(!format_export_dialog_cancel_label().is_empty());
+}
+
+#[test]
+fn format_export_dialog_export_label_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_export_label;
+
+    assert!(!format_export_dialog_export_label().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// ExportDialogState — fresh defaults, destination + format accessors
+// ---------------------------------------------------------------------------
+
+#[test]
+fn export_dialog_state_new_has_no_destination() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let state = ExportDialogState::new();
+    assert!(state.destination_path().is_none());
+}
+
+#[test]
+fn export_dialog_state_new_format_matches_default() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let state = ExportDialogState::new();
+    assert_eq!(state.format(), ExportFormatChoice::default());
+}
+
+#[test]
+fn export_dialog_state_set_destination_updates_path() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a());
+    assert_eq!(state.destination_path(), Some(dest_a().as_path()));
+}
+
+#[test]
+fn export_dialog_state_set_destination_replaces_prior_path() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a());
+    state.set_destination(dest_b());
+    assert_eq!(state.destination_path(), Some(dest_b().as_path()));
+}
+
+#[test]
+fn export_dialog_state_set_format_updates_format() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    assert_eq!(state.format(), ExportFormatChoice::EncryptedPaladin);
+}
+
+#[test]
+fn export_dialog_state_set_format_back_to_plaintext_replaces_encrypted() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_format(ExportFormatChoice::PlaintextOtpauth);
+    assert_eq!(state.format(), ExportFormatChoice::PlaintextOtpauth);
+}
+
+// ---------------------------------------------------------------------------
+// compose_destination_row_subtitle — placeholder when empty, display path else
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_destination_row_subtitle_uses_placeholder_when_no_destination() {
+    use paladin_gtk::export_dialog::{
+        compose_destination_row_subtitle, format_export_dialog_destination_row_placeholder,
+        ExportDialogState,
+    };
+
+    let state = ExportDialogState::new();
+    assert_eq!(
+        compose_destination_row_subtitle(&state),
+        format_export_dialog_destination_row_placeholder()
+    );
+}
+
+#[test]
+fn compose_destination_row_subtitle_renders_display_path_when_set() {
+    use paladin_gtk::export_dialog::{compose_destination_row_subtitle, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a());
+    assert_eq!(
+        compose_destination_row_subtitle(&state),
+        dest_a().display().to_string()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// compose_submit_button_sensitive — gated on destination presence
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_submit_button_sensitive_false_when_no_destination() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let state = ExportDialogState::new();
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_true_when_destination_set() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a());
+    // Later sub-items add the overwrite gate, plaintext-warning gate,
+    // and the twice-confirm passphrase row to this projection. For
+    // the format-selector + destination-picker sub-item the only
+    // gate is the destination presence — subsequent sub-items extend
+    // the assertion as their gates land.
+    assert!(compose_submit_button_sensitive(&state));
+}
+
+// ---------------------------------------------------------------------------
+// apply_msg — DestinationPicked / FormatChanged / Cancel / Close
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_destination_picked_updates_state_and_emits_no_output() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    let output = apply_msg(&mut state, ExportDialogMsg::DestinationPicked(dest_a()));
+    assert!(output.is_none());
+    assert_eq!(state.destination_path(), Some(dest_a().as_path()));
+}
+
+#[test]
+fn apply_msg_format_changed_updates_state_and_emits_no_output() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    let output = apply_msg(
+        &mut state,
+        ExportDialogMsg::FormatChanged(ExportFormatChoice::EncryptedPaladin),
+    );
+    assert!(output.is_none());
+    assert_eq!(state.format(), ExportFormatChoice::EncryptedPaladin);
+}
+
+#[test]
+fn apply_msg_cancel_emits_cancel_output() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, ExportDialogMsg, ExportDialogOutput, ExportDialogState,
+    };
+
+    let mut state = ExportDialogState::new();
+    let output = apply_msg(&mut state, ExportDialogMsg::Cancel);
+    assert!(matches!(output, Some(ExportDialogOutput::Cancel)));
+}
+
+#[test]
+fn apply_msg_close_emits_close_output() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, ExportDialogMsg, ExportDialogOutput, ExportDialogState,
+    };
+
+    let mut state = ExportDialogState::new();
+    let output = apply_msg(&mut state, ExportDialogMsg::Close);
+    assert!(matches!(output, Some(ExportDialogOutput::Close)));
+}
+
+#[test]
+fn apply_msg_destination_picked_replaces_prior_destination() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    apply_msg(&mut state, ExportDialogMsg::DestinationPicked(dest_a()));
+    apply_msg(&mut state, ExportDialogMsg::DestinationPicked(dest_b()));
+    assert_eq!(state.destination_path(), Some(dest_b().as_path()));
+}
+
+#[test]
+fn export_dialog_output_cancel_is_distinct_from_close() {
+    use paladin_gtk::export_dialog::ExportDialogOutput;
+
+    // §"Component tree" > `ExportDialog` distinguishes the explicit
+    // Cancel button from the parent-close path so a future
+    // "Discard draft?" prompt can attach to one dispatch arm without
+    // affecting the other. Both currently drop the controller in
+    // `AppModel`, but the variants must stay separate.
+    let cancel = ExportDialogOutput::Cancel;
+    let close = ExportDialogOutput::Close;
+    assert!(!matches!(cancel, ExportDialogOutput::Close));
+    assert!(!matches!(close, ExportDialogOutput::Cancel));
+}

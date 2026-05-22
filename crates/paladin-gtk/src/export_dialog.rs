@@ -60,6 +60,7 @@ use std::path::{Path, PathBuf};
 
 use libadwaita as adw;
 use libadwaita::prelude::*;
+use relm4::gtk;
 use relm4::prelude::*;
 
 use paladin_core::{format_plaintext_export_warning, EncryptionOptions, ErrorKind, PaladinError};
@@ -74,10 +75,18 @@ use secrecy::SecretString;
 /// (encrypted Paladin bundle). They drive distinct dialog gates: the
 /// plaintext path arms the plaintext-warning checkbox; the encrypted
 /// path arms the twice-confirm passphrase row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// [`Default`] returns [`ExportFormatChoice::PlaintextOtpauth`] for
+/// CLI parity: `paladin export <DEST>` with no `--format` flag writes
+/// the plaintext `otpauth://` JSON list, and the dialog opens on the
+/// same format so the user's first interaction matches the CLI
+/// documentation. Switching to the encrypted path is one click on
+/// the format-selector `adw::ComboRow`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExportFormatChoice {
     /// Plaintext otpauth JSON list. Requires the plaintext-export
     /// warning to be acknowledged before the writer runs.
+    #[default]
     PlaintextOtpauth,
     /// Encrypted Paladin bundle. Requires the twice-confirm
     /// passphrase row to be filled with a matching, non-empty pair.
@@ -97,6 +106,117 @@ impl ExportFormatChoice {
     pub fn requires_passphrase(self) -> bool {
         matches!(self, Self::EncryptedPaladin)
     }
+
+    /// `AdwComboRow` selection index for this choice.
+    ///
+    /// Inverse of [`format_choice_from_index`]: the widget binds
+    /// `set_selected:` to this value so the active row matches the
+    /// state machine after every refresh. The order mirrors
+    /// [`format_export_dialog_format_labels`]:
+    /// `[PlaintextOtpauth, EncryptedPaladin]`.
+    #[must_use]
+    pub fn index(self) -> u32 {
+        match self {
+            Self::PlaintextOtpauth => 0,
+            Self::EncryptedPaladin => 1,
+        }
+    }
+}
+
+/// `AdwComboRow` `selected` index → [`ExportFormatChoice`].
+///
+/// Out-of-range selections route as `None` so the dispatch arm
+/// leaves the draft untouched, mirroring the
+/// `format_choice_from_index` pattern in [`crate::import_dialog`].
+#[must_use]
+pub fn format_choice_from_index(selected: u32) -> Option<ExportFormatChoice> {
+    match selected {
+        0 => Some(ExportFormatChoice::PlaintextOtpauth),
+        1 => Some(ExportFormatChoice::EncryptedPaladin),
+        _ => None,
+    }
+}
+
+/// Format-selector display labels for the `AdwComboRow` model.
+///
+/// The order matches [`format_choice_from_index`] /
+/// [`ExportFormatChoice::index`]:
+/// `[PlaintextOtpauth, EncryptedPaladin]`.
+#[must_use]
+pub fn format_export_dialog_format_labels() -> &'static [&'static str] {
+    &["Plaintext otpauth:// JSON list", "Encrypted Paladin bundle"]
+}
+
+// ---------------------------------------------------------------------------
+// Dialog title / row label helpers
+// ---------------------------------------------------------------------------
+//
+// All wording lives in pure-logic helpers so `tests/export_dialog_logic.rs`
+// can pin the strings without touching the GTK runtime, and so a
+// future localization pass can swap the bodies in one place.
+
+/// Title bar text for the `ExportDialog` `adw::Dialog`.
+#[must_use]
+pub fn format_export_dialog_title() -> &'static str {
+    "Export"
+}
+
+/// Subtitle text rendered beneath the dialog title.
+#[must_use]
+pub fn format_export_dialog_subtitle() -> &'static str {
+    "Write the visible accounts to a file."
+}
+
+/// `adw::PreferencesGroup` title for the destination chooser row.
+#[must_use]
+pub fn format_export_dialog_destination_group_title() -> &'static str {
+    "Destination"
+}
+
+/// `adw::ActionRow` title for the destination chooser row.
+#[must_use]
+pub fn format_export_dialog_destination_row_title() -> &'static str {
+    "File"
+}
+
+/// `adw::ActionRow` placeholder subtitle when no destination is
+/// selected yet.
+#[must_use]
+pub fn format_export_dialog_destination_row_placeholder() -> &'static str {
+    "No file selected"
+}
+
+/// `gtk::Button` label for the "Choose file…" affordance that opens
+/// the [`gtk::FileDialog`] destination picker.
+#[must_use]
+pub fn format_export_dialog_choose_destination_label() -> &'static str {
+    "Choose file…"
+}
+
+/// `adw::PreferencesGroup` title for the options group hosting the
+/// format selector (and, in subsequent sub-items, the overwrite
+/// gate, plaintext-warning gate, and twice-confirm passphrase row).
+#[must_use]
+pub fn format_export_dialog_options_group_title() -> &'static str {
+    "Options"
+}
+
+/// `adw::ComboRow` title for the format selector.
+#[must_use]
+pub fn format_export_dialog_format_row_title() -> &'static str {
+    "Format"
+}
+
+/// Footer Cancel button label.
+#[must_use]
+pub fn format_export_dialog_cancel_label() -> &'static str {
+    "Cancel"
+}
+
+/// Footer Export button label (the `suggested-action` affordance).
+#[must_use]
+pub fn format_export_dialog_export_label() -> &'static str {
+    "Export"
 }
 
 /// Body text for the plaintext-export warning rendered above the
@@ -358,16 +478,39 @@ pub struct ExportDialogInit {
 
 /// Messages handled by [`ExportDialogComponent`].
 ///
-/// This milestone scaffolds the read-only `adw::Dialog` mount; the
-/// file-picker / format-selector / overwrite-gate / plaintext-warning /
-/// twice-confirm passphrase / submit / worker-result transitions
-/// described in `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-/// `ExportDialog` land in follow-up commits alongside the live-apply
-/// behavior. The empty enum is the deliberate v0.2 starting point —
-/// relm4 requires the associated `Input` type to exist even when no
-/// inbound messages are wired yet.
+/// The set covers the format-selector + destination-picker sub-item
+/// from `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// `ExportDialogComponent` plus the explicit Cancel / Close
+/// dismissal paths. Subsequent sub-items extend the enum with the
+/// overwrite-gate toggle, the plaintext-warning toggle, the
+/// twice-confirm passphrase entries, the submit click, and the
+/// worker-completion dispatch.
 #[derive(Debug)]
-pub enum ExportDialogMsg {}
+pub enum ExportDialogMsg {
+    /// User picked a destination file via the [`gtk::FileDialog`]
+    /// callback. The path is stored verbatim — canonicalization
+    /// belongs to the picker, and the gate-reset helpers
+    /// ([`overwrite_gate_needs_reset`] /
+    /// [`plaintext_warning_needs_reset`] / [`passphrase_needs_reset`])
+    /// compare raw paths so a switch between two equivalent forms
+    /// still rearms the gates.
+    DestinationPicked(PathBuf),
+    /// User changed the active format on the [`adw::ComboRow`]
+    /// selector. Carries the [`ExportFormatChoice`] decoded by
+    /// [`format_choice_from_index`]; an out-of-range selection is
+    /// dropped by the widget rather than dispatched.
+    FormatChanged(ExportFormatChoice),
+    /// User clicked the explicit Cancel button. The dispatch arm
+    /// emits [`ExportDialogOutput::Cancel`] so `AppModel` drops the
+    /// live controller and the form draft is discarded.
+    Cancel,
+    /// User dismissed the dialog via the parent close path (Escape /
+    /// window close). The dispatch arm emits
+    /// [`ExportDialogOutput::Close`]; the variant stays distinct
+    /// from [`ExportDialogMsg::Cancel`] so a future "Discard draft?"
+    /// prompt can attach to one path without affecting the other.
+    Close,
+}
 
 /// Messages emitted by [`ExportDialogComponent`] for `AppModel` to consume.
 ///
@@ -376,30 +519,148 @@ pub enum ExportDialogMsg {}
 /// so the underlying `adw::Dialog` is torn down. Submit / export-
 /// result outputs that propagate the typed
 /// [`classify_export_result`] verdict to `AppModel` land in the same
-/// follow-up commits that add the matching [`ExportDialogMsg`]
-/// variants.
+/// follow-up commits that add the submit and worker-completion
+/// transitions.
 #[derive(Debug, Clone)]
 pub enum ExportDialogOutput {
-    /// User dismissed the dialog (Close button / Escape / window
-    /// close). `AppModel` responds by dropping the live controller
-    /// so the dialog disappears and any in-flight pending form draft
-    /// (selected destination path, format choice, overwrite
-    /// acknowledgement, plaintext-warning acknowledgement,
+    /// User clicked the explicit Cancel button. `AppModel` drops the
+    /// live controller so the dialog disappears and any in-flight
+    /// pending form draft is discarded. Kept distinct from
+    /// [`ExportDialogOutput::Close`] so future "Discard draft?"
+    /// behavior can attach to one variant without affecting the
+    /// other.
+    Cancel,
+    /// User dismissed the dialog via the parent close path (Escape /
+    /// window close). `AppModel` responds by dropping the live
+    /// controller so the dialog disappears and any in-flight pending
+    /// form draft (selected destination path, format choice,
+    /// overwrite acknowledgement, plaintext-warning acknowledgement,
     /// twice-confirm passphrase entries) is discarded.
     Close,
+}
+
+/// Pure-logic state machine for [`ExportDialogComponent`].
+///
+/// Owns the destination-path + format form draft. Subsequent
+/// sub-items extend the struct with the overwrite-acknowledgement
+/// gate, plaintext-warning gate, the twice-confirm passphrase
+/// [`crate::secret_fields::SecretEntry`] buffer, the busy latch, and
+/// the post-worker rendering slots. The widget layer drives this
+/// via [`apply_msg`] and reads it via the `compose_*` helpers so
+/// the state stays unit-testable in `tests/export_dialog_logic.rs`.
+#[derive(Debug, Default)]
+pub struct ExportDialogState {
+    destination_path: Option<PathBuf>,
+    format: ExportFormatChoice,
+}
+
+impl ExportDialogState {
+    /// Construct a fresh state — equivalent to `Self::default()`.
+    /// `format` defaults to [`ExportFormatChoice::default`] (the
+    /// plaintext `otpauth://` JSON list, mirroring the CLI's
+    /// no-`--format` behavior).
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Currently selected destination path, if any.
+    #[must_use]
+    pub fn destination_path(&self) -> Option<&Path> {
+        self.destination_path.as_deref()
+    }
+
+    /// Currently selected format.
+    #[must_use]
+    pub fn format(&self) -> ExportFormatChoice {
+        self.format
+    }
+
+    /// Update the destination path. The widget calls this from the
+    /// [`gtk::FileDialog`] callback after the user picks a file.
+    /// Subsequent sub-items extend this setter to clear the
+    /// overwrite-acknowledgement and plaintext-warning gates and the
+    /// twice-confirm passphrase entries via
+    /// [`overwrite_gate_needs_reset`] /
+    /// [`plaintext_warning_needs_reset`] / [`passphrase_needs_reset`].
+    pub fn set_destination(&mut self, path: PathBuf) {
+        self.destination_path = Some(path);
+    }
+
+    /// Update the active format. The widget calls this from the
+    /// `adw::ComboRow` `connect_selected_notify` handler when
+    /// [`format_choice_from_index`] decodes the selection. Subsequent
+    /// sub-items extend this setter to clear gates / passphrase
+    /// entries when the format changes, mirroring the existing
+    /// reset helpers.
+    pub fn set_format(&mut self, format: ExportFormatChoice) {
+        self.format = format;
+    }
+}
+
+/// Subtitle binding for the destination `adw::ActionRow`.
+///
+/// Returns the picked path's full display string when a destination
+/// is selected, or
+/// [`format_export_dialog_destination_row_placeholder`] otherwise.
+#[must_use]
+pub fn compose_destination_row_subtitle(state: &ExportDialogState) -> String {
+    match state.destination_path() {
+        Some(path) => path.display().to_string(),
+        None => format_export_dialog_destination_row_placeholder().to_string(),
+    }
+}
+
+/// `gtk::Button::set_sensitive` binding for the footer Export button.
+///
+/// Returns `true` only when the user has picked a destination path.
+/// Subsequent sub-items extend the predicate with the
+/// overwrite-acknowledgement, plaintext-warning, and twice-confirm
+/// passphrase gates so the Export button enables only when every
+/// required gate is satisfied.
+#[must_use]
+pub fn compose_submit_button_sensitive(state: &ExportDialogState) -> bool {
+    state.destination_path().is_some()
+}
+
+/// Apply an [`ExportDialogMsg`] to the [`ExportDialogState`] and
+/// return the optional [`ExportDialogOutput`] the widget should
+/// forward to `AppModel`.
+///
+/// Mirrors the [`crate::import_dialog::apply_msg`] shape so the two
+/// dialogs stay in lock-step. The widget calls this from
+/// [`relm4::SimpleComponent::update`]; `AppModel` consumes the
+/// returned output through the existing
+/// [`crate::app::model::AppMsg::ExportDialogAction`] dispatch arm.
+pub fn apply_msg(
+    state: &mut ExportDialogState,
+    msg: ExportDialogMsg,
+) -> Option<ExportDialogOutput> {
+    match msg {
+        ExportDialogMsg::DestinationPicked(path) => {
+            state.set_destination(path);
+            None
+        }
+        ExportDialogMsg::FormatChanged(format) => {
+            state.set_format(format);
+            None
+        }
+        ExportDialogMsg::Cancel => Some(ExportDialogOutput::Cancel),
+        ExportDialogMsg::Close => Some(ExportDialogOutput::Close),
+    }
 }
 
 /// Widget-bearing `adw::Dialog` for the application menu's Export… entry.
 ///
 /// Mounts the libadwaita dialog described in DESIGN.md §7
 /// (`ExportDialog`) and `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
-/// tree" > `ExportDialog`. The widget body is a read-only scaffold
-/// at this milestone (an empty `adw::ToolbarView` wrapped in
-/// `adw::Dialog` with the dialog title set), so the controller
-/// mounts cleanly under `xvfb-run` without yet exposing the file
-/// picker, format selector, overwrite gate, plaintext-warning gate,
-/// or twice-confirm passphrase row. Follow-up commits attach the
-/// real form widgets and the export worker that drives
+/// tree" > `ExportDialog`. The widget body now exposes the
+/// destination picker (an `adw::ActionRow` with a "Choose file…"
+/// `gtk::Button` that opens a [`gtk::FileDialog`]) and the format
+/// selector (an `adw::ComboRow` driven by
+/// [`format_export_dialog_format_labels`]). Subsequent sub-items
+/// attach the overwrite-gate, the plaintext-warning gate, the
+/// twice-confirm passphrase row, and the export worker that drives
 /// [`classify_export_result`].
 pub struct ExportDialogComponent {
     /// Vault path the dialog mounts against, kept on `self` so the
@@ -408,6 +669,11 @@ pub struct ExportDialogComponent {
     /// by `tests/export_dialog_logic.rs`.
     #[allow(dead_code)]
     vault_path: PathBuf,
+    /// Form-draft state machine driven by [`apply_msg`]. Holds the
+    /// destination path + format choice; subsequent sub-items extend
+    /// the struct with the gate / passphrase / busy / post-worker
+    /// slots. The widget view reads this via the `compose_*` helpers.
+    state: ExportDialogState,
 }
 
 #[allow(missing_docs)]
@@ -420,11 +686,104 @@ impl SimpleComponent for ExportDialogComponent {
     view! {
         #[root]
         adw::Dialog {
-            set_title: "Export",
+            set_title: format_export_dialog_title(),
 
             #[wrap(Some)]
             set_child = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {},
+
+                #[wrap(Some)]
+                set_content = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 12,
+                    set_margin_top: 12,
+                    set_margin_bottom: 12,
+                    set_margin_start: 12,
+                    set_margin_end: 12,
+
+                    gtk::Label {
+                        set_label: format_export_dialog_subtitle(),
+                        set_xalign: 0.0,
+                        set_wrap: true,
+                        add_css_class: "dim-label",
+                    },
+
+                    #[name = "destination_group"]
+                    adw::PreferencesGroup {
+                        set_title: format_export_dialog_destination_group_title(),
+
+                        #[name = "destination_row"]
+                        add = &adw::ActionRow {
+                            set_title: format_export_dialog_destination_row_title(),
+                            #[watch]
+                            set_subtitle: &compose_destination_row_subtitle(&model.state),
+
+                            #[name = "choose_destination_button"]
+                            add_suffix = &gtk::Button {
+                                set_label: format_export_dialog_choose_destination_label(),
+                                set_valign: gtk::Align::Center,
+                            },
+                        },
+                    },
+
+                    #[name = "options_group"]
+                    adw::PreferencesGroup {
+                        set_title: format_export_dialog_options_group_title(),
+
+                        #[name = "format_row"]
+                        add = &adw::ComboRow {
+                            set_title: format_export_dialog_format_row_title(),
+                            set_model: Some(&gtk::StringList::new(
+                                format_export_dialog_format_labels(),
+                            )),
+                            #[watch]
+                            set_selected: model.state.format().index(),
+                            connect_selected_notify[sender] => move |row| {
+                                if let Some(choice) =
+                                    format_choice_from_index(row.selected())
+                                {
+                                    sender.input(ExportDialogMsg::FormatChanged(choice));
+                                }
+                            },
+                        },
+                    },
+
+                    // Footer: Cancel / Export (subsequent sub-items
+                    // attach a busy spinner and post-success Dismiss
+                    // button alongside the existing affordances).
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 8,
+                        set_halign: gtk::Align::End,
+                        set_margin_top: 6,
+
+                        #[name = "cancel_button"]
+                        gtk::Button {
+                            set_label: format_export_dialog_cancel_label(),
+                            connect_clicked[sender] => move |_| {
+                                sender.input(ExportDialogMsg::Cancel);
+                            },
+                        },
+
+                        #[name = "export_button"]
+                        gtk::Button {
+                            set_label: format_export_dialog_export_label(),
+                            add_css_class: "suggested-action",
+                            #[watch]
+                            set_sensitive: compose_submit_button_sensitive(&model.state),
+                        },
+                    },
+                },
+            },
+
+            // `connect_closed` fires on Escape / window-close /
+            // parent-navigation close. `AppModel` drops the
+            // controller on both Cancel and Close; the variants stay
+            // distinct so a future Close-only behavior (e.g. a
+            // "Discard draft?" prompt) can attach to one dispatch arm
+            // without affecting Cancel.
+            connect_closed[sender] => move |_| {
+                sender.input(ExportDialogMsg::Close);
             },
         }
     }
@@ -432,19 +791,50 @@ impl SimpleComponent for ExportDialogComponent {
     fn init(
         init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let model = ExportDialogComponent {
             vault_path: init.vault_path,
+            state: ExportDialogState::new(),
         };
         let widgets = view_output!();
+
+        // Wire the "Choose file…" button to `gtk::FileDialog::save`.
+        // The async result feeds back as
+        // `ExportDialogMsg::DestinationPicked` with the user's
+        // selection; the picker's choice is stored verbatim per
+        // §"`ExportDialog`" raw-path semantics.
+        let dialog_root = root.clone();
+        let sender_clone = sender.clone();
+        widgets.choose_destination_button.connect_clicked(move |_| {
+            let file_dialog = gtk::FileDialog::builder()
+                .title("Choose export destination")
+                .modal(true)
+                .build();
+            let sender_inner = sender_clone.clone();
+            let parent = dialog_root.clone();
+            file_dialog.save(
+                parent.root().and_downcast_ref::<gtk::Window>(),
+                None::<&relm4::gtk::gio::Cancellable>,
+                move |result| {
+                    if let Ok(file) = result {
+                        if let Some(path) = file.path() {
+                            sender_inner.input(ExportDialogMsg::DestinationPicked(path));
+                        }
+                    }
+                },
+            );
+        });
+
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
-        // No inbound messages handled at this milestone — see
-        // `ExportDialogMsg` doc comment for the upcoming file-picker /
-        // format / overwrite / plaintext-warning / passphrase /
-        // submit / worker-result transitions.
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        if let Some(output) = apply_msg(&mut self.state, msg) {
+            // Forward to `AppModel`. A closed output channel only happens
+            // if `AppModel` already dropped the controller, in which case
+            // the dialog is about to be torn down — drop the output.
+            let _ = sender.output(output);
+        }
     }
 }

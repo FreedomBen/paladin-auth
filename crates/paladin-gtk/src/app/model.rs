@@ -1946,13 +1946,20 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
-            AppMsg::ExportDialogAction(ExportDialogOutput::Close) => {
-                // User dismissed the `adw::Dialog`. Drop the live
-                // controller so the widget is released and any
-                // in-flight pending form draft (selected destination
-                // path, format choice, overwrite acknowledgement,
-                // plaintext-warning acknowledgement, twice-confirm
-                // passphrase entries) is discarded. `adw::Dialog`
+            AppMsg::ExportDialogAction(ExportDialogOutput::Cancel | ExportDialogOutput::Close) => {
+                // User dismissed the `adw::Dialog` — either by the
+                // explicit Cancel button (`ExportDialogOutput::Cancel`)
+                // or by Escape / window close
+                // (`ExportDialogOutput::Close`). Both currently drop
+                // the live controller so the widget is released and
+                // any in-flight pending form draft (selected
+                // destination path, format choice, overwrite
+                // acknowledgement, plaintext-warning acknowledgement,
+                // twice-confirm passphrase entries) is discarded; the
+                // variants stay distinct in
+                // [`crate::export_dialog::ExportDialogOutput`] so a
+                // future "Discard draft?" prompt can attach to one
+                // path without affecting the other. `adw::Dialog`
                 // self-detaches from its toplevel parent on close,
                 // so no `self.content.remove` is needed — unlike
                 // `AddAccountComponent` / `RenameDialogComponent` /
