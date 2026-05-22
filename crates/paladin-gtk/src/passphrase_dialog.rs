@@ -527,6 +527,21 @@ pub struct PassphraseDialogState {
     /// transition. The widget body matches on this so the inline
     /// error / durability warning surfaces.
     worker_outcome: Option<PassphraseErrorOutcome>,
+    /// `true` while a `gio::spawn_blocking` passphrase-transition
+    /// worker is in flight. Shadows the `AppState::UnlockedBusy`
+    /// busy-gate `AppModel` mounts at the same instant the dialog
+    /// emits [`PassphraseDialogOutput::Submit`]: the Save / Cancel
+    /// buttons disable through [`Self::submit_button_sensitive`] /
+    /// [`Self::cancel_button_sensitive`] and the footer spinner
+    /// shows through [`Self::spinner_visible`] until the worker
+    /// completes. Cleared by
+    /// [`PassphraseDialogMsg::WorkerFailed`] (stay-open failure
+    /// branches re-enable the dialog) and by
+    /// [`PassphraseDialogMsg::Cancel`] (defensive: a stray Cancel
+    /// arriving while busy must not deadlock the dialog). On
+    /// success the controller is dropped by `AppModel` so the flag
+    /// disappears with the state.
+    dispatching: bool,
 }
 
 impl std::fmt::Debug for PassphraseDialogState {
@@ -547,6 +562,7 @@ impl std::fmt::Debug for PassphraseDialogState {
             .field("remove_confirmed", &self.secrets.remove_confirmed)
             .field("inline_rejection", &self.inline_rejection)
             .field("worker_outcome", &self.worker_outcome)
+            .field("dispatching", &self.dispatching)
             .finish()
     }
 }
@@ -566,6 +582,7 @@ impl PassphraseDialogState {
             secrets: PassphraseSecretState::new(sub_flow),
             inline_rejection: None,
             worker_outcome: None,
+            dispatching: false,
         }
     }
 
@@ -617,8 +634,15 @@ impl PassphraseDialogState {
     ///
     /// For Set / Change: both passphrase rows non-empty and equal.
     /// For Remove: the acknowledgement checkbox ticked.
+    ///
+    /// Always returns `false` while a passphrase-transition worker is
+    /// in flight (see [`Self::is_dispatching`]) so a stray accelerator
+    /// cannot fire a second Submit over the running worker.
     #[must_use]
     pub fn submit_button_sensitive(&self) -> bool {
+        if self.dispatching {
+            return false;
+        }
         match self.sub_flow() {
             SubFlow::Set | SubFlow::Change => {
                 !self.new_passphrase().is_empty()
@@ -627,10 +651,53 @@ impl PassphraseDialogState {
             SubFlow::Remove => self.remove_confirmed(),
         }
     }
+
+    /// Whether the Cancel button should be sensitive.
+    ///
+    /// Always `true` while idle; `false` while a passphrase-transition
+    /// worker is in flight per the §"In-flight effect ownership" rule
+    /// "Dialog close/cancel is disabled for the surface that owns the
+    /// in-flight mutation until the worker returns".
+    #[must_use]
+    pub fn cancel_button_sensitive(&self) -> bool {
+        !self.dispatching
+    }
+
+    /// Whether the busy spinner should be visible. Mirrors
+    /// [`Self::is_dispatching`] so the widget can bind both
+    /// `set_spinning` and `set_visible` directly.
+    #[must_use]
+    pub fn spinner_visible(&self) -> bool {
+        self.dispatching
+    }
+
+    /// `true` while a `gio::spawn_blocking` passphrase-transition
+    /// worker is in flight against this dialog.
+    #[must_use]
+    pub fn is_dispatching(&self) -> bool {
+        self.dispatching
+    }
+
+    /// Toggle the dispatching busy gate. Flipped to `true` by the
+    /// `apply_msg` arm that consumes a valid Submit; flipped to
+    /// `false` by [`PassphraseDialogMsg::WorkerFailed`] or by
+    /// [`PassphraseDialogMsg::Cancel`] (defensive). `AppModel` may
+    /// also call this through the
+    /// [`PassphraseDialogMsg::SetDispatching`] message to roll the
+    /// gate back when a dispatch is refused before the worker
+    /// spawns.
+    pub fn set_dispatching(&mut self, dispatching: bool) {
+        self.dispatching = dispatching;
+    }
 }
 
 /// Messages handled by [`PassphraseDialogComponent`].
-#[derive(Debug)]
+///
+/// `Clone` is derived so [`crate::app::state::compose_passphrase_dispatch`]'s
+/// `dialog_msg` field can carry an owned `PassphraseDialogMsg`
+/// projection and `AppModel::update` can forward it to the live
+/// controller without re-deriving the routing.
+#[derive(Debug, Clone)]
 pub enum PassphraseDialogMsg {
     /// User clicked a different sub-flow on the segmented control.
     /// If the target is available for the current encryption mode
@@ -661,8 +728,19 @@ pub enum PassphraseDialogMsg {
     Cancel,
     /// `AppModel` pushes the typed [`PassphraseErrorOutcome`] back
     /// to the dialog after the `gio::spawn_blocking` worker reports
-    /// a failure.
+    /// a failure. Releases the busy gate
+    /// ([`PassphraseDialogState::is_dispatching`] → `false`) so the
+    /// dialog re-enables; the typed outcome stages the inline
+    /// error / durability warning rendered through
+    /// [`inline_body_text`].
     WorkerFailed(PassphraseErrorOutcome),
+    /// `AppModel` pushes the busy gate back to the dialog without
+    /// staging a worker outcome — used when a dispatch is refused
+    /// before the worker spawns (defensive: a stray Submit from a
+    /// non-`Unlocked` state, or a `compose_passphrase_worker_input`
+    /// refusal). Lets the dialog re-enable Save / Cancel without
+    /// surfacing an inline error.
+    SetDispatching(bool),
 }
 
 /// Messages emitted by [`PassphraseDialogComponent`] for `AppModel` to consume.
@@ -737,6 +815,7 @@ pub fn apply_msg(
                             // post-apply_msg hook.
                             state.inline_rejection = None;
                             state.secrets.clear_for(ClearReason::Submit);
+                            state.dispatching = true;
                             let payload = match state.secrets.sub_flow {
                                 SubFlow::Set => SubmitPayload::Set(options),
                                 SubFlow::Change => SubmitPayload::Change(options),
@@ -763,6 +842,7 @@ pub fn apply_msg(
                     }
                     state.inline_rejection = None;
                     state.secrets.clear_for(ClearReason::Submit);
+                    state.dispatching = true;
                     Some(PassphraseDialogOutput::Submit(SubmitPayload::Remove))
                 }
             }
@@ -771,10 +851,16 @@ pub fn apply_msg(
             state.secrets.clear_for(ClearReason::Cancel);
             state.inline_rejection = None;
             state.worker_outcome = None;
+            state.dispatching = false;
             Some(PassphraseDialogOutput::Close)
         }
         PassphraseDialogMsg::WorkerFailed(outcome) => {
             state.worker_outcome = Some(outcome);
+            state.dispatching = false;
+            None
+        }
+        PassphraseDialogMsg::SetDispatching(value) => {
+            state.dispatching = value;
             None
         }
     }
@@ -953,15 +1039,25 @@ impl SimpleComponent for PassphraseDialogComponent {
                         set_visible: !inline_body_text(&model.state).is_empty(),
                     },
 
-                    // Footer buttons.
+                    // Footer: spinner (while busy), Cancel / Save buttons.
                     gtk::Box {
                         set_orientation: gtk::Orientation::Horizontal,
                         set_spacing: 6,
                         set_halign: gtk::Align::End,
 
+                        #[name = "busy_spinner"]
+                        gtk::Spinner {
+                            #[watch]
+                            set_spinning: model.state.spinner_visible(),
+                            #[watch]
+                            set_visible: model.state.spinner_visible(),
+                        },
+
                         #[name = "cancel_button"]
                         gtk::Button {
                             set_label: format_passphrase_dialog_cancel_label(),
+                            #[watch]
+                            set_sensitive: model.state.cancel_button_sensitive(),
                             connect_clicked[sender] => move |_| {
                                 sender.input(PassphraseDialogMsg::Cancel);
                             },

@@ -85,18 +85,20 @@ use crate::add_account::{
 use crate::app::state::{
     apply_add_dispatch_inplace, apply_add_vault_install_inplace, apply_export_dispatch_inplace,
     apply_export_vault_install_inplace, apply_import_dispatch_inplace,
-    apply_import_vault_install_inplace, apply_qr_dispatch_inplace, apply_remove_dispatch_inplace,
-    apply_remove_vault_install_inplace, apply_rename_dispatch_inplace,
-    apply_rename_vault_install_inplace, apply_submit_add_inplace, apply_submit_export_inplace,
-    apply_submit_import_inplace, apply_submit_remove_inplace, apply_submit_rename_inplace,
-    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace,
-    compose_add_dispatch, compose_add_worker_input, compose_export_dispatch,
-    compose_export_worker_input, compose_import_dispatch, compose_import_worker_input,
-    compose_qr_dispatch, compose_qr_worker_input, compose_remove_dispatch,
-    compose_remove_worker_input, compose_rename_dispatch, compose_rename_worker_input,
-    compose_unlock_dispatch, compose_unlock_worker_input, decide_state_from_inspect,
-    decide_state_from_open_error, run_unlock_worker, AppState, OpenErrorOutcome,
-    UnlockWorkerCompletion,
+    apply_import_vault_install_inplace, apply_passphrase_dispatch_inplace,
+    apply_passphrase_vault_install_inplace, apply_qr_dispatch_inplace,
+    apply_remove_dispatch_inplace, apply_remove_vault_install_inplace,
+    apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, apply_submit_add_inplace,
+    apply_submit_export_inplace, apply_submit_import_inplace, apply_submit_passphrase_inplace,
+    apply_submit_remove_inplace, apply_submit_rename_inplace, apply_submit_unlock_inplace,
+    apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace, compose_add_dispatch,
+    compose_add_worker_input, compose_export_dispatch, compose_export_worker_input,
+    compose_import_dispatch, compose_import_worker_input, compose_passphrase_dispatch,
+    compose_passphrase_worker_input, compose_qr_dispatch, compose_qr_worker_input,
+    compose_remove_dispatch, compose_remove_worker_input, compose_rename_dispatch,
+    compose_rename_worker_input, compose_unlock_dispatch, compose_unlock_worker_input,
+    decide_state_from_inspect, decide_state_from_open_error, run_unlock_worker, AppState,
+    OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
@@ -120,7 +122,8 @@ use crate::init_dialog::{
     InitDialogOutput, InitWorkerCompletion, InitWorkerEffect, InitWorkerInput, InitWorkerMode,
 };
 use crate::passphrase_dialog::{
-    PassphraseDialogComponent, PassphraseDialogInit, PassphraseDialogOutput,
+    run_passphrase_worker, PassphraseDialogComponent, PassphraseDialogInit, PassphraseDialogMsg,
+    PassphraseDialogOutput, PassphraseWorkerCompletion,
 };
 use crate::remove_dialog::{
     decide_remove_target, run_remove_worker, RemoveDialogComponent, RemoveDialogOutput,
@@ -989,6 +992,23 @@ pub enum AppMsg {
     /// returned by `classify_create_error` / `classify_create_force_error`
     /// stay inline and never transition the dialog out.
     InitWorkerCompleted(InitWorkerCompletion),
+    /// Posted by the `gio::spawn_blocking
+    /// Vault::set_passphrase` / `change_passphrase` /
+    /// `remove_passphrase` worker after it consumes the bundled
+    /// [`crate::passphrase_dialog::PassphraseWorkerInput`] and reports
+    /// its routed outcome as a [`PassphraseWorkerCompletion`].
+    ///
+    /// The handler reinstalls the returned `(Vault, Store)` pair into
+    /// [`AppModel::vault`] (the §4.5 transitions are authoritative for
+    /// the rollback / durability semantics so the pair always rides
+    /// back through here), routes the typed
+    /// [`crate::passphrase_dialog::PassphraseWorkerEffect`] through
+    /// [`compose_passphrase_dispatch`], and applies the four
+    /// dispatch decisions: the `UnlockedBusy → Unlocked` rollback,
+    /// the inline message forward to the live
+    /// [`PassphraseDialogComponent`] on failure, the dialog drop on
+    /// success, and the optional `AdwToast` body.
+    PassphraseWorkerCompleted(PassphraseWorkerCompletion),
     /// Posted by [`dispatch_startup_error_output`] when
     /// [`StartupErrorComponent`](crate::startup_error::StartupErrorComponent)
     /// emits [`StartupErrorOutput::Retry`].
@@ -2165,20 +2185,149 @@ impl SimpleComponent for AppModel {
                 self.passphrase_dialog = None;
             }
             AppMsg::PassphraseDialogAction(PassphraseDialogOutput::Submit(payload)) => {
-                // Save button entry side of the `gio::spawn_blocking`
-                // passphrase-transition worker. The full
-                // `UnlockedBusy → Unlocked` busy-gate transition plus
-                // worker dispatch lands in the follow-up sub-task
-                // ("Worker dispatch on spawn_blocking") that wires
-                // `run_passphrase_worker` into the AppModel
-                // composition layer. For now drop the validated
-                // payload (zeroizing any carried `SecretString`
-                // through `EncryptionOptions`'s `ZeroizeOnDrop`) and
-                // drop the live controller so the dialog tears down
-                // — matches the `Close` behavior, with the secret
-                // payload safely zeroized on its way out.
-                drop(payload);
-                self.passphrase_dialog = None;
+                // Save button entry side of the `gio::spawn_blocking
+                // Vault::set_passphrase` / `change_passphrase` /
+                // `remove_passphrase` worker. Mirrors the
+                // `RemoveDialogOutput::SubmitConfirm` and
+                // `RenameDialogOutput::SubmitLabel` handlers
+                // step-for-step:
+                //
+                // 1. Take the live `(Vault, Store)` pair from
+                //    `self.vault` and bundle it with the validated
+                //    [`PassphraseSubmitPayload`] into a
+                //    `PassphraseWorkerInput` via
+                //    `compose_passphrase_worker_input`. The composer
+                //    inspects the cached `AppState`: only `Unlocked`
+                //    returns `Ok(input)`; every other variant returns
+                //    `Err(pair)` so the wrapper can reinstall the
+                //    pair via `apply_passphrase_vault_install_inplace`.
+                //    A `None` state or a `None` vault slot is the
+                //    defensive no-op for a stray `Submit` from a
+                //    locked / missing / busy state — in that case the
+                //    dialog's `dispatching` flag is rolled back via
+                //    `PassphraseDialogMsg::SetDispatching(false)` so
+                //    Save / Cancel re-enable.
+                // 2. Apply the `Unlocked → UnlockedBusy` busy-gate
+                //    transition via `apply_submit_passphrase_inplace`
+                //    so `is_busy()` / `allows_mutating_menu()` cover
+                //    the worker's lifetime. The dialog stays mounted
+                //    — `should_drop_passphrase_dialog_after` drops
+                //    the controller only on the success branch and
+                //    keeps it on every failure branch.
+                // 3. Spawn `run_passphrase_worker` on
+                //    `gtk::gio::spawn_blocking` so the §4.5
+                //    Argon2id KDF (m=64 MiB defaults) does not
+                //    block the GTK main loop. The wrapping
+                //    `gtk::glib::spawn_future_local` awaits the
+                //    blocking handle and posts the bundled
+                //    `PassphraseWorkerCompletion` back to `AppModel`
+                //    via `AppMsg::PassphraseWorkerCompleted`,
+                //    consumed by the dispatch branch wired below.
+                let worker_input = match (self.state.as_ref(), self.vault.take()) {
+                    (Some(state), Some(pair)) => {
+                        match compose_passphrase_worker_input(state, pair, payload) {
+                            Ok(input) => Some(input),
+                            Err(pair) => {
+                                apply_passphrase_vault_install_inplace(&mut self.vault, pair);
+                                None
+                            }
+                        }
+                    }
+                    (None, Some(pair)) => {
+                        apply_passphrase_vault_install_inplace(&mut self.vault, pair);
+                        None
+                    }
+                    (_, None) => None,
+                };
+                if let Some(input) = worker_input {
+                    if let Some(state) = self.state.as_mut() {
+                        apply_submit_passphrase_inplace(state);
+                    }
+                    let sender = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let completion =
+                            gtk::gio::spawn_blocking(move || run_passphrase_worker(input))
+                                .await
+                                .expect("Vault passphrase-transition worker panicked");
+                        sender.input(AppMsg::PassphraseWorkerCompleted(completion));
+                    });
+                } else {
+                    // The dispatch was refused (state was not `Unlocked`
+                    // or the vault slot was empty). The dialog already
+                    // flipped `dispatching = true` in `apply_msg`; roll
+                    // it back so Save / Cancel re-enable rather than
+                    // leaving the dialog locked up waiting for a worker
+                    // that will never start.
+                    if let Some(controller) = self.passphrase_dialog.as_ref() {
+                        controller.emit(PassphraseDialogMsg::SetDispatching(false));
+                    }
+                }
+            }
+            AppMsg::PassphraseWorkerCompleted(completion) => {
+                // Worker-outcome dispatch. Mirrors
+                // `RemoveWorkerCompleted` / `RenameWorkerCompleted`:
+                // `compose_passphrase_dispatch` bundles the typed
+                // `PassphraseWorkerEffect` over the cached `AppState`
+                // into a `PassphraseDispatch`:
+                //
+                // * `app_state` — `UnlockedBusy → Unlocked` rollback
+                //   regardless of typed effect (`Vault::*_passphrase`
+                //   is authoritative for the §4.5 rollback /
+                //   durability semantics, so the busy gate always
+                //   releases). The `None` defensive case (worker
+                //   outcome arrived but the cached state was not
+                //   `UnlockedBusy`) leaves `AppModel::state` intact.
+                // * `dialog_msg` — `Some(WorkerFailed(outcome))` on
+                //   every failure branch, forwarded to the live
+                //   `PassphraseDialogComponent` so the typed
+                //   `save_not_committed` / `save_durability_unconfirmed`
+                //   / defensive error re-renders inline and releases
+                //   the dialog's own `dispatching` flag.
+                // * `drop_dialog` — `true` on the success branch
+                //   only, dropping the controller so the dialog
+                //   tears down.
+                // * `success_toast` — `Some(body)` on success, raised
+                //   on the `adw::ToastOverlay`.
+                //
+                // The carried `(vault, store)` pair is reinstalled
+                // into `AppModel::vault` via
+                // `apply_passphrase_vault_install_inplace`
+                // unconditionally — the §4.5 transitions are
+                // authoritative for the post-transition / rollback
+                // state across every effect branch.
+                let PassphraseWorkerCompletion {
+                    effect,
+                    vault,
+                    store,
+                } = completion;
+                apply_passphrase_vault_install_inplace(&mut self.vault, (vault, store));
+                let dispatch = self.state.as_mut().map(|state| {
+                    let dispatch = compose_passphrase_dispatch(state, &effect);
+                    apply_passphrase_dispatch_inplace(state, &dispatch);
+                    dispatch
+                });
+                if let Some(dispatch) = dispatch {
+                    if let Some(msg) = dispatch.dialog_msg {
+                        if let Some(controller) = self.passphrase_dialog.as_ref() {
+                            controller.emit(msg);
+                        }
+                    }
+                    if dispatch.drop_dialog {
+                        // `adw::Dialog` self-detaches from its
+                        // toplevel parent on close, so explicit
+                        // `force_close` covers the race where the
+                        // worker returns before the dismissal
+                        // completes, then drop the controller. No
+                        // `self.content.remove` — `adw::Dialog`
+                        // self-detaches.
+                        if let Some(controller) = self.passphrase_dialog.take() {
+                            controller.widget().force_close();
+                        }
+                    }
+                    if let Some(body) = dispatch.success_toast {
+                        self.toast_overlay.add_toast(adw::Toast::new(&body));
+                    }
+                }
             }
             AppMsg::OpenAddDialog => {
                 // Header-bar `+` button activation. Mount a fresh

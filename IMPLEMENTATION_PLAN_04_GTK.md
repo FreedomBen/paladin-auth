@@ -3357,9 +3357,34 @@ sign-off.
     passphrase buffers and clears `remove_confirmed`. Pinned by
     `apply_msg_sub_flow_selected_clears_passphrase_buffers` and
     `apply_msg_sub_flow_selected_clears_remove_confirmed_flag`.)
-  - [ ] Dispatch the chosen transition on `gio::spawn_blocking` so
+  - [x] Dispatch the chosen transition on `gio::spawn_blocking` so
     the §4.5 KDF runs off the main loop; surface a spinner / busy
     affordance while the join is pending.
+    (`AppMsg::PassphraseDialogAction(Submit(_))` runs
+    `compose_passphrase_worker_input` + `apply_submit_passphrase_inplace`
+    to bundle `(Vault, Store, SubmitPayload)` and apply the
+    `Unlocked → UnlockedBusy` busy gate, then spawns
+    `run_passphrase_worker` on `gtk::gio::spawn_blocking` and posts
+    the completion back as `AppMsg::PassphraseWorkerCompleted`,
+    consumed by the dispatch branch that runs
+    `compose_passphrase_dispatch` to apply the rollback +
+    `PassphraseDialogMsg::WorkerFailed` forward + drop-on-success
+    + `AdwToast` body. The dialog's own
+    `PassphraseDialogState::is_dispatching` flag arms on the
+    accepted Submit, disables Save / Cancel via
+    `submit_button_sensitive` / `cancel_button_sensitive`, shows a
+    `gtk::Spinner` via `spinner_visible`, and clears on
+    `WorkerFailed` / `Cancel` / `SetDispatching(false)` (rolled
+    back when the AppModel-side dispatch is refused). Pinned by
+    the dialog-side `submit_button_insensitive_while_dispatching`,
+    `cancel_button_insensitive_while_dispatching`,
+    `spinner_visible_while_dispatching`,
+    `apply_msg_worker_failed_clears_dispatching`,
+    `apply_msg_cancel_clears_dispatching_flag`, and AppModel-side
+    `compose_passphrase_dispatch_*`,
+    `apply_submit_passphrase_inplace_*`,
+    `compose_passphrase_worker_input_*`,
+    `apply_passphrase_vault_install_inplace_*` test suites.)
   - [x] Surface `save_not_committed` and
     `save_durability_unconfirmed` inline (DESIGN §4.5 owns the
     in-memory mode / key rollback / replacement); the dialog stays

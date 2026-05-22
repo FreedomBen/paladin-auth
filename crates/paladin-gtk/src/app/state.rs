@@ -67,6 +67,10 @@ use crate::export_dialog::{
     ExportDialogMsg, ExportOutcome, ExportSubmitPayload, ExportWorkerInput,
 };
 use crate::import_dialog::{ImportDialogMsg, ImportSubmitPayload, ImportWorkerInput, MergeOutcome};
+use crate::passphrase_dialog::{
+    format_passphrase_success_toast, PassphraseDialogMsg, PassphraseWorkerEffect,
+    PassphraseWorkerInput, SubmitPayload as PassphraseSubmitPayload,
+};
 use crate::remove_dialog::{RemoveDialogMsg, RemoveWorkerEffect, RemoveWorkerInput};
 use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
@@ -3877,4 +3881,257 @@ pub fn apply_export_vault_install_inplace(
     pair: (Vault, Store),
 ) {
     *vault_slot = Some(pair);
+}
+
+// ---------------------------------------------------------------------------
+// PassphraseDialog — pre-worker / post-worker composers
+//
+// `PassphraseDialog` mirrors the `RemoveDialog` shape: a typed
+// effect (`PassphraseWorkerEffect::{Success, Failure}`) routes
+// through a `compose_passphrase_dispatch` aggregator into
+// `(app_state, dialog_msg, drop_dialog, success_toast)`. The
+// success branch drops the dialog and raises an `AdwToast`; every
+// failure branch keeps the dialog mounted with
+// `PassphraseDialogMsg::WorkerFailed(outcome)` so the dialog re-
+// renders the typed `save_not_committed` /
+// `save_durability_unconfirmed` / defensive inline error per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors".
+// ---------------------------------------------------------------------------
+
+/// Pre-worker `Unlocked → UnlockedBusy` transition for the
+/// `gio::spawn_blocking` passphrase-transition worker dispatched
+/// by `AppMsg::PassphraseDialogAction(PassphraseDialogOutput::Submit(_))`.
+///
+/// Returns `Some(UnlockedBusy { path })` iff `current` is
+/// [`AppState::Unlocked`], and `None` from every other state
+/// (`Missing`, `Locked`, `UnlockedBusy`, `StartupError`). The
+/// `None` arm is the defensive case for a stray `Submit` reaching
+/// `AppModel::update` from a non-`Unlocked` source — `AppModel`
+/// must not silently install a phantom `UnlockedBusy` that would
+/// clobber the idle state.
+#[must_use]
+pub fn submit_passphrase_app_state(current: &AppState) -> Option<AppState> {
+    current.clone().enter_busy()
+}
+
+/// Apply [`submit_passphrase_app_state`]'s transition in-place to
+/// `state`, leaving it unchanged when the transition would return
+/// `None`.
+///
+/// Returns `true` when the state actually transitioned (source was
+/// `Unlocked` → destination is `UnlockedBusy`), `false` otherwise.
+/// `AppModel::update` uses the `true` return to gate the
+/// `gio::spawn_blocking` worker spawn — a `false` return is the
+/// defensive no-op for a stray `Submit` from any non-`Unlocked`
+/// source state.
+pub fn apply_submit_passphrase_inplace(state: &mut AppState) -> bool {
+    if let Some(new_state) = submit_passphrase_app_state(state) {
+        *state = new_state;
+        true
+    } else {
+        false
+    }
+}
+
+/// Compose the [`PassphraseWorkerInput`] payload for the
+/// `gio::spawn_blocking` passphrase-transition worker.
+///
+/// Bundles the live `(Vault, Store)` pair and the validated
+/// [`PassphraseSubmitPayload`] into a [`PassphraseWorkerInput`] for
+/// [`crate::passphrase_dialog::run_passphrase_worker`]. Gates on
+/// the pre-transition source state: only [`AppState::Unlocked`]
+/// returns `Ok(input)`; every other variant returns
+/// `Err((vault, store))` so the caller can reinstall the pair
+/// without losing the live unlocked vault.
+///
+/// `Result` rather than `Option` because the `(Vault, Store)` pair
+/// is non-`Clone` — dropping it on a stray dispatch would lose the
+/// user's open vault. The `Err((vault, store))` branch hands the
+/// pair back so `apply_passphrase_vault_install_inplace` can put
+/// it back in `AppModel.vault`. The [`PassphraseSubmitPayload`] is
+/// dropped on the refusal arm so the carried
+/// [`paladin_core::EncryptionOptions`] zeroizes its
+/// `secrecy::SecretString` per `ZeroizeOnDrop`.
+///
+/// # Errors
+///
+/// Returns `Err((vault, store))` when `current` is not
+/// [`AppState::Unlocked`]; the pair is unchanged.
+pub fn compose_passphrase_worker_input(
+    current: &AppState,
+    pair: (Vault, Store),
+    payload: PassphraseSubmitPayload,
+) -> Result<PassphraseWorkerInput, (Vault, Store)> {
+    match current {
+        AppState::Unlocked { .. } => {
+            let (vault, store) = pair;
+            Ok(PassphraseWorkerInput {
+                vault,
+                store,
+                payload,
+            })
+        }
+        AppState::Missing { .. }
+        | AppState::Locked { .. }
+        | AppState::UnlockedBusy { .. }
+        | AppState::StartupError { .. } => Err(pair),
+    }
+}
+
+/// Install the worker's `(Vault, Store)` pair from
+/// [`crate::passphrase_dialog::PassphraseWorkerCompletion`] into
+/// `AppModel::vault` in-place.
+///
+/// Symmetric partner of [`apply_remove_vault_install_inplace`] for
+/// the passphrase path. The pair is always reinstalled — the §4.5
+/// passphrase transitions are authoritative for the rollback
+/// (`save_not_committed`) and durability-unconfirmed semantics, so
+/// the returned vault reflects the committed state regardless of
+/// effect branch.
+pub fn apply_passphrase_vault_install_inplace(
+    vault_slot: &mut Option<(Vault, Store)>,
+    pair: (Vault, Store),
+) {
+    *vault_slot = Some(pair);
+}
+
+/// `UnlockedBusy → Unlocked` rollback projection for the passphrase
+/// worker outcome.
+///
+/// Mirrors [`remove_final_app_state`]: every
+/// [`PassphraseWorkerEffect`] variant — `Success` and every
+/// `Failure(PassphraseErrorOutcome)` projection — lands on the same
+/// `UnlockedBusy → Unlocked` rollback via [`AppState::leave_busy`].
+/// `Vault::set_passphrase` / `change_passphrase` / `remove_passphrase`
+/// own the §4.5 rollback / durability semantics, so the state
+/// machine returns to `Unlocked` uniformly. The dialog-drop /
+/// inline-message / toast routing splits off the typed effect in
+/// sibling helpers in [`compose_passphrase_dispatch`].
+///
+/// Returns `Some(Unlocked { path })` iff `current` is
+/// [`AppState::UnlockedBusy`], and `None` from every other state.
+#[must_use]
+pub fn passphrase_final_app_state(
+    current: &AppState,
+    _effect: &PassphraseWorkerEffect,
+) -> Option<AppState> {
+    current.clone().leave_busy()
+}
+
+/// Drop-decision projection for the
+/// [`crate::passphrase_dialog::PassphraseDialogComponent`] after a
+/// passphrase worker outcome.
+///
+/// `true` on [`PassphraseWorkerEffect::Success`] — the dialog
+/// dismisses; `false` on every `Failure(_)` branch so the dialog
+/// stays open and re-renders the typed
+/// `save_not_committed` / `save_durability_unconfirmed` /
+/// defensive inline error.
+#[must_use]
+pub fn should_drop_passphrase_dialog_after(effect: &PassphraseWorkerEffect) -> bool {
+    matches!(effect, PassphraseWorkerEffect::Success { .. })
+}
+
+/// Inline-message projection for the passphrase worker outcome.
+///
+/// * [`PassphraseWorkerEffect::Success`] → `None`. The dialog
+///   dismisses so no inline body needs to render.
+/// * [`PassphraseWorkerEffect::Failure(outcome)`] →
+///   `Some(PassphraseDialogMsg::WorkerFailed(outcome))`. The dialog
+///   stays open and the typed
+///   [`crate::passphrase_dialog::PassphraseErrorOutcome`]
+///   re-renders inline (DESIGN §4.5 owns the in-memory rollback /
+///   replacement).
+#[must_use]
+pub fn passphrase_dialog_msg_after(effect: &PassphraseWorkerEffect) -> Option<PassphraseDialogMsg> {
+    match effect {
+        PassphraseWorkerEffect::Success { .. } => None,
+        PassphraseWorkerEffect::Failure(outcome) => {
+            Some(PassphraseDialogMsg::WorkerFailed(outcome.clone()))
+        }
+    }
+}
+
+/// Toast-body projection for the passphrase worker outcome.
+///
+/// * [`PassphraseWorkerEffect::Success { sub_flow, .. }`] →
+///   `Some(format_passphrase_success_toast(sub_flow).to_string())`.
+/// * [`PassphraseWorkerEffect::Failure`] → `None`. The dialog
+///   stays mounted with the inline error / warning, which is the
+///   surface that conveys the typed outcome — no toast layered on
+///   top.
+#[must_use]
+pub fn passphrase_success_toast_after(effect: &PassphraseWorkerEffect) -> Option<String> {
+    match effect {
+        PassphraseWorkerEffect::Success { sub_flow, .. } => {
+            Some(format_passphrase_success_toast(*sub_flow).to_string())
+        }
+        PassphraseWorkerEffect::Failure(_) => None,
+    }
+}
+
+/// Bundle of dispatch decisions for the passphrase worker outcome.
+///
+/// Mirrors [`RemoveDispatch`] for the passphrase path.
+/// `AppMsg::PassphraseWorkerCompleted` runs this aggregator over
+/// the typed effect so the call site applies all four decisions
+/// (state rollback, inline message forward, dialog drop, success
+/// toast) without re-deriving the routing.
+#[derive(Debug, Clone)]
+pub struct PassphraseDispatch {
+    /// New [`AppState`] to install on `AppModel.state`. `Some` for
+    /// the `UnlockedBusy → Unlocked` rollback that
+    /// [`passphrase_final_app_state`] returns regardless of typed
+    /// effect; `None` is the defensive case where the worker
+    /// outcome arrives but `current` is not
+    /// [`AppState::UnlockedBusy`].
+    pub app_state: Option<AppState>,
+    /// Inline message to forward to the live
+    /// [`crate::passphrase_dialog::PassphraseDialogComponent`]
+    /// controller. `Some(WorkerFailed(outcome))` for the failure
+    /// branches; `None` for the success branch that drops the
+    /// dialog.
+    pub dialog_msg: Option<PassphraseDialogMsg>,
+    /// Whether `AppModel::update` should drop the live
+    /// [`crate::passphrase_dialog::PassphraseDialogComponent`]
+    /// controller after applying [`Self::app_state`]. Drops on the
+    /// success branch; stays mounted on every failure branch.
+    pub drop_dialog: bool,
+    /// Optional `AdwToast` body to raise on the
+    /// `adw::ToastOverlay` after applying the worker outcome.
+    /// `Some(body)` on success, `None` on every failure.
+    pub success_toast: Option<String>,
+}
+
+/// Aggregate the trio of passphrase-dispatch projections into a
+/// single [`PassphraseDispatch`].
+#[must_use]
+pub fn compose_passphrase_dispatch(
+    current: &AppState,
+    effect: &PassphraseWorkerEffect,
+) -> PassphraseDispatch {
+    PassphraseDispatch {
+        app_state: passphrase_final_app_state(current, effect),
+        dialog_msg: passphrase_dialog_msg_after(effect),
+        drop_dialog: should_drop_passphrase_dialog_after(effect),
+        success_toast: passphrase_success_toast_after(effect),
+    }
+}
+
+/// Apply [`compose_passphrase_dispatch`]'s state field in-place to
+/// `state`, leaving it unchanged when the dispatch carries
+/// `app_state = None`.
+///
+/// Returns `true` when the state actually transitioned, `false`
+/// otherwise.
+pub fn apply_passphrase_dispatch_inplace(
+    state: &mut AppState,
+    dispatch: &PassphraseDispatch,
+) -> bool {
+    if let Some(new_state) = dispatch.app_state.as_ref() {
+        *state = new_state.clone();
+        true
+    } else {
+        false
+    }
 }

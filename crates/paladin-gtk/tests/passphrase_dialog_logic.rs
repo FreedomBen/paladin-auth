@@ -979,3 +979,229 @@ fn run_passphrase_worker_set_on_already_encrypted_returns_failure_with_pair() {
     // (Vault, Store) pair returned on failure so AppModel can reinstall.
     assert!(completion.vault.is_encrypted());
 }
+
+// ---------------------------------------------------------------------------
+// Dispatching / busy state — pin the §"In-flight effect ownership"
+// gating shadow the `PassphraseDialog` owns. `AppModel` mounts the
+// `Unlocked → UnlockedBusy` busy-gate at the same instant the
+// dialog flips `dispatching = true`; the dialog's own controls
+// disable so a stray keyboard accelerator cannot fire a second
+// Submit / Cancel while the `gio::spawn_blocking` worker is in
+// flight.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn passphrase_dialog_state_new_starts_idle() {
+    let plaintext = PassphraseDialogState::new(false);
+    assert!(!plaintext.is_dispatching());
+    let encrypted = PassphraseDialogState::new(true);
+    assert!(!encrypted.is_dispatching());
+}
+
+#[test]
+fn apply_msg_submit_set_with_match_flips_dispatching_true() {
+    let mut state = PassphraseDialogState::new(false);
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::NewPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::ConfirmPassphraseChanged("hunter2".into()),
+    );
+
+    let output = apply_msg(&mut state, PassphraseDialogMsg::SubmitClicked);
+
+    assert!(matches!(
+        output,
+        Some(PassphraseDialogOutput::Submit(SubmitPayload::Set(_)))
+    ));
+    assert!(
+        state.is_dispatching(),
+        "successful Submit must arm the dispatching busy gate"
+    );
+}
+
+#[test]
+fn apply_msg_submit_change_with_match_flips_dispatching_true() {
+    let mut state = PassphraseDialogState::new(true);
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::NewPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::ConfirmPassphraseChanged("hunter2".into()),
+    );
+
+    apply_msg(&mut state, PassphraseDialogMsg::SubmitClicked);
+
+    assert!(state.is_dispatching());
+}
+
+#[test]
+fn apply_msg_submit_remove_with_ack_flips_dispatching_true() {
+    let mut state = PassphraseDialogState::new(true);
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::SubFlowSelected(SubFlow::Remove),
+    );
+    apply_msg(&mut state, PassphraseDialogMsg::AcknowledgeRemove(true));
+
+    apply_msg(&mut state, PassphraseDialogMsg::SubmitClicked);
+
+    assert!(state.is_dispatching());
+}
+
+#[test]
+fn apply_msg_submit_set_with_mismatch_leaves_dispatching_false() {
+    // A pre-submit rejection (mismatch) must not arm the busy gate —
+    // no worker is dispatched, so the dialog stays interactive.
+    let mut state = PassphraseDialogState::new(false);
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::NewPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::ConfirmPassphraseChanged("hunter3".into()),
+    );
+
+    apply_msg(&mut state, PassphraseDialogMsg::SubmitClicked);
+
+    assert!(
+        !state.is_dispatching(),
+        "rejected Submit must not arm the busy gate"
+    );
+}
+
+#[test]
+fn apply_msg_submit_remove_without_ack_leaves_dispatching_false() {
+    let mut state = PassphraseDialogState::new(true);
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::SubFlowSelected(SubFlow::Remove),
+    );
+
+    apply_msg(&mut state, PassphraseDialogMsg::SubmitClicked);
+
+    assert!(!state.is_dispatching());
+}
+
+#[test]
+fn apply_msg_worker_failed_clears_dispatching() {
+    use paladin_core::PaladinError;
+
+    let mut state = PassphraseDialogState::new(false);
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::NewPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::ConfirmPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(&mut state, PassphraseDialogMsg::SubmitClicked);
+    assert!(state.is_dispatching());
+
+    let outcome = classify_passphrase_error(&PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    });
+    apply_msg(&mut state, PassphraseDialogMsg::WorkerFailed(outcome));
+
+    assert!(
+        !state.is_dispatching(),
+        "WorkerFailed must release the busy gate so the dialog re-enables"
+    );
+}
+
+#[test]
+fn submit_button_insensitive_while_dispatching() {
+    // Save button is bound to `submit_button_sensitive`; once the
+    // worker is in flight the gate must close so a stray accelerator
+    // cannot fire a second Submit over the running worker.
+    let mut state = PassphraseDialogState::new(false);
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::NewPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::ConfirmPassphraseChanged("hunter2".into()),
+    );
+    assert!(state.submit_button_sensitive());
+
+    apply_msg(&mut state, PassphraseDialogMsg::SubmitClicked);
+
+    assert!(state.is_dispatching());
+    assert!(
+        !state.submit_button_sensitive(),
+        "Save button must be insensitive while a worker is in flight"
+    );
+}
+
+#[test]
+fn cancel_button_insensitive_while_dispatching() {
+    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    // ownership": "Dialog close/cancel is disabled for the surface
+    // that owns the in-flight mutation until the worker returns".
+    let mut state = PassphraseDialogState::new(false);
+    assert!(state.cancel_button_sensitive());
+
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::NewPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::ConfirmPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(&mut state, PassphraseDialogMsg::SubmitClicked);
+
+    assert!(state.is_dispatching());
+    assert!(
+        !state.cancel_button_sensitive(),
+        "Cancel must be insensitive while a worker is in flight"
+    );
+}
+
+#[test]
+fn spinner_visible_while_dispatching() {
+    let mut state = PassphraseDialogState::new(false);
+    assert!(!state.spinner_visible());
+
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::NewPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::ConfirmPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(&mut state, PassphraseDialogMsg::SubmitClicked);
+
+    assert!(state.spinner_visible());
+}
+
+#[test]
+fn apply_msg_cancel_clears_dispatching_flag() {
+    // Defensive: the widget hides Cancel while dispatching, but if a
+    // stray Cancel arrives anyway, releasing the busy gate keeps the
+    // post-state usable rather than locking the dialog up forever.
+    let mut state = PassphraseDialogState::new(false);
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::NewPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(
+        &mut state,
+        PassphraseDialogMsg::ConfirmPassphraseChanged("hunter2".into()),
+    );
+    apply_msg(&mut state, PassphraseDialogMsg::SubmitClicked);
+    assert!(state.is_dispatching());
+
+    apply_msg(&mut state, PassphraseDialogMsg::Cancel);
+
+    assert!(!state.is_dispatching());
+}

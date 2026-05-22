@@ -11097,3 +11097,282 @@ fn apply_import_vault_install_inplace_replaces_existing_slot() {
     apply_import_vault_install_inplace(&mut slot, (vault2, store2));
     assert!(slot.is_some());
 }
+
+// ---------------------------------------------------------------------------
+// submit_passphrase_app_state / apply_submit_passphrase_inplace —
+// pre-worker `Unlocked → UnlockedBusy` busy-gate composer for the
+// passphrase-transition path.
+//
+// Mirrors the `submit_remove_app_state` / `submit_rename_app_state`
+// suite: the `Unlocked` source transitions to `UnlockedBusy`
+// preserving the path; every other source is a defensive no-op.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn submit_passphrase_app_state_from_unlocked_returns_unlocked_busy_preserving_path() {
+    use paladin_gtk::app::state::submit_passphrase_app_state;
+    let path = vault_path();
+    let unlocked = AppState::Unlocked { path: path.clone() };
+    let next = submit_passphrase_app_state(&unlocked)
+        .expect("Unlocked must transition to UnlockedBusy on passphrase submit");
+    assert!(matches!(next, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn submit_passphrase_app_state_from_non_unlocked_returns_none() {
+    use paladin_gtk::app::state::submit_passphrase_app_state;
+    let path = vault_path();
+    assert!(submit_passphrase_app_state(&AppState::Missing { path: path.clone() }).is_none());
+    assert!(submit_passphrase_app_state(&AppState::Locked { path: path.clone() }).is_none());
+    assert!(submit_passphrase_app_state(&AppState::UnlockedBusy { path: path.clone() }).is_none());
+    let startup = decide_state_from_inspect(&path, Err(invalid_header_err()))
+        .expect("inspect Err yields StartupError state");
+    assert!(submit_passphrase_app_state(&startup).is_none());
+}
+
+#[test]
+fn apply_submit_passphrase_inplace_from_unlocked_mutates_to_unlocked_busy_and_returns_true() {
+    use paladin_gtk::app::state::apply_submit_passphrase_inplace;
+    let path = vault_path();
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let mutated = apply_submit_passphrase_inplace(&mut state);
+    assert!(mutated);
+    assert!(matches!(state, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_submit_passphrase_inplace_from_non_unlocked_returns_false_and_keeps_state() {
+    use paladin_gtk::app::state::apply_submit_passphrase_inplace;
+    let path = vault_path();
+    for variant in [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+    ] {
+        let mut state = variant.clone();
+        let mutated = apply_submit_passphrase_inplace(&mut state);
+        assert!(!mutated);
+        // Source byte-for-byte intact: the discriminant is preserved.
+        match (&state, &variant) {
+            (AppState::Missing { .. }, AppState::Missing { .. })
+            | (AppState::Locked { .. }, AppState::Locked { .. })
+            | (AppState::UnlockedBusy { .. }, AppState::UnlockedBusy { .. }) => {}
+            other => panic!("source variant must be preserved, got {other:?}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// compose_passphrase_worker_input — bundles `(Vault, Store, SubmitPayload)`
+// into a `PassphraseWorkerInput` for the `gio::spawn_blocking` worker.
+// `Unlocked` returns `Ok(input)`; every other variant returns
+// `Err(pair)` so the dispatch site can reinstall the live pair.
+// ---------------------------------------------------------------------------
+
+fn passphrase_remove_payload() -> paladin_gtk::passphrase_dialog::SubmitPayload {
+    // `Remove` carries no secret payload — the simplest fixture for
+    // the composer tests since it does not need a real
+    // `EncryptionOptions`.
+    paladin_gtk::passphrase_dialog::SubmitPayload::Remove
+}
+
+#[test]
+fn compose_passphrase_worker_input_from_unlocked_bundles_pair_and_payload() {
+    use paladin_gtk::app::state::compose_passphrase_worker_input;
+    let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+    let unlocked = AppState::Unlocked { path: path.clone() };
+
+    let input =
+        compose_passphrase_worker_input(&unlocked, (vault, store), passphrase_remove_payload())
+            .expect("Unlocked source must produce a PassphraseWorkerInput");
+
+    // The worker payload arm matches the input we passed in.
+    assert!(matches!(
+        input.payload,
+        paladin_gtk::passphrase_dialog::SubmitPayload::Remove
+    ));
+    // The bundled vault is the live one (zero accounts in this fixture).
+    assert_eq!(input.vault.summaries().count(), 0);
+}
+
+#[test]
+fn compose_passphrase_worker_input_from_non_unlocked_returns_pair_back() {
+    use paladin_gtk::app::state::compose_passphrase_worker_input;
+    for variant in ["missing", "locked", "unlocked_busy", "startup_error"] {
+        let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+        let source = match variant {
+            "missing" => AppState::Missing { path: path.clone() },
+            "locked" => AppState::Locked { path: path.clone() },
+            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
+            "startup_error" => decide_state_from_inspect(&path, Err(invalid_header_err()))
+                .expect("inspect Err yields StartupError state"),
+            _ => unreachable!(),
+        };
+        let result =
+            compose_passphrase_worker_input(&source, (vault, store), passphrase_remove_payload());
+        assert!(
+            result.is_err(),
+            "non-Unlocked source must return Err(pair), variant={variant}",
+        );
+        let (returned_vault, _returned_store) = result.err().unwrap();
+        assert_eq!(returned_vault.summaries().count(), 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// compose_passphrase_dispatch — aggregates the four routing
+// projections (app_state rollback, dialog_msg, drop_dialog,
+// success_toast) from the typed `PassphraseWorkerEffect`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_passphrase_dispatch_success_drops_dialog_and_rolls_busy_back() {
+    use paladin_gtk::app::state::compose_passphrase_dispatch;
+    use paladin_gtk::passphrase_dialog::{PassphraseWorkerEffect, SubFlow};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = PassphraseWorkerEffect::Success {
+        sub_flow: SubFlow::Set,
+        new_is_encrypted: true,
+    };
+
+    let dispatch = compose_passphrase_dispatch(&busy, &effect);
+
+    assert!(dispatch.drop_dialog, "success must drop the dialog");
+    assert!(
+        dispatch.dialog_msg.is_none(),
+        "success must not forward an inline message",
+    );
+    assert!(
+        matches!(dispatch.app_state, Some(AppState::Unlocked { .. })),
+        "busy gate must roll back on success",
+    );
+    assert!(
+        dispatch.success_toast.is_some(),
+        "success must raise a confirmation toast",
+    );
+}
+
+#[test]
+fn compose_passphrase_dispatch_failure_keeps_dialog_with_worker_failed_msg() {
+    use paladin_gtk::app::state::compose_passphrase_dispatch;
+    use paladin_gtk::passphrase_dialog::{
+        classify_passphrase_error, PassphraseDialogMsg, PassphraseWorkerEffect,
+    };
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = paladin_core::PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_passphrase_error(&err);
+    let effect = PassphraseWorkerEffect::Failure(outcome);
+
+    let dispatch = compose_passphrase_dispatch(&busy, &effect);
+
+    assert!(
+        !dispatch.drop_dialog,
+        "failure must keep the dialog mounted",
+    );
+    assert!(
+        matches!(
+            dispatch.dialog_msg,
+            Some(PassphraseDialogMsg::WorkerFailed(_))
+        ),
+        "failure must forward WorkerFailed to the dialog",
+    );
+    assert!(
+        matches!(dispatch.app_state, Some(AppState::Unlocked { .. })),
+        "busy gate must roll back even on failure",
+    );
+    assert!(
+        dispatch.success_toast.is_none(),
+        "failure must not raise a confirmation toast",
+    );
+}
+
+#[test]
+fn compose_passphrase_dispatch_from_non_unlocked_busy_returns_no_app_state() {
+    use paladin_gtk::app::state::compose_passphrase_dispatch;
+    use paladin_gtk::passphrase_dialog::{PassphraseWorkerEffect, SubFlow};
+
+    let path = vault_path();
+    let effect = PassphraseWorkerEffect::Success {
+        sub_flow: SubFlow::Set,
+        new_is_encrypted: true,
+    };
+
+    for source in [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ] {
+        let dispatch = compose_passphrase_dispatch(&source, &effect);
+        assert!(
+            dispatch.app_state.is_none(),
+            "non-UnlockedBusy source must not install a phantom Unlocked",
+        );
+    }
+}
+
+#[test]
+fn apply_passphrase_dispatch_inplace_applies_unlocked_rollback() {
+    use paladin_gtk::app::state::{apply_passphrase_dispatch_inplace, compose_passphrase_dispatch};
+    use paladin_gtk::passphrase_dialog::{PassphraseWorkerEffect, SubFlow};
+
+    let path = vault_path();
+    let mut state = AppState::UnlockedBusy { path: path.clone() };
+    let dispatch = compose_passphrase_dispatch(
+        &state,
+        &PassphraseWorkerEffect::Success {
+            sub_flow: SubFlow::Set,
+            new_is_encrypted: true,
+        },
+    );
+    let mutated = apply_passphrase_dispatch_inplace(&mut state, &dispatch);
+    assert!(mutated);
+    assert!(matches!(state, AppState::Unlocked { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_passphrase_dispatch_inplace_noop_when_app_state_is_none() {
+    use paladin_gtk::app::state::{apply_passphrase_dispatch_inplace, compose_passphrase_dispatch};
+    use paladin_gtk::passphrase_dialog::{PassphraseWorkerEffect, SubFlow};
+
+    let path = vault_path();
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let dispatch = compose_passphrase_dispatch(
+        &state,
+        &PassphraseWorkerEffect::Success {
+            sub_flow: SubFlow::Set,
+            new_is_encrypted: true,
+        },
+    );
+    let mutated = apply_passphrase_dispatch_inplace(&mut state, &dispatch);
+    assert!(!mutated);
+    assert!(matches!(state, AppState::Unlocked { .. }));
+}
+
+#[test]
+fn apply_passphrase_vault_install_inplace_writes_pair_into_empty_slot() {
+    use paladin_gtk::app::state::apply_passphrase_vault_install_inplace;
+    let (_tempdir, _path, vault, store) = fresh_plaintext_pair();
+    let mut slot: Option<(Vault, Store)> = None;
+    apply_passphrase_vault_install_inplace(&mut slot, (vault, store));
+    assert!(slot.is_some());
+}
+
+#[test]
+fn apply_passphrase_vault_install_inplace_replaces_existing_slot() {
+    use paladin_gtk::app::state::apply_passphrase_vault_install_inplace;
+    let (_tempdir1, _path1, vault1, store1) = fresh_plaintext_pair();
+    let (_tempdir2, _path2, vault2, store2) = fresh_plaintext_pair();
+    let mut slot: Option<(Vault, Store)> = Some((vault1, store1));
+    apply_passphrase_vault_install_inplace(&mut slot, (vault2, store2));
+    assert!(slot.is_some());
+}
