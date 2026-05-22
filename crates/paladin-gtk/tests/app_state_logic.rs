@@ -4952,6 +4952,295 @@ fn qr_dialog_msg_after_drop_dialog_partition_inverts_add_on_success() {
 }
 
 // ---------------------------------------------------------------------------
+// compose_qr_dispatch — bundle QR-worker dispatch decisions
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `compose_add_dispatch` for the clipboard-QR
+// sub-path. `AppMsg::QrWorkerCompleted` (wired in a follow-up commit)
+// consults this composer to apply the worker outcome in a single
+// shot without re-routing the `QrWorkerEffect`:
+//
+// * `app_state` mirrors `qr_final_app_state`.
+// * `dialog_msg` mirrors `qr_dialog_msg_after`.
+// * `drop_dialog` mirrors `should_drop_add_dialog_after_qr` (always
+//   `false` — the dialog stays mounted on every effect so the
+//   counts panel / inline error / durability warning surfaces).
+// * `refresh_list` mirrors `should_refresh_list_after_qr`.
+//
+// `success_toast` is intentionally omitted from `QrDispatch`: the
+// counts panel parked by `QrSuccess(summary)` is the surface for
+// the post-merge counts, so a separate `AdwToast` would be
+// redundant. The plan's "Surface post-merge counts inline" rule
+// for the QR sub-path is satisfied entirely by the still-mounted
+// dialog.
+
+#[test]
+fn compose_qr_dispatch_success_carries_qr_success_keep_mounted_and_refresh() {
+    use paladin_core::ImportReport;
+    use paladin_gtk::add_account::{AddAccountMsg, QrWorkerEffect};
+    use paladin_gtk::app::state::compose_qr_dispatch;
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let report = ImportReport {
+        imported: 2,
+        skipped: 1,
+        replaced: 0,
+        appended: 0,
+        accounts: vec![
+            paladin_core::AccountId::new(),
+            paladin_core::AccountId::new(),
+        ],
+        warnings: Vec::new(),
+    };
+    let expected_summary = QrImportSummary::from_report(&report);
+    let effect = QrWorkerEffect::Success(report);
+    let dispatch = compose_qr_dispatch(&busy, &effect);
+
+    let new_state = dispatch
+        .app_state
+        .as_ref()
+        .expect("Success rolls back UnlockedBusy → Unlocked");
+    assert!(matches!(new_state, AppState::Unlocked { .. }));
+    assert_path_eq(new_state, &path);
+
+    match dispatch.dialog_msg.as_ref() {
+        Some(AddAccountMsg::QrSuccess(summary)) => {
+            assert_eq!(
+                *summary, expected_summary,
+                "Success forwards QrSuccess with the from_report summary",
+            );
+        }
+        other => panic!(
+            "Success must forward Some(AddAccountMsg::QrSuccess(_)) into the dialog, got {other:?}",
+        ),
+    }
+
+    assert!(
+        !dispatch.drop_dialog,
+        "QR Success keeps the Add dialog mounted so the counts panel renders",
+    );
+    assert!(
+        dispatch.refresh_list,
+        "QR Success refreshes the list so newly merged accounts surface",
+    );
+}
+
+#[test]
+fn compose_qr_dispatch_failure_inline_keeps_dialog_mounted_no_refresh() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::compose_qr_dispatch;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    });
+    assert!(matches!(outcome, AddPostEffectOutcome::Inline(_)));
+    let effect = QrWorkerEffect::Failure(outcome);
+    let dispatch = compose_qr_dispatch(&busy, &effect);
+
+    let new_state = dispatch
+        .app_state
+        .as_ref()
+        .expect("Inline failure still rolls back UnlockedBusy → Unlocked");
+    assert!(matches!(new_state, AppState::Unlocked { .. }));
+    assert_path_eq(new_state, &path);
+
+    match dispatch.dialog_msg.as_ref() {
+        Some(AddAccountMsg::WorkerFailed(AddPostEffectOutcome::Inline(_))) => {}
+        other => panic!(
+            "Inline failure must forward WorkerFailed(Inline) into the dialog, got {other:?}",
+        ),
+    }
+
+    assert!(
+        !dispatch.drop_dialog,
+        "Inline failure keeps the dialog mounted so the inline error renders",
+    );
+    assert!(
+        !dispatch.refresh_list,
+        "Inline failure rolls back; visible rows already match disk",
+    );
+}
+
+#[test]
+fn compose_qr_dispatch_failure_keep_with_warning_refreshes_and_keeps_mounted() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::compose_qr_dispatch;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    assert!(matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)));
+    let effect = QrWorkerEffect::Failure(outcome);
+    let dispatch = compose_qr_dispatch(&busy, &effect);
+
+    let new_state = dispatch
+        .app_state
+        .as_ref()
+        .expect("KeepWithWarning rolls back UnlockedBusy → Unlocked");
+    assert!(matches!(new_state, AppState::Unlocked { .. }));
+    assert_path_eq(new_state, &path);
+
+    match dispatch.dialog_msg.as_ref() {
+        Some(AddAccountMsg::WorkerFailed(AddPostEffectOutcome::KeepWithWarning(_))) => {}
+        other => {
+            panic!("KeepWithWarning must forward WorkerFailed(KeepWithWarning), got {other:?}",)
+        }
+    }
+
+    assert!(
+        !dispatch.drop_dialog,
+        "KeepWithWarning keeps the dialog mounted so the warning renders",
+    );
+    assert!(
+        dispatch.refresh_list,
+        "KeepWithWarning leaves the merged accounts durable; list must surface them",
+    );
+}
+
+#[test]
+fn compose_qr_dispatch_from_non_unlocked_busy_carries_none_app_state() {
+    // Defensive: a stray worker completion arriving while `current`
+    // is not `UnlockedBusy` must not install a phantom `Unlocked`
+    // rollback. The dispatch composer still projects `dialog_msg` /
+    // `drop_dialog` / `refresh_list` consistently — these are
+    // payload-only and the dialog routing remains valid — but
+    // `app_state` carries `None` so `AppModel::update` leaves the
+    // cached state untouched.
+    use paladin_core::ImportReport;
+    use paladin_gtk::add_account::{AddAccountMsg, QrWorkerEffect};
+    use paladin_gtk::app::state::compose_qr_dispatch;
+
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    let effect = QrWorkerEffect::Success(ImportReport::default());
+    for source in &sources {
+        let dispatch = compose_qr_dispatch(source, &effect);
+        assert!(
+            dispatch.app_state.is_none(),
+            "compose_qr_dispatch must carry None app_state for stray dispatch from source={source:?}",
+        );
+        assert!(
+            matches!(
+                dispatch.dialog_msg.as_ref(),
+                Some(AddAccountMsg::QrSuccess(_))
+            ),
+            "dialog_msg still mirrors qr_dialog_msg_after for source={source:?}",
+        );
+        assert!(
+            !dispatch.drop_dialog,
+            "drop_dialog still mirrors should_drop_add_dialog_after_qr",
+        );
+        assert!(
+            dispatch.refresh_list,
+            "refresh_list still mirrors should_refresh_list_after_qr",
+        );
+    }
+}
+
+#[test]
+fn compose_qr_dispatch_mirrors_trio_projections() {
+    // Aggregator invariant: each field of `QrDispatch` must equal
+    // the corresponding sibling projection across every typed
+    // effect and every source state. Pinning this prevents the
+    // composer from drifting from its constituent projections
+    // (e.g. forwarding a `QrSuccess` while quietly dropping the
+    // dialog).
+    use paladin_core::ImportReport;
+    use paladin_gtk::add_account::{classify_add_post_effect_error, QrWorkerEffect};
+    use paladin_gtk::app::state::{
+        compose_qr_dispatch, qr_dialog_msg_after, qr_final_app_state,
+        should_drop_add_dialog_after_qr, should_refresh_list_after_qr,
+    };
+
+    let path = vault_path();
+    let effects = [
+        QrWorkerEffect::Success(ImportReport::default()),
+        QrWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            },
+        )),
+        QrWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        QrWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::InvalidState {
+                operation: "import",
+                state: "account_not_found",
+            },
+        )),
+    ];
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for effect in &effects {
+        for source in &sources {
+            let dispatch = compose_qr_dispatch(source, effect);
+            let direct_state = qr_final_app_state(source, effect);
+            match (&dispatch.app_state, &direct_state) {
+                (Some(a), Some(b)) => {
+                    assert_eq!(
+                        std::mem::discriminant::<AppState>(a),
+                        std::mem::discriminant::<AppState>(b),
+                        "QrDispatch.app_state variant must mirror qr_final_app_state for source={source:?} effect={effect:?}",
+                    );
+                    assert_eq!(
+                        a.path().map(Path::to_path_buf),
+                        b.path().map(Path::to_path_buf),
+                        "QrDispatch.app_state path must mirror qr_final_app_state for source={source:?} effect={effect:?}",
+                    );
+                }
+                (None, None) => {}
+                _ => panic!(
+                    "QrDispatch.app_state Some/None partition must mirror qr_final_app_state for source={source:?} effect={effect:?}: dispatch={dispatch:?} direct={direct_state:?}",
+                ),
+            }
+            assert_eq!(
+                dispatch.drop_dialog,
+                should_drop_add_dialog_after_qr(effect),
+                "QrDispatch.drop_dialog must mirror should_drop_add_dialog_after_qr for source={source:?} effect={effect:?}",
+            );
+            assert_eq!(
+                dispatch.refresh_list,
+                should_refresh_list_after_qr(effect),
+                "QrDispatch.refresh_list must mirror should_refresh_list_after_qr for source={source:?} effect={effect:?}",
+            );
+            // Presence-only check on dialog_msg: the projection
+            // builds `Some(...)` for every typed effect (the dialog
+            // stays mounted on Success and Failure alike), so the
+            // aggregator must also carry `Some(_)` — pinned here so
+            // the field cannot quietly fall to `None`.
+            assert_eq!(
+                dispatch.dialog_msg.is_some(),
+                qr_dialog_msg_after(effect).is_some(),
+                "QrDispatch.dialog_msg presence must mirror qr_dialog_msg_after for source={source:?} effect={effect:?}",
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // apply_submit_unlock_inplace — `AppModel::update` mut-state wrapper
 // ---------------------------------------------------------------------------
 //

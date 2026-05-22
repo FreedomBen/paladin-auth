@@ -1366,6 +1366,130 @@ pub fn qr_dialog_msg_after(effect: &QrWorkerEffect) -> Option<AddAccountMsg> {
     }
 }
 
+/// Bundled `AppModel::update` instructions for a clipboard-QR
+/// worker completion. Carries the four decisions the existing
+/// sibling projections derive ([`qr_final_app_state`],
+/// [`qr_dialog_msg_after`], [`should_drop_add_dialog_after_qr`], and
+/// [`should_refresh_list_after_qr`]) so the dispatch site can apply
+/// the worker outcome in a single shot without re-routing the
+/// [`QrWorkerEffect`].
+///
+/// Symmetric partner of [`AddDispatch`] for the QR sub-path. The
+/// shape diverges from [`AddDispatch`] on two points:
+///
+/// * `dialog_msg` is `Some(_)` on every typed effect (not just
+///   `Failure`) because the QR sub-path keeps the dialog mounted on
+///   `Success` to render the counts panel via
+///   [`AddAccountMsg::QrSuccess`]. The manual / URI add path drops
+///   the dialog on `Success` and therefore has no message to
+///   forward; the QR sub-path always forwards a message.
+/// * `success_toast` is intentionally absent. The counts panel
+///   parked by `QrSuccess(summary)` inside the still-mounted dialog
+///   is the surface for the post-merge counts (per
+///   `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+///   clipboard image path" > "Surface post-merge counts … inline
+///   (parity with §6)"). A separate `AdwToast` would be redundant.
+///
+/// `app_state` keeps the same `Option<AppState>` shape as
+/// [`AddDispatch`] (the busy gate always releases on
+/// [`AppState::UnlockedBusy`] and is `None` from every other source
+/// state to avoid installing a phantom rollback on a stray
+/// dispatch). `drop_dialog` is always `false` for QR (the dialog
+/// stays mounted on every effect) but the field is preserved for
+/// shape parity with the sibling dispatches.
+#[derive(Debug, Clone)]
+pub struct QrDispatch {
+    /// New [`AppState`] to install on `AppModel.state`. `Some` for
+    /// the `UnlockedBusy → Unlocked` rollback that
+    /// [`qr_final_app_state`] returns regardless of typed effect
+    /// (the QR worker always rolls the busy gate back because
+    /// `Vault::mutate_and_save` is authoritative for the rollback /
+    /// durability-unconfirmed semantics per DESIGN.md §4.3).
+    /// `None` is the defensive case where the worker outcome
+    /// arrives but `current` is not [`AppState::UnlockedBusy`] —
+    /// `AppModel::update` leaves the state untouched rather than
+    /// installing a phantom `Unlocked` over another idle state.
+    pub app_state: Option<AppState>,
+    /// Inline message to forward to the live
+    /// [`crate::add_account::AddAccountComponent`] controller.
+    /// `Some(AddAccountMsg::QrSuccess(summary))` on `Success` so the
+    /// counts panel renders the post-merge counts, and
+    /// `Some(AddAccountMsg::WorkerFailed(outcome))` on every
+    /// `Failure` branch (the dialog stays mounted and re-renders
+    /// the typed outcome — `Inline` for `save_not_committed` /
+    /// `io_error` / defensive `validation_error` / `invalid_state`
+    /// and `KeepWithWarning` for `save_durability_unconfirmed`).
+    pub dialog_msg: Option<AddAccountMsg>,
+    /// Whether `AppModel::update` should drop the live
+    /// [`crate::add_account::AddAccountComponent`] controller after
+    /// applying [`Self::app_state`]. Always `false` for the QR sub-
+    /// path because the dialog stays mounted on every effect; the
+    /// field is kept for shape parity with [`AddDispatch`] /
+    /// [`RemoveDispatch`] / [`RenameDispatch`] and so a future
+    /// routing refinement can flip it without changing the
+    /// dispatch shape at the call site.
+    pub drop_dialog: bool,
+    /// Whether `AppModel::update` should re-project rows off the
+    /// freshly reinstalled `(Vault, Store)` pair and emit
+    /// [`crate::account_list::AccountListMsg::Refresh`] so newly
+    /// merged accounts appear in the visible row set. Mirrors
+    /// [`should_refresh_list_after_qr`] — `true` on `Success` and
+    /// `KeepWithWarning` (both leave the merged accounts in
+    /// memory), `false` on the `Inline` failure branches (where
+    /// the vault is unchanged so the visible rows already match
+    /// disk).
+    pub refresh_list: bool,
+}
+
+/// Bundle the four QR-dispatch decisions into a single
+/// [`QrDispatch`] result so `AppModel::update` can apply the worker
+/// outcome in one shot.
+///
+/// Symmetric partner of [`compose_add_dispatch`] for the QR sub-
+/// path. The composer is a pure aggregator over the existing
+/// projections — it never re-derives the routing:
+///
+/// * `app_state` mirrors [`qr_final_app_state`], which is the
+///   `UnlockedBusy → Unlocked` rollback for every typed effect
+///   (the QR worker always rolls the busy gate back, regardless of
+///   typed outcome).
+/// * `dialog_msg` mirrors [`qr_dialog_msg_after`], which returns
+///   `Some(AddAccountMsg::QrSuccess(summary))` on `Success` and
+///   `Some(AddAccountMsg::WorkerFailed(outcome))` on every
+///   `Failure` branch. The bundled message is owned so it outlives
+///   the borrow on `effect`.
+/// * `drop_dialog` mirrors [`should_drop_add_dialog_after_qr`]
+///   (always `false`).
+/// * `refresh_list` mirrors [`should_refresh_list_after_qr`].
+///
+/// The same invariants pinned at the projection level carry
+/// through:
+///
+/// * `dialog_msg.is_some()` is always `true` because the dialog
+///   stays mounted on every effect — diverges from
+///   [`compose_add_dispatch`] which returns `None` on `Success`
+///   (the manual / URI add path drops the dialog).
+/// * `app_state.is_some()` iff `current` is
+///   [`AppState::UnlockedBusy`]. For the defensive branch from a
+///   non-`UnlockedBusy` source state (a stray dispatch),
+///   `app_state` is `None` while the other three fields still
+///   mirror the projections. `AppModel::update` leaves the source
+///   state in place rather than installing a phantom rollback.
+///
+/// The composer stays shape-only — it delegates to the sibling
+/// projections without inspecting the typed [`QrWorkerEffect`]
+/// variant itself — so `tests/app_state_logic.rs` exercises the
+/// dispatch contract without spinning up GTK / libadwaita.
+#[must_use]
+pub fn compose_qr_dispatch(current: &AppState, effect: &QrWorkerEffect) -> QrDispatch {
+    QrDispatch {
+        app_state: qr_final_app_state(current, effect),
+        dialog_msg: qr_dialog_msg_after(effect),
+        drop_dialog: should_drop_add_dialog_after_qr(effect),
+        refresh_list: should_refresh_list_after_qr(effect),
+    }
+}
+
 /// Apply [`submit_unlock_app_state`] in-place to `state`, leaving
 /// it unchanged when the composer returns `None`.
 ///
