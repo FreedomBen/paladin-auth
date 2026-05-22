@@ -104,3 +104,34 @@ jobs:
             echo "::error::Public API surface changed. Update crates/paladin-core/public-api.txt or revert the change."
             exit 1
           fi
+
+  desktop-metainfo:
+    name: desktop-file-validate + appstreamcli validate
+    runs-on: ubuntu-latest
+    # Per IMPLEMENTATION_PLAN_04_GTK.md §"Linux desktop integration" /
+    # §"Packaging (per §11)", the v0.2 GUI ships a freedesktop desktop
+    # entry and an AppStream metainfo file under
+    # `crates/paladin-gtk/data/`. The §11 packaging dry-run validates
+    # both with `desktop-file-validate` and the AppStream validator
+    # respectively; this job runs the same checks on every push so a
+    # malformed `.desktop` or metainfo file fails CI before it reaches
+    # a packaging build.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install desktop-file-utils + appstream
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            desktop-file-utils \
+            appstream
+      - name: Validate desktop entry
+        run: |
+          desktop-file-validate \
+            crates/paladin-gtk/data/org.tamx.Paladin.Gui.desktop
+      - name: Validate AppStream metainfo
+        # `--no-net` skips the URL-reachability checks so the
+        # validator never depends on network access. The substantive
+        # schema / required-fields checks still run.
+        run: |
+          appstreamcli validate --no-net \
+            crates/paladin-gtk/data/metainfo/org.tamx.Paladin.Gui.metainfo.xml

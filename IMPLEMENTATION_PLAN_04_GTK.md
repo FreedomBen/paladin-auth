@@ -4110,7 +4110,7 @@ sign-off.
 - [x] Use `paladin_core::classify_paladin_import_precheck` before any
   encrypted-Paladin-bundle import prompt so the GUI shares the CLI / TUI
   Paladin header decision table.
-- [ ] Linux desktop file, AppStream metadata, and icon.
+- [x] Linux desktop file, AppStream metadata, and icon.
   - [x] Write `data/org.tamx.Paladin.Gui.desktop` with `Name=Paladin`,
     `Icon=org.tamx.Paladin.Gui`,
     `StartupWMClass=org.tamx.Paladin.Gui`,
@@ -4248,9 +4248,29 @@ sign-off.
     `build_script_invokes_glib_compile_resources_against_manifest`,
     `build_script_tracks_workspace_license_for_rerun`, and
     `build_script_declares_workspace_root_as_secondary_source_dir`.)
-  - [ ] Add `desktop-file-validate` and the AppStream validator to
+  - [x] Add `desktop-file-validate` and the AppStream validator to
     the CI / packaging dry-run so both files are checked on every
     build.
+    (`.github/workflows/ci.yml` gains a `desktop-metainfo` job that
+    installs `desktop-file-utils` (ships `desktop-file-validate`) and
+    `appstream` (ships `appstreamcli`) on the `ubuntu-latest`
+    runner, then runs `desktop-file-validate` against
+    `crates/paladin-gtk/data/org.tamx.Paladin.Gui.desktop` and
+    `appstreamcli validate --no-net` against
+    `crates/paladin-gtk/data/metainfo/org.tamx.Paladin.Gui.metainfo.xml`.
+    The `--no-net` flag keeps the validator off the network so the
+    job never depends on the external homepage / screenshot URLs being
+    reachable — the substantive schema / required-field checks still
+    run. Pinned by `tests/ci_desktop_metainfo_validators_logic.rs`:
+    `ci_workflow_runs_desktop_file_validate_on_the_desktop_entry`,
+    `ci_workflow_runs_appstreamcli_validate_on_the_metainfo_file`,
+    and
+    `ci_workflow_installs_both_validators_in_one_apt_invocation`,
+    each reading `.github/workflows/ci.yml` and asserting the
+    relevant invocation / package name is present so a future CI
+    edit that drops the validator step fails this test
+    immediately, independent of whether the validators are installed
+    locally.)
 - [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
   - [ ] Update `crates/paladin-gtk/Cargo.toml` to inherit
