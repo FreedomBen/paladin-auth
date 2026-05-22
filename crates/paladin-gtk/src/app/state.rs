@@ -1241,6 +1241,44 @@ pub fn qr_final_app_state(current: &AppState, _effect: &QrWorkerEffect) -> Optio
     current.clone().leave_busy()
 }
 
+/// Drop-decision projection for the [`crate::add_account::AddAccountComponent`]
+/// after a clipboard-QR worker outcome.
+///
+/// Symmetric partner of [`should_drop_add_dialog_after`] for the QR
+/// sub-path. Diverges from the manual / URI add path on `Success`:
+/// where the manual / URI flow drops the dialog after a successful
+/// add (the new row appears in the visible list and there is nothing
+/// more to show), the QR sub-path keeps the dialog mounted so the
+/// counts panel can render the `imported` / `skipped` / `warning`
+/// numbers parked by
+/// [`crate::qr_clipboard::QrImportSummary::from_report`]. The failure
+/// projections (`AddPostEffectOutcome::Inline` for
+/// `save_not_committed` / `io_error` / defensive `validation_error`
+/// / `invalid_state` and `KeepWithWarning` for
+/// `save_durability_unconfirmed`) also keep the dialog mounted so
+/// the inline error / durability warning is visible and the user
+/// can retry or acknowledge — same contract as the manual / URI
+/// failure branches.
+///
+/// The projection therefore returns `false` for every typed
+/// [`QrWorkerEffect`] variant. The "stay mounted" rule across
+/// success and failure is what lets the dialog continue to serve as
+/// the user's surface for both the counts panel and the inline
+/// error / durability warning without needing a separate post-
+/// success popup.
+///
+/// The projection inspects only the typed [`QrWorkerEffect`]
+/// variant — it does not consult [`AppState`], the live
+/// `(Vault, Store)` pair, or any
+/// [`crate::add_account::AddAccountComponent`] state — so the
+/// side-effect decision in `AppModel::update` stays unit-testable
+/// in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+#[must_use]
+pub fn should_drop_add_dialog_after_qr(_effect: &QrWorkerEffect) -> bool {
+    false
+}
+
 /// Apply [`submit_unlock_app_state`] in-place to `state`, leaving
 /// it unchanged when the composer returns `None`.
 ///

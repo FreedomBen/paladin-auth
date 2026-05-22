@@ -4467,6 +4467,174 @@ fn qr_final_app_state_agrees_with_add_final_app_state_for_failure_branches() {
 }
 
 // ---------------------------------------------------------------------------
+// should_drop_add_dialog_after_qr — clipboard-QR dialog-drop projection
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `should_drop_add_dialog_after` for the
+// clipboard-QR sub-path. Diverges from the manual / URI add path on
+// `Success`: where the manual / URI flow drops the dialog after a
+// successful add (the new row appears in the visible list and there
+// is nothing more to show), the QR sub-path keeps the dialog
+// mounted so the counts panel can render the `imported / skipped /
+// warning` numbers parked by `QrImportSummary::from_report`. The
+// failure projections (`AddPostEffectOutcome::Inline` for
+// `save_not_committed` / `io_error` / defensive `validation_error`
+// / `invalid_state` and `KeepWithWarning` for
+// `save_durability_unconfirmed`) also keep the dialog mounted so
+// the inline error / durability warning is visible and the user
+// can retry or acknowledge — same contract as the manual / URI
+// failure branches.
+//
+// The projection therefore returns `false` for every typed
+// `QrWorkerEffect` variant, matching the post-commit "the dialog
+// stays open" semantics for the QR sub-path.
+
+#[test]
+fn should_drop_add_dialog_after_qr_returns_false_on_success() {
+    use paladin_core::ImportReport;
+    use paladin_gtk::add_account::QrWorkerEffect;
+    use paladin_gtk::app::state::should_drop_add_dialog_after_qr;
+
+    let effect = QrWorkerEffect::Success(ImportReport::default());
+    assert!(
+        !should_drop_add_dialog_after_qr(&effect),
+        "QR Success keeps the Add dialog mounted so the counts panel can render",
+    );
+}
+
+#[test]
+fn should_drop_add_dialog_after_qr_returns_false_on_failure_inline() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_drop_add_dialog_after_qr;
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    });
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "save_not_committed routes to Inline",
+    );
+    let effect = QrWorkerEffect::Failure(outcome);
+    assert!(
+        !should_drop_add_dialog_after_qr(&effect),
+        "Inline failure keeps the Add dialog mounted so the inline error renders",
+    );
+}
+
+#[test]
+fn should_drop_add_dialog_after_qr_returns_false_on_failure_keep_with_warning() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_drop_add_dialog_after_qr;
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)),
+        "save_durability_unconfirmed routes to KeepWithWarning",
+    );
+    let effect = QrWorkerEffect::Failure(outcome);
+    assert!(
+        !should_drop_add_dialog_after_qr(&effect),
+        "KeepWithWarning failure keeps the Add dialog mounted so the warning renders",
+    );
+}
+
+#[test]
+fn should_drop_add_dialog_after_qr_returns_false_for_defensive_inline() {
+    // Defensive: an `invalid_state` would only fire if
+    // `Vault::mutate_and_save`'s closure observed an unexpected
+    // post-condition. `classify_add_post_effect_error` routes it to
+    // `Inline`. Same "stay mounted" rule applies so the typed
+    // error renders.
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_drop_add_dialog_after_qr;
+
+    let outcome = classify_add_post_effect_error(&PaladinError::InvalidState {
+        operation: "import",
+        state: "account_not_found",
+    });
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "defensive invalid_state routes to Inline",
+    );
+    let effect = QrWorkerEffect::Failure(outcome);
+    assert!(
+        !should_drop_add_dialog_after_qr(&effect),
+        "defensive Inline failure keeps the Add dialog mounted",
+    );
+}
+
+#[test]
+fn should_drop_add_dialog_after_qr_diverges_from_add_on_success() {
+    // Cross-check: the QR sub-path's `Success` projection must NOT
+    // mirror the manual / URI add path — the QR sub-path keeps the
+    // dialog mounted on success so the counts panel can render the
+    // post-merge counts, while the manual / URI add path drops the
+    // dialog because the new row's only surface is the visible
+    // account list. Pin the divergence so a future refactor of either
+    // projection can't silently align them and erase the counts
+    // panel.
+    use paladin_core::{AccountId, ImportReport};
+    use paladin_gtk::add_account::{AddWorkerEffect, QrWorkerEffect};
+    use paladin_gtk::app::state::{should_drop_add_dialog_after, should_drop_add_dialog_after_qr};
+
+    let add_effect = AddWorkerEffect::Success {
+        account_id: AccountId::new(),
+    };
+    let qr_effect = QrWorkerEffect::Success(ImportReport::default());
+    assert!(
+        should_drop_add_dialog_after(&add_effect),
+        "manual / URI add path drops the Add dialog on Success",
+    );
+    assert!(
+        !should_drop_add_dialog_after_qr(&qr_effect),
+        "QR sub-path keeps the Add dialog mounted on Success (counts panel)",
+    );
+}
+
+#[test]
+fn should_drop_add_dialog_after_qr_mirrors_add_on_failure() {
+    // Cross-check: the failure projections (`Inline` and
+    // `KeepWithWarning`) share the "stay mounted" rule between the
+    // manual / URI add path and the QR sub-path because both keep
+    // the dialog open so the inline error / durability warning is
+    // visible. Pin the agreement so a future refactor of either
+    // projection cannot silently diverge on the failure branches.
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddWorkerEffect, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::{should_drop_add_dialog_after, should_drop_add_dialog_after_qr};
+
+    let errs = [
+        PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        },
+        PaladinError::SaveDurabilityUnconfirmed,
+        PaladinError::InvalidState {
+            operation: "import",
+            state: "account_not_found",
+        },
+    ];
+    for err in &errs {
+        let outcome = classify_add_post_effect_error(err);
+        let add_effect = AddWorkerEffect::Failure(outcome.clone());
+        let qr_effect = QrWorkerEffect::Failure(outcome);
+        assert_eq!(
+            should_drop_add_dialog_after(&add_effect),
+            should_drop_add_dialog_after_qr(&qr_effect),
+            "add/qr Failure drop decisions must agree for err={err:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // apply_submit_unlock_inplace — `AppModel::update` mut-state wrapper
 // ---------------------------------------------------------------------------
 //
