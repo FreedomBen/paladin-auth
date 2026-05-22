@@ -369,7 +369,7 @@ fn destination_or_format_changed(
 /// with distinct `reason` wire codes so the dialog can attach the
 /// rejection to the correct row and so telemetry / JSON
 /// instrumentation match the CLI / TUI verbatim.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitRejection {
     /// Passphrase and confirm rows differ. Mirrors
     /// [`paladin_core::PaladinError::InvalidPassphrase`] with
@@ -495,6 +495,23 @@ impl InlineError {
             rendered: err.to_string(),
         }
     }
+
+    /// Build an [`InlineError`] from a pre-flight [`SubmitRejection`].
+    ///
+    /// Both [`SubmitRejection::ConfirmationMismatch`] and
+    /// [`SubmitRejection::ZeroLength`] are §5 `invalid_passphrase`
+    /// rejections — the [`ErrorKind`] is always
+    /// [`ErrorKind::InvalidPassphrase`], and the rendered body comes
+    /// from the matching [`PaladinError::InvalidPassphrase`] variant so
+    /// wording stays in lock-step with the CLI / TUI verbatim. The
+    /// `reason` wire code is preserved through
+    /// [`SubmitRejection::reason`].
+    #[must_use]
+    pub fn from_rejection(rejection: SubmitRejection) -> Self {
+        Self::from_error(&PaladinError::InvalidPassphrase {
+            reason: rejection.reason(),
+        })
+    }
 }
 
 /// Durability-warning projection for the `ExportDialog` body.
@@ -602,6 +619,19 @@ pub enum ExportDialogMsg {
     /// Per-keystroke shadow of the confirm-passphrase entry. Same
     /// dispatch shape as [`Self::PassphraseChanged`].
     ConfirmPassphraseChanged(String),
+    /// User clicked the footer Export button. [`apply_msg`] runs the
+    /// twice-confirm pre-flight ([`prepare_encrypted_export`]) on the
+    /// encrypted path and stages an [`InlineError`] when the pair is
+    /// mismatched ([`SubmitRejection::ConfirmationMismatch`] →
+    /// `invalid_passphrase { reason: "confirmation_mismatch" }`) or
+    /// both rows are empty ([`SubmitRejection::ZeroLength`] →
+    /// `invalid_passphrase { reason: "zero_length" }`). The actual
+    /// writer dispatch (an `ExportDialogOutput::Submit` payload routed
+    /// through `gio::spawn_blocking` into
+    /// [`paladin_core::write_secret_file_atomic`] wrapping the chosen
+    /// payload) lands in the subsequent sub-item. Until then this
+    /// arm emits no output for the accepted path either.
+    SubmitClicked,
     /// User clicked the explicit Cancel button. The dispatch arm
     /// emits [`ExportDialogOutput::Cancel`] so `AppModel` drops the
     /// live controller and the form draft is discarded.
@@ -672,6 +702,14 @@ pub struct ExportDialogState {
     /// Confirm-passphrase entry buffer. Same lifecycle as
     /// [`Self::passphrase`].
     confirm_passphrase: SecretEntry,
+    /// Inline error staged by the dialog body. Currently the only
+    /// producer is the `SubmitClicked` twice-confirm pre-flight: a
+    /// mismatched / zero-length encrypted passphrase pair stages an
+    /// `invalid_passphrase` projection here. Cleared on edits to the
+    /// passphrase rows, destination / format changes, and the next
+    /// accepted `SubmitClicked` so a dismissed failure never lingers
+    /// beside the freshly accepted input.
+    inline_error: Option<InlineError>,
 }
 
 impl ExportDialogState {
@@ -758,6 +796,9 @@ impl ExportDialogState {
         if reset_passphrase {
             self.passphrase.clear();
             self.confirm_passphrase.clear();
+            // A stale `invalid_passphrase` body must not linger beside
+            // the freshly emptied passphrase rows.
+            self.inline_error = None;
         }
         self.destination_path = Some(path);
         self.destination_exists = exists;
@@ -808,6 +849,9 @@ impl ExportDialogState {
         if reset_passphrase {
             self.passphrase.clear();
             self.confirm_passphrase.clear();
+            // A stale `invalid_passphrase` body must not linger beside
+            // the freshly emptied passphrase rows.
+            self.inline_error = None;
         }
         self.format = format;
     }
@@ -847,14 +891,36 @@ impl ExportDialogState {
     /// per keystroke so the Paladin-owned shadow tracks the GTK
     /// `gtk::EntryBuffer` verbatim; the prior buffer contents are
     /// zeroized in place via [`SecretEntry::set`].
+    ///
+    /// Also clears any staged inline error so the user is not stuck
+    /// staring at a dismissed `invalid_passphrase` body while typing
+    /// the fix.
     pub fn set_passphrase(&mut self, text: &str) {
         self.passphrase.set(text);
+        self.inline_error = None;
     }
 
     /// Replace the confirm-passphrase entry buffer. Same per-keystroke
-    /// semantics as [`Self::set_passphrase`].
+    /// semantics as [`Self::set_passphrase`], including the inline-
+    /// error clearing.
     pub fn set_confirm_passphrase(&mut self, text: &str) {
         self.confirm_passphrase.set(text);
+        self.inline_error = None;
+    }
+
+    /// Currently staged inline error, if any. The `compose_inline_error_*`
+    /// view-layer helpers read this; widgets bind via
+    /// [`compose_inline_error_revealed`] and [`compose_inline_error_body`].
+    #[must_use]
+    pub fn inline_error(&self) -> Option<&InlineError> {
+        self.inline_error.as_ref()
+    }
+
+    /// Replace the staged inline error. Internal callers stage a
+    /// [`SubmitRejection`]-derived error via [`apply_msg`]; tests use
+    /// this to seed prior-state fixtures.
+    pub fn set_inline_error(&mut self, err: Option<InlineError>) {
+        self.inline_error = err;
     }
 }
 
@@ -1005,9 +1071,62 @@ pub fn apply_msg(
             state.set_confirm_passphrase(&text);
             None
         }
+        ExportDialogMsg::SubmitClicked => {
+            // Pre-flight the twice-confirm passphrase on the encrypted
+            // path. The widget gates the Submit button via
+            // `compose_submit_button_sensitive`, but the same check
+            // here is defense in depth: a stale widget state can never
+            // sneak an empty / mismatched pair into the worker dispatch
+            // that lands in the subsequent sub-item.
+            //
+            // The plaintext path has no passphrase pair to validate;
+            // the writer dispatch will land in the same subsequent sub-
+            // item. For now this arm just clears any stale inline error
+            // so the user does not see a dismissed `invalid_passphrase`
+            // body after switching off the encrypted path.
+            if state.format().requires_passphrase() {
+                match prepare_encrypted_export(
+                    state.passphrase_text(),
+                    state.confirm_passphrase_text(),
+                ) {
+                    Ok(_options) => {
+                        // The validated `EncryptionOptions` will be
+                        // handed to the writer worker by the subsequent
+                        // sub-item. For now clear any stale inline
+                        // error so the next pass starts clean.
+                        state.set_inline_error(None);
+                    }
+                    Err(rejection) => {
+                        state.set_inline_error(Some(InlineError::from_rejection(rejection)));
+                    }
+                }
+            } else {
+                state.set_inline_error(None);
+            }
+            None
+        }
         ExportDialogMsg::Cancel => Some(ExportDialogOutput::Cancel),
         ExportDialogMsg::Close => Some(ExportDialogOutput::Close),
     }
+}
+
+/// `gtk::Revealer::set_reveal_child` binding for the inline-error row.
+///
+/// Returns `true` iff the state has a staged [`InlineError`] — currently
+/// only the `SubmitClicked` twice-confirm pre-flight stages one. The
+/// dialog body wraps the rendered text in a `gtk::Revealer` so the slot
+/// collapses cleanly when no error is staged.
+#[must_use]
+pub fn compose_inline_error_revealed(state: &ExportDialogState) -> bool {
+    state.inline_error().is_some()
+}
+
+/// `gtk::Label::set_label` binding for the inline-error body. Returns
+/// the rendered `invalid_passphrase` body when an error is staged, or
+/// `None` when the slot is collapsed.
+#[must_use]
+pub fn compose_inline_error_body(state: &ExportDialogState) -> Option<&str> {
+    state.inline_error().map(|e| e.rendered.as_str())
 }
 
 /// Widget-bearing `adw::Dialog` for the application menu's Export… entry.
@@ -1190,6 +1309,28 @@ impl SimpleComponent for ExportDialogComponent {
                         },
                     },
 
+                    // Inline error revealer (`invalid_passphrase`
+                    // staged by the SubmitClicked twice-confirm pre-
+                    // flight; subsequent sub-items extend this to the
+                    // writer outcome's `Inline` arm).
+                    #[name = "inline_error_revealer"]
+                    gtk::Revealer {
+                        #[watch]
+                        set_reveal_child: compose_inline_error_revealed(&model.state),
+                        set_transition_type: gtk::RevealerTransitionType::SlideDown,
+                        set_transition_duration: 150,
+
+                        #[name = "inline_error_label"]
+                        gtk::Label {
+                            #[watch]
+                            set_label: compose_inline_error_body(&model.state)
+                                .unwrap_or(""),
+                            set_xalign: 0.0,
+                            set_wrap: true,
+                            add_css_class: "error",
+                        },
+                    },
+
                     // Footer: Cancel / Export (subsequent sub-items
                     // attach a busy spinner and post-success Dismiss
                     // button alongside the existing affordances).
@@ -1213,6 +1354,9 @@ impl SimpleComponent for ExportDialogComponent {
                             add_css_class: "suggested-action",
                             #[watch]
                             set_sensitive: compose_submit_button_sensitive(&model.state),
+                            connect_clicked[sender] => move |_| {
+                                sender.input(ExportDialogMsg::SubmitClicked);
+                            },
                         },
                     },
                 },

@@ -3199,10 +3199,45 @@ sign-off.
     `format_export_dialog_passphrase_group_title_is_non_empty`,
     `format_export_dialog_passphrase_row_title_is_non_empty`, and
     `format_export_dialog_confirm_passphrase_row_title_is_non_empty`.)
-  - [ ] Prompt twice for the encrypted-bundle passphrase; reject
+  - [x] Prompt twice for the encrypted-bundle passphrase; reject
     mismatch with `invalid_passphrase`
     (`reason: "confirmation_mismatch"`) and zero-length with
     `invalid_passphrase` (`reason: "zero_length"`) inline.
+    (`ExportDialogMsg::SubmitClicked` runs the existing
+    `prepare_encrypted_export` pre-flight on the encrypted path
+    inside `apply_msg`; rejections stage an
+    `InlineError::from_rejection(SubmitRejection)` projection on
+    `ExportDialogState::inline_error`, which renders verbatim through
+    the matching `PaladinError::InvalidPassphrase { reason }` variant
+    so wording stays in lock-step with the CLI / TUI. The plaintext
+    path is a no-op for the pre-flight; both paths clear any stale
+    inline error on accept. Per-keystroke
+    `PassphraseChanged` / `ConfirmPassphraseChanged` and
+    destination / format changes also clear the inline error so a
+    dismissed failure never lingers beside the freshly typed input
+    or empty rows. The view! macro mounts a `gtk::Revealer` driven
+    by `compose_inline_error_revealed` / `compose_inline_error_body`
+    underneath the passphrase group; the footer Export button wires
+    a `connect_clicked` into `ExportDialogMsg::SubmitClicked`.
+    `SubmitRejection` gains `Copy` so the `from_rejection`
+    constructor takes the rejection by value without the
+    `needless_pass_by_value` clippy lint. Pinned by
+    `tests/export_dialog_logic.rs::inline_error_from_rejection_confirmation_mismatch_is_invalid_passphrase`,
+    `inline_error_from_rejection_zero_length_is_invalid_passphrase`,
+    `export_dialog_state_new_has_no_inline_error`,
+    `apply_msg_submit_clicked_encrypted_mismatched_stages_confirmation_mismatch_inline`,
+    `apply_msg_submit_clicked_encrypted_zero_length_stages_zero_length_inline`,
+    `apply_msg_submit_clicked_encrypted_one_empty_stages_confirmation_mismatch_inline`,
+    `apply_msg_submit_clicked_encrypted_matching_clears_prior_inline_error`,
+    `apply_msg_submit_clicked_plaintext_does_not_stage_inline_error`,
+    `apply_msg_passphrase_changed_clears_prior_inline_error`,
+    `apply_msg_confirm_passphrase_changed_clears_prior_inline_error`,
+    `apply_msg_destination_picked_clears_prior_inline_error`,
+    `apply_msg_format_changed_clears_prior_inline_error`,
+    `compose_inline_error_revealed_returns_false_when_no_error`,
+    `compose_inline_error_revealed_returns_true_when_error_staged`,
+    `compose_inline_error_body_returns_none_when_no_error`, and
+    `compose_inline_error_body_renders_staged_invalid_passphrase`.)
   - [ ] Dispatch the write on `gio::spawn_blocking` (encrypted
     bundle to keep the fresh-AEAD-key derivation off the main loop;
     plaintext for symmetry since `write_secret_file_atomic` chains

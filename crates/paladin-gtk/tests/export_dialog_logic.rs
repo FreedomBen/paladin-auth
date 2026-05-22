@@ -1771,3 +1771,290 @@ fn format_export_dialog_confirm_passphrase_row_title_is_non_empty() {
 
     assert!(!format_export_dialog_confirm_passphrase_row_title().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// SubmitClicked twice-confirm validation
+//
+// The Submit button is gated by `compose_submit_button_sensitive`, but the
+// `apply_msg(SubmitClicked)` arm runs the same pre-flight validation
+// (`prepare_encrypted_export`) as a defense in depth so a stale widget state
+// can never sneak an empty / mismatched passphrase into the worker
+// dispatch. Mismatched and zero-length pairs stage an inline error on
+// `ExportDialogState` so the dialog body re-renders the `invalid_passphrase`
+// projection inline; the `error_kind` / `reason` pair matches the §5
+// wire codes the CLI / TUI surface.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inline_error_from_rejection_confirmation_mismatch_is_invalid_passphrase() {
+    use paladin_gtk::export_dialog::InlineError;
+
+    let inline = InlineError::from_rejection(SubmitRejection::ConfirmationMismatch);
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+    let expected = PaladinError::InvalidPassphrase {
+        reason: "confirmation_mismatch",
+    }
+    .to_string();
+    assert_eq!(inline.rendered, expected);
+}
+
+#[test]
+fn inline_error_from_rejection_zero_length_is_invalid_passphrase() {
+    use paladin_gtk::export_dialog::InlineError;
+
+    let inline = InlineError::from_rejection(SubmitRejection::ZeroLength);
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+    let expected = PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    }
+    .to_string();
+    assert_eq!(inline.rendered, expected);
+}
+
+#[test]
+fn export_dialog_state_new_has_no_inline_error() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let state = ExportDialogState::new();
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn apply_msg_submit_clicked_encrypted_mismatched_stages_confirmation_mismatch_inline() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("different");
+
+    let output = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(output.is_none());
+    let inline = state.inline_error().expect("mismatch stages inline error");
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+    let expected = PaladinError::InvalidPassphrase {
+        reason: "confirmation_mismatch",
+    }
+    .to_string();
+    assert_eq!(inline.rendered, expected);
+}
+
+#[test]
+fn apply_msg_submit_clicked_encrypted_zero_length_stages_zero_length_inline() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    // Both rows left empty.
+
+    let output = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(output.is_none());
+    let inline = state
+        .inline_error()
+        .expect("zero-length stages inline error");
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+    let expected = PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    }
+    .to_string();
+    assert_eq!(inline.rendered, expected);
+}
+
+#[test]
+fn apply_msg_submit_clicked_encrypted_one_empty_stages_confirmation_mismatch_inline() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("");
+
+    let output = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(output.is_none());
+    let inline = state.inline_error().expect("one-empty stages inline error");
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+    let expected = PaladinError::InvalidPassphrase {
+        reason: "confirmation_mismatch",
+    }
+    .to_string();
+    assert_eq!(inline.rendered, expected);
+}
+
+#[test]
+fn apply_msg_submit_clicked_encrypted_matching_clears_prior_inline_error() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    // First click stages a mismatch error.
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("different");
+    let _ = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(state.inline_error().is_some());
+
+    // User fixes the confirm field and re-submits — the stale inline
+    // error must clear so the dialog does not surface a dismissed
+    // failure beside the freshly accepted pair.
+    state.set_confirm_passphrase("hunter2");
+    let _ = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn apply_msg_submit_clicked_plaintext_does_not_stage_inline_error() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::PlaintextOtpauth);
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+
+    let _ = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    // The plaintext path has no twice-confirm passphrase to validate;
+    // SubmitClicked must not stage an `invalid_passphrase` inline error.
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn apply_msg_passphrase_changed_clears_prior_inline_error() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    // Stage an inline error via a SubmitClicked on a mismatched pair.
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("different");
+    let _ = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(state.inline_error().is_some());
+
+    // Editing the passphrase clears the stale error so the user is
+    // not stuck staring at a dismissed `invalid_passphrase` body
+    // while typing the fix.
+    let _ = apply_msg(
+        &mut state,
+        ExportDialogMsg::PassphraseChanged("hunter3".to_string()),
+    );
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn apply_msg_confirm_passphrase_changed_clears_prior_inline_error() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("different");
+    let _ = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(state.inline_error().is_some());
+
+    let _ = apply_msg(
+        &mut state,
+        ExportDialogMsg::ConfirmPassphraseChanged("hunter2".to_string()),
+    );
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn apply_msg_destination_picked_clears_prior_inline_error() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("different");
+    let _ = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(state.inline_error().is_some());
+
+    // Picking a different destination clears the stale inline error so
+    // the user is not stuck staring at an `invalid_passphrase` body
+    // attached to the prior path — the passphrase rows are also cleared
+    // by `passphrase_needs_reset`, so leaving the inline error up would
+    // contradict the empty passphrase rows.
+    let _ = apply_msg(
+        &mut state,
+        ExportDialogMsg::DestinationPicked {
+            path: dest_b(),
+            exists: false,
+        },
+    );
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn apply_msg_format_changed_clears_prior_inline_error() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("different");
+    let _ = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(state.inline_error().is_some());
+
+    // Switching off the encrypted path drops the passphrase rows and
+    // makes the prior `invalid_passphrase` inline error irrelevant.
+    let _ = apply_msg(
+        &mut state,
+        ExportDialogMsg::FormatChanged(ExportFormatChoice::PlaintextOtpauth),
+    );
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn compose_inline_error_revealed_returns_false_when_no_error() {
+    use paladin_gtk::export_dialog::{compose_inline_error_revealed, ExportDialogState};
+
+    let state = ExportDialogState::new();
+    assert!(!compose_inline_error_revealed(&state));
+}
+
+#[test]
+fn compose_inline_error_revealed_returns_true_when_error_staged() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, compose_inline_error_revealed, ExportDialogMsg, ExportDialogState,
+    };
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("a");
+    state.set_confirm_passphrase("b");
+    let _ = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(compose_inline_error_revealed(&state));
+}
+
+#[test]
+fn compose_inline_error_body_returns_none_when_no_error() {
+    use paladin_gtk::export_dialog::{compose_inline_error_body, ExportDialogState};
+
+    let state = ExportDialogState::new();
+    assert!(compose_inline_error_body(&state).is_none());
+}
+
+#[test]
+fn compose_inline_error_body_renders_staged_invalid_passphrase() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, compose_inline_error_body, ExportDialogMsg, ExportDialogState,
+    };
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("a");
+    state.set_confirm_passphrase("b");
+    let _ = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    let expected = PaladinError::InvalidPassphrase {
+        reason: "confirmation_mismatch",
+    }
+    .to_string();
+    assert_eq!(compose_inline_error_body(&state), Some(expected.as_str()));
+}
