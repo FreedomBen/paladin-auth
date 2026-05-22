@@ -3311,34 +3311,85 @@ sign-off.
 - [ ] `PassphraseDialogComponent` full implementation (`set` /
   `change` / `remove` sub-flows, gating, validation, error
   handling).
-  - [ ] Add the three sub-flow entry points (`set` / `change` /
+  - [x] Add the three sub-flow entry points (`set` / `change` /
     `remove`) and gate the available sub-flow against
     `Vault::is_encrypted()`: `set` only when the getter returns
     `false`; `change` and `remove` only when it returns `true`.
-  - [ ] Render `set` / `change` with twice-confirmed
+    (`available_sub_flows` plus `default_sub_flow_for` arm the
+    segmented control; `apply_msg`'s `SubFlowSelected` arm drops
+    unavailable targets via `SubFlow::is_available`. Pinned by
+    `default_sub_flow_for_plaintext_returns_set`,
+    `default_sub_flow_for_encrypted_returns_change`,
+    `apply_msg_sub_flow_selected_unavailable_is_noop`.)
+  - [x] Render `set` / `change` with twice-confirmed
     `AdwPasswordEntryRow` entries; mismatch returns inline with
     `invalid_passphrase` (`reason: "confirmation_mismatch"`).
-  - [ ] Reject zero-length new passphrases on `set` / `change`
+    (Two `adw::PasswordEntryRow` widgets parented in
+    `passphrase_group`; `apply_msg`'s `SubmitClicked` arm routes
+    through `prepare_new_passphrase` so a mismatch stamps
+    `SubmitRejection::ConfirmationMismatch` and emits no output.
+    Pinned by
+    `apply_msg_submit_set_with_mismatch_stamps_inline_rejection_and_no_output`
+    and the existing
+    `submit_rejection_confirmation_mismatch_renders_invalid_passphrase_reason`.)
+  - [x] Reject zero-length new passphrases on `set` / `change`
     inline with `invalid_passphrase` (`reason: "zero_length"`).
-  - [ ] Render `remove` with
+    (`prepare_new_passphrase`'s both-empty branch returns
+    `SubmitRejection::ZeroLength`; `apply_msg`'s `SubmitClicked` arm
+    stamps it onto `state.inline_rejection` and emits no output.
+    Pinned by `apply_msg_submit_set_with_both_empty_stamps_zero_length`.)
+  - [x] Render `remove` with
     `paladin_core::format_plaintext_storage_warning()` verbatim and
     require explicit confirmation before mutation.
-  - [ ] Clear all passphrase rows and any pending
+    (`remove_warning_label` renders the `remove_warning_body()`
+    string verbatim; the `remove_ack_row` `AdwSwitchRow` flips the
+    `PassphraseSecretState::remove_confirmed` flag through
+    `apply_msg`'s `AcknowledgeRemove`. `submit_button_sensitive` /
+    `apply_msg` only emit `Submit(Remove)` when the flag is set.
+    Pinned by `apply_msg_submit_remove_without_ack_is_blocked`,
+    `apply_msg_submit_remove_with_ack_emits_submit_remove`, and
+    `submit_button_insensitive_for_remove_without_acknowledgement`.)
+  - [x] Clear all passphrase rows and any pending
     plaintext-removal confirmation when the user switches
     sub-flows.
+    (`apply_msg`'s `SubFlowSelected` arm calls
+    `PassphraseSecretState::switch_sub_flow` which wipes both
+    passphrase buffers and clears `remove_confirmed`. Pinned by
+    `apply_msg_sub_flow_selected_clears_passphrase_buffers` and
+    `apply_msg_sub_flow_selected_clears_remove_confirmed_flag`.)
   - [ ] Dispatch the chosen transition on `gio::spawn_blocking` so
     the §4.5 KDF runs off the main loop; surface a spinner / busy
     affordance while the join is pending.
-  - [ ] Surface `save_not_committed` and
+  - [x] Surface `save_not_committed` and
     `save_durability_unconfirmed` inline (DESIGN §4.5 owns the
     in-memory mode / key rollback / replacement); the dialog stays
     open on both failure classes.
+    (`classify_passphrase_error` routes `SaveNotCommitted` to
+    `PassphraseErrorOutcome::RestorePrior(InlineError)` and
+    `SaveDurabilityUnconfirmed` to
+    `PassphraseErrorOutcome::KeepNewWithWarning(InlineWarning)`;
+    `apply_msg`'s `WorkerFailed` arm stamps the outcome onto
+    `state.worker_outcome` without emitting any output, so the
+    dialog stays mounted. `inline_body_text` renders the outcome
+    body. Pinned by
+    `apply_msg_worker_failed_save_not_committed_routes_to_inline_error`,
+    `apply_msg_worker_failed_durability_unconfirmed_routes_to_warning`,
+    and `classify_passphrase_error_invalid_state_routes_to_inline_error_variant`.)
   - [ ] On success, update the visible vault-mode flag before
     closing the dialog, post a status / toast confirmation, and re-ask
     `IdlePolicy::should_arm` so the auto-lock timer state tracks the
     new on-disk mode.
-  - [ ] Zeroize all passphrase widget buffers on submit / cancel /
+  - [x] Zeroize all passphrase widget buffers on submit / cancel /
     dialog close / auto-lock.
+    (`apply_msg`'s `SubmitClicked` and `Cancel` arms call
+    `PassphraseSecretState::clear_for(ClearReason::{Submit,Cancel})`
+    which zeroizes both buffers in place; close / auto-lock
+    transitively run through controller drop, which destroys the
+    GTK entry-row widgets and the `PassphraseDialogState` along
+    with their `SecretEntry` shadows (zeroizing on drop). Pinned by
+    `apply_msg_submit_set_with_match_emits_submit_and_clears_secrets`
+    and `apply_msg_cancel_emits_close_and_wipes_secrets`, plus the
+    existing `passphrase_state_clear_for_*` suite.)
 - [ ] `SettingsComponent` full implementation
   (`AdwPreferencesDialog` with toggles and spinners; live-apply
   through `Vault::mutate_and_save`).

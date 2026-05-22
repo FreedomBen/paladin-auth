@@ -2164,6 +2164,22 @@ impl SimpleComponent for AppModel {
                 // this is a benign no-op.
                 self.passphrase_dialog = None;
             }
+            AppMsg::PassphraseDialogAction(PassphraseDialogOutput::Submit(payload)) => {
+                // Save button entry side of the `gio::spawn_blocking`
+                // passphrase-transition worker. The full
+                // `UnlockedBusy → Unlocked` busy-gate transition plus
+                // worker dispatch lands in the follow-up sub-task
+                // ("Worker dispatch on spawn_blocking") that wires
+                // `run_passphrase_worker` into the AppModel
+                // composition layer. For now drop the validated
+                // payload (zeroizing any carried `SecretString`
+                // through `EncryptionOptions`'s `ZeroizeOnDrop`) and
+                // drop the live controller so the dialog tears down
+                // — matches the `Close` behavior, with the secret
+                // payload safely zeroized on its way out.
+                drop(payload);
+                self.passphrase_dialog = None;
+            }
             AppMsg::OpenAddDialog => {
                 // Header-bar `+` button activation. Mount a fresh
                 // `AddAccountComponent` seeded with the resolved
