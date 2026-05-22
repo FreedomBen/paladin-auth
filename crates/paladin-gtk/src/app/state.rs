@@ -57,7 +57,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use paladin_core::{
-    Account, AccountId, PaladinError, Store, ValidatedAccount, Vault, VaultLock, VaultStatus,
+    policy::auto_lock::IdlePolicy, Account, AccountId, PaladinError, Store, ValidatedAccount,
+    Vault, VaultLock, VaultSettings, VaultStatus,
 };
 
 use crate::add_account::{
@@ -4070,13 +4071,69 @@ pub fn passphrase_success_toast_after(effect: &PassphraseWorkerEffect) -> Option
     }
 }
 
+/// Visible vault-mode-flag projection for the passphrase worker
+/// outcome.
+///
+/// * [`PassphraseWorkerEffect::Success { new_is_encrypted, .. }`] →
+///   `Some(new_is_encrypted)`. The worker carries the post-transition
+///   [`Vault::is_encrypted`] value, so downstream consumers (menu
+///   sub-flow gating, auto-lock arming) do not need to round-trip
+///   through the live vault getter.
+/// * [`PassphraseWorkerEffect::Failure`] → `None`. The dialog stays
+///   open and DESIGN §4.5 owns the in-memory mode rollback /
+///   replacement, so no flag flip propagates outside the dialog.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`PassphraseDialog` full
+/// implementation" line 3403 ("On success, update the visible
+/// vault-mode flag before closing the dialog, post a status / toast
+/// confirmation, and re-ask `IdlePolicy::should_arm` so the auto-lock
+/// timer state tracks the new on-disk mode").
+#[must_use]
+pub fn passphrase_new_is_encrypted_after(effect: &PassphraseWorkerEffect) -> Option<bool> {
+    match effect {
+        PassphraseWorkerEffect::Success {
+            new_is_encrypted, ..
+        } => Some(*new_is_encrypted),
+        PassphraseWorkerEffect::Failure(_) => None,
+    }
+}
+
+/// Re-ask
+/// [`IdlePolicy::should_arm`][paladin_core::policy::auto_lock::IdlePolicy::should_arm]
+/// after a passphrase worker outcome.
+///
+/// * [`PassphraseWorkerEffect::Success { new_is_encrypted, .. }`] →
+///   `Some(IdlePolicy::should_arm(new_is_encrypted, settings))`. The
+///   encrypted-only gating lives in core, so a `Remove` that flips the
+///   vault to plaintext returns `Some(false)` regardless of the user's
+///   `auto_lock_enabled` setting (DESIGN §6 / §7 plaintext no-op).
+/// * [`PassphraseWorkerEffect::Failure`] → `None`. Failures keep the
+///   dialog open and the in-memory mode is the §4.5
+///   rollback / replacement value, so no re-arm decision is taken.
+///
+/// `settings` comes from the reinstalled vault (the worker hands the
+/// pair back via [`apply_passphrase_vault_install_inplace`]
+/// before the dispatch projection runs, so by the time the caller
+/// reaches this helper the `(Vault, Store)` slot already reflects the
+/// post-transition state). Threads the projection from
+/// [`passphrase_new_is_encrypted_after`] so the
+/// `Success` / `Failure` discrimination stays in one place.
+#[must_use]
+pub fn passphrase_should_arm_idle_after(
+    effect: &PassphraseWorkerEffect,
+    settings: &VaultSettings,
+) -> Option<bool> {
+    passphrase_new_is_encrypted_after(effect)
+        .map(|is_encrypted| IdlePolicy::should_arm(is_encrypted, settings))
+}
+
 /// Bundle of dispatch decisions for the passphrase worker outcome.
 ///
 /// Mirrors [`RemoveDispatch`] for the passphrase path.
 /// `AppMsg::PassphraseWorkerCompleted` runs this aggregator over
-/// the typed effect so the call site applies all four decisions
+/// the typed effect so the call site applies all five decisions
 /// (state rollback, inline message forward, dialog drop, success
-/// toast) without re-deriving the routing.
+/// toast, visible vault-mode flag) without re-deriving the routing.
 #[derive(Debug, Clone)]
 pub struct PassphraseDispatch {
     /// New [`AppState`] to install on `AppModel.state`. `Some` for
@@ -4101,10 +4158,22 @@ pub struct PassphraseDispatch {
     /// `adw::ToastOverlay` after applying the worker outcome.
     /// `Some(body)` on success, `None` on every failure.
     pub success_toast: Option<String>,
+    /// Visible vault-mode flag after the transition: `Some(true)` if
+    /// the vault is encrypted, `Some(false)` if plaintext. `None` on
+    /// every failure branch (the dialog stays open and the in-memory
+    /// mode is owned by §4.5 rollback / replacement).
+    ///
+    /// `AppModel::update` consults this projection (alongside the
+    /// reinstalled `(Vault, Store)` pair) to re-evaluate auto-lock
+    /// arming via
+    /// [`paladin_core::policy::auto_lock::IdlePolicy::should_arm`] —
+    /// the hook from line 3403 of the plan that the auto-lock
+    /// section (line 3499) builds on.
+    pub new_is_encrypted: Option<bool>,
 }
 
-/// Aggregate the trio of passphrase-dispatch projections into a
-/// single [`PassphraseDispatch`].
+/// Aggregate the passphrase-dispatch projections into a single
+/// [`PassphraseDispatch`].
 #[must_use]
 pub fn compose_passphrase_dispatch(
     current: &AppState,
@@ -4115,6 +4184,7 @@ pub fn compose_passphrase_dispatch(
         dialog_msg: passphrase_dialog_msg_after(effect),
         drop_dialog: should_drop_passphrase_dialog_after(effect),
         success_toast: passphrase_success_toast_after(effect),
+        new_is_encrypted: passphrase_new_is_encrypted_after(effect),
     }
 }
 

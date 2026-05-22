@@ -11376,3 +11376,202 @@ fn apply_passphrase_vault_install_inplace_replaces_existing_slot() {
     apply_passphrase_vault_install_inplace(&mut slot, (vault2, store2));
     assert!(slot.is_some());
 }
+
+// ---------------------------------------------------------------------------
+// passphrase_new_is_encrypted_after — visible vault-mode-flag projection
+// for the typed `PassphraseWorkerEffect`.
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"PassphraseDialog full
+// implementation" checklist line 3403: "On success, update the visible
+// vault-mode flag before closing the dialog, post a status / toast
+// confirmation, and re-ask `IdlePolicy::should_arm` so the auto-lock
+// timer state tracks the new on-disk mode." The success projection
+// carries the worker's post-transition `new_is_encrypted` so downstream
+// consumers (menu sub-flow gating, auto-lock arming) do not need to
+// round-trip through the live `Vault::is_encrypted()` getter again.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn passphrase_new_is_encrypted_after_success_set_returns_some_true() {
+    use paladin_gtk::app::state::passphrase_new_is_encrypted_after;
+    use paladin_gtk::passphrase_dialog::{PassphraseWorkerEffect, SubFlow};
+
+    let effect = PassphraseWorkerEffect::Success {
+        sub_flow: SubFlow::Set,
+        new_is_encrypted: true,
+    };
+    assert_eq!(passphrase_new_is_encrypted_after(&effect), Some(true));
+}
+
+#[test]
+fn passphrase_new_is_encrypted_after_success_remove_returns_some_false() {
+    use paladin_gtk::app::state::passphrase_new_is_encrypted_after;
+    use paladin_gtk::passphrase_dialog::{PassphraseWorkerEffect, SubFlow};
+
+    let effect = PassphraseWorkerEffect::Success {
+        sub_flow: SubFlow::Remove,
+        new_is_encrypted: false,
+    };
+    assert_eq!(passphrase_new_is_encrypted_after(&effect), Some(false));
+}
+
+#[test]
+fn passphrase_new_is_encrypted_after_success_change_preserves_encrypted_mode() {
+    use paladin_gtk::app::state::passphrase_new_is_encrypted_after;
+    use paladin_gtk::passphrase_dialog::{PassphraseWorkerEffect, SubFlow};
+
+    // `Change` keeps the vault encrypted — the projection still
+    // reports the post-transition mode so the caller does not have to
+    // special-case it.
+    let effect = PassphraseWorkerEffect::Success {
+        sub_flow: SubFlow::Change,
+        new_is_encrypted: true,
+    };
+    assert_eq!(passphrase_new_is_encrypted_after(&effect), Some(true));
+}
+
+#[test]
+fn passphrase_new_is_encrypted_after_failure_returns_none() {
+    use paladin_gtk::app::state::passphrase_new_is_encrypted_after;
+    use paladin_gtk::passphrase_dialog::{classify_passphrase_error, PassphraseWorkerEffect};
+
+    let err = paladin_core::PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_passphrase_error(&err);
+    let effect = PassphraseWorkerEffect::Failure(outcome);
+    assert_eq!(
+        passphrase_new_is_encrypted_after(&effect),
+        None,
+        "the dialog stays open on every failure branch — no mode flip to project",
+    );
+}
+
+#[test]
+fn compose_passphrase_dispatch_success_projects_new_is_encrypted_true() {
+    use paladin_gtk::app::state::compose_passphrase_dispatch;
+    use paladin_gtk::passphrase_dialog::{PassphraseWorkerEffect, SubFlow};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path };
+    let effect = PassphraseWorkerEffect::Success {
+        sub_flow: SubFlow::Set,
+        new_is_encrypted: true,
+    };
+    let dispatch = compose_passphrase_dispatch(&busy, &effect);
+    assert_eq!(
+        dispatch.new_is_encrypted,
+        Some(true),
+        "Set success must propagate the new encrypted-mode flag",
+    );
+}
+
+#[test]
+fn compose_passphrase_dispatch_success_projects_new_is_encrypted_false() {
+    use paladin_gtk::app::state::compose_passphrase_dispatch;
+    use paladin_gtk::passphrase_dialog::{PassphraseWorkerEffect, SubFlow};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path };
+    let effect = PassphraseWorkerEffect::Success {
+        sub_flow: SubFlow::Remove,
+        new_is_encrypted: false,
+    };
+    let dispatch = compose_passphrase_dispatch(&busy, &effect);
+    assert_eq!(
+        dispatch.new_is_encrypted,
+        Some(false),
+        "Remove success must propagate the new plaintext-mode flag",
+    );
+}
+
+#[test]
+fn compose_passphrase_dispatch_failure_projects_no_new_is_encrypted() {
+    use paladin_gtk::app::state::compose_passphrase_dispatch;
+    use paladin_gtk::passphrase_dialog::{classify_passphrase_error, PassphraseWorkerEffect};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path };
+    let err = paladin_core::PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = classify_passphrase_error(&err);
+    let effect = PassphraseWorkerEffect::Failure(outcome);
+    let dispatch = compose_passphrase_dispatch(&busy, &effect);
+    assert_eq!(
+        dispatch.new_is_encrypted, None,
+        "the dialog stays open on failure — no mode-flag flip",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// passphrase_should_arm_idle_after — re-asks
+// `paladin_core::policy::auto_lock::IdlePolicy::should_arm` after a
+// successful passphrase transition, so the auto-lock timer state
+// tracks the new on-disk mode without re-inspecting the file.
+//
+// Encrypted-only gating lives in `IdlePolicy` itself: a plaintext
+// vault (post-`Remove`) returns `false` regardless of the user's
+// `auto_lock_enabled` setting. The helper threads the projection
+// through `passphrase_new_is_encrypted_after`, so failures (which
+// project `None`) are also `None` here.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn passphrase_should_arm_idle_after_success_encrypted_consults_idle_policy() {
+    use paladin_core::policy::auto_lock::IdlePolicy;
+    use paladin_gtk::app::state::passphrase_should_arm_idle_after;
+    use paladin_gtk::passphrase_dialog::{PassphraseWorkerEffect, SubFlow};
+
+    let (_tempdir, _path, vault, _store) = fresh_plaintext_pair();
+    let effect = PassphraseWorkerEffect::Success {
+        sub_flow: SubFlow::Set,
+        new_is_encrypted: true,
+    };
+    let observed = passphrase_should_arm_idle_after(&effect, vault.settings());
+    assert_eq!(
+        observed,
+        Some(IdlePolicy::should_arm(true, vault.settings())),
+        "Set success must consult IdlePolicy::should_arm with the new encrypted flag",
+    );
+}
+
+#[test]
+fn passphrase_should_arm_idle_after_success_plaintext_returns_some_false() {
+    use paladin_gtk::app::state::passphrase_should_arm_idle_after;
+    use paladin_gtk::passphrase_dialog::{PassphraseWorkerEffect, SubFlow};
+
+    // `Remove` flips the vault to plaintext. `IdlePolicy::should_arm`
+    // returns `false` for plaintext regardless of the
+    // `auto_lock_enabled` setting (DESIGN §6 / §7 plaintext no-op),
+    // so the helper must surface that as `Some(false)`.
+    let (_tempdir, _path, vault, _store) = fresh_plaintext_pair();
+    let effect = PassphraseWorkerEffect::Success {
+        sub_flow: SubFlow::Remove,
+        new_is_encrypted: false,
+    };
+    let observed = passphrase_should_arm_idle_after(&effect, vault.settings());
+    assert_eq!(
+        observed,
+        Some(false),
+        "Remove success on a plaintext vault must not arm the auto-lock timer",
+    );
+}
+
+#[test]
+fn passphrase_should_arm_idle_after_failure_returns_none() {
+    use paladin_gtk::app::state::passphrase_should_arm_idle_after;
+    use paladin_gtk::passphrase_dialog::{classify_passphrase_error, PassphraseWorkerEffect};
+
+    let (_tempdir, _path, vault, _store) = fresh_plaintext_pair();
+    let err = paladin_core::PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_passphrase_error(&err);
+    let effect = PassphraseWorkerEffect::Failure(outcome);
+    let observed = passphrase_should_arm_idle_after(&effect, vault.settings());
+    assert_eq!(
+        observed, None,
+        "Failures keep the dialog open — no re-arm decision to take",
+    );
+}

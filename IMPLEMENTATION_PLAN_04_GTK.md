@@ -3400,10 +3400,35 @@ sign-off.
     `apply_msg_worker_failed_save_not_committed_routes_to_inline_error`,
     `apply_msg_worker_failed_durability_unconfirmed_routes_to_warning`,
     and `classify_passphrase_error_invalid_state_routes_to_inline_error_variant`.)
-  - [ ] On success, update the visible vault-mode flag before
+  - [x] On success, update the visible vault-mode flag before
     closing the dialog, post a status / toast confirmation, and re-ask
     `IdlePolicy::should_arm` so the auto-lock timer state tracks the
     new on-disk mode.
+    (`PassphraseWorkerEffect::Success` carries the post-transition
+    `new_is_encrypted` from the worker; `passphrase_new_is_encrypted_after`
+    projects it onto `PassphraseDispatch::new_is_encrypted` so the
+    visible vault-mode flag updates atomically alongside the dialog
+    drop / busy-gate rollback. `compose_passphrase_dispatch` already
+    populated `success_toast` from `passphrase_success_toast_after`;
+    `AppModel::update`'s `PassphraseWorkerCompleted` arm raises the
+    body on `self.toast_overlay` as the status confirmation. After
+    the dispatch is applied, the same arm consults
+    `paladin_core::policy::auto_lock::IdlePolicy::should_arm` via
+    `crate::auto_lock::idle_should_arm(vault)` on the reinstalled
+    pair so the new on-disk mode flows through `Vault::is_encrypted` /
+    `Vault::settings` exactly as the §"Clipboard + auto-lock parity
+    with TUI" checklist will rely on once the timer plumbing lands.
+    Pinned by
+    `passphrase_new_is_encrypted_after_success_set_returns_some_true`,
+    `passphrase_new_is_encrypted_after_success_remove_returns_some_false`,
+    `passphrase_new_is_encrypted_after_success_change_preserves_encrypted_mode`,
+    `passphrase_new_is_encrypted_after_failure_returns_none`,
+    `compose_passphrase_dispatch_success_projects_new_is_encrypted_true`,
+    `compose_passphrase_dispatch_success_projects_new_is_encrypted_false`,
+    `compose_passphrase_dispatch_failure_projects_no_new_is_encrypted`,
+    `passphrase_should_arm_idle_after_success_encrypted_consults_idle_policy`,
+    `passphrase_should_arm_idle_after_success_plaintext_returns_some_false`,
+    and `passphrase_should_arm_idle_after_failure_returns_none`.)
   - [x] Zeroize all passphrase widget buffers on submit / cancel /
     dialog close / auto-lock.
     (`apply_msg`'s `SubmitClicked` and `Cancel` arms call

@@ -100,6 +100,7 @@ use crate::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, run_unlock_worker, AppState,
     OpenErrorOutcome, UnlockWorkerCompletion,
 };
+use crate::auto_lock::idle_should_arm;
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
 };
@@ -2288,6 +2289,19 @@ impl SimpleComponent for AppModel {
                 //   tears down.
                 // * `success_toast` — `Some(body)` on success, raised
                 //   on the `adw::ToastOverlay`.
+                // * `new_is_encrypted` — `Some(new_mode)` on success
+                //   only, the visible vault-mode flag that downstream
+                //   consumers (menu sub-flow gating, auto-lock
+                //   arming) consult without re-reading
+                //   `Vault::is_encrypted()`. After applying the
+                //   dispatch we re-ask
+                //   `IdlePolicy::should_arm` via
+                //   [`crate::auto_lock::idle_should_arm`] so the
+                //   auto-lock timer state will track the new on-disk
+                //   mode once the §"Clipboard + auto-lock parity"
+                //   checklist wires the actual `glib::timeout_add_local`
+                //   plumbing — the hook from
+                //   `IMPLEMENTATION_PLAN_04_GTK.md` line 3403.
                 //
                 // The carried `(vault, store)` pair is reinstalled
                 // into `AppModel::vault` via
@@ -2326,6 +2340,24 @@ impl SimpleComponent for AppModel {
                     }
                     if let Some(body) = dispatch.success_toast {
                         self.toast_overlay.add_toast(adw::Toast::new(&body));
+                    }
+                    // Re-ask `IdlePolicy::should_arm` against the
+                    // reinstalled vault so the auto-lock timer state
+                    // tracks the new on-disk mode without re-reading
+                    // `paladin_core::inspect`. The dispatch's
+                    // `new_is_encrypted` gate ensures we only consult
+                    // the policy on success (DESIGN §4.5 owns the
+                    // rollback / replacement for every failure
+                    // branch). The return value is bound to
+                    // `_should_arm` because the §"Clipboard + auto-lock
+                    // parity with TUI" checklist owns the timer
+                    // arm/disarm side of this hook; this call is the
+                    // documented integration point per
+                    // `IMPLEMENTATION_PLAN_04_GTK.md` line 3403.
+                    if dispatch.new_is_encrypted.is_some() {
+                        if let Some((vault, _)) = self.vault.as_ref() {
+                            let _should_arm = idle_should_arm(vault);
+                        }
                     }
                 }
             }
