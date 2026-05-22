@@ -64,7 +64,7 @@ use paladin_core::{
 use crate::add_account::{
     AddAccountMsg, AddWorkerEffect, AddWorkerInput, QrWorkerEffect, QrWorkerInput,
 };
-use crate::effect_ownership::EffectOwnership;
+use crate::effect_ownership::{EffectOwnership, QuitDecision};
 use crate::export_dialog::{
     ExportDialogMsg, ExportOutcome, ExportSubmitPayload, ExportWorkerInput,
 };
@@ -4528,5 +4528,32 @@ pub fn initial_effects_for(state: &AppState) -> Option<EffectOwnership> {
         | AppState::Locked { .. }
         | AppState::UnlockedBusy { .. }
         | AppState::StartupError { .. } => None,
+    }
+}
+
+/// Routing decision for `AppMsg::Quit`: dispatch the teardown-and-quit
+/// path now, or defer until the in-flight worker returns.
+///
+/// Wraps [`EffectOwnership::request_quit`] over the
+/// `Option<EffectOwnership>` slot stored on
+/// [`crate::app::model::AppModel`]'s `effects` field. When the slot
+/// is `None` (no vault open — `Missing` / `Locked` / `StartupError`
+/// startups leave it unallocated per [`initial_effects_for`]), there
+/// is no worker to defer behind, so the decision is unconditionally
+/// [`QuitDecision::Now`]; otherwise the slot's `EffectOwnership`
+/// drives the decision and records the `pending_quit` flag on
+/// `Deferred`.
+///
+/// `AppModel::update`'s `AppMsg::Quit` branch calls this helper then
+/// matches: `Now` runs the teardown +
+/// `relm4::main_application().quit()`; `Deferred` records the
+/// pending flag on the in-flight state machine (already done by
+/// `request_quit` itself) and waits for the worker-completion path
+/// to surface [`crate::effect_ownership::CompleteOutcome::QuitNow`]
+/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+pub fn handle_quit_request(effects: Option<&mut EffectOwnership>) -> QuitDecision {
+    match effects {
+        Some(state) => state.request_quit(),
+        None => QuitDecision::Now,
     }
 }

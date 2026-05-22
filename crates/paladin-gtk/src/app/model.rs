@@ -100,7 +100,8 @@ use crate::app::state::{
     compose_remove_worker_input, compose_rename_dispatch, compose_rename_worker_input,
     compose_settings_dispatch, compose_settings_worker_input, compose_unlock_dispatch,
     compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
-    initial_effects_for, run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
+    handle_quit_request, initial_effects_for, run_unlock_worker, AppState, OpenErrorOutcome,
+    UnlockWorkerCompletion,
 };
 use crate::auto_lock::{
     auto_lock_timer_transition, evaluate_timer_fire, idle_should_arm, lock_on_expiry,
@@ -110,7 +111,7 @@ use crate::auto_lock::{
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
 };
-use crate::effect_ownership::EffectOwnership;
+use crate::effect_ownership::{EffectOwnership, QuitDecision};
 use crate::export_dialog::{
     run_export_worker, ExportDialogComponent, ExportDialogInit, ExportDialogMsg,
     ExportDialogOutput, ExportWorkerCompletion,
@@ -1533,24 +1534,32 @@ impl SimpleComponent for AppModel {
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
             AppMsg::Quit => {
-                if let Some(source_id) = self.ticker_source.take() {
-                    source_id.remove();
+                // Route through the in-flight effect-ownership state
+                // machine: if a `gio::spawn_blocking` worker holds the
+                // live `(Vault, Store)` pair, the teardown + quit is
+                // deferred until the worker returns so we never abandon
+                // a save-bearing operation mid-flight. The completion
+                // path (a follow-up commit wires `complete_effect` into
+                // each worker's success / failure callback) surfaces
+                // `CompleteOutcome::QuitNow` to fire the teardown then.
+                // When `effects` is `None` (no vault open) or
+                // `Some(idle)`, the helper returns `QuitDecision::Now`
+                // and we fall through to the immediate teardown +
+                // `relm4::main_application().quit()` per
+                // `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+                // ownership".
+                match handle_quit_request(self.effects.as_mut()) {
+                    QuitDecision::Now => {
+                        self.tear_down_for_quit();
+                        relm4::main_application().quit();
+                    }
+                    QuitDecision::Deferred => {
+                        // `request_quit` already recorded `pending_quit`
+                        // on `self.effects`. The worker-completion hook
+                        // will fire the teardown when the in-flight
+                        // worker returns.
+                    }
                 }
-                if let Some(source_id) = self.auto_lock_source.take() {
-                    source_id.remove();
-                }
-                // Drop every open reveal so the `Zeroizing<String>`
-                // wrappers wipe the visible digits before the
-                // process exits. Drop the pending clipboard slot
-                // too so the captured `Zeroizing<Vec<u8>>` wipes in
-                // lockstep — the clipboard contents themselves are
-                // not touched here.
-                self.reveal_windows.clear();
-                self.pending_clipboard = None;
-                // Clear the armed auto-lock deadline so a stray
-                // post-quit timer wake would see a disarmed source.
-                self.idle_source.disarm();
-                relm4::main_application().quit();
             }
             AppMsg::Tick {
                 wall_clock,
@@ -3543,6 +3552,38 @@ impl AppModel {
         if let Some(controller) = self.add_dialog.as_ref() {
             controller.emit(AddAccountMsg::SetBusy(busy));
         }
+    }
+
+    /// Tear down the per-session GTK / `GLib` resources that must not
+    /// outlive the process exit.
+    ///
+    /// Called from the immediate `QuitDecision::Now` branch of
+    /// `AppMsg::Quit` and from the worker-completion path when a
+    /// deferred quit fires
+    /// ([`crate::effect_ownership::CompleteOutcome::QuitNow`]). The
+    /// teardown is idempotent across the two call sites so the
+    /// deferred path can safely reuse it after the in-flight worker
+    /// returns.
+    ///
+    /// Removes the live TOTP ticker and auto-lock `glib::SourceId`s
+    /// (a consumed `SourceId` cannot be re-removed, so each is
+    /// `take`n behind the `if let` guard); drops every open HOTP
+    /// reveal so the `Zeroizing<String>` wrappers wipe the visible
+    /// digits before the process exits; drops the pending clipboard
+    /// slot so the captured `Zeroizing<Vec<u8>>` wipes in lockstep
+    /// (the clipboard contents themselves are not touched here);
+    /// and disarms the auto-lock idle deadline so a stray post-quit
+    /// timer wake would see a disarmed source.
+    fn tear_down_for_quit(&mut self) {
+        if let Some(source_id) = self.ticker_source.take() {
+            source_id.remove();
+        }
+        if let Some(source_id) = self.auto_lock_source.take() {
+            source_id.remove();
+        }
+        self.reveal_windows.clear();
+        self.pending_clipboard = None;
+        self.idle_source.disarm();
     }
 }
 

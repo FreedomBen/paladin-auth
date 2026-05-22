@@ -12041,3 +12041,61 @@ fn initial_effects_for_non_unlocked_returns_none() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// handle_quit_request — `AppMsg::Quit` routing over the
+// `Option<EffectOwnership>` slot on `AppModel.effects`.
+//
+// `None` slot (no vault open): there is no worker to defer behind, so
+// the decision is unconditionally `QuitDecision::Now`.
+//
+// `Some` slot: delegate to `EffectOwnership::request_quit`, which
+// returns `Now` on the idle `Unlocked` state and `Deferred` (recording
+// the pending_quit flag) on `UnlockedBusy`. Per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+// ---------------------------------------------------------------------------
+
+#[test]
+fn handle_quit_request_with_no_effects_slot_fires_now() {
+    use paladin_gtk::app::state::handle_quit_request;
+    use paladin_gtk::effect_ownership::QuitDecision;
+
+    // `None` slot covers every startup surface that owns no vault:
+    // `Missing`, `Locked`, `StartupError` all leave the slot
+    // unallocated per `initial_effects_for`. The Quit decision is
+    // unconditional in those cases because no worker can be in
+    // flight.
+    let decision = handle_quit_request(None);
+    assert_eq!(decision, QuitDecision::Now);
+}
+
+#[test]
+fn handle_quit_request_with_idle_effects_fires_now() {
+    use paladin_gtk::app::state::handle_quit_request;
+    use paladin_gtk::effect_ownership::{EffectOwnership, QuitDecision};
+
+    let mut effects = EffectOwnership::unlocked();
+    let decision = handle_quit_request(Some(&mut effects));
+    assert_eq!(decision, QuitDecision::Now);
+    assert!(
+        !effects.pending_quit(),
+        "Now decision must not set the pending_quit flag",
+    );
+}
+
+#[test]
+fn handle_quit_request_with_busy_effects_is_deferred_and_records_pending_quit() {
+    use paladin_gtk::app::state::handle_quit_request;
+    use paladin_gtk::effect_ownership::{EffectKind, EffectOwnership, QuitDecision};
+
+    let mut effects = EffectOwnership::unlocked();
+    // Force the busy gate so the helper sees an in-flight worker.
+    effects.start_effect(EffectKind::Export);
+
+    let decision = handle_quit_request(Some(&mut effects));
+    assert_eq!(decision, QuitDecision::Deferred);
+    assert!(
+        effects.pending_quit(),
+        "Deferred decision must set the pending_quit flag so the worker-completion hook fires the teardown",
+    );
+}
