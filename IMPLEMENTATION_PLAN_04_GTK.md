@@ -4175,13 +4175,42 @@ sign-off.
     `<release>`, `<screenshots>` block, homepage / bugtracker URLs,
     a developer block (`<developer>` or legacy `<developer_name>`),
     and the `<content_rating>` declaration.)
-  - [ ] Ship the scalable app icon at
+  - [x] Ship the scalable app icon at
     `data/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg` and
     16/24/32/48 PNG fallbacks under
     `data/icons/hicolor/<size>/apps/org.tamx.Paladin.Gui.png`.
-  - [ ] Ship the symbolic variant at
+    (Scalable SVG drawn at the GNOME HIG-standard 128×128 viewport
+    as a heraldic shield with a central keyhole and a six-digit
+    OTP display, rendered against an Adwaita "blue 3" gradient.
+    PNG fallbacks rasterized from the same SVG source via
+    `inkscape --export-type=png --export-width=<N> --export-height=<N>`
+    at 16 / 24 / 32 / 48 so a single SVG drives every fallback
+    size. Pinned by `tests/icon_assets_logic.rs`:
+    `scalable_svg_exists_at_expected_path`,
+    `scalable_svg_basename_matches_app_id`,
+    `scalable_svg_is_well_formed_svg_root`,
+    `scalable_svg_declares_explicit_viewbox`,
+    `scalable_svg_carries_spdx_header`,
+    `png_fallbacks_exist_at_each_required_size`,
+    `png_fallbacks_use_png_magic_bytes`, and
+    `png_fallbacks_have_matching_ihdr_dimensions` (parses the IHDR
+    chunk and asserts that each PNG's width / height equals the
+    `<size>` from its install directory so a future rerasterization
+    cannot silently land a mis-sized fallback).)
+  - [x] Ship the symbolic variant at
     `data/icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg`
     when the Adwaita palette warrants it.
+    (Drawn at the GNOME HIG-standard 16×16 symbolic viewport as a
+    single-color shield silhouette with a keyhole. Uses
+    `fill="currentColor"` throughout so the Adwaita engine can
+    recolor the glyph against the active foreground (light theme
+    → dark glyph; dark theme → light glyph). Pinned by
+    `tests/icon_assets_logic.rs`:
+    `symbolic_svg_exists_at_expected_path`,
+    `symbolic_svg_basename_matches_app_id_symbolic_convention`,
+    `symbolic_svg_is_well_formed_svg_root`,
+    `symbolic_svg_carries_spdx_header`, and
+    `symbolic_svg_uses_currentcolor_for_recoloring`.)
   - [ ] Wire `build.rs` + `data/paladin-gtk.gresource.xml` to compile
     the gresource bundle deterministically via
     `glib-compile-resources` (fixed input order).

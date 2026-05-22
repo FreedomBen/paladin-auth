@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  Paladin GTK app icon (colored variant) per
+  IMPLEMENTATION_PLAN_04_GTK.md §"Linux desktop integration".
+
+  Installs verbatim at
+  /usr/share/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg in
+  both the native (.deb / .rpm) and Flatpak packaging formats. The
+  iconography is a heraldic shield (the Paladin namesake) with a
+  central keyhole and a six-digit OTP display, drawn against a
+  GNOME-Blue (Adwaita "blue 3") gradient so the icon reads at
+  launcher sizes (48x48 / 32x32 / 24x24 / 16x16) and at the
+  full-scale GNOME Software preview size.
+
+  Designed at the GNOME HIG-standard 128x128 viewport so the
+  rasterized fallbacks under data/icons/hicolor/<size>/apps/
+  derive from a single source of truth.
+-->
+<svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="128"
+    height="128"
+    viewBox="0 0 128 128"
+    version="1.1">
+  <title>Paladin</title>
+  <defs>
+    <linearGradient id="shieldGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#62a0ea"/>
+      <stop offset="1" stop-color="#1c71d8"/>
+    </linearGradient>
+    <linearGradient id="screenGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a1a1a"/>
+      <stop offset="1" stop-color="#2d2d2d"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Drop shadow under the shield so the glyph reads against light Adwaita backgrounds. -->
+  <ellipse cx="64" cy="116" rx="36" ry="4" fill="#000000" fill-opacity="0.20"/>
+
+  <!--
+    Heraldic shield silhouette. The path traces a flat-topped shield
+    with a rounded "boss" pointing down (the classic heater shield
+    shape used in modern security iconography).
+  -->
+  <path d="M 64 10
+           L 22 22
+           L 22 64
+           C 22 90 40 108 64 118
+           C 88 108 106 90 106 64
+           L 106 22 Z"
+        fill="url(#shieldGradient)"
+        stroke="#0d3b8a"
+        stroke-width="2"
+        stroke-linejoin="round"/>
+
+  <!--
+    Inner shield border for a subtle bevel. Renders as a thin highlight
+    along the upper edge so the shield reads as embossed rather than flat.
+  -->
+  <path d="M 64 16
+           L 28 26
+           L 28 50"
+        fill="none"
+        stroke="#a4c8f0"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-opacity="0.55"/>
+
+  <!--
+    OTP "display" rectangle. Mimics the digital readout of a hardware
+    token, anchoring the icon's authenticator identity.
+  -->
+  <rect x="32" y="68" width="64" height="22" rx="3" ry="3"
+        fill="url(#screenGradient)"
+        stroke="#0d3b8a"
+        stroke-width="1.5"/>
+
+  <!--
+    Six monospaced digits drawn as rounded "lozenge" rectangles so the
+    icon reads at 16x16 without legibility loss (a literal "123456"
+    would alias into a blob).
+  -->
+  <g fill="#a4c8f0">
+    <rect x="36" y="74" width="6" height="10" rx="1"/>
+    <rect x="46" y="74" width="6" height="10" rx="1"/>
+    <rect x="56" y="74" width="6" height="10" rx="1"/>
+    <rect x="66" y="74" width="6" height="10" rx="1"/>
+    <rect x="76" y="74" width="6" height="10" rx="1"/>
+    <rect x="86" y="74" width="6" height="10" rx="1"/>
+  </g>
+
+  <!--
+    Keyhole above the OTP display: a small circle plus a tapered slot.
+    Reinforces the "this app guards your accounts" reading without
+    competing with the digital display.
+  -->
+  <g fill="#ffffff">
+    <circle cx="64" cy="40" r="8"/>
+    <path d="M 60 46
+             L 68 46
+             L 66 58
+             L 62 58 Z"/>
+  </g>
+</svg>
