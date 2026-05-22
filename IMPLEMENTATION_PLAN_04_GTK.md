@@ -4504,10 +4504,58 @@ sign-off.
     asserting the `.minisig` post-condition.)
   - [ ] File the Flathub submission and inherit Flatpak signing from
     Flathub.
-  - [ ] Add the packaging dry-run job to CI: produces `.deb`,
+  - [x] Add the packaging dry-run job to CI: produces `.deb`,
     `.rpm`, Flatpak, and AppImage artifacts and runs
     `desktop-file-validate` plus the AppStream validator on the
     installed payload.
+    (`.github/workflows/ci.yml` now declares a `packaging-dry-run`
+    job that runs inside the same `fedora:42` container the
+    `clippy` / `test` jobs use — GTK 4.16 + libadwaita 1.6 headers
+    are present so `cargo build --release --locked -p paladin-gtk`
+    resolves against the version floor. The job installs `nfpm`
+    pinned at the upstream `v2.41.3` GitHub release artifact (a
+    `dnf install` would let the distro pick a divergent version
+    or skip the package entirely on Fedora), exports
+    `PALADIN_VERSION="0.0.1-ci-dry-run"` so the
+    `version: ${PALADIN_VERSION}` substitution in both nfpm
+    manifests resolves to a concrete string, and then runs
+    `nfpm package -f packaging/deb/paladin-gtk.yaml -p deb -t
+    target/dist/` and the matching `-p rpm` invocation against
+    `packaging/rpm/paladin-gtk.yaml`. Each artifact is extracted
+    into a staging directory (`dpkg-deb -x` for the `.deb`,
+    `rpm2cpio | cpio -idm` for the `.rpm`) and both validators run
+    against the installed payload at the FHS paths the manifests
+    claim (`usr/share/applications/org.tamx.Paladin.Gui.desktop`
+    and `usr/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml`)
+    — that closes the gap the existing `desktop-metainfo`
+    source-validator job leaves open. The Flatpak + AppImage
+    artifact-production sub-steps land in follow-up workflow
+    commits (both require additional runtime setup —
+    flatpak-builder + Flathub remote for Flatpak;
+    `linuxdeploy` + `linuxdeploy-plugin-gtk` for AppImage — that
+    is out of scope for this contract); their text-level manifest
+    / script tests
+    (`tests/packaging_flatpak_manifest_logic.rs`,
+    `tests/packaging_appimage_build_script_logic.rs`) run on every
+    push regardless. Pinned by
+    `tests/ci_packaging_dry_run_logic.rs::ci_workflow_declares_packaging_dry_run_job`,
+    `ci_packaging_dry_run_job_has_a_human_readable_name`,
+    `ci_packaging_dry_run_job_runs_in_a_fedora_container`,
+    `ci_packaging_dry_run_installs_nfpm`,
+    `ci_packaging_dry_run_builds_release_binary_with_locked_lockfile`,
+    `ci_packaging_dry_run_exports_paladin_version`,
+    `ci_packaging_dry_run_builds_deb_package_via_nfpm`,
+    `ci_packaging_dry_run_builds_rpm_package_via_nfpm`,
+    `ci_packaging_dry_run_extracts_deb_payload`,
+    `ci_packaging_dry_run_extracts_rpm_payload`,
+    `ci_packaging_dry_run_runs_desktop_file_validate_on_extracted_payload`,
+    `ci_packaging_dry_run_runs_appstreamcli_validate_on_extracted_payload`,
+    `extract_packaging_dry_run_job_returns_only_the_named_job_body`,
+    and `extract_packaging_dry_run_job_returns_none_when_absent` —
+    together these fail if the job is removed, drops `--locked`,
+    swaps the container, stops pointing at the in-tree manifest
+    paths, skips extraction, or stops validating the installed
+    payload.)
 - [ ] Milestone 7 automated and manual sign-off stays tracked.
   - [x] Manual test plan documented in
     `crates/paladin-gtk/tests/manual/MANUAL_TEST_PLAN.md`, with

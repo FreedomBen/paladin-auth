@@ -105,6 +105,123 @@ jobs:
             exit 1
           fi
 
+  packaging-dry-run:
+    name: packaging dry-run (.deb / .rpm + installed-payload validators)
+    runs-on: ubuntu-latest
+    # Per IMPLEMENTATION_PLAN_04_GTK.md Milestone 7 checklist entry
+    # "Add the packaging dry-run job to CI: produces .deb, .rpm, Flatpak,
+    # and AppImage artifacts and runs desktop-file-validate plus the
+    # AppStream validator on the installed payload", this job exercises
+    # the nfpm-driven .deb and .rpm pipelines end-to-end:
+    #
+    #   1. Builds the release binary with --release --locked (same flag
+    #      set the §11.6 reproducibility gate locks in for the AppImage
+    #      script via tests/packaging_reproducible_build_logic.rs).
+    #   2. Produces a .deb via the in-tree packaging/deb/paladin-gtk.yaml
+    #      nfpm manifest, then a .rpm via packaging/rpm/paladin-gtk.yaml.
+    #   3. Extracts each artifact into a staging directory (dpkg-deb -x
+    #      for the .deb, rpm2cpio | cpio for the .rpm) so the validators
+    #      check the installed payload — not just the source-tree
+    #      originals the existing `desktop-metainfo` job covers.
+    #   4. Runs `desktop-file-validate` against the extracted .desktop
+    #      file and `appstreamcli validate --no-net` against the
+    #      extracted AppStream metainfo. A regression in either nfpm
+    #      manifest that drops or relocates one of those files therefore
+    #      fails CI immediately, even though the source-tree originals
+    #      stay valid.
+    #
+    # GTK4 + libadwaita 1.6 floor: the release binary build depends on
+    # the gtk4-sys / libadwaita-sys crates' >= 1.6 + GTK 4.16 feature
+    # gates, and ubuntu-24.04 ships GTK 4.14 / libadwaita 1.5. The job
+    # therefore runs inside the `fedora:42` container (matching the
+    # clippy / test jobs above) so the system headers satisfy the
+    # version floor without a PPA dance.
+    #
+    # Flatpak + AppImage dry-runs land in follow-up workflow commits —
+    # both require additional runtime setup (flatpak-builder + Flathub
+    # remote for Flatpak; linuxdeploy + linuxdeploy-plugin-gtk for
+    # AppImage) that is out of scope for this contract. The Flatpak
+    # manifest is already pinned by
+    # crates/paladin-gtk/tests/packaging_flatpak_manifest_logic.rs and
+    # the AppImage assembly script by
+    # crates/paladin-gtk/tests/packaging_appimage_build_script_logic.rs;
+    # those text-level tests run on every push regardless of this job.
+    #
+    # Contract pinned by
+    # crates/paladin-gtk/tests/ci_packaging_dry_run_logic.rs.
+    container:
+      image: fedora:42
+    env:
+      # The nfpm manifests reference `${PALADIN_VERSION}` (see the
+      # `version: ${PALADIN_VERSION}` lines in both YAMLs). The
+      # release pipeline derives this from the release tag; the CI
+      # dry-run uses a sentinel since no tag is in flight on a push /
+      # PR run. The string only needs to be a syntactically valid
+      # version — the actual workspace version stays authoritative.
+      PALADIN_VERSION: "0.0.1-ci-dry-run"
+    steps:
+      - name: Install system dependencies (GTK4 + libadwaita + extractors + validators + Rust)
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            rustup gcc pkg-config openssl-devel \
+            gtk4-devel libadwaita-devel \
+            dpkg cpio rpm-build \
+            desktop-file-utils appstream \
+            curl tar git ca-certificates
+          rustup-init -y --no-modify-path --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@v4
+      - name: Show pinned toolchain
+        run: rustup show
+      - name: Install nfpm
+        # The deb / rpm builder both nfpm manifests target. Installed
+        # from the upstream GitHub release artifact so the version
+        # stays pinned (a `dnf install nfpm` is not available on
+        # Fedora; `go install` would pull HEAD).
+        run: |
+          NFPM_VERSION="2.41.3"
+          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz" \
+            | tar -xz -C /usr/local/bin nfpm
+          nfpm --version
+      - name: Build release binary
+        # --release for the release-profile binary, --locked for
+        # reproducibility per DESIGN §11.6 (parity with the AppImage
+        # script's `cargo build --release --locked` fallback).
+        run: cargo build --release --locked -p paladin-gtk
+      - name: Build .deb via nfpm
+        run: nfpm package -f packaging/deb/paladin-gtk.yaml -p deb -t target/dist/
+      - name: Build .rpm via nfpm
+        run: nfpm package -f packaging/rpm/paladin-gtk.yaml -p rpm -t target/dist/
+      - name: Extract .deb payload into target/dist/deb-extracted/
+        run: |
+          mkdir -p target/dist/deb-extracted
+          DEB_FILE="$(ls target/dist/paladin-gtk_*.deb | head -n1)"
+          dpkg-deb -x "${DEB_FILE}" target/dist/deb-extracted
+      - name: Extract .rpm payload into target/dist/rpm-extracted/
+        run: |
+          mkdir -p target/dist/rpm-extracted
+          RPM_FILE="$(ls target/dist/paladin-gtk-*.rpm | head -n1)"
+          ( cd target/dist/rpm-extracted && rpm2cpio "../../../${RPM_FILE}" | cpio -idm )
+      - name: Validate installed .desktop entry (from .deb payload)
+        run: |
+          desktop-file-validate \
+            target/dist/deb-extracted/usr/share/applications/org.tamx.Paladin.Gui.desktop
+      - name: Validate installed AppStream metainfo (from .deb payload)
+        # `--no-net` keeps the validator off the network so the job
+        # never depends on external URLs being reachable. The
+        # substantive schema / required-fields checks still run.
+        run: |
+          appstreamcli validate --no-net \
+            target/dist/deb-extracted/usr/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml
+      - name: Validate installed .desktop entry (from .rpm payload)
+        run: |
+          desktop-file-validate \
+            target/dist/rpm-extracted/usr/share/applications/org.tamx.Paladin.Gui.desktop
+      - name: Validate installed AppStream metainfo (from .rpm payload)
+        run: |
+          appstreamcli validate --no-net \
+            target/dist/rpm-extracted/usr/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml
+
   desktop-metainfo:
     name: desktop-file-validate + appstreamcli validate
     runs-on: ubuntu-latest
