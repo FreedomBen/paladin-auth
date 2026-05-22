@@ -79,18 +79,19 @@ use crate::account_list::{
 };
 use crate::add_account::{
     run_add_worker, AddAccountComponent, AddAccountInit, AddAccountMsg, AddAccountOutput,
-    AddWorkerCompletion,
+    AddWorkerCompletion, QrWorkerCompletion,
 };
 use crate::app::state::{
-    apply_add_dispatch_inplace, apply_add_vault_install_inplace, apply_remove_dispatch_inplace,
-    apply_remove_vault_install_inplace, apply_rename_dispatch_inplace,
-    apply_rename_vault_install_inplace, apply_submit_add_inplace, apply_submit_remove_inplace,
-    apply_submit_rename_inplace, apply_submit_unlock_inplace, apply_unlock_dispatch_inplace,
-    apply_unlock_vault_install_inplace, compose_add_dispatch, compose_add_worker_input,
-    compose_remove_dispatch, compose_remove_worker_input, compose_rename_dispatch,
-    compose_rename_worker_input, compose_unlock_dispatch, compose_unlock_worker_input,
-    decide_state_from_inspect, decide_state_from_open_error, run_unlock_worker, AppState,
-    OpenErrorOutcome, UnlockWorkerCompletion,
+    apply_add_dispatch_inplace, apply_add_vault_install_inplace, apply_qr_dispatch_inplace,
+    apply_remove_dispatch_inplace, apply_remove_vault_install_inplace,
+    apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, apply_submit_add_inplace,
+    apply_submit_remove_inplace, apply_submit_rename_inplace, apply_submit_unlock_inplace,
+    apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace, compose_add_dispatch,
+    compose_add_worker_input, compose_qr_dispatch, compose_remove_dispatch,
+    compose_remove_worker_input, compose_rename_dispatch, compose_rename_worker_input,
+    compose_unlock_dispatch, compose_unlock_worker_input, decide_state_from_inspect,
+    decide_state_from_open_error, run_unlock_worker, AppState, OpenErrorOutcome,
+    UnlockWorkerCompletion,
 };
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
@@ -786,6 +787,39 @@ pub enum AppMsg {
     /// [`crate::app::state::apply_add_vault_install_inplace`]
     /// unconditionally.
     AddWorkerCompleted(AddWorkerCompletion),
+    /// Posted by the `gio::spawn_blocking` worker that runs
+    /// `Vault::mutate_and_save(|v| v.import_accounts(...))` for the
+    /// clipboard-QR add path after it consumes a
+    /// [`crate::add_account::QrWorkerInput`] and reports its routed
+    /// outcome as a [`QrWorkerCompletion`] — the typed
+    /// [`crate::add_account::QrWorkerEffect`] bundled with the live
+    /// `(Vault, Store)` pair returned by `mutate_and_save` regardless
+    /// of typed outcome (the QR worker always returns the pair per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" >
+    /// "Every worker returns `(Vault, Store, EffectOutcome)`").
+    ///
+    /// Mirrors the [`Self::AddWorkerCompleted`] dispatch path with
+    /// two divergences pinned by `compose_qr_dispatch`:
+    ///
+    /// * `drop_dialog` is always `false` — the QR sub-path keeps the
+    ///   Add dialog mounted on every effect so the post-success
+    ///   counts panel can render the
+    ///   `imported`/`skipped`/`warning` numbers parked by
+    ///   [`crate::add_account::AddAccountMsg::QrSuccess`].
+    /// * `dialog_msg` is `Some(_)` on every effect:
+    ///   `QrSuccess(QrImportSummary)` on `Success` (so the counts
+    ///   panel actually surfaces the post-merge counts inline,
+    ///   parity with §6) and `WorkerFailed(outcome)` on every
+    ///   failure branch (typed
+    ///   [`crate::add_account::AddPostEffectOutcome`] so the inline
+    ///   error / durability warning re-renders).
+    ///
+    /// The carried pair is reinstalled into [`AppModel::vault`] via
+    /// [`crate::app::state::apply_add_vault_install_inplace`]
+    /// unconditionally — the QR sub-path reuses the add path's
+    /// installer because both workers consume and return the live
+    /// `(Vault, Store)` pair through `Vault::mutate_and_save`.
+    QrWorkerCompleted(QrWorkerCompletion),
     /// Posted by the `gio::spawn_blocking` worker that runs
     /// `Vault::hotp_peek` + `Vault::hotp_advance` after it consumes
     /// the bundled [`HotpAdvanceWorkerInput`] and reports its routed
@@ -2437,6 +2471,60 @@ impl SimpleComponent for AppModel {
                     }
                     if let Some(body) = dispatch.success_toast {
                         self.toast_overlay.add_toast(adw::Toast::new(&body));
+                    }
+                }
+            }
+            AppMsg::QrWorkerCompleted(completion) => {
+                // Clipboard-QR worker-outcome dispatch. Symmetric
+                // partner of `AddWorkerCompleted` on the QR sub-path
+                // with two divergences pinned by `compose_qr_dispatch`
+                // and exercised in
+                // `tests/app_state_logic.rs::qr_pipeline_*`:
+                //
+                // * `drop_dialog` is always `false` — the dialog
+                //   stays mounted on every effect so the counts panel
+                //   (success) or inline error / durability warning
+                //   (failure) can render against the still-mounted
+                //   Add dialog.
+                // * `dialog_msg` is `Some(_)` on every effect:
+                //   `QrSuccess(QrImportSummary)` on Success so the
+                //   counts panel surfaces `imported`/`skipped`/
+                //   `warning` inline (parity with §6), and
+                //   `WorkerFailed(outcome)` on every failure branch.
+                //
+                // `compose_qr_dispatch` bundles the four worker-
+                // completion decisions (`app_state`, `dialog_msg`,
+                // `drop_dialog`, `refresh_list`); the handler reuses
+                // `apply_add_vault_install_inplace` for the
+                // `(Vault, Store)` reinstallation because the QR
+                // worker consumes and returns the same live pair the
+                // add path does, then routes the dispatch through
+                // `apply_qr_dispatch_inplace` for the busy-gate
+                // rollback.
+                let QrWorkerCompletion {
+                    effect,
+                    vault,
+                    store,
+                } = completion;
+                apply_add_vault_install_inplace(&mut self.vault, (vault, store));
+                let dispatch = self.state.as_mut().map(|state| {
+                    let dispatch = compose_qr_dispatch(state, &effect);
+                    apply_qr_dispatch_inplace(state, &dispatch);
+                    dispatch
+                });
+                if let Some(dispatch) = dispatch {
+                    if let Some(msg) = dispatch.dialog_msg {
+                        if let Some(controller) = self.add_dialog.as_ref() {
+                            controller.emit(msg);
+                        }
+                    }
+                    if dispatch.drop_dialog {
+                        if let Some(controller) = self.add_dialog.take() {
+                            self.content.remove(controller.widget());
+                        }
+                    }
+                    if dispatch.refresh_list {
+                        self.refresh_account_list();
                     }
                 }
             }

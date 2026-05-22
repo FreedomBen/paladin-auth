@@ -2762,10 +2762,39 @@ sign-off.
     `compose_qr_decode_outcome_decoded_carries_empty_vec_only_under_unreachable_path`,
     on top of the existing `decode_clipboard_qr_*` and
     `verify_download_layout_*` pins.
-  - [ ] Insert the returned accounts through
+  - [x] Insert the returned accounts through
     `Vault::import_accounts(accounts, ImportConflict::Skip,
     import_time)` inside `Vault::mutate_and_save`; report
     imported / skipped / warning counts inline (parity with §6).
+    `crate::add_account::run_qr_worker` runs the
+    `vault.mutate_and_save(&store, |v|
+    v.import_accounts(accounts, ImportConflict::Skip, import_time))`
+    closure (the policy constant comes from
+    `crate::qr_clipboard::CLIPBOARD_QR_CONFLICT_POLICY` so the
+    worker cannot drift off `Skip`) and bundles the outcome into a
+    `QrWorkerCompletion`. The new `AppMsg::QrWorkerCompleted` arm
+    in `AppModel::update` reinstalls the live `(Vault, Store)` pair
+    via the shared `apply_add_vault_install_inplace`, then drives
+    the four `compose_qr_dispatch` decisions in a single shot:
+    `apply_qr_dispatch_inplace` releases the
+    `UnlockedBusy → Unlocked` busy gate, the bundled
+    `AddAccountMsg::QrSuccess(QrImportSummary::from_report(report))`
+    is forwarded to the still-mounted Add dialog (parked on
+    `AddDialogState::qr_success_counts` and rendered by the
+    `compose_qr_counts_panel_*` projections — imported / skipped /
+    warning labels), `drop_dialog == false` keeps the counts panel
+    visible, and `refresh_list == true` re-projects rows so the
+    newly merged accounts surface in the visible list. Pinned by
+    `tests/add_account_logic.rs::run_qr_worker_plaintext_import_succeeds_and_returns_live_pair_with_report`,
+    `run_qr_worker_persists_imported_accounts_to_disk`,
+    `run_qr_worker_skip_policy_skips_duplicate_with_same_secret_issuer_label`,
+    `run_qr_worker_empty_input_returns_success_with_zero_counts`,
+    `run_qr_worker_propagates_validation_warnings_through_report`,
+    the
+    `compose_qr_counts_panel_*` invariants, and the new
+    `tests/app_state_logic.rs::apply_qr_dispatch_inplace_*` /
+    `qr_pipeline_success_returns_to_unlocked_with_imported_account_and_keeps_dialog_mounted`
+    composition-order pin.
   - [ ] Handle `save_not_committed` by restoring the
     `Vault::mutate_and_save` snapshot and keeping the Add dialog open
     with the inline error; handle `save_durability_unconfirmed` by

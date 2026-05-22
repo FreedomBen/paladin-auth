@@ -10156,3 +10156,393 @@ fn add_pipeline_failure_keeps_pair_installed_and_returns_to_unlocked() {
         "state must roll back to Unlocked on Failure (busy gate always releases)",
     );
 }
+
+// ---------------------------------------------------------------------------
+// apply_qr_dispatch_inplace — `AppModel::update` mut-state wrapper for QR
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `apply_add_dispatch_inplace` for the clipboard-QR
+// sub-path. `compose_qr_dispatch(&AppState, &QrWorkerEffect) -> QrDispatch`
+// bundles the four worker-completion decisions (`app_state`, `dialog_msg`,
+// `drop_dialog`, `refresh_list`); the wrapper here lets
+// `AppMsg::QrWorkerCompleted` install the new `dispatch.app_state` against
+// the cached `AppState` in place, mirroring `apply_add_dispatch_inplace`'s
+// contract for the busy-gate rollback. The remaining `dialog_msg` /
+// `drop_dialog` / `refresh_list` projections drive widget-side work in the
+// handler and are not the wrapper's concern.
+
+#[test]
+fn apply_qr_dispatch_inplace_success_rolls_back_to_unlocked_and_returns_true() {
+    // Worker reported `Ok(report)`: `compose_qr_dispatch` carries
+    // `Some(Unlocked(path))` in `app_state` (the QR worker always
+    // releases the busy gate). The wrapper installs the rollback
+    // against the cached `UnlockedBusy` state and returns `true` so
+    // `AppModel::update` can release the busy gate while the dialog
+    // stays mounted to render the post-merge counts panel.
+    use paladin_core::ImportReport;
+    use paladin_gtk::add_account::QrWorkerEffect;
+    use paladin_gtk::app::state::{apply_qr_dispatch_inplace, compose_qr_dispatch};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = QrWorkerEffect::Success(ImportReport::default());
+    let dispatch = compose_qr_dispatch(&busy, &effect);
+    let mut state = busy.clone();
+    let transitioned = apply_qr_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        transitioned,
+        "apply_qr_dispatch_inplace must return true on the Success rollback",
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { .. }),
+        "Success rollback target must be Unlocked, got {state:?}",
+    );
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_qr_dispatch_inplace_failure_inline_rolls_back_to_unlocked_and_returns_true() {
+    // Worker reported a typed `Inline` failure
+    // (e.g. `save_not_committed`): the QR worker always rolls the
+    // busy gate back to `Unlocked` because `Vault::mutate_and_save`
+    // is authoritative for the rollback semantics. The wrapper
+    // installs the rollback and returns `true`; widget-side work
+    // (the inline error and the still-mounted dialog) is driven by
+    // the remaining dispatch fields.
+    use paladin_gtk::add_account::{classify_add_post_effect_error, QrWorkerEffect};
+    use paladin_gtk::app::state::{apply_qr_dispatch_inplace, compose_qr_dispatch};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let effect = QrWorkerEffect::Failure(classify_add_post_effect_error(&err));
+    let dispatch = compose_qr_dispatch(&busy, &effect);
+    let mut state = busy.clone();
+    let transitioned = apply_qr_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        transitioned,
+        "apply_qr_dispatch_inplace must return true on the Failure rollback",
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { .. }),
+        "Failure rollback target must be Unlocked, got {state:?}",
+    );
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_qr_dispatch_inplace_failure_keep_with_warning_rolls_back_to_unlocked_and_returns_true() {
+    // The `save_durability_unconfirmed` branch also rolls
+    // `UnlockedBusy → Unlocked`; the durability warning is forwarded
+    // via `dispatch.dialog_msg` as `WorkerFailed(KeepWithWarning(_))`
+    // and is not the wrapper's concern.
+    use paladin_gtk::add_account::{classify_add_post_effect_error, QrWorkerEffect};
+    use paladin_gtk::app::state::{apply_qr_dispatch_inplace, compose_qr_dispatch};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let effect = QrWorkerEffect::Failure(classify_add_post_effect_error(&err));
+    let dispatch = compose_qr_dispatch(&busy, &effect);
+    let mut state = busy.clone();
+    let transitioned = apply_qr_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        transitioned,
+        "KeepWithWarning rollback must transition UnlockedBusy → Unlocked",
+    );
+    assert!(matches!(state, AppState::Unlocked { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_qr_dispatch_inplace_from_non_unlocked_busy_leaves_state_unchanged_and_returns_false() {
+    // Defensive: when the worker outcome arrives but the cached state
+    // is not `UnlockedBusy` (a stray dispatch from any other source),
+    // `compose_qr_dispatch` reports `app_state = None` to refuse a
+    // phantom `Unlocked` transition. The wrapper must leave the
+    // cached state untouched byte-for-byte and return `false` so
+    // `AppModel::update` does not clobber an idle state with a
+    // phantom rollback.
+    use paladin_core::ImportReport;
+    use paladin_gtk::add_account::QrWorkerEffect;
+    use paladin_gtk::app::state::{apply_qr_dispatch_inplace, compose_qr_dispatch};
+
+    let path = vault_path();
+    let effect = QrWorkerEffect::Success(ImportReport::default());
+    let invalid_sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ];
+    for source in invalid_sources {
+        let dispatch = compose_qr_dispatch(&source, &effect);
+        assert!(
+            dispatch.app_state.is_none(),
+            "fixture invariant: non-UnlockedBusy source must carry app_state=None",
+        );
+        let original_discriminant = std::mem::discriminant::<AppState>(&source);
+        let original_path = source.path().map(Path::to_path_buf);
+        let mut state = source.clone();
+        let transitioned = apply_qr_dispatch_inplace(&mut state, &dispatch);
+        assert!(
+            !transitioned,
+            "apply_qr_dispatch_inplace must return false when dispatch.app_state is None \
+             for source={source:?}",
+        );
+        assert_eq!(
+            std::mem::discriminant::<AppState>(&state),
+            original_discriminant,
+            "wrapper must leave variant unchanged when dispatch.app_state is None \
+             for source={source:?}",
+        );
+        assert_eq!(
+            state.path().map(Path::to_path_buf),
+            original_path,
+            "wrapper must leave path unchanged when dispatch.app_state is None \
+             for source={source:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// QR pipeline — full composition order `AppModel::update` walks for
+// `AppMsg::QrWorkerCompleted`. Pins the exact sequence
+// `compose_qr_worker_input` → `apply_submit_add_inplace` →
+// `run_qr_worker` → `apply_add_vault_install_inplace` →
+// `compose_qr_dispatch` → `apply_qr_dispatch_inplace`.
+//
+// Symmetric partner of `add_pipeline_success_*` /
+// `add_pipeline_failure_*` for the QR sub-path. The individual
+// projections are exhaustively tested above; these pipeline tests
+// guard against composition-order regressions in `AppModel::update`.
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+// clipboard image path" > L2765: "Insert the returned accounts
+// through `Vault::import_accounts(accounts, ImportConflict::Skip,
+// import_time)` inside `Vault::mutate_and_save`; report imported /
+// skipped / warning counts inline (parity with §6)". The
+// `apply_add_vault_install_inplace` reuse is intentional — the QR
+// sub-path shares the add path's `(Vault, Store)` reinstallation
+// because both workers return the post-effect pair regardless of
+// typed outcome.
+// ---------------------------------------------------------------------------
+
+/// Build a single-account validated QR import batch for the QR
+/// pipeline fixtures. Mirrors the manual-add path's
+/// `fresh_add_account` but emits the `ValidatedAccount` shape the QR
+/// worker consumes (one entry per decoded QR).
+fn fresh_qr_batch() -> Vec<paladin_core::ValidatedAccount> {
+    use paladin_core::{validate_manual, AccountInput, AccountKindInput, Algorithm, IconHintInput};
+    use secrecy::SecretString;
+
+    let input = AccountInput {
+        label: "qr-imported".to_string(),
+        issuer: Some("qr-issuer".to_string()),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    vec![validate_manual(input, SystemTime::UNIX_EPOCH)
+        .expect("totp account input validates for QR pipeline fixture")]
+}
+
+#[test]
+fn qr_pipeline_success_returns_to_unlocked_with_imported_account_and_keeps_dialog_mounted() {
+    // Happy path: the clipboard-QR sub-path of `AddAccountComponent`
+    // submits a decoded `Vec<ValidatedAccount>`; `AppModel::update`
+    // composes the QR worker input over `Unlocked`, transitions to
+    // `UnlockedBusy`, runs the worker (which merges the batch
+    // through `Vault::mutate_and_save(|v| v.import_accounts(...))`
+    // under `ImportConflict::Skip`), reinstalls the post-save pair,
+    // and dispatches over `UnlockedBusy + Success` to roll back to
+    // `Unlocked` while keeping the dialog mounted (to render the
+    // counts panel) and forwarding `QrSuccess(summary)` so the
+    // dialog can render `imported`/`skipped`/`warning` counts inline.
+    use paladin_gtk::add_account::{
+        run_qr_worker, AddAccountMsg, QrWorkerCompletion, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::{
+        apply_add_vault_install_inplace, apply_qr_dispatch_inplace, compose_qr_dispatch,
+    };
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+    let batch = fresh_qr_batch();
+    let expected_label = batch[0].account.label().to_string();
+
+    // 1. Compose worker input from `Unlocked` over the live pair.
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let mut vault_slot: Option<(Vault, Store)> = Some((vault, store));
+    let worker_input = compose_qr_worker_input(
+        &state,
+        vault_slot.take().expect("vault slot is filled"),
+        batch,
+        SystemTime::UNIX_EPOCH,
+    )
+    .expect("compose returns Ok when state is Unlocked");
+
+    // 2. Busy-gate transition (shared with the add path because both
+    //    workers consume the live pair and `import_accounts` is just
+    //    a different `mutate_and_save` closure body).
+    let transitioned = apply_submit_add_inplace(&mut state);
+    assert!(
+        transitioned,
+        "apply_submit_add_inplace must return true on Unlocked source for QR sub-path"
+    );
+    assert!(
+        matches!(state, AppState::UnlockedBusy { .. }),
+        "state must be UnlockedBusy after apply_submit_add_inplace"
+    );
+
+    // 3. Worker body — `Vault::mutate_and_save(|v|
+    //    v.import_accounts(..., ImportConflict::Skip, import_time))`.
+    let completion = run_qr_worker(worker_input);
+    let QrWorkerCompletion {
+        effect,
+        vault,
+        store,
+    } = completion;
+    let report = match &effect {
+        QrWorkerEffect::Success(report) => {
+            assert_eq!(report.imported, 1, "single fresh account → imported=1");
+            assert_eq!(report.skipped, 0, "no duplicate → skipped=0");
+            report.clone()
+        }
+        other @ QrWorkerEffect::Failure(_) => {
+            panic!("expected Success for a valid QR batch, got {other:?}")
+        }
+    };
+
+    // 4. Reinstall pair into the live slot (the QR sub-path reuses
+    //    the add path's installer because both workers return the
+    //    post-effect pair regardless of typed outcome).
+    apply_add_vault_install_inplace(&mut vault_slot, (vault, store));
+    let (installed_vault, _) = vault_slot.as_ref().expect("pair reinstalled");
+    let summary = installed_vault
+        .summaries()
+        .find(|s| s.label == expected_label)
+        .expect("imported account survives mutate_and_save");
+    assert_eq!(summary.issuer.as_deref(), Some("qr-issuer"));
+
+    // 5. Dispatch over UnlockedBusy + Success.
+    let dispatch = compose_qr_dispatch(&state, &effect);
+    assert!(
+        !dispatch.drop_dialog,
+        "drop_dialog == false on QR Success (dialog stays mounted for counts panel)",
+    );
+    assert!(
+        dispatch.refresh_list,
+        "refresh_list == true on QR Success so the new row appears in the list",
+    );
+    match dispatch.dialog_msg.as_ref() {
+        Some(AddAccountMsg::QrSuccess(s)) => {
+            let expected = QrImportSummary::from_report(&report);
+            assert_eq!(
+                *s, expected,
+                "dialog_msg must carry QrSuccess(QrImportSummary::from_report(report))",
+            );
+        }
+        other => panic!("dialog_msg must carry QrSuccess on Success, got {other:?}"),
+    }
+    let dispatched = apply_qr_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        dispatched,
+        "apply_qr_dispatch_inplace must return true on UnlockedBusy source"
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { path: ref p } if *p == path),
+        "state must be Unlocked at path after Success dispatch",
+    );
+}
+
+#[test]
+fn qr_pipeline_failure_keeps_pair_installed_and_returns_to_unlocked_with_inline_dialog_msg() {
+    // Failure path: simulate a `save_not_committed` outcome (the
+    // worker returns the pre-commit `(Vault, Store)` snapshot
+    // because `mutate_and_save` rolled back). The dispatch must
+    // still roll the busy-gate back to `Unlocked`, must NOT drop
+    // the dialog (the QR sub-path always keeps the dialog mounted),
+    // and must forward a
+    // `WorkerFailed(AddPostEffectOutcome::Inline(_))` to the live
+    // `AddAccountComponent` so the inline error renders.
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, QrWorkerCompletion,
+        QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::{
+        apply_add_vault_install_inplace, apply_qr_dispatch_inplace, compose_qr_dispatch,
+    };
+
+    let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let mut vault_slot: Option<(Vault, Store)> = Some((vault, store));
+    let _worker_input = compose_qr_worker_input(
+        &state,
+        vault_slot.take().expect("vault slot is filled"),
+        fresh_qr_batch(),
+        SystemTime::UNIX_EPOCH,
+    )
+    .expect("compose returns Ok when state is Unlocked");
+
+    apply_submit_add_inplace(&mut state);
+    assert!(matches!(state, AppState::UnlockedBusy { .. }));
+
+    // Synthesize a typed `save_not_committed` failure as if
+    // `mutate_and_save` had rolled back. The worker hands the pair
+    // back regardless of typed outcome, so the test reuses a fresh
+    // plaintext pair to stand in for the rolled-back snapshot.
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(matches!(outcome, AddPostEffectOutcome::Inline(_)));
+    let (_tempdir2, _path2, vault, store) = fresh_plaintext_pair();
+    let completion = QrWorkerCompletion {
+        effect: QrWorkerEffect::Failure(outcome),
+        vault,
+        store,
+    };
+    let QrWorkerCompletion {
+        effect,
+        vault,
+        store,
+    } = completion;
+
+    apply_add_vault_install_inplace(&mut vault_slot, (vault, store));
+    assert!(
+        vault_slot.is_some(),
+        "pair must be reinstalled even on failure"
+    );
+
+    let dispatch = compose_qr_dispatch(&state, &effect);
+    assert!(
+        !dispatch.drop_dialog,
+        "drop_dialog == false on QR Failure (dialog stays mounted for inline error)",
+    );
+    assert!(
+        !dispatch.refresh_list,
+        "refresh_list == false on Inline failure (vault rolled back so list already matches disk)",
+    );
+    match dispatch.dialog_msg.as_ref() {
+        Some(AddAccountMsg::WorkerFailed(AddPostEffectOutcome::Inline(_))) => {}
+        other => panic!("dialog_msg must carry WorkerFailed(Inline) on Failure, got {other:?}"),
+    }
+    let dispatched = apply_qr_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        dispatched,
+        "apply_qr_dispatch_inplace must transition on UnlockedBusy source"
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { path: ref p } if *p == path),
+        "state must roll back to Unlocked on Failure (busy gate always releases)",
+    );
+}
