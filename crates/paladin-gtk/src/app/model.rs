@@ -1540,7 +1540,8 @@ impl SimpleComponent for AppModel {
                 if let Some(token) = self.handle_tick(wall_clock, monotonic) {
                     // The per-tick clipboard wake deadline elapsed
                     // and the pending entry is still armed. Issue an
-                    // async `gdk::Clipboard::read_text` and route
+                    // async `gdk::Clipboard::read_text` via
+                    // [`crate::clipboard::read_text_async`] and route
                     // the byte-equality decision through
                     // `evaluate_wake` on completion — keeping the
                     // sync part of the tick handler free of the
@@ -1548,14 +1549,7 @@ impl SimpleComponent for AppModel {
                     // blocks the next TOTP gauge refresh.
                     let clipboard = WidgetExt::display(&self.content).clipboard();
                     let dispatch = sender.clone();
-                    clipboard.read_text_async(None::<&gtk::gio::Cancellable>, move |result| {
-                        let current = zeroize::Zeroizing::new(
-                            result
-                                .ok()
-                                .flatten()
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default(),
-                        );
+                    crate::clipboard::read_text_async(&clipboard, move |current| {
                         dispatch.input(AppMsg::ClipboardWakeRead { token, current });
                     });
                 }
@@ -1575,7 +1569,7 @@ impl SimpleComponent for AppModel {
                 match decision {
                     Some(WakeDecision::Clear) => {
                         let clipboard = WidgetExt::display(&self.content).clipboard();
-                        clipboard.set_text("");
+                        crate::clipboard::clear(&clipboard);
                         self.pending_clipboard = None;
                     }
                     Some(WakeDecision::Mismatch) => {
@@ -1737,10 +1731,8 @@ impl SimpleComponent for AppModel {
                     if let Some(bytes) =
                         prepare_copy_bytes(vault, &self.reveal_windows, id, wall_clock)
                     {
-                        let display = WidgetExt::display(&self.content);
-                        let clipboard = display.clipboard();
-                        let text = String::from_utf8_lossy(&bytes);
-                        clipboard.set_text(&text);
+                        let clipboard = WidgetExt::display(&self.content).clipboard();
+                        crate::clipboard::write_payload(&clipboard, &bytes);
                         if let Some(pending) =
                             schedule_copy(Instant::now(), vault.settings(), bytes)
                         {

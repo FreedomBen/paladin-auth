@@ -67,6 +67,7 @@ crates/paladin-gtk/
     ├── startup_probes.rs
     ├── app_state_logic.rs
     ├── auto_lock_logic.rs        # pure logic; no display required
+    ├── clipboard_logic.rs        # pure logic; no display required
     ├── clipboard_clear_logic.rs  # pure logic; no display required
     ├── hotp_reveal_logic.rs
     ├── secret_fields_logic.rs
@@ -825,6 +826,32 @@ These run without a display server. Each lives under
 - [x] On expiry, the model drops `Vault`, switches to `Locked`, and
   discards open HOTP reveal windows, the search query, and any open
   dialog.
+
+#### `tests/clipboard_logic.rs`
+
+- [x] [`crate::clipboard::payload_text`] returns the OTP-code bytes
+  unchanged for the ASCII-only case (borrowed `Cow::Borrowed`, no
+  allocation) and falls back to UTF-8 lossy substitution for
+  defensive non-UTF-8 inputs so the
+  `gdk::Clipboard::set_text(&str)` boundary never panics on a stray
+  byte. Pinned by `payload_text_passes_ascii_otp_code_unchanged`,
+  `payload_text_handles_empty_bytes`, and
+  `payload_text_replaces_invalid_utf8_with_replacement_char`.
+- [x] [`crate::clipboard::captured_clipboard_bytes`] wraps the
+  `Option<&str>` projection of `read_text_async`'s result in a
+  `Zeroizing<Vec<u8>>` so the captured comparison value zeroes on
+  drop. Both `None` (read failure, missing clipboard text) and
+  `Some("")` collapse to an empty buffer so the only-if-unchanged
+  byte-equality check in
+  `paladin_core::ClipboardClearPolicy::should_clear` (via
+  `crate::clipboard_clear::evaluate_wake`) resolves to
+  `WakeDecision::Mismatch` in those cases — the wipe stays its
+  hand rather than clobbering whatever the user has on the
+  clipboard. Pinned by
+  `captured_clipboard_bytes_returns_empty_for_none`,
+  `captured_clipboard_bytes_returns_empty_for_empty_string`,
+  `captured_clipboard_bytes_carries_utf8_payload`, and
+  `captured_clipboard_bytes_is_zeroizing_typed`.
 
 #### `tests/clipboard_clear_logic.rs`
 
@@ -3832,17 +3859,65 @@ sign-off.
     `refresh_idle_source_after_passphrase_with_disabled_setting_disarms`,
     and
     `refresh_idle_source_after_passphrase_matches_idle_source_refresh_on_success`.)
-  - [ ] Wire `gdk::Clipboard.read_text` / `set_text` for the copy
+  - [x] Wire `gdk::Clipboard.read_text` / `set_text` for the copy
     and clear paths inside `clipboard.rs`.
-  - [ ] Drive clipboard auto-clear via
+    (`crate::clipboard` (`src/clipboard.rs`) owns the GDK boundary:
+    `write_payload` writes the OTP-code bytes via
+    `gdk::Clipboard::set_text(&payload_text(bytes))`, `clear` wipes
+    the clipboard via `gdk::Clipboard::set_text("")`, and
+    `read_text_async` wraps `gdk::Clipboard::read_text_async` so the
+    only place that has to spell out the `gio::Cancellable` type
+    parameter and the
+    `Result<Option<GString>, glib::Error>` → `Zeroizing<Vec<u8>>`
+    conversion is this module. `AppModel::update`'s `Tick` handler,
+    `ClipboardWakeRead → Clear` branch, and
+    `AccountListAction(AccountListOutput::CopyCode(_))` handler all
+    route through these helpers so `gtk::gdk` touchpoints stay
+    concentrated in `clipboard.rs`. The widget-bound wrappers ride
+    the `xvfb-run` smoke test; the pure-logic byte-encoding
+    helpers (`payload_text` / `captured_clipboard_bytes`) are pinned
+    by `tests/clipboard_logic.rs`.)
+  - [x] Drive clipboard auto-clear via
     `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`
     at copy time and `should_clear` on wake against the current
     clipboard text (only-if-unchanged); apply mode-agnostically
     (both plaintext and encrypted vaults).
-  - [ ] Keep pending copied values in a `Zeroizing<Vec<u8>>` buffer
+    (Copy-time scheduling routes through
+    `crate::clipboard_clear::schedule_copy` (a thin wrapper around
+    `ClipboardClearPolicy::schedule`) in the
+    `AccountListAction(CopyCode)` handler, which returns `None` when
+    `VaultSettings::clipboard_clear_enabled` is off so the policy's
+    opt-in gate is honored without a GUI-side shortcut. Wake-time
+    byte-equality routes through `crate::clipboard_clear::evaluate_wake`
+    in the `ClipboardWakeRead` handler, which calls
+    `ClipboardClearPolicy::should_clear` after gating on the
+    monotonic token. Mode-agnostic behavior is pinned by
+    `schedule_copy_does_not_gate_on_encryption` in
+    `tests/clipboard_clear_logic.rs`.)
+  - [x] Keep pending copied values in a `Zeroizing<Vec<u8>>` buffer
     and zeroize after clear attempt or stale-token drop.
-  - [ ] Preserve clipboard auto-clear timers across lock so a timer
+    (`crate::clipboard_clear::PendingClipboardClear.value` is
+    `Zeroizing<Vec<u8>>`, so the captured bytes wipe in place when
+    the slot drops. `AppModel::pending_clipboard` clears to `None`
+    on `WakeDecision::Clear` and `WakeDecision::Mismatch` (the
+    drop runs the zeroize), and a fresh `schedule_copy` supersedes
+    the old slot by assignment so the prior `Zeroizing<Vec<u8>>`
+    drops in lockstep. Pinned by
+    `pending_value_zeroizes_when_dropped_after_clear_attempt` and
+    `pending_value_zeroizes_when_superseded_by_a_fresh_schedule` in
+    `tests/clipboard_clear_logic.rs`.)
+  - [x] Preserve clipboard auto-clear timers across lock so a timer
     scheduled before lock still fires only-if-unchanged after lock.
+    (`crate::auto_lock::lock_on_expiry` accepts the live
+    `Option<PendingClipboardClear>` slot and forwards it on
+    `LockedTransition.pending_clipboard_clear` so the
+    auto-lock transition carries the pending wipe across into
+    `AppState::Locked`. The post-lock `Tick` handler still routes
+    the wake through `evaluate_wake` against the live
+    `gdk::Clipboard` text, so the only-if-unchanged rule survives
+    the lock unchanged. Pinned by
+    `pending_clipboard_clear_survives_auto_lock` in
+    `tests/clipboard_clear_logic.rs`.)
 - [ ] Serialized in-flight vault effects: one vault-touching worker at a time,
   mutating controls disabled while busy, and worker results restore
   `(Vault, Store)` before UI state applies success / typed failure handling;
@@ -4159,7 +4234,8 @@ section just pins which Adwaita class fills each role.
   (`tests/icon_resolution.rs`, `tests/search_logic.rs`,
   `tests/cli_global_args.rs`, `tests/startup_probes.rs`,
   `tests/app_state_logic.rs`, `tests/auto_lock_logic.rs`,
-  `tests/clipboard_clear_logic.rs`, `tests/hotp_reveal_logic.rs`,
+  `tests/clipboard_logic.rs`, `tests/clipboard_clear_logic.rs`,
+  `tests/hotp_reveal_logic.rs`,
   `tests/secret_fields_logic.rs`, `tests/startup_error_logic.rs`,
   `tests/qr_clipboard_logic.rs`, `tests/account_list_logic.rs`,
   `tests/account_row_logic.rs`, `tests/init_dialog_logic.rs`,

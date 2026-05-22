@@ -5,9 +5,9 @@
 //! See `IMPLEMENTATION_PLAN_04_GTK.md` and `DESIGN.md` §7. The binary
 //! at `src/main.rs` is a thin shim that hands off to [`run`]; all
 //! presentation logic lives in submodules so the pure-logic helpers
-//! (search, icon resolution, auto-lock, clipboard-clear, HOTP reveal,
-//! dialog state machines, …) can be exercised by integration tests in
-//! `tests/` without spinning up GTK or libadwaita.
+//! (search, icon resolution, auto-lock, clipboard wiring, clipboard-clear
+//! policy, HOTP reveal, dialog state machines, …) can be exercised by
+//! integration tests in `tests/` without spinning up GTK or libadwaita.
 //!
 //! The crate intentionally re-exports nothing from `paladin_core`;
 //! callers go through `paladin_core::*` directly. The §"Thinness
@@ -25,6 +25,7 @@ pub mod add_account;
 pub mod app;
 pub mod auto_lock;
 pub mod cli;
+pub mod clipboard;
 pub mod clipboard_clear;
 pub mod effect_ownership;
 pub mod export_dialog;
