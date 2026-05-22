@@ -3308,7 +3308,7 @@ sign-off.
     `apply_msg_submit_clicked_proceed_encrypted_emits_submit_and_clears_passphrase_buffers`,
     `apply_msg_cancel_clears_passphrase_buffers`, and
     `apply_msg_close_clears_passphrase_buffers`.)
-- [ ] `PassphraseDialogComponent` full implementation (`set` /
+- [x] `PassphraseDialogComponent` full implementation (`set` /
   `change` / `remove` sub-flows, gating, validation, error
   handling).
   - [x] Add the three sub-flow entry points (`set` / `change` /
@@ -3543,29 +3543,93 @@ sign-off.
     `compose_settings_dispatch_durability_warning_keeps_committed_and_reasks_idle`,
     `compose_settings_dispatch_rollback_does_not_reask_idle`, and
     `compose_settings_dispatch_inline_does_not_reask_idle`.)
-- [ ] Header-bar `+` button and primary menu wired with the pinned
+- [x] Header-bar `+` button and primary menu wired with the pinned
   entries (Import…, Export…, Passphrase…, Preferences, About Paladin,
   Quit) per §"libadwaita usage", with Unlocked / `UnlockedBusy` gating
   applied to the mutating entries.
-  - [ ] Mount an `AdwHeaderBar` inside the `AdwToolbarView` top slot
+  - [x] Mount an `AdwHeaderBar` inside the `AdwToolbarView` top slot
     on the unlocked screen.
-  - [ ] Add the primary "Add account" `+` button at the start of the
+    (`view!` in `app/model.rs` mounts the root
+    `adw::ApplicationWindow` whose content is an
+    `adw::ToolbarView`; the `add_top_bar = &adw::HeaderBar` slot
+    parents the primary `+` button, search-toggle, and primary
+    `gtk::MenuButton`. Pinned by
+    `format_app_window_title_returns_paladin`,
+    `format_app_window_default_size_returns_640_by_480`, and
+    the smoke-test `gtk_smoke.rs` end-to-end mount check.)
+  - [x] Add the primary "Add account" `+` button at the start of the
     right side (icon `list-add-symbolic`, tooltip "Add account")
     wired to open `AddAccountComponent`.
-  - [ ] Add the search-toggle button bound to
+    (`view!`'s `pack_start = &gtk::Button` slot binds the
+    `format_app_add_button_icon_name()` / `tooltip` / `action`
+    helpers; clicks resolve through the bundled
+    `gio::SimpleActionGroup`'s `"app.add"` `SimpleAction` to
+    `AppMsg::OpenAddDialog`. Visibility tracks
+    `format_app_add_button_visible(&state)`. Pinned by
+    `format_app_add_button_icon_name_returns_list_add_symbolic`,
+    `format_app_add_button_action_name`,
+    `format_app_add_button_visible`, and the
+    `build_app_window_action_group_bundles_primary_actions_and_add_action`
+    end-to-end test.)
+  - [x] Add the search-toggle button bound to
     `gtk::SearchBar::search-mode-enabled` inside
     `AccountListComponent`.
-  - [ ] Add the primary `gtk::MenuButton` driven by a `gio::Menu`
+    (`view!`'s `#[name = "search_button"]` `gtk::ToggleButton`
+    posts `AppMsg::SearchToggled(active)`; `AppModel::update`
+    forwards it to the live `AccountListComponent` controller as
+    `AccountListMsg::SetSearchModeEnabled(active)`, whose handler
+    calls `self.search_bar.set_search_mode(enabled)` on the owned
+    `gtk::SearchBar`. Pinned by
+    `format_app_search_button_icon_name`,
+    `format_app_search_button_tooltip`, and the search-toggle
+    dispatch unit tests in `tests/account_list_logic.rs`.)
+  - [x] Add the primary `gtk::MenuButton` driven by a `gio::Menu`
     with the fixed entries Import…, Export…, Passphrase…,
     Preferences, About Paladin, Quit.
-  - [ ] Wire each menu entry to its target component (`ImportDialog`,
+    (`view!`'s `pack_end = &gtk::MenuButton` slot is attached to
+    the model returned by `build_app_primary_menu_model()` via
+    `wire_app_menu_button_menu_model(&widgets.menu_button)` in
+    `init`. The six entries are sourced from
+    `format_app_primary_menu_entries()` so the labels and action
+    targets stay in one place. Pinned by
+    `format_app_primary_menu_entries_returns_six_entries_in_pinned_order`,
+    `build_app_primary_menu_model_appends_every_format_app_primary_menu_entries_pair`,
+    and `wire_app_menu_button_menu_model_signature_takes_menu_button_reference`.)
+  - [x] Wire each menu entry to its target component (`ImportDialog`,
     `ExportDialog`, `PassphraseDialog` with the sub-flow gated by
     `Vault::is_encrypted()`, `SettingsComponent`'s
     `AdwPreferencesDialog`, `AdwAboutDialog`, application quit).
-  - [ ] Disable the `+` button and the Import / Export / Passphrase /
+    (`build_app_window_action_group(&state)` registers
+    `"app.import"`, `"app.export"`, `"app.passphrase"`,
+    `"app.preferences"`, `"app.about"`, `"app.quit"`, and
+    `"app.add"` on a single `gio::SimpleActionGroup`;
+    `wire_app_window_action_activations(&group, sender)` attaches
+    `connect_activate` handlers that dispatch
+    `AppMsg::OpenImportDialog` / `OpenExportDialog` /
+    `OpenPassphraseDialog` / `OpenPreferencesDialog` /
+    `OpenAboutDialog` / `Quit` / `OpenAddDialog`. The PassphraseDialog
+    sub-flow defaults track `Vault::is_encrypted()` through
+    `default_sub_flow_for`. Pinned by
+    `build_app_window_action_group_bundles_primary_actions_and_add_action`,
+    `wire_app_window_action_activations_signature_takes_group_and_input_sender`,
+    `wire_app_window_action_group_signature_takes_application_window_and_action_group`,
+    and the per-action `format_app_primary_menu_entries_targets_dispatch_to_app_msg`
+    pin.)
+  - [x] Disable the `+` button and the Import / Export / Passphrase /
     Preferences entries whenever `AppModel` is not `Unlocked`
     (Missing / Locked / StartupError) and while `UnlockedBusy` is
     active; keep About and Quit enabled in every state.
+    (`format_app_primary_menu_action_sensitivities(&state)`
+    returns `[bool; 6]` keyed to the pinned action-name array;
+    `build_app_window_action_group` applies them at construction
+    time, and `apply_app_window_action_group_sensitivities` /
+    `apply_app_primary_menu_sensitivities` apply them on every
+    state transition. The `+` button additionally toggles
+    visibility via `format_app_add_button_visible` so it disappears
+    entirely outside the vault-open states. Pinned by
+    `format_app_primary_menu_action_sensitivities_disables_mutating_entries_off_unlocked`,
+    `format_app_primary_menu_action_sensitivities_enables_mutating_entries_on_unlocked`,
+    and `build_app_window_action_group_disables_mutating_actions_in_non_unlocked_states`.)
 - [ ] About dialog (`AdwAboutDialog` wired to the primary menu's
   "About Paladin" entry, metadata sourced from Cargo package fields
   embedded at compile time).
