@@ -3806,9 +3806,32 @@ sign-off.
     `lock_on_expiry_drops_vault_so_secrets_do_not_outlive_lock`
     tests against `crate::auto_lock::lock_on_expiry` — the
     pure-logic contract the `AppModel` glue routes through.)
-  - [ ] Re-ask `IdlePolicy::should_arm` after every successful
+  - [x] Re-ask `IdlePolicy::should_arm` after every successful
     `PassphraseDialog` transition so arm/disarm tracks the on-disk
     vault mode without re-inspecting the file.
+    (`refresh_idle_source_after_passphrase` in `auto_lock.rs` is
+    gated on the typed
+    `PassphraseDispatch::new_is_encrypted` projection: `Some(_)` on
+    the success branch refreshes the live `IdleSource` against the
+    reinstalled `(Vault, Store)` pair via `IdleSource::refresh`
+    (which routes through `IdlePolicy::next_deadline` — the
+    `Some` / `None` of the returned deadline encodes the
+    `IdlePolicy::should_arm` decision); `None` on every failure
+    branch leaves the source bit-identical because DESIGN §4.5
+    owns the in-memory rollback / replacement. The
+    `PassphraseWorkerCompleted` handler in `app/model.rs` calls
+    the helper after `apply_passphrase_vault_install_inplace` so
+    the dispatch epilogue's `apply_auto_lock_timer_transition`
+    picks up any install / teardown delta in lockstep with the new
+    on-disk mode. Pinned by
+    `refresh_idle_source_after_passphrase_remove_disarms_armed_source`,
+    `refresh_idle_source_after_passphrase_set_arms_disarmed_source`,
+    `refresh_idle_source_after_passphrase_change_rolls_deadline_forward`,
+    `refresh_idle_source_after_passphrase_failure_leaves_armed_source_untouched`,
+    `refresh_idle_source_after_passphrase_failure_leaves_disarmed_source_untouched`,
+    `refresh_idle_source_after_passphrase_with_disabled_setting_disarms`,
+    and
+    `refresh_idle_source_after_passphrase_matches_idle_source_refresh_on_success`.)
   - [ ] Wire `gdk::Clipboard.read_text` / `set_text` for the copy
     and clear paths inside `clipboard.rs`.
   - [ ] Drive clipboard auto-clear via

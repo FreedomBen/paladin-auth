@@ -50,6 +50,48 @@ pub fn idle_should_arm(vault: &Vault) -> bool {
     IdlePolicy::should_arm(vault.is_encrypted(), vault.settings())
 }
 
+/// Refresh the auto-lock [`IdleSource`] against a post-`PassphraseDialog`
+/// vault state, gated on a successful transition.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock parity
+/// with TUI" — "Re-ask `IdlePolicy::should_arm` after every successful
+/// `PassphraseDialog` transition so arm/disarm tracks the on-disk vault
+/// mode without re-inspecting the file." The arm/disarm decision is
+/// surfaced as `Some` / `None` on the deadline that
+/// [`IdleSource::refresh`] (and therefore
+/// [`IdlePolicy::next_deadline`][paladin_core::policy::auto_lock::IdlePolicy::next_deadline])
+/// returns, so consulting [`IdlePolicy::should_arm`] is a strict subset
+/// of refreshing the source.
+///
+/// `new_is_encrypted` carries the typed
+/// [`PassphraseDispatch::new_is_encrypted`][crate::app::state::PassphraseDispatch::new_is_encrypted]
+/// projection from
+/// [`compose_passphrase_dispatch`][crate::app::state::compose_passphrase_dispatch]:
+///
+/// * `Some(_)` — success branch (any of `set` / `change` / `remove`).
+///   Refreshes the source against the reinstalled `vault` so the new
+///   on-disk mode and the user's `auto_lock_enabled` setting both feed
+///   into the policy decision.
+/// * `None` — failure branch. DESIGN §4.5 owns the in-memory rollback
+///   / replacement and the dialog stays open, so no re-arm decision is
+///   taken and the source is left bit-identical.
+///
+/// Returns `true` iff the source was refreshed.
+#[must_use]
+pub fn refresh_idle_source_after_passphrase(
+    idle_source: &mut IdleSource,
+    new_is_encrypted: Option<bool>,
+    vault: &Vault,
+    now: Instant,
+) -> bool {
+    if new_is_encrypted.is_some() {
+        idle_source.refresh(now, vault);
+        true
+    } else {
+        false
+    }
+}
+
 /// Strict monotonic deadline check, exposed here so callers don't
 /// need to import the policy directly.
 ///

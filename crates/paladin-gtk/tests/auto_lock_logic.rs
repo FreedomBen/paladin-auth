@@ -32,8 +32,8 @@ use paladin_core::{
 
 use paladin_gtk::auto_lock::{
     auto_lock_timer_transition, evaluate_timer_fire, idle_event_deadline, idle_should_arm,
-    is_expired, lock_on_expiry, AutoLockFireDecision, AutoLockTimerTransition, IdleSource,
-    UnlockedDiscards,
+    is_expired, lock_on_expiry, refresh_idle_source_after_passphrase, AutoLockFireDecision,
+    AutoLockTimerTransition, IdleSource, UnlockedDiscards,
 };
 
 // ---------------------------------------------------------------------------
@@ -258,6 +258,195 @@ fn re_arm_after_setting_passphrase_on_plaintext_arms_the_timer() {
         idle_event_deadline(now, &enc_vault),
         Some(now + Duration::from_secs(60))
     );
+}
+
+// ---------------------------------------------------------------------------
+// refresh_idle_source_after_passphrase — wire-up helper for the
+// `PassphraseWorkerCompleted` handler in `app::model`.
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock parity
+// with TUI" — "Re-ask `IdlePolicy::should_arm` after every successful
+// `PassphraseDialog` transition so arm/disarm tracks the on-disk vault
+// mode without re-inspecting the file." The gating `Option<bool>`
+// carries the typed `PassphraseDispatch::new_is_encrypted` projection:
+// `Some(_)` on success (any of `set` / `change` / `remove`) refreshes
+// the source against the reinstalled vault; `None` on every failure
+// branch leaves the source untouched because DESIGN §4.5 owns the
+// in-memory rollback / replacement.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn refresh_idle_source_after_passphrase_remove_disarms_armed_source() {
+    // `PassphraseDialog::remove` flips the vault to plaintext. The
+    // helper must refresh the source against the new vault so the
+    // armed deadline clears via `IdlePolicy::next_deadline`'s
+    // plaintext-no-op rule.
+    let tmp = secure_tempdir();
+    let (mut enc_vault, enc_store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    enc_vault.set_auto_lock_enabled(true);
+    enc_vault.set_auto_lock_timeout_secs(60).unwrap();
+    enc_vault.save(&enc_store).unwrap();
+
+    let mut src = IdleSource::new();
+    src.refresh(Instant::now(), &enc_vault)
+        .expect("armed before transition");
+    assert!(src.is_armed());
+
+    // Stand-in for the post-`remove` reinstalled vault.
+    let tmp2 = secure_tempdir();
+    let (mut plain_vault, plain_store) = create_plaintext(&tmp2.path().join("plain.bin"));
+    plain_vault.set_auto_lock_enabled(true);
+    plain_vault.set_auto_lock_timeout_secs(60).unwrap();
+    plain_vault.save(&plain_store).unwrap();
+
+    let refreshed =
+        refresh_idle_source_after_passphrase(&mut src, Some(false), &plain_vault, Instant::now());
+
+    assert!(refreshed, "success branch must refresh the source");
+    assert!(!src.is_armed(), "plaintext mode disarms via the policy");
+    assert_eq!(src.deadline(), None);
+}
+
+#[test]
+fn refresh_idle_source_after_passphrase_set_arms_disarmed_source() {
+    // `PassphraseDialog::set` flips a plaintext vault to encrypted.
+    // A previously disarmed source must arm against the new vault.
+    let tmp = secure_tempdir();
+    let (mut enc_vault, enc_store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    enc_vault.set_auto_lock_enabled(true);
+    enc_vault.set_auto_lock_timeout_secs(90).unwrap();
+    enc_vault.save(&enc_store).unwrap();
+
+    let mut src = IdleSource::new();
+    assert!(!src.is_armed(), "disarmed before transition");
+
+    let now = Instant::now();
+    let refreshed = refresh_idle_source_after_passphrase(&mut src, Some(true), &enc_vault, now);
+
+    assert!(refreshed);
+    assert!(src.is_armed());
+    assert_eq!(src.deadline(), Some(now + Duration::from_secs(90)));
+}
+
+#[test]
+fn refresh_idle_source_after_passphrase_change_rolls_deadline_forward() {
+    // `PassphraseDialog::change` keeps the vault encrypted. A prior
+    // armed deadline must be replaced by a fresh one computed against
+    // the new `now`, matching the `IdleEvent` refresh contract.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(120).unwrap();
+    vault.save(&store).unwrap();
+
+    let armed_at = Instant::now();
+    let mut src = IdleSource::new();
+    let initial = src.refresh(armed_at, &vault).expect("armed initially");
+
+    let later = armed_at + Duration::from_secs(45);
+    let refreshed = refresh_idle_source_after_passphrase(&mut src, Some(true), &vault, later);
+
+    assert!(refreshed);
+    assert!(src.is_armed());
+    let new_deadline = src.deadline().expect("still armed after change");
+    assert_eq!(new_deadline, later + Duration::from_secs(120));
+    assert!(
+        new_deadline > initial,
+        "passphrase change rolls the deadline forward against the new now"
+    );
+}
+
+#[test]
+fn refresh_idle_source_after_passphrase_failure_leaves_armed_source_untouched() {
+    // `None` is the failure branch (any of `save_not_committed` /
+    // `save_durability_unconfirmed` / typed defensive error). The
+    // helper must not poke the source — DESIGN §4.5 owns the
+    // in-memory rollback / replacement.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(60).unwrap();
+    vault.save(&store).unwrap();
+
+    let armed_at = Instant::now();
+    let mut src = IdleSource::new();
+    let before = src.refresh(armed_at, &vault).expect("armed");
+    let before_state = src;
+
+    let later = armed_at + Duration::from_secs(7);
+    let refreshed = refresh_idle_source_after_passphrase(&mut src, None, &vault, later);
+
+    assert!(!refreshed, "failure branch must report no refresh");
+    assert_eq!(
+        src, before_state,
+        "failure branch must leave the source bit-identical"
+    );
+    assert_eq!(src.deadline(), Some(before));
+}
+
+#[test]
+fn refresh_idle_source_after_passphrase_failure_leaves_disarmed_source_untouched() {
+    // The defensive pair of the prior test: a disarmed source stays
+    // disarmed across a failure outcome.
+    let tmp = secure_tempdir();
+    let (vault, _store) = create_plaintext(&tmp.path().join("plain.bin"));
+
+    let mut src = IdleSource::new();
+    assert!(!src.is_armed());
+
+    let refreshed = refresh_idle_source_after_passphrase(&mut src, None, &vault, Instant::now());
+
+    assert!(!refreshed);
+    assert!(!src.is_armed());
+    assert_eq!(src.deadline(), None);
+}
+
+#[test]
+fn refresh_idle_source_after_passphrase_with_disabled_setting_disarms() {
+    // Even when the post-transition vault is encrypted, the
+    // `auto_lock_enabled` setting still gates arming through the
+    // policy. The helper must route through `IdleSource::refresh`,
+    // not bypass it — so an encrypted vault with the toggle off
+    // disarms the source.
+    let tmp = secure_tempdir();
+    let (vault, _store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    assert!(
+        !vault.settings().auto_lock_enabled(),
+        "default is false (opt-in)"
+    );
+
+    let mut src = IdleSource::new();
+    let refreshed =
+        refresh_idle_source_after_passphrase(&mut src, Some(true), &vault, Instant::now());
+
+    assert!(refreshed, "success branch always reports a refresh");
+    assert!(
+        !src.is_armed(),
+        "opt-out gate lives in the policy, not in the helper"
+    );
+    assert_eq!(src.deadline(), None);
+}
+
+#[test]
+fn refresh_idle_source_after_passphrase_matches_idle_source_refresh_on_success() {
+    // Sanity: on the success branch, the helper produces the same
+    // deadline as calling `IdleSource::refresh` directly, so the GUI
+    // cannot drift between the dispatch-gated and bare routes.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(150).unwrap();
+    vault.save(&store).unwrap();
+
+    let now = Instant::now();
+    let mut helper_src = IdleSource::new();
+    let mut bare_src = IdleSource::new();
+
+    let _ = refresh_idle_source_after_passphrase(&mut helper_src, Some(true), &vault, now);
+    bare_src.refresh(now, &vault);
+
+    assert_eq!(helper_src, bare_src);
+    assert_eq!(helper_src.deadline(), Some(now + Duration::from_secs(150)));
 }
 
 // ---------------------------------------------------------------------------

@@ -104,7 +104,8 @@ use crate::app::state::{
 };
 use crate::auto_lock::{
     auto_lock_timer_transition, evaluate_timer_fire, idle_should_arm, lock_on_expiry,
-    AutoLockFireDecision, AutoLockTimerTransition, IdleSource, LockedTransition, UnlockedDiscards,
+    refresh_idle_source_after_passphrase, AutoLockFireDecision, AutoLockTimerTransition,
+    IdleSource, LockedTransition, UnlockedDiscards,
 };
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
@@ -2588,20 +2589,28 @@ impl SimpleComponent for AppModel {
                     // Re-ask `IdlePolicy::should_arm` against the
                     // reinstalled vault so the auto-lock timer state
                     // tracks the new on-disk mode without re-reading
-                    // `paladin_core::inspect`. The dispatch's
-                    // `new_is_encrypted` gate ensures we only consult
-                    // the policy on success (DESIGN §4.5 owns the
-                    // rollback / replacement for every failure
-                    // branch). The return value is bound to
-                    // `_should_arm` because the §"Clipboard + auto-lock
-                    // parity with TUI" checklist owns the timer
-                    // arm/disarm side of this hook; this call is the
-                    // documented integration point per
-                    // `IMPLEMENTATION_PLAN_04_GTK.md` line 3403.
-                    if dispatch.new_is_encrypted.is_some() {
-                        if let Some((vault, _)) = self.vault.as_ref() {
-                            let _should_arm = idle_should_arm(vault);
-                        }
+                    // `paladin_core::inspect`. The arm/disarm decision
+                    // is surfaced as `Some` / `None` on the deadline
+                    // that `IdleSource::refresh` returns, so the helper
+                    // routes through it; the dispatch epilogue's
+                    // `apply_auto_lock_timer_transition` then picks up
+                    // any install / teardown delta. The dispatch's
+                    // `new_is_encrypted` gate ensures we only refresh
+                    // on success (DESIGN §4.5 owns the rollback /
+                    // replacement for every failure branch). Per
+                    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard +
+                    // auto-lock parity with TUI" — "Re-ask
+                    // `IdlePolicy::should_arm` after every successful
+                    // `PassphraseDialog` transition so arm/disarm
+                    // tracks the on-disk vault mode without re-
+                    // inspecting the file."
+                    if let Some((vault, _)) = self.vault.as_ref() {
+                        let _ = refresh_idle_source_after_passphrase(
+                            &mut self.idle_source,
+                            dispatch.new_is_encrypted,
+                            vault,
+                            Instant::now(),
+                        );
                     }
                 }
             }
