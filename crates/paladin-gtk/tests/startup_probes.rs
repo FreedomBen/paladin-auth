@@ -2473,10 +2473,11 @@ fn build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a
         format_app_about_dialog_debug_info_filename, format_app_about_dialog_designers,
         format_app_about_dialog_developer_name, format_app_about_dialog_developers,
         format_app_about_dialog_documenters, format_app_about_dialog_issue_url,
-        format_app_about_dialog_license_type, format_app_about_dialog_program_name,
-        format_app_about_dialog_release_notes, format_app_about_dialog_release_notes_version,
-        format_app_about_dialog_support_url, format_app_about_dialog_translator_credits,
-        format_app_about_dialog_version, format_app_about_dialog_website,
+        format_app_about_dialog_license_text, format_app_about_dialog_license_type,
+        format_app_about_dialog_program_name, format_app_about_dialog_release_notes,
+        format_app_about_dialog_release_notes_version, format_app_about_dialog_support_url,
+        format_app_about_dialog_translator_credits, format_app_about_dialog_version,
+        format_app_about_dialog_website,
     };
 
     // `gtk::init` (and the libadwaita type registration it
@@ -2522,6 +2523,11 @@ fn build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a
         dialog.license_type(),
         format_app_about_dialog_license_type(),
         "AdwAboutDialog license_type must be sourced from format_app_about_dialog_license_type",
+    );
+    assert_eq!(
+        dialog.license(),
+        format_app_about_dialog_license_text(),
+        "AdwAboutDialog license body must be sourced from format_app_about_dialog_license_text so the gresource-bundled AGPL-3.0-or-later text is the visible license body",
     );
     assert_eq!(
         dialog.website(),
@@ -4422,48 +4428,48 @@ fn format_app_about_dialog_copyright_starts_with_copyright_glyph_and_contains_de
 }
 
 #[test]
-fn format_app_about_dialog_license_type_returns_agpl30_or_later() {
-    // Per DESIGN.md §14 the project ships under AGPL-3.0-or-later
-    // and the §"CLAUDE.md / License hygiene" workspace contract
-    // pins every crate's `license = "AGPL-3.0-or-later"`. The
-    // matching GTK license-type enum variant is `License::Agpl30`
-    // (the `GTK_LICENSE_AGPL_3_0` value — the "or later" form,
-    // not the `Agpl30Only` strict variant). Pinning the typed
-    // enum value here keeps the `AdwAboutDialog::set_license_type`
-    // call site free of SPDX-string-to-enum translation logic
-    // and keeps the dialog footer license link rendering the
-    // canonical AGPL-3.0-or-later text shipped with the dialog.
+fn format_app_about_dialog_license_type_returns_custom() {
+    // Per IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7 checklist"
+    // → "About dialog": the AGPL-3.0-or-later license text is
+    // shipped in the gresource bundle and surfaced through
+    // `AdwAboutDialog::license-type` set to `Custom` with the
+    // bundled text. Pinning `License::Custom` here keeps the
+    // dialog wired to the bundled text (via the companion
+    // `format_app_about_dialog_license_text` helper) rather than
+    // letting the toolkit render the generic GTK-shipped
+    // `Agpl30` boilerplate, so the dialog footer license panel
+    // shows the verbatim project LICENSE file from the repo
+    // root.
     use paladin_gtk::app::model::format_app_about_dialog_license_type;
     use relm4::gtk;
 
     assert_eq!(
         format_app_about_dialog_license_type(),
-        gtk::License::Agpl30,
-        "AdwAboutDialog license-type must be `gtk::License::Agpl30` (the AGPL-3.0-or-later variant)",
+        gtk::License::Custom,
+        "AdwAboutDialog license-type must be `gtk::License::Custom` so the bundled AGPL-3.0-or-later text from `format_app_about_dialog_license_text` is the visible license body",
     );
 }
 
 #[test]
-fn format_app_about_dialog_license_type_is_not_strict_agpl30_only_or_other_gpl_family() {
-    // Defense-in-depth: catch an accidental swap with the strict
-    // `Agpl30Only` variant (which would mis-state the license
-    // boundary to users) or with the sibling `Gpl30` /
-    // `Gpl30Only` / `Lgpl30` variants. The DESIGN.md §14 contract
-    // is specifically AGPL-3.0-or-later, so anything other than
-    // `Agpl30` would silently misrepresent the project license in
-    // the dialog footer link.
+fn format_app_about_dialog_license_type_is_not_one_of_the_toolkit_shipped_gpl_family_variants() {
+    // Defense-in-depth: catch an accidental swap with any of the
+    // toolkit-shipped license-text variants (`Agpl30` /
+    // `Agpl30Only` / `Gpl30` / `Gpl30Only` / `Lgpl30` /
+    // `Lgpl30Only`). Each of those tells `AdwAboutDialog` to
+    // render the boilerplate text shipped with the toolkit
+    // rather than the bundled `format_app_about_dialog_license_text`
+    // body. The IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7" /
+    // "About dialog" contract specifically calls for the
+    // bundled LICENSE text — anything other than `Custom` would
+    // bypass the gresource-bundled license body.
     use paladin_gtk::app::model::format_app_about_dialog_license_type;
     use relm4::gtk;
 
     let license = format_app_about_dialog_license_type();
-    assert_ne!(
-        license,
-        gtk::License::Agpl30Only,
-        "AdwAboutDialog license-type must be the `or later` form `Agpl30`, not the strict `Agpl30Only` variant",
-    );
     for forbidden in [
         gtk::License::Unknown,
-        gtk::License::Custom,
+        gtk::License::Agpl30,
+        gtk::License::Agpl30Only,
         gtk::License::Gpl30,
         gtk::License::Gpl30Only,
         gtk::License::Lgpl30,
@@ -4471,9 +4477,166 @@ fn format_app_about_dialog_license_type_is_not_strict_agpl30_only_or_other_gpl_f
     ] {
         assert_ne!(
             license, forbidden,
-            "AdwAboutDialog license-type must be `Agpl30` (AGPL-3.0-or-later), not {forbidden:?}",
+            "AdwAboutDialog license-type must be `Custom` so the bundled LICENSE body is the visible license; got {forbidden:?}",
         );
     }
+}
+
+#[test]
+fn format_app_about_dialog_license_text_matches_repository_license_file() {
+    // Per IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7 checklist"
+    // → "About dialog" — "Ship the AGPL-3.0-or-later license
+    // text in the gresource bundle and surface it through
+    // `AdwAboutDialog::license-type` set to `Custom` with the
+    // bundled text." The helper must return the verbatim text
+    // of the repo-root `LICENSE` file so the dialog license body
+    // and the AGPL-3.0-or-later source-of-truth stay in lockstep
+    // without a manual duplicate. `include_str!` on the source
+    // tree's `LICENSE` file is the canonical channel for the
+    // body; the matching gresource entry under
+    // `format_app_about_dialog_license_resource_path()` ships
+    // the same bytes for inspectors that walk the bundle.
+    use paladin_gtk::app::model::format_app_about_dialog_license_text;
+
+    let expected = include_str!("../../../LICENSE");
+    assert_eq!(
+        format_app_about_dialog_license_text(),
+        expected,
+        "AdwAboutDialog license text must match the repo-root LICENSE file verbatim",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_license_text_starts_with_the_gnu_affero_general_public_license_header() {
+    // Sanity check: the AGPL-3.0-or-later body shipped by the
+    // FSF opens with the canonical
+    // "GNU AFFERO GENERAL PUBLIC LICENSE" header. Asserting the
+    // header is present here catches an accidental swap with a
+    // GPL / LGPL body or a corrupted LICENSE file before the
+    // visible dialog shows the wrong license to users.
+    use paladin_gtk::app::model::format_app_about_dialog_license_text;
+
+    let text = format_app_about_dialog_license_text();
+    assert!(
+        text.contains("GNU AFFERO GENERAL PUBLIC LICENSE"),
+        "AdwAboutDialog license text must contain the canonical FSF AGPL header; got first 120 chars: {:?}",
+        text.chars().take(120).collect::<String>(),
+    );
+}
+
+#[test]
+fn format_app_about_dialog_license_text_carries_version_3_marker() {
+    // Defense-in-depth: AGPL-3.0-or-later — the body must be
+    // the version-3 license, not an accidental swap with v1 or
+    // v2 of the AGPL or GPL. The FSF AGPLv3 body's preamble
+    // line "Version 3, 19 November 2007" is the canonical
+    // marker; asserting it is present catches a regression
+    // where the LICENSE file is replaced with a wrong-version
+    // body.
+    use paladin_gtk::app::model::format_app_about_dialog_license_text;
+
+    let text = format_app_about_dialog_license_text();
+    assert!(
+        text.contains("Version 3, 19 November 2007"),
+        "AdwAboutDialog license text must carry the AGPLv3 preamble version marker; got first 200 chars: {:?}",
+        text.chars().take(200).collect::<String>(),
+    );
+}
+
+#[test]
+fn format_app_about_dialog_license_text_is_non_empty() {
+    // A blank license body would render an empty footer panel
+    // — worse than rendering the toolkit boilerplate, since the
+    // user would see "License: (nothing)". Pin the body as
+    // non-empty so a future regression that nukes the LICENSE
+    // file or swaps the helper to `""` surfaces here as a
+    // failing test.
+    use paladin_gtk::app::model::format_app_about_dialog_license_text;
+
+    assert!(
+        !format_app_about_dialog_license_text().is_empty(),
+        "AdwAboutDialog license text must be non-empty",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_license_text_does_not_contain_a_null_byte() {
+    // Defense-in-depth: GTK / GObject string properties are
+    // NUL-terminated. A NUL byte embedded in the license body
+    // would truncate the rendered text mid-license. The
+    // upstream FSF AGPLv3 body is plain ASCII and contains no
+    // NULs; pinning the absence catches a regression where the
+    // LICENSE file is replaced with a binary blob (e.g. a
+    // gzipped or DER-encoded copy) before users see a truncated
+    // license footer.
+    use paladin_gtk::app::model::format_app_about_dialog_license_text;
+
+    assert!(
+        !format_app_about_dialog_license_text().contains('\u{0}'),
+        "AdwAboutDialog license text must not contain a NUL byte",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_license_resource_path_returns_paladin_gui_license_path() {
+    // Per IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7 checklist"
+    // → "About dialog" — the AGPL-3.0-or-later license text is
+    // shipped in the gresource bundle under the
+    // `/org/tamx/Paladin/Gui` prefix (matching the
+    // `APP_ID`-derived prefix used by `style.css` and the
+    // bundled icon theme). Pinning the exact gresource path
+    // here keeps `data/paladin-gtk.gresource.xml`'s
+    // `<file alias="LICENSE">` entry and any consumer that
+    // looks up the bundled text by path in lockstep without a
+    // duplicated literal.
+    use paladin_gtk::app::model::format_app_about_dialog_license_resource_path;
+
+    assert_eq!(
+        format_app_about_dialog_license_resource_path(),
+        "/org/tamx/Paladin/Gui/LICENSE",
+        "AdwAboutDialog license resource path must match the gresource manifest alias under the APP_ID prefix",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_license_resource_path_uses_app_id_prefix() {
+    // Defense-in-depth: the resource path must live under the
+    // same `/org/tamx/Paladin/Gui` prefix as `style.css`
+    // (`format_app_style_css_resource_path`) and the bundled
+    // icon theme (`format_app_icon_theme_resource_path`) so the
+    // gresource pool stays namespaced by reverse-DNS APP_ID
+    // and a swap that drops the prefix (which would leak the
+    // bare `/LICENSE` path into the process-wide pool) surfaces
+    // here as a failing test.
+    use paladin_gtk::app::model::format_app_about_dialog_license_resource_path;
+
+    let path = format_app_about_dialog_license_resource_path();
+    assert!(
+        path.starts_with("/org/tamx/Paladin/Gui/"),
+        "AdwAboutDialog license resource path must live under the APP_ID-derived prefix; got {path:?}",
+    );
+    assert!(
+        path.ends_with("/LICENSE"),
+        "AdwAboutDialog license resource path must terminate at the LICENSE entry; got {path:?}",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_license_resource_path_does_not_end_with_a_trailing_slash() {
+    // A trailing slash on a `gio::resources_lookup_data` key
+    // resolves to a directory listing, not the file body —
+    // `set_license` would then receive an empty / garbage body.
+    // Pin the absence of a trailing slash so a regression that
+    // changes the helper to `"/org/tamx/Paladin/Gui/LICENSE/"`
+    // surfaces here as a failing test before the dialog renders
+    // an empty license panel.
+    use paladin_gtk::app::model::format_app_about_dialog_license_resource_path;
+
+    let path = format_app_about_dialog_license_resource_path();
+    assert!(
+        !path.ends_with('/'),
+        "AdwAboutDialog license resource path must not end with a trailing slash; got {path:?}",
+    );
 }
 
 #[test]

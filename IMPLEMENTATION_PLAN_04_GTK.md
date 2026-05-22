@@ -3630,21 +3630,100 @@ sign-off.
     `format_app_primary_menu_action_sensitivities_disables_mutating_entries_off_unlocked`,
     `format_app_primary_menu_action_sensitivities_enables_mutating_entries_on_unlocked`,
     and `build_app_window_action_group_disables_mutating_actions_in_non_unlocked_states`.)
-- [ ] About dialog (`AdwAboutDialog` wired to the primary menu's
+- [x] About dialog (`AdwAboutDialog` wired to the primary menu's
   "About Paladin" entry, metadata sourced from Cargo package fields
   embedded at compile time).
-  - [ ] Mount `AdwAboutDialog` behind the primary menu's "About
+  - [x] Mount `AdwAboutDialog` behind the primary menu's "About
     Paladin" entry; pull `application-name`, `version`,
     `developers`, `website`, and `issue-tracker` from Cargo package
     metadata via `env!` / `option_env!` so the strings stay in sync
     with the workspace.
-  - [ ] Ship the AGPL-3.0-or-later license text in the gresource
+    (`AppMsg::OpenAboutDialog` activates from the
+    `"app.about"` action and presents the dialog returned by
+    `build_app_about_dialog()`. The dialog's `application-name`
+    (`format_app_about_dialog_program_name` → `"Paladin"`,
+    matching the §11.3 desktop entry's `Name=Paladin`),
+    `version` (`env!("CARGO_PKG_VERSION")`), `website`
+    (`env!("CARGO_PKG_HOMEPAGE")`), `issue-url`
+    (`concat!(env!("CARGO_PKG_REPOSITORY"), "/issues")`), and
+    `support-url` (`concat!(env!("CARGO_PKG_REPOSITORY"),
+    "/discussions")`) all flow through pinned
+    `format_app_about_dialog_*` helpers sourced from Cargo
+    metadata that `crates/paladin-gtk/Cargo.toml` inherits from
+    the workspace `[workspace.package]` table, so a workspace
+    bump propagates automatically. `developers` resolves through
+    the `format_app_about_dialog_developers` literal because
+    `[workspace.package].authors` is intentionally empty per
+    DESIGN §14's open-contributor-pool model; pinning the
+    literal keeps the attribution row stable across releases.
+    Pinned by `format_app_about_dialog_version_matches_cargo_pkg_version`,
+    `format_app_about_dialog_website_matches_cargo_pkg_homepage`,
+    `format_app_about_dialog_issue_url_appends_issues_to_cargo_pkg_repository`,
+    `format_app_about_dialog_support_url_appends_discussions_to_cargo_pkg_repository`,
+    and the
+    `build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a_setter`
+    setter-chain end-to-end test.)
+  - [x] Ship the AGPL-3.0-or-later license text in the gresource
     bundle and surface it through
     `AdwAboutDialog::license-type` set to `Custom` with the bundled
     text.
-  - [ ] Show the app icon `org.tamx.Paladin.Gui` and link to the
+    (`data/paladin-gtk.gresource.xml` ships
+    `<file alias="LICENSE">LICENSE</file>` under the
+    `/org/tamx/Paladin/Gui` prefix; `build.rs` adds `../..`
+    (workspace root) as a second `glib-compile-resources`
+    sourcedir so the repo-root `LICENSE` (AGPL-3.0-or-later,
+    FSF AGPLv3 verbatim) packs into the bundle. The matching
+    `format_app_about_dialog_license_resource_path` →
+    `"/org/tamx/Paladin/Gui/LICENSE"` pin keeps the manifest
+    alias and any consumer that looks up the bundled text by
+    path in lockstep. `format_app_about_dialog_license_type`
+    flipped from `gtk::License::Agpl30` to
+    `gtk::License::Custom`, and `build_app_about_dialog` now
+    calls `set_license(format_app_about_dialog_license_text())`
+    after `set_license_type(License::Custom)` so the dialog
+    footer renders the bundled body rather than the toolkit's
+    generic AGPL-3.0-or-later boilerplate.
+    `format_app_about_dialog_license_text` returns
+    `include_str!("../../../../LICENSE")` so the helper and
+    the gresource entry share the same on-disk source of
+    truth. Pinned by
+    `format_app_about_dialog_license_type_returns_custom`,
+    `format_app_about_dialog_license_type_is_not_one_of_the_toolkit_shipped_gpl_family_variants`,
+    `format_app_about_dialog_license_text_matches_repository_license_file`,
+    `format_app_about_dialog_license_text_starts_with_the_gnu_affero_general_public_license_header`,
+    `format_app_about_dialog_license_text_carries_version_3_marker`,
+    `format_app_about_dialog_license_text_is_non_empty`,
+    `format_app_about_dialog_license_text_does_not_contain_a_null_byte`,
+    `format_app_about_dialog_license_resource_path_returns_paladin_gui_license_path`,
+    `format_app_about_dialog_license_resource_path_uses_app_id_prefix`,
+    `format_app_about_dialog_license_resource_path_does_not_end_with_a_trailing_slash`,
+    and the
+    `build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a_setter`
+    setter-chain assertion on `dialog.license()`.)
+  - [x] Show the app icon `org.tamx.Paladin.Gui` and link to the
     repository / issue tracker URLs declared in the workspace
     `[workspace.package]` table.
+    (`format_app_about_dialog_application_icon_name` returns
+    `crate::APP_ID` (`"org.tamx.Paladin.Gui"`) — the same
+    reverse-DNS key consumed by `RelmApp::new(APP_ID)`, the
+    §11.3 `Icon=org.tamx.Paladin.Gui` desktop entry, and the
+    hicolor `/usr/share/icons/hicolor/<size>/apps/org.tamx.Paladin.Gui.*`
+    install layout, so the launcher glyph and the dialog
+    header glyph resolve identically. The dialog's footer
+    "Website", "Report an issue", and "Get support" links
+    flow through `format_app_about_dialog_website` →
+    `env!("CARGO_PKG_HOMEPAGE")` (workspace `homepage`),
+    `format_app_about_dialog_issue_url` →
+    `concat!(env!("CARGO_PKG_REPOSITORY"), "/issues")`, and
+    `format_app_about_dialog_support_url` →
+    `concat!(env!("CARGO_PKG_REPOSITORY"), "/discussions")` so
+    a workspace `[workspace.package].repository` /
+    `homepage` change propagates without an edit here. Pinned
+    by `format_app_about_dialog_application_icon_name_matches_app_id`,
+    `format_app_about_dialog_application_icon_name_is_reverse_dns`,
+    `format_app_about_dialog_website_matches_cargo_pkg_homepage`,
+    `format_app_about_dialog_issue_url_appends_issues_to_cargo_pkg_repository`,
+    and `format_app_about_dialog_issue_url_and_support_url_share_cargo_pkg_repository_prefix`.)
 - [ ] Clipboard + auto-lock parity with TUI (opt-in). Use
   `Vault::is_encrypted()` to decide whether to arm the auto-lock
   timer (encrypted only) and to track the visible vault-mode flag

@@ -24,5 +24,22 @@
   <gresource prefix="/org/tamx/Paladin/Gui">
     <file compressed="true" alias="style.css">style.css</file>
     <file compressed="true" alias="icons/scalable/actions/dialog-password-symbolic.svg">icons/scalable/actions/dialog-password-symbolic.svg</file>
+    <!--
+      Repo-root `LICENSE` (AGPL-3.0-or-later, FSF AGPLv3 verbatim
+      text) shipped under `/org/tamx/Paladin/Gui/LICENSE` so the
+      §"About dialog" `AdwAboutDialog` can hand the bundled body
+      to `set_license` (paired with
+      `set_license_type(License::Custom)`) and bundle inspectors
+      can resolve the project license by gresource path. The
+      same source bytes are surfaced at compile time through
+      `format_app_about_dialog_license_text` (`include_str!` on
+      the same on-disk path) so the helper and the bundle stay
+      consistent by construction. The workspace-root source dir
+      is added by `build.rs` via
+      `glib_build_tools::compile_resources(&["data", "../.."], ...)`
+      so the relative path `LICENSE` resolves against the
+      workspace root.
+    -->
+    <file compressed="true" alias="LICENSE">LICENSE</file>
   </gresource>
 </gresources>

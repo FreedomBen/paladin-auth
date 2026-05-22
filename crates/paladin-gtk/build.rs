@@ -16,8 +16,19 @@
 //! `/org/tamx/Paladin/Gui/style.css` through `gtk::CssProvider`.
 
 fn main() {
+    // `glib-compile-resources` searches each `--sourcedir` in order
+    // for files referenced by the manifest. `data` covers the
+    // GTK-owned payload (`style.css`, bundled icons). `../..`
+    // (the workspace root relative to this build script's cwd,
+    // which is `crates/paladin-gtk/`) lets the manifest pull in
+    // the repo-root `LICENSE` (AGPL-3.0-or-later body shipped
+    // under `/org/tamx/Paladin/Gui/LICENSE`) without a duplicate
+    // copy under `data/`. Track the LICENSE file explicitly so
+    // a `LICENSE` edit re-runs the build script and the bundled
+    // body stays in lockstep with the on-disk source of truth.
+    println!("cargo:rerun-if-changed=../../LICENSE");
     glib_build_tools::compile_resources(
-        &["data"],
+        &["data", "../.."],
         "data/paladin-gtk.gresource.xml",
         "paladin-gtk.gresource",
     );

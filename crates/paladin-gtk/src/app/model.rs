@@ -5566,6 +5566,10 @@ pub fn apply_app_window_action_group_sensitivities(
 /// * [`format_app_about_dialog_copyright`] → `set_copyright`
 /// * [`format_app_about_dialog_license_type`] →
 ///   `set_license_type`
+/// * [`format_app_about_dialog_license_text`] → `set_license`
+///   (paired with `set_license_type(License::Custom)` so the
+///   dialog footer renders the bundled AGPL-3.0-or-later body
+///   rather than the toolkit's generic boilerplate)
 /// * [`format_app_about_dialog_website`] → `set_website`
 /// * [`format_app_about_dialog_issue_url`] → `set_issue_url`
 /// * [`format_app_about_dialog_support_url`] →
@@ -5616,6 +5620,7 @@ pub fn build_app_about_dialog() -> adw::AboutDialog {
     dialog.set_developer_name(format_app_about_dialog_developer_name());
     dialog.set_copyright(format_app_about_dialog_copyright());
     dialog.set_license_type(format_app_about_dialog_license_type());
+    dialog.set_license(format_app_about_dialog_license_text());
     dialog.set_website(format_app_about_dialog_website());
     dialog.set_issue_url(format_app_about_dialog_issue_url());
     dialog.set_support_url(format_app_about_dialog_support_url());
@@ -5743,26 +5748,112 @@ pub fn format_app_about_dialog_copyright() -> &'static str {
 /// Typed GTK license enum the application menu's "About
 /// Paladin" entry's `AdwAboutDialog` hands to
 /// `set_license_type` so the dialog footer renders the
-/// canonical AGPL-3.0-or-later text shipped with the toolkit.
+/// gresource-bundled AGPL-3.0-or-later body rather than the
+/// generic boilerplate shipped with the GTK toolkit.
 ///
-/// Returns [`gtk::License::Agpl30`] — the `GTK_LICENSE_AGPL_3_0`
-/// variant, i.e. the "or later" form per DESIGN.md §14 and the
-/// workspace-wide `license = "AGPL-3.0-or-later"` contract.
-/// Distinct from the strict [`gtk::License::Agpl30Only`] variant
-/// (which would mis-state the license boundary as "AGPL-3.0
-/// only"), and from the sibling `Gpl30` / `Lgpl30` variants
-/// (which would silently misrepresent the project license).
+/// Returns [`gtk::License::Custom`] per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" →
+/// "About dialog" — "Ship the AGPL-3.0-or-later license text in
+/// the gresource bundle and surface it through
+/// `AdwAboutDialog::license-type` set to `Custom` with the
+/// bundled text." Pairing `License::Custom` with a follow-up
+/// `set_license(format_app_about_dialog_license_text())` call
+/// (see [`build_app_about_dialog`]) makes the dialog footer
+/// render the verbatim repo-root `LICENSE` file rather than the
+/// toolkit's generic AGPL-3.0-or-later boilerplate, so the
+/// project license surface and the on-disk source of truth stay
+/// in lockstep without a duplicated literal.
 ///
-/// Returning the typed enum (rather than an SPDX `&'static str`)
-/// keeps the `AdwAboutDialog::set_license_type` call site free
-/// of string-to-enum translation logic and lets the toolkit
-/// drive both the footer license link and the human-readable
-/// license name from a single source of truth.
+/// Distinct from the toolkit-shipped GPL-family variants
+/// ([`gtk::License::Agpl30`], [`gtk::License::Agpl30Only`],
+/// [`gtk::License::Gpl30`], [`gtk::License::Gpl30Only`],
+/// [`gtk::License::Lgpl30`], [`gtk::License::Lgpl30Only`]): any
+/// of those would tell `AdwAboutDialog` to render the toolkit's
+/// boilerplate body and bypass the bundled LICENSE text. The
+/// matching `format_app_about_dialog_license_type_*` test pins
+/// the forbidden variants so a regression cannot silently swap
+/// `Custom` back to a toolkit-shipped variant.
 ///
 /// Pure — returns a `Copy` enum value without allocating.
+/// Companion of [`format_app_about_dialog_license_text`] and
+/// [`format_app_about_dialog_license_resource_path`] on the
+/// bundled-license side; together they pin the typed license
+/// enum, the bundled body, and the gresource path against a
+/// single source of truth.
 #[must_use]
 pub fn format_app_about_dialog_license_type() -> gtk::License {
-    gtk::License::Agpl30
+    gtk::License::Custom
+}
+
+/// Bundled AGPL-3.0-or-later license body the application
+/// menu's "About Paladin" entry's `AdwAboutDialog` hands to
+/// `set_license` (paired with
+/// [`format_app_about_dialog_license_type`] →
+/// [`gtk::License::Custom`]) so the dialog footer license panel
+/// renders the verbatim repo-root `LICENSE` file.
+///
+/// Returns the project `LICENSE` file's text via
+/// `include_str!("../../../../LICENSE")` so the helper and the
+/// on-disk source of truth stay in lockstep without a manual
+/// duplicate. The same on-disk bytes are also shipped through
+/// the gresource bundle under
+/// [`format_app_about_dialog_license_resource_path`] (added by
+/// `data/paladin-gtk.gresource.xml` with the workspace root as
+/// a `glib_build_tools::compile_resources` source dir per
+/// `build.rs`); the dialog uses the `include_str!` channel for
+/// simplicity, while the gresource entry covers bundle
+/// inspectors that walk the resource pool by path.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
+/// → "About dialog" — "Ship the AGPL-3.0-or-later license text
+/// in the gresource bundle and surface it through
+/// `AdwAboutDialog::license-type` set to `Custom` with the
+/// bundled text." Sourcing both the bundle entry and this
+/// helper from the same on-disk `LICENSE` file makes a
+/// regression that swaps the visible license impossible without
+/// also editing the source-of-truth file.
+///
+/// Pure — returns a `'static str` resolved at compile time.
+/// Companion of [`format_app_about_dialog_license_type`]
+/// ([`gtk::License::Custom`]) and
+/// [`format_app_about_dialog_license_resource_path`] (the
+/// matching gresource path) on the bundled-license side.
+#[must_use]
+pub fn format_app_about_dialog_license_text() -> &'static str {
+    include_str!("../../../../LICENSE")
+}
+
+/// Absolute gresource path the application menu's "About
+/// Paladin" entry's bundled AGPL-3.0-or-later `LICENSE` body
+/// mounts at inside the application's gresource pool.
+///
+/// Returns the absolute path
+/// `"/org/tamx/Paladin/Gui/LICENSE"`. The prefix segments
+/// `/org/tamx/Paladin/Gui` mirror [`crate::APP_ID`]
+/// (`"org.tamx.Paladin.Gui"`) reformatted as a slash-delimited
+/// path so the gresource pool namespaces by reverse-DNS app ID,
+/// matching the other Paladin-bundled paths
+/// ([`format_app_style_css_resource_path`] →
+/// `"/org/tamx/Paladin/Gui/style.css"`,
+/// [`format_app_icon_theme_resource_path`] →
+/// `"/org/tamx/Paladin/Gui/icons"`). The terminal `LICENSE`
+/// segment matches the alias declared in
+/// `data/paladin-gtk.gresource.xml`, so the path the helper
+/// returns and the path the bundle exposes are pinned against a
+/// single source of truth.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`register_app_gresource_bundle`] (which hands the
+/// compiled gresource bytes to `gio::resources_register` so
+/// this path resolves at runtime) and of
+/// [`format_app_about_dialog_license_text`] (which returns the
+/// same bytes via `include_str!` for the
+/// [`build_app_about_dialog`] call site); together they pin the
+/// gresource side of the Paladin bundled-license layer against
+/// a single source of truth.
+#[must_use]
+pub fn format_app_about_dialog_license_resource_path() -> &'static str {
+    "/org/tamx/Paladin/Gui/LICENSE"
 }
 
 /// Website URL the application menu's "About Paladin" entry's
