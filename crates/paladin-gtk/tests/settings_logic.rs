@@ -2902,3 +2902,309 @@ fn compose_settings_dialog_clipboard_clear_secs_sensitive_busy_returns_false_eve
         &state
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Coalesce settings spinner debounce to the latest pre-save value when an
+// effect is in flight; refuse toggle changes that would overlap an active
+// vault effect until the control is re-enabled (line 4030 of
+// IMPLEMENTATION_PLAN_04_GTK.md).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dispatch_debounce_tick_while_busy_returns_noop_and_keeps_pending_auto_lock() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(CommittedSettings::new(true, 300, false, 30));
+    // Stage a spinner draft, then enter the busy state (mirrors the
+    // scenario where the user changes the auto-lock spinner just
+    // before clicking the clipboard-clear toggle: the toggle save
+    // races ahead and starts a vault effect while the spinner timer
+    // is still armed).
+    let stage_action = dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::AutoLockSecsSpinnerChanged(600),
+    );
+    assert_eq!(stage_action, SettingsDialogAction::StageDebounce);
+    assert_eq!(state.visible_auto_lock_secs(), 600);
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    assert!(state.is_busy());
+
+    // The spinner debounce timer expires while a sibling vault
+    // effect owns the vault. Firing the save now would overlap with
+    // the in-flight effect, so the dispatch coalesces: keep the
+    // pending value buffered for the post-busy re-arm path and
+    // report Noop to the widget so it neither submits nor re-arms a
+    // fresh timer (the SetBusy(false) handler re-arms instead).
+    let tick_action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::DebounceTick);
+    assert_eq!(tick_action, SettingsDialogAction::Noop);
+    assert_eq!(state.visible_auto_lock_secs(), 600);
+}
+
+#[test]
+fn dispatch_debounce_tick_while_busy_returns_noop_and_keeps_pending_clipboard_clear() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(CommittedSettings::new(false, 300, true, 30));
+    let stage_action = dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::ClipboardClearSecsSpinnerChanged(45),
+    );
+    assert_eq!(stage_action, SettingsDialogAction::StageDebounce);
+    assert_eq!(state.visible_clipboard_clear_secs(), 45);
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+
+    let tick_action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::DebounceTick);
+    assert_eq!(tick_action, SettingsDialogAction::Noop);
+    assert_eq!(state.visible_clipboard_clear_secs(), 45);
+}
+
+#[test]
+fn dispatch_set_busy_false_with_pending_auto_lock_re_arms_debounce() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(CommittedSettings::new(true, 300, false, 30));
+    dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::AutoLockSecsSpinnerChanged(600),
+    );
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    // While busy, the spinner timer fires harmlessly (returns Noop)
+    // and keeps the pending draft. When the sibling worker returns
+    // and the dialog leaves the busy state, the dispatch re-arms the
+    // 500 ms debounce so the latest pre-save value eventually saves.
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::DebounceTick);
+
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(false));
+    assert_eq!(action, SettingsDialogAction::StageDebounce);
+    assert!(!state.is_busy());
+    assert_eq!(state.visible_auto_lock_secs(), 600);
+}
+
+#[test]
+fn dispatch_set_busy_false_with_pending_clipboard_clear_re_arms_debounce() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(CommittedSettings::new(false, 300, true, 30));
+    dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::ClipboardClearSecsSpinnerChanged(45),
+    );
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::DebounceTick);
+
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(false));
+    assert_eq!(action, SettingsDialogAction::StageDebounce);
+    assert_eq!(state.visible_clipboard_clear_secs(), 45);
+}
+
+#[test]
+fn dispatch_set_busy_false_with_no_pending_returns_noop() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(false));
+    assert_eq!(action, SettingsDialogAction::Noop);
+    assert!(!state.is_busy());
+}
+
+#[test]
+fn dispatch_set_busy_false_with_pending_equal_to_committed_returns_noop() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    // Pending value matches committed — resolving the debounce would
+    // return Idle, so no re-arm needed either.
+    let mut state = SettingsState::new(CommittedSettings::new(true, 300, false, 30));
+    dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::AutoLockSecsSpinnerChanged(300),
+    );
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(false));
+    assert_eq!(action, SettingsDialogAction::Noop);
+}
+
+#[test]
+fn dispatch_set_busy_true_preserves_pending_spinner_draft() {
+    use paladin_gtk::settings::{dispatch_settings_dialog_msg, SettingsDialogMsg, SettingsState};
+    // Entering the busy state must not drop a pending spinner draft
+    // — that draft is the "latest pre-save value" the post-busy
+    // re-arm needs to feed back into the next save.
+    let mut state = SettingsState::new(CommittedSettings::new(true, 300, false, 30));
+    dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::AutoLockSecsSpinnerChanged(600),
+    );
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    assert_eq!(state.visible_auto_lock_secs(), 600);
+}
+
+#[test]
+fn dispatch_set_busy_idempotent_true_with_pending_does_not_re_arm() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    // A repeated SetBusy(true) must not re-arm — only the true→false
+    // edge with a pending draft triggers StageDebounce.
+    let mut state = SettingsState::new(CommittedSettings::new(true, 300, false, 30));
+    dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::AutoLockSecsSpinnerChanged(600),
+    );
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    assert_eq!(action, SettingsDialogAction::Noop);
+}
+
+#[test]
+fn dispatch_auto_lock_toggle_while_busy_returns_noop_and_does_not_submit() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::AutoLockToggled(true));
+    assert_eq!(
+        action,
+        SettingsDialogAction::Noop,
+        "toggle changes are refused while a vault effect is in flight",
+    );
+    // Committed state is unchanged — the toggle never reached the
+    // setter.
+    assert!(!state.committed().auto_lock_enabled());
+}
+
+#[test]
+fn dispatch_clipboard_clear_toggle_while_busy_returns_noop_and_does_not_submit() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+
+    let action =
+        dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::ClipboardClearToggled(true));
+    assert_eq!(action, SettingsDialogAction::Noop);
+    assert!(!state.committed().clipboard_clear_enabled());
+}
+
+#[test]
+fn dispatch_spinner_change_while_busy_returns_noop_and_does_not_stage() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(CommittedSettings::new(true, 300, false, 30));
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    // A queued SpinnerChanged that arrives while busy (e.g. before
+    // the widget-side `set_sensitive: false` `#[watch]` tick takes
+    // effect) is refused so the in-flight save's committed-on-disk
+    // value is the latest pre-save value — not a stray during-save
+    // value.
+    let action = dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::AutoLockSecsSpinnerChanged(600),
+    );
+    assert_eq!(action, SettingsDialogAction::Noop);
+    assert_eq!(state.visible_auto_lock_secs(), 300);
+}
+
+#[test]
+fn dispatch_clipboard_spinner_change_while_busy_returns_noop_and_does_not_stage() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(CommittedSettings::new(false, 300, true, 30));
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    let action = dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::ClipboardClearSecsSpinnerChanged(45),
+    );
+    assert_eq!(action, SettingsDialogAction::Noop);
+    assert_eq!(state.visible_clipboard_clear_secs(), 30);
+}
+
+#[test]
+fn dispatch_coalescing_round_trip_pending_survives_intervening_save_and_fires_after_busy_clears() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, AcceptedChange, SaveOutcome, SettingsDialogAction,
+        SettingsDialogMsg, SettingsState, SettingsWorkerEffect,
+    };
+    let mut state = SettingsState::new(CommittedSettings::new(true, 300, false, 30));
+
+    // Stage a spinner draft (timer armed in the widget layer).
+    let staged = dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::AutoLockSecsSpinnerChanged(600),
+    );
+    assert_eq!(staged, SettingsDialogAction::StageDebounce);
+
+    // Sibling vault effect starts (e.g. a toggle save).
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+
+    // Spinner debounce timer expires while busy — coalesces.
+    let tick = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::DebounceTick);
+    assert_eq!(tick, SettingsDialogAction::Noop);
+    assert_eq!(state.visible_auto_lock_secs(), 600);
+
+    // Sibling worker returns successfully (committed updates but
+    // does not touch auto_lock_secs).
+    dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::WorkerCompleted(SettingsWorkerEffect {
+            change: AcceptedChange::ClipboardClearEnabled(true),
+            outcome: SaveOutcome::Success,
+        }),
+    );
+
+    // Busy clears — the dispatch re-arms because the spinner draft
+    // still differs from the committed value.
+    let release = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(false));
+    assert_eq!(release, SettingsDialogAction::StageDebounce);
+
+    // The widget-armed debounce now fires the coalesced save.
+    let final_tick = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::DebounceTick);
+    let SettingsDialogAction::Submit(patch) = final_tick else {
+        panic!("expected coalesced Submit after busy release, got {final_tick:?}");
+    };
+    assert!(matches!(patch, SettingPatch::AutoLockTimeoutSecs(600)));
+}
+
+#[test]
+fn has_pending_save_due_reports_true_only_when_pending_differs_from_committed() {
+    use paladin_gtk::settings::{dispatch_settings_dialog_msg, SettingsDialogMsg, SettingsState};
+    let mut state = SettingsState::new(CommittedSettings::new(true, 300, true, 30));
+    assert!(!state.has_pending_save_due(), "no pending draft");
+
+    // Same value as committed — pending exists but no save would
+    // fire.
+    dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::AutoLockSecsSpinnerChanged(300),
+    );
+    assert!(!state.has_pending_save_due());
+
+    // Differing value — save would fire.
+    dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::AutoLockSecsSpinnerChanged(600),
+    );
+    assert!(state.has_pending_save_due());
+
+    // Switch fields (clipboard-clear differs from committed=30).
+    dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::ClipboardClearSecsSpinnerChanged(45),
+    );
+    assert!(state.has_pending_save_due());
+
+    // Resolving the debounce clears pending.
+    state.resolve_debounce();
+    assert!(!state.has_pending_save_due());
+}

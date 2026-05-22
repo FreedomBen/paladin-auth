@@ -4027,10 +4027,43 @@ sign-off.
     and
     `handle_effect_completion_with_pending_lock_on_plaintext_converted_vault_discards_lock`
     in `tests/app_state_logic.rs`.)
-  - [ ] Coalesce settings spinner debounce to the latest pre-save
+  - [x] Coalesce settings spinner debounce to the latest pre-save
     value when an effect is in flight; refuse toggle changes that
     would overlap an active vault effect until the control is
     re-enabled.
+    (`dispatch_settings_dialog_msg` gates every input arm on
+    [`SettingsState::is_busy`]: `AutoLockToggled` /
+    `ClipboardClearToggled` /
+    `AutoLockSecsSpinnerChanged` /
+    `ClipboardClearSecsSpinnerChanged` short-circuit to
+    `SettingsDialogAction::Noop` while busy without invoking
+    `toggle_*` or `stage_*`, so a stray queued message racing the
+    `#[watch] set_sensitive` dim cannot reach the setter. The
+    `DebounceTick` arm also short-circuits to `Noop` while busy,
+    *keeping the pending spinner draft intact*; the
+    `SetBusy(true → false)` edge consults the new
+    [`SettingsState::has_pending_save_due`] helper and returns
+    `SettingsDialogAction::StageDebounce` when a draft still differs
+    from the committed snapshot, so the widget re-arms the 500 ms
+    `glib::timeout_add_local` timer and the next `DebounceTick`
+    fires the coalesced latest pre-save value through a single
+    `Vault::mutate_and_save`. Pinned by
+    `dispatch_debounce_tick_while_busy_returns_noop_and_keeps_pending_auto_lock`,
+    `dispatch_debounce_tick_while_busy_returns_noop_and_keeps_pending_clipboard_clear`,
+    `dispatch_set_busy_false_with_pending_auto_lock_re_arms_debounce`,
+    `dispatch_set_busy_false_with_pending_clipboard_clear_re_arms_debounce`,
+    `dispatch_set_busy_false_with_no_pending_returns_noop`,
+    `dispatch_set_busy_false_with_pending_equal_to_committed_returns_noop`,
+    `dispatch_set_busy_true_preserves_pending_spinner_draft`,
+    `dispatch_set_busy_idempotent_true_with_pending_does_not_re_arm`,
+    `dispatch_auto_lock_toggle_while_busy_returns_noop_and_does_not_submit`,
+    `dispatch_clipboard_clear_toggle_while_busy_returns_noop_and_does_not_submit`,
+    `dispatch_spinner_change_while_busy_returns_noop_and_does_not_stage`,
+    `dispatch_clipboard_spinner_change_while_busy_returns_noop_and_does_not_stage`,
+    `dispatch_coalescing_round_trip_pending_survives_intervening_save_and_fires_after_busy_clears`,
+    and
+    `has_pending_save_due_reports_true_only_when_pending_differs_from_committed`
+    in `tests/settings_logic.rs`.)
   - [x] Route workers that fail before returning the pair to
     `StartupErrorComponent` without trying to reconstruct in-memory
     vault state.

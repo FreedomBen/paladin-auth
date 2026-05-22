@@ -1558,6 +1558,27 @@ impl SettingsState {
         self.busy = busy;
     }
 
+    /// True iff a buffered spinner draft differs from the committed
+    /// value — i.e., a save would actually fire if
+    /// [`Self::resolve_debounce`] were called now.
+    ///
+    /// Used by [`dispatch_settings_dialog_msg`] on the
+    /// `SetBusy(true → false)` edge so the dispatch can decide whether
+    /// to re-arm the 500 ms debounce timer after a sibling vault
+    /// effect returns. Per `IMPLEMENTATION_PLAN_04_GTK.md` line 4030
+    /// ("Coalesce settings spinner debounce to the latest pre-save
+    /// value when an effect is in flight"), the spinner draft must
+    /// survive a busy window and eventually save — the post-busy
+    /// re-arm is the path that wakes it.
+    #[must_use]
+    pub fn has_pending_save_due(&self) -> bool {
+        match self.pending {
+            Some(PendingSpinner::AutoLockSecs(v)) => v != self.committed.auto_lock_secs,
+            Some(PendingSpinner::ClipboardClearSecs(v)) => v != self.committed.clipboard_clear_secs,
+            None => false,
+        }
+    }
+
     /// Committed (on-disk) snapshot.
     #[must_use]
     pub fn committed(&self) -> &CommittedSettings {
@@ -1836,29 +1857,64 @@ pub fn dispatch_settings_dialog_msg(
 ) -> SettingsDialogAction {
     match msg {
         SettingsDialogMsg::AutoLockToggled(enabled) => {
+            // Refuse toggle changes that would overlap an active
+            // vault effect (`IMPLEMENTATION_PLAN_04_GTK.md` line 4030
+            // and §"In-flight effect ownership"). The widget layer
+            // dims the `AdwSwitchRow` via `set_sensitive: false` so
+            // the user cannot reach this path under normal
+            // interaction; this guard defends against a stray message
+            // queued before the `#[watch]` dim tick takes effect.
+            if state.is_busy() {
+                return SettingsDialogAction::Noop;
+            }
             match state.toggle_auto_lock_enabled(enabled) {
                 ToggleOutcome::Noop => SettingsDialogAction::Noop,
                 ToggleOutcome::Save { patch, .. } => SettingsDialogAction::Submit(patch),
             }
         }
         SettingsDialogMsg::ClipboardClearToggled(enabled) => {
+            if state.is_busy() {
+                return SettingsDialogAction::Noop;
+            }
             match state.toggle_clipboard_clear_enabled(enabled) {
                 ToggleOutcome::Noop => SettingsDialogAction::Noop,
                 ToggleOutcome::Save { patch, .. } => SettingsDialogAction::Submit(patch),
             }
         }
         SettingsDialogMsg::AutoLockSecsSpinnerChanged(value) => {
+            // Drop spinner edits arriving during a busy window so the
+            // current save's committed-on-disk value is the latest
+            // *pre-save* value, not a stray during-save value. The
+            // widget is dimmed in this state; this guard catches the
+            // pre-tick race.
+            if state.is_busy() {
+                return SettingsDialogAction::Noop;
+            }
             state.stage_auto_lock_secs(value);
             SettingsDialogAction::StageDebounce
         }
         SettingsDialogMsg::ClipboardClearSecsSpinnerChanged(value) => {
+            if state.is_busy() {
+                return SettingsDialogAction::Noop;
+            }
             state.stage_clipboard_clear_secs(value);
             SettingsDialogAction::StageDebounce
         }
-        SettingsDialogMsg::DebounceTick => match state.resolve_debounce() {
-            DebounceOutcome::Idle => SettingsDialogAction::Noop,
-            DebounceOutcome::Save { patch, .. } => SettingsDialogAction::Submit(patch),
-        },
+        SettingsDialogMsg::DebounceTick => {
+            // Coalesce the spinner debounce to the latest pre-save
+            // value when a sibling vault effect is in flight: keep
+            // the pending draft buffered and return Noop so the
+            // widget neither submits nor re-arms a fresh timer. The
+            // `SetBusy(true → false)` edge below re-arms when the
+            // worker returns so the staged value eventually saves.
+            if state.is_busy() {
+                return SettingsDialogAction::Noop;
+            }
+            match state.resolve_debounce() {
+                DebounceOutcome::Idle => SettingsDialogAction::Noop,
+                DebounceOutcome::Save { patch, .. } => SettingsDialogAction::Submit(patch),
+            }
+        }
         SettingsDialogMsg::WorkerCompleted(SettingsWorkerEffect { change, outcome }) => {
             state.apply_save_outcome(change, outcome);
             SettingsDialogAction::Noop
@@ -1870,7 +1926,18 @@ pub fn dispatch_settings_dialog_msg(
             // call with `SetBusy(true)` / `SetBusy(false)` so the
             // toggle / spinner sensitivity projectors dim the dialog
             // while the worker owns the live `(Vault, Store)` pair.
+            //
+            // On the `true → false` edge, if a spinner draft is still
+            // buffered (a `DebounceTick` was dropped while busy, or a
+            // pending value pre-dated the save), re-arm the 500 ms
+            // debounce so the latest pre-save value eventually fires
+            // a save — that is the coalescing path per
+            // `IMPLEMENTATION_PLAN_04_GTK.md` line 4030.
+            let was_busy = state.is_busy();
             state.set_busy(busy);
+            if was_busy && !busy && state.has_pending_save_due() {
+                return SettingsDialogAction::StageDebounce;
+            }
             SettingsDialogAction::Noop
         }
     }
@@ -1924,7 +1991,14 @@ pub enum SettingsDialogOutput {
 /// [`SettingsState::stage_clipboard_clear_secs`] and arm the 500 ms
 /// debounce timer via [`format_settings_dialog_spinner_debounce`].
 /// Holding +/- coalesces to a single save with the most recent
-/// buffered value per `IMPLEMENTATION_PLAN_04_GTK.md` line 3456.
+/// buffered value per `IMPLEMENTATION_PLAN_04_GTK.md` line 3456. A
+/// `DebounceTick` that fires while a sibling vault effect is in
+/// flight is absorbed by [`dispatch_settings_dialog_msg`] without
+/// dropping the buffered draft, and the `SetBusy(true → false)` edge
+/// re-arms the debounce so the latest pre-save value still reaches a
+/// single `Vault::mutate_and_save` after the worker returns — the
+/// "Coalesce settings spinner debounce to the latest pre-save value
+/// when an effect is in flight" contract.
 pub struct SettingsComponent {
     /// Live state machine seeded from [`SettingsDialogInit::settings`]
     /// in `init`. The pure-logic round-trip is asserted by
