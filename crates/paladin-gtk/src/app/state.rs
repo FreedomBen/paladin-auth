@@ -56,9 +56,11 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use paladin_core::{Account, AccountId, PaladinError, Store, Vault, VaultLock, VaultStatus};
+use paladin_core::{
+    Account, AccountId, PaladinError, Store, ValidatedAccount, Vault, VaultLock, VaultStatus,
+};
 
-use crate::add_account::{AddAccountMsg, AddWorkerEffect, AddWorkerInput};
+use crate::add_account::{AddAccountMsg, AddWorkerEffect, AddWorkerInput, QrWorkerInput};
 use crate::remove_dialog::{RemoveDialogMsg, RemoveWorkerEffect, RemoveWorkerInput};
 use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
@@ -1122,6 +1124,70 @@ pub fn compose_add_worker_input(
                 vault,
                 store,
                 account,
+            })
+        }
+        AppState::Missing { .. }
+        | AppState::Locked { .. }
+        | AppState::UnlockedBusy { .. }
+        | AppState::StartupError { .. } => Err(pair),
+    }
+}
+
+/// Compose the [`QrWorkerInput`] payload for the clipboard-QR add
+/// path's `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.import_accounts(...))` worker.
+///
+/// Symmetric partner of [`compose_add_worker_input`] on the QR sub-
+/// path. Where the manual / URI add path submits a single
+/// [`Account`] through [`AddWorkerInput`], the clipboard-QR sub-
+/// path submits a batch — `paladin_core::import::qr_image_bytes`
+/// returns `Vec<ValidatedAccount>` regardless of QR count, and the
+/// worker merges them under
+/// [`crate::qr_clipboard::CLIPBOARD_QR_CONFLICT_POLICY`].
+///
+/// The composer captures the live `(Vault, Store)` pair plus the
+/// decoded accounts and the `import_time` stamp the dialog read
+/// when it requested the clipboard scan (so a long worker queue
+/// cannot stamp a stale `updated_at` for any replaced row if a
+/// future caller swaps the policy off `Skip`). It gates on the
+/// pre-transition source state (`Unlocked` only — the QR worker
+/// consumes the already-decrypted pair) so `AppModel::update` can
+/// call this composer before `submit_add_app_state` consumes the
+/// variant.
+///
+/// `compose_qr_worker_input` returns `Result<QrWorkerInput,
+/// (Vault, Store)>` rather than `Option` because the
+/// `(Vault, Store)` pair is non-`Clone` and represents live
+/// unlocked state — dropping it on a stray dispatch would lose the
+/// user's open vault. The `Err((vault, store))` branch returns the
+/// pair so the caller can put it back in `AppModel.vault`. The
+/// `Vec<ValidatedAccount>` payload is dropped on the refusal arm
+/// (no filesystem state attached) and the secret bytes inside each
+/// `Account` zeroize on drop via `Zeroize` so a refused dispatch
+/// does not leak the decoded payloads.
+///
+/// Stays widget-free and `gio::spawn_blocking`-free — the
+/// `(Vault, Store)` pair lives in `AppModel`'s sibling
+/// `Option<(Vault, Store)>` slot and the `AppState` cache is just a
+/// discriminant on `current` — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` against real `(Vault, Store)` pairs
+/// constructed via `paladin_core::Store::create` over a tempfile
+/// vault.
+pub fn compose_qr_worker_input(
+    current: &AppState,
+    pair: (Vault, Store),
+    accounts: Vec<ValidatedAccount>,
+    import_time: SystemTime,
+) -> Result<QrWorkerInput, (Vault, Store)> {
+    match current {
+        AppState::Unlocked { .. } => {
+            let (vault, store) = pair;
+            Ok(QrWorkerInput {
+                vault,
+                store,
+                accounts,
+                import_time,
             })
         }
         AppState::Missing { .. }
