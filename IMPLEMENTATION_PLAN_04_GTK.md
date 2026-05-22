@@ -3918,7 +3918,7 @@ sign-off.
     the lock unchanged. Pinned by
     `pending_clipboard_clear_survives_auto_lock` in
     `tests/clipboard_clear_logic.rs`.)
-- [ ] Serialized in-flight vault effects: one vault-touching worker at a time,
+- [x] Serialized in-flight vault effects: one vault-touching worker at a time,
   mutating controls disabled while busy, and worker results restore
   `(Vault, Store)` before UI state applies success / typed failure handling;
   quit and auto-lock requests are deferred until the worker returns.
@@ -4111,11 +4111,37 @@ sign-off.
   encrypted-Paladin-bundle import prompt so the GUI shares the CLI / TUI
   Paladin header decision table.
 - [ ] Linux desktop file, AppStream metadata, and icon.
-  - [ ] Write `data/org.tamx.Paladin.Gui.desktop` with `Name=Paladin`,
+  - [x] Write `data/org.tamx.Paladin.Gui.desktop` with `Name=Paladin`,
     `Icon=org.tamx.Paladin.Gui`,
     `StartupWMClass=org.tamx.Paladin.Gui`,
     `Categories=Utility;Security;`, security/authenticator
     `Keywords=`, and `Exec=paladin-gtk` (no file/URI placeholders).
+    (Shipped at `crates/paladin-gtk/data/org.tamx.Paladin.Gui.desktop`.
+    `Type=Application`, `Name=Paladin`, `Icon=org.tamx.Paladin.Gui`,
+    `Exec=paladin-gtk` with no `%F` / `%U` / `%f` / `%u` placeholders,
+    `Terminal=false`, `StartupWMClass=org.tamx.Paladin.Gui`,
+    `Categories=Utility;Security;`, and
+    `Keywords=OTP;TOTP;HOTP;2FA;MFA;Authenticator;One-Time-Password;Two-Factor;Security;`.
+    `Comment=` and `GenericName=` are filled so launchers can render the
+    tooltip / generic-name overlay. The §11.3 Flatpak and native package
+    manifests install this file verbatim under
+    `/usr/share/applications/org.tamx.Paladin.Gui.desktop`. Pinned by
+    `tests/desktop_entry_logic.rs`:
+    `desktop_file_exists_at_expected_path`,
+    `desktop_file_path_uses_app_id_basename`,
+    `desktop_file_starts_with_desktop_entry_group_header`,
+    `desktop_file_has_spdx_header_comment`,
+    `desktop_entry_type_is_application`,
+    `desktop_entry_name_is_paladin`,
+    `desktop_entry_icon_matches_app_id`,
+    `desktop_entry_startup_wm_class_matches_app_id`,
+    `desktop_entry_exec_is_paladin_gtk_binary_name`,
+    `desktop_entry_exec_has_no_file_or_uri_placeholders`,
+    `desktop_entry_categories_includes_utility_and_security`,
+    `desktop_entry_keywords_covers_security_authenticator_vocabulary`,
+    `desktop_entry_terminal_is_false`,
+    `desktop_entry_has_a_summary_comment_field`, and
+    `desktop_entry_basename_matches_appstream_launchable_filename`.)
   - [ ] Write `data/metainfo/org.tamx.Paladin.Gui.metainfo.xml`
     AppStream metadata with the matching
     `<launchable type="desktop-id">` plus screenshots and release
