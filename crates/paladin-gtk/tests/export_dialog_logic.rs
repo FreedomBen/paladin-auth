@@ -762,13 +762,12 @@ fn compose_submit_button_sensitive_true_when_destination_set_and_no_overwrite_ne
     use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
 
     let mut state = ExportDialogState::new();
+    // Switch to encrypted to isolate the destination-presence gate
+    // from the plaintext-warning gate; the encrypted-path twice-
+    // confirm passphrase row lands in a follow-up sub-item, so for
+    // now the encrypted path's only gate is destination presence.
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
     state.set_destination(dest_a(), false);
-    // Later sub-items add the plaintext-warning gate and the
-    // twice-confirm passphrase row to this projection. For the
-    // format-selector + destination-picker + overwrite-gate
-    // sub-items the gating is: destination present AND (no overwrite
-    // needed OR overwrite acknowledged) — subsequent sub-items extend
-    // the assertion as their gates land.
     assert!(compose_submit_button_sensitive(&state));
 }
 
@@ -1045,6 +1044,9 @@ fn compose_submit_button_sensitive_true_when_overwrite_gate_acked() {
     use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
 
     let mut state = ExportDialogState::new();
+    // Switch to encrypted so this test isolates the overwrite gate
+    // from the plaintext-warning gate.
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
     state.set_destination(dest_a(), true);
     state.set_overwrite_acknowledged(true);
     assert!(compose_submit_button_sensitive(&state));
@@ -1132,4 +1134,294 @@ fn format_export_dialog_overwrite_gate_subtitle_is_non_empty() {
     use paladin_gtk::export_dialog::format_export_dialog_overwrite_gate_subtitle;
 
     assert!(!format_export_dialog_overwrite_gate_subtitle().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Plaintext-warning gate — verbatim warning + ack required before write
+// ---------------------------------------------------------------------------
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// `ExportDialogComponent` > "Render
+// `paladin_core::format_plaintext_export_warning()` verbatim on the
+// plaintext path and require explicit confirmation before the write
+// proceeds." The widget mounts the warning body (verbatim through
+// the existing `plaintext_warning_body` helper) above an
+// `AdwSwitchRow` ack toggle whose visibility tracks the active
+// format; `compose_submit_button_sensitive` refuses submission on
+// the plaintext path until the user toggles the ack on.
+
+#[test]
+fn export_dialog_state_new_plaintext_warning_not_acknowledged() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let state = ExportDialogState::new();
+    assert!(!state.is_plaintext_warning_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_plaintext_warning_acknowledged_true() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_plaintext_warning_acknowledged(true);
+    assert!(state.is_plaintext_warning_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_plaintext_warning_acknowledged_back_to_false() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_plaintext_warning_acknowledged(true);
+    state.set_plaintext_warning_acknowledged(false);
+    assert!(!state.is_plaintext_warning_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_destination_resets_plaintext_ack_on_path_change() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    // The user has ack'd the warning for `dest_a` on the plaintext
+    // path. Picking a different path must clear the prior ack so
+    // the new destination's warning starts unticked.
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+    state.set_destination(dest_b(), false);
+    assert!(!state.is_plaintext_warning_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_destination_keeps_plaintext_ack_when_path_and_format_match() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    // Setting the same destination twice (with the same format) must
+    // not invalidate the ack — the widget may re-emit the picker
+    // result on focus restoration or window-close races.
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+    state.set_destination(dest_a(), false);
+    assert!(state.is_plaintext_warning_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_format_resets_plaintext_ack_on_format_change() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    // Switching off the plaintext format invalidates the prior ack:
+    // when the user switches back to plaintext, the warning must be
+    // re-acknowledged. `plaintext_warning_needs_reset` already
+    // expresses this contract; the state machine routes through it
+    // so the dialog cannot drift off the helper.
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    assert!(!state.is_plaintext_warning_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_format_keeps_plaintext_ack_when_format_unchanged() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+    // Re-set the same format — should not invalidate the ack.
+    state.set_format(ExportFormatChoice::PlaintextOtpauth);
+    assert!(state.is_plaintext_warning_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_format_resets_plaintext_ack_onto_plaintext_from_encrypted() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    // Switching onto the plaintext format also restarts the prompt:
+    // any ack carried while the warning was hidden is invalid for
+    // the new mode — the user must re-acknowledge after the format
+    // change.
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+    state.set_format(ExportFormatChoice::PlaintextOtpauth);
+    assert!(!state.is_plaintext_warning_acknowledged());
+}
+
+// ---------------------------------------------------------------------------
+// compose_plaintext_warning_visible — gated to PlaintextOtpauth format
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_plaintext_warning_visible_true_on_plaintext_format() {
+    use paladin_gtk::export_dialog::{compose_plaintext_warning_visible, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::PlaintextOtpauth);
+    assert!(compose_plaintext_warning_visible(&state));
+}
+
+#[test]
+fn compose_plaintext_warning_visible_false_on_encrypted_format() {
+    use paladin_gtk::export_dialog::{compose_plaintext_warning_visible, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    assert!(!compose_plaintext_warning_visible(&state));
+}
+
+#[test]
+fn compose_plaintext_warning_visible_true_on_default_state() {
+    use paladin_gtk::export_dialog::{compose_plaintext_warning_visible, ExportDialogState};
+
+    // The default format is `PlaintextOtpauth` so a fresh dialog
+    // shows the warning until the user switches to encrypted.
+    let state = ExportDialogState::new();
+    assert!(compose_plaintext_warning_visible(&state));
+}
+
+// ---------------------------------------------------------------------------
+// compose_plaintext_warning_body — verbatim core wording
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_plaintext_warning_body_matches_paladin_core_verbatim() {
+    use paladin_gtk::export_dialog::compose_plaintext_warning_body;
+
+    // Renders verbatim through `paladin_core::format_plaintext_export_warning`
+    // so CLI / TUI / GUI all surface the same wording.
+    assert_eq!(
+        compose_plaintext_warning_body(),
+        format_plaintext_export_warning()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// compose_submit_button_sensitive — plaintext ack required when visible
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_submit_button_sensitive_false_when_plaintext_warning_visible_unacked() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    // Default format is PlaintextOtpauth so the warning is visible
+    // and unacked; submit must stay dim.
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_true_after_plaintext_warning_acked() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+    assert!(compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_true_on_encrypted_format_without_plaintext_ack() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    // Encrypted path hides the plaintext warning entirely, so the
+    // ack is irrelevant. Subsequent sub-items extend this to require
+    // the twice-confirm passphrase rows; for now the encrypted-path
+    // submit enables on destination presence alone.
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    assert!(compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_false_after_plaintext_ack_revoked() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    // Toggling the ack off after acking it must dim the button
+    // again — the widget binds the gate to an `AdwSwitchRow`.
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+    state.set_plaintext_warning_acknowledged(false);
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_requires_both_overwrite_and_plaintext_ack_when_both_armed() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    // Composition: when both the overwrite gate AND the plaintext
+    // warning are visible, both must be ack'd before submit enables.
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true); // file exists, arm overwrite
+    assert!(!compose_submit_button_sensitive(&state));
+
+    state.set_overwrite_acknowledged(true);
+    // Plaintext warning still unacked.
+    assert!(!compose_submit_button_sensitive(&state));
+
+    state.set_plaintext_warning_acknowledged(true);
+    // Both gates acked — submit enables.
+    assert!(compose_submit_button_sensitive(&state));
+}
+
+// ---------------------------------------------------------------------------
+// apply_msg — PlaintextWarningAcknowledged
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_plaintext_warning_acknowledged_true_updates_state() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    let output = apply_msg(
+        &mut state,
+        ExportDialogMsg::PlaintextWarningAcknowledged(true),
+    );
+    assert!(output.is_none());
+    assert!(state.is_plaintext_warning_acknowledged());
+}
+
+#[test]
+fn apply_msg_plaintext_warning_acknowledged_false_clears_state() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    apply_msg(
+        &mut state,
+        ExportDialogMsg::PlaintextWarningAcknowledged(true),
+    );
+    apply_msg(
+        &mut state,
+        ExportDialogMsg::PlaintextWarningAcknowledged(false),
+    );
+    assert!(!state.is_plaintext_warning_acknowledged());
+}
+
+// ---------------------------------------------------------------------------
+// Plaintext-warning row labels — non-empty fixed strings the view! binds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_export_dialog_plaintext_warning_group_title_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_plaintext_warning_group_title;
+
+    assert!(!format_export_dialog_plaintext_warning_group_title().is_empty());
+}
+
+#[test]
+fn format_export_dialog_plaintext_warning_ack_title_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_plaintext_warning_ack_title;
+
+    assert!(!format_export_dialog_plaintext_warning_ack_title().is_empty());
+}
+
+#[test]
+fn format_export_dialog_plaintext_warning_ack_subtitle_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_plaintext_warning_ack_subtitle;
+
+    assert!(!format_export_dialog_plaintext_warning_ack_subtitle().is_empty());
 }

@@ -224,6 +224,29 @@ pub fn format_export_dialog_overwrite_gate_subtitle() -> &'static str {
     "The selected file already exists. Toggle on to replace it on Export."
 }
 
+/// `adw::PreferencesGroup` title for the plaintext-warning group
+/// hosting the warning body + ack row.
+#[must_use]
+pub fn format_export_dialog_plaintext_warning_group_title() -> &'static str {
+    "Plaintext warning"
+}
+
+/// `AdwSwitchRow` title for the plaintext-warning acknowledgement
+/// toggle. Keeping the wording short so the row body remains the
+/// primary affordance.
+#[must_use]
+pub fn format_export_dialog_plaintext_warning_ack_title() -> &'static str {
+    "I understand the risks"
+}
+
+/// `AdwSwitchRow` subtitle for the plaintext-warning acknowledgement
+/// toggle. Restates that the user must explicitly confirm before the
+/// plaintext write proceeds.
+#[must_use]
+pub fn format_export_dialog_plaintext_warning_ack_subtitle() -> &'static str {
+    "Toggle on to confirm and enable Export."
+}
+
 /// Footer Cancel button label.
 #[must_use]
 pub fn format_export_dialog_cancel_label() -> &'static str {
@@ -534,9 +557,16 @@ pub enum ExportDialogMsg {
     /// new boolean into [`ExportDialogState::set_overwrite_acknowledged`].
     /// When the gate is rearmed (false), the submit button dims again;
     /// when it is acknowledged (true), the submit button enables
-    /// (subject to subsequent sub-items' plaintext-warning and
-    /// twice-confirm passphrase gates).
+    /// (subject to the plaintext-warning and twice-confirm passphrase
+    /// gates).
     OverwriteAcknowledged(bool),
+    /// User toggled the inline plaintext-warning acknowledgement on
+    /// the warning-group `AdwSwitchRow`. The dispatch arm forwards
+    /// the new boolean into
+    /// [`ExportDialogState::set_plaintext_warning_acknowledged`].
+    /// Mirror semantics to [`Self::OverwriteAcknowledged`]: rearming
+    /// the gate dims the submit button until the user re-acks.
+    PlaintextWarningAcknowledged(bool),
     /// User clicked the explicit Cancel button. The dispatch arm
     /// emits [`ExportDialogOutput::Cancel`] so `AppModel` drops the
     /// live controller and the form draft is discarded.
@@ -579,9 +609,10 @@ pub enum ExportDialogOutput {
 /// Pure-logic state machine for [`ExportDialogComponent`].
 ///
 /// Owns the destination-path + format form draft plus the inline
-/// overwrite-acknowledgement gate that arms when the picked
-/// destination already exists on disk. Subsequent sub-items extend
-/// the struct with the plaintext-warning gate, the twice-confirm
+/// overwrite-acknowledgement gate (arms when the picked destination
+/// already exists on disk) and the plaintext-export-warning ack
+/// (arms on the [`ExportFormatChoice::PlaintextOtpauth`] path).
+/// Subsequent sub-items extend the struct with the twice-confirm
 /// passphrase [`crate::secret_fields::SecretEntry`] buffer, the busy
 /// latch, and the post-worker rendering slots. The widget layer
 /// drives this via [`apply_msg`] and reads it via the `compose_*`
@@ -593,6 +624,7 @@ pub struct ExportDialogState {
     destination_exists: bool,
     format: ExportFormatChoice,
     overwrite_acknowledged: bool,
+    plaintext_warning_acknowledged: bool,
 }
 
 impl ExportDialogState {
@@ -637,24 +669,40 @@ impl ExportDialogState {
         self.overwrite_acknowledged
     }
 
+    /// Whether the user has ack'd the plaintext-export warning for
+    /// the current `(destination, format)` pair. Resets to `false`
+    /// whenever the destination or format changes per
+    /// [`plaintext_warning_needs_reset`].
+    #[must_use]
+    pub fn is_plaintext_warning_acknowledged(&self) -> bool {
+        self.plaintext_warning_acknowledged
+    }
+
     /// Update the destination path and the cached existence probe.
     /// The widget calls this from the [`gtk::FileDialog`] callback
     /// after the user picks a file and runs `Path::try_exists`.
     ///
-    /// Resets the overwrite acknowledgement when the path or format
-    /// has changed per [`overwrite_gate_needs_reset`]: a stale ack
-    /// must never carry across to a different file. Subsequent
-    /// sub-items extend this setter to clear the plaintext-warning
-    /// gate and the twice-confirm passphrase entries via
-    /// [`plaintext_warning_needs_reset`] / [`passphrase_needs_reset`].
+    /// Resets the overwrite-acknowledgement and the plaintext-warning
+    /// acknowledgements when the path or format has changed per
+    /// [`overwrite_gate_needs_reset`] /
+    /// [`plaintext_warning_needs_reset`]: a stale ack must never carry
+    /// across to a different file. Subsequent sub-items extend this
+    /// setter to clear the twice-confirm passphrase entries via
+    /// [`passphrase_needs_reset`].
     pub fn set_destination(&mut self, path: PathBuf, exists: bool) {
         let format = self.format;
-        let needs_reset = match self.destination_path.as_deref() {
-            Some(prev) => overwrite_gate_needs_reset(prev, format, &path, format),
-            None => true,
+        let (reset_overwrite, reset_plaintext) = match self.destination_path.as_deref() {
+            Some(prev) => (
+                overwrite_gate_needs_reset(prev, format, &path, format),
+                plaintext_warning_needs_reset(prev, format, &path, format),
+            ),
+            None => (true, true),
         };
-        if needs_reset {
+        if reset_overwrite {
             self.overwrite_acknowledged = false;
+        }
+        if reset_plaintext {
+            self.plaintext_warning_acknowledged = false;
         }
         self.destination_path = Some(path);
         self.destination_exists = exists;
@@ -664,25 +712,40 @@ impl ExportDialogState {
     /// `adw::ComboRow` `connect_selected_notify` handler when
     /// [`format_choice_from_index`] decodes the selection.
     ///
-    /// Resets the overwrite acknowledgement when the format changes
-    /// per [`overwrite_gate_needs_reset`]: the gate is keyed to
+    /// Resets the overwrite-acknowledgement and the plaintext-warning
+    /// acknowledgements when the format changes per
+    /// [`overwrite_gate_needs_reset`] /
+    /// [`plaintext_warning_needs_reset`]: both gates are keyed to
     /// `(path, format)` because the two formats write distinct
-    /// payloads even at the same path. Subsequent sub-items extend
-    /// this setter to clear plaintext-warning / passphrase state when
-    /// the format changes, mirroring the existing reset helpers.
+    /// payloads even at the same path. The plaintext-warning ack
+    /// also resets on a same-path encrypted-to-plaintext switch so
+    /// any tick that survived the format hop is invalidated.
+    /// Subsequent sub-items extend this setter to clear passphrase
+    /// state when the format changes, mirroring the existing reset
+    /// helpers.
     pub fn set_format(&mut self, format: ExportFormatChoice) {
         let prev_format = self.format;
-        let needs_reset = match self.destination_path.as_deref() {
-            Some(prev_dest) => {
-                overwrite_gate_needs_reset(prev_dest, prev_format, prev_dest, format)
-            }
-            // No destination yet — a format change cannot invalidate
-            // an ack against nothing. Setting the field is a no-op
-            // for the gate.
-            None => false,
+        let (reset_overwrite, reset_plaintext) = match self.destination_path.as_deref() {
+            Some(prev_dest) => (
+                overwrite_gate_needs_reset(prev_dest, prev_format, prev_dest, format),
+                plaintext_warning_needs_reset(prev_dest, prev_format, prev_dest, format),
+            ),
+            // No destination yet. The overwrite ack tracks the
+            // (path, format) pair against an actual file, so a
+            // format-only change cannot invalidate an ack against
+            // nothing. The plaintext ack, by contrast, is keyed to
+            // the format selector regardless of destination — the
+            // widget reveals the warning whenever the plaintext
+            // format is active. A format-only switch off (or onto)
+            // plaintext must clear any pre-destination ack so the
+            // warning is re-acknowledged.
+            None => (false, prev_format != format),
         };
-        if needs_reset {
+        if reset_overwrite {
             self.overwrite_acknowledged = false;
+        }
+        if reset_plaintext {
+            self.plaintext_warning_acknowledged = false;
         }
         self.format = format;
     }
@@ -693,6 +756,14 @@ impl ExportDialogState {
     /// careful user can step back from an ack they regret.
     pub fn set_overwrite_acknowledged(&mut self, acknowledged: bool) {
         self.overwrite_acknowledged = acknowledged;
+    }
+
+    /// Toggle the plaintext-warning acknowledgement. The widget binds
+    /// this to the `AdwSwitchRow` `connect_active_notify` handler
+    /// underneath the warning body; flipping the switch off rearms
+    /// the gate so the user can step back from an ack they regret.
+    pub fn set_plaintext_warning_acknowledged(&mut self, acknowledged: bool) {
+        self.plaintext_warning_acknowledged = acknowledged;
     }
 }
 
@@ -724,22 +795,57 @@ pub fn compose_overwrite_gate_visible(state: &ExportDialogState) -> bool {
     state.destination_path().is_some() && state.destination_exists()
 }
 
+/// `gtk::Widget::set_visible` binding for the inline plaintext-warning
+/// group.
+///
+/// Returns `true` iff the active format is the plaintext
+/// `otpauth://` JSON list ([`ExportFormatChoice::requires_plaintext_warning`]).
+/// The widget mounts the warning body + ack row inside an
+/// `adw::PreferencesGroup` and reveals it through this predicate so
+/// the user only sees the warning when an actual plaintext write is
+/// at stake. Destination presence is intentionally not part of the
+/// predicate — the warning is keyed to the format selector so the
+/// user sees the risk before committing to a destination.
+#[must_use]
+pub fn compose_plaintext_warning_visible(state: &ExportDialogState) -> bool {
+    state.format().requires_plaintext_warning()
+}
+
+/// `gtk::Label::set_label` binding for the inline plaintext-warning
+/// body.
+///
+/// Returns the verbatim core wording through
+/// [`paladin_core::format_plaintext_export_warning`] so the GUI,
+/// CLI, and TUI all surface the same text. Wrapping it as a
+/// `compose_*` projection mirrors the rest of the dialog's view-
+/// layer plumbing and gives the widget one consistent binding shape
+/// across every body / label / subtitle in the dialog.
+#[must_use]
+pub fn compose_plaintext_warning_body() -> String {
+    plaintext_warning_body()
+}
+
 /// `gtk::Button::set_sensitive` binding for the footer Export button.
 ///
 /// Returns `true` only when:
 /// * The user has picked a destination path, and
 /// * Either the destination does not already exist, or the user has
-///   ack'd the inline overwrite gate.
+///   ack'd the inline overwrite gate, and
+/// * Either the active format does not require the plaintext
+///   warning, or the user has ack'd the plaintext-warning gate.
 ///
-/// Subsequent sub-items extend the predicate with the
-/// plaintext-warning and twice-confirm passphrase gates so the
-/// Export button enables only when every required gate is satisfied.
+/// Subsequent sub-items extend the predicate with the twice-confirm
+/// passphrase gate so the Export button enables only when every
+/// required gate is satisfied.
 #[must_use]
 pub fn compose_submit_button_sensitive(state: &ExportDialogState) -> bool {
     if state.destination_path().is_none() {
         return false;
     }
     if compose_overwrite_gate_visible(state) && !state.is_overwrite_acknowledged() {
+        return false;
+    }
+    if compose_plaintext_warning_visible(state) && !state.is_plaintext_warning_acknowledged() {
         return false;
     }
     true
@@ -769,6 +875,10 @@ pub fn apply_msg(
         }
         ExportDialogMsg::OverwriteAcknowledged(acknowledged) => {
             state.set_overwrite_acknowledged(acknowledged);
+            None
+        }
+        ExportDialogMsg::PlaintextWarningAcknowledged(acknowledged) => {
+            state.set_plaintext_warning_acknowledged(acknowledged);
             None
         }
         ExportDialogMsg::Cancel => Some(ExportDialogOutput::Cancel),
@@ -885,6 +995,44 @@ impl SimpleComponent for ExportDialogComponent {
                                 {
                                     sender.input(ExportDialogMsg::FormatChanged(choice));
                                 }
+                            },
+                        },
+                    },
+
+                    #[name = "plaintext_warning_group"]
+                    adw::PreferencesGroup {
+                        set_title: format_export_dialog_plaintext_warning_group_title(),
+                        #[watch]
+                        set_visible: compose_plaintext_warning_visible(&model.state),
+
+                        #[name = "plaintext_warning_body_row"]
+                        add = &adw::ActionRow {
+                            // Mount the verbatim warning as the row's
+                            // title via `compose_plaintext_warning_body`
+                            // so the wording stays in lock-step with
+                            // `paladin_core::format_plaintext_export_warning`.
+                            // Title is `set_use_markup: false` by
+                            // default, so the body renders as plain
+                            // text identically to the CLI / TUI.
+                            #[watch]
+                            set_title: &compose_plaintext_warning_body(),
+                            set_title_lines: 0,
+                            set_subtitle_lines: 0,
+                            add_css_class: "warning",
+                        },
+
+                        #[name = "plaintext_warning_ack_row"]
+                        add = &adw::SwitchRow {
+                            set_title: format_export_dialog_plaintext_warning_ack_title(),
+                            set_subtitle: format_export_dialog_plaintext_warning_ack_subtitle(),
+                            #[watch]
+                            set_active: model.state.is_plaintext_warning_acknowledged(),
+                            connect_active_notify[sender] => move |row| {
+                                sender.input(
+                                    ExportDialogMsg::PlaintextWarningAcknowledged(
+                                        row.is_active(),
+                                    ),
+                                );
                             },
                         },
                     },

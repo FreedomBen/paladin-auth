@@ -3078,9 +3078,67 @@ sign-off.
     `apply_msg_overwrite_acknowledged_false_clears_state`,
     `format_export_dialog_overwrite_gate_title_is_non_empty`, and
     `format_export_dialog_overwrite_gate_subtitle_is_non_empty`.)
-  - [ ] Render `paladin_core::format_plaintext_export_warning()`
+  - [x] Render `paladin_core::format_plaintext_export_warning()`
     verbatim on the plaintext path and require explicit
     confirmation before the write proceeds.
+    (`ExportDialogState` gains a `plaintext_warning_acknowledged:
+    bool` field with paired `is_plaintext_warning_acknowledged()` /
+    `set_plaintext_warning_acknowledged(bool)` accessors; both
+    `set_destination` and `set_format` now reset the ack via the
+    existing `plaintext_warning_needs_reset` helper so a stale tick
+    never carries across to a different file or format. The
+    pre-destination format-only branch on `set_format` keys the
+    plaintext-ack reset to the format selector regardless of
+    destination so a switch onto or off the plaintext path always
+    re-prompts. New `ExportDialogMsg::PlaintextWarningAcknowledged(bool)`
+    routes through `apply_msg` into the new setter.
+    `compose_plaintext_warning_visible(state)` returns
+    `state.format().requires_plaintext_warning()` so the warning is
+    keyed to the format selector — the user sees the risk before
+    committing to a destination; `compose_plaintext_warning_body()`
+    re-exposes `plaintext_warning_body()` (already a verbatim wrap of
+    `paladin_core::format_plaintext_export_warning`) so the GUI, CLI,
+    and TUI all surface the same wording. The view! macro mounts an
+    `adw::PreferencesGroup` titled `"Plaintext warning"` with an
+    `adw::ActionRow` whose title is bound to
+    `compose_plaintext_warning_body()` (rendered as plain text via
+    `set_use_markup: false` default, with `set_title_lines: 0` /
+    `set_subtitle_lines: 0` so long lines wrap) and an underlying
+    `adw::SwitchRow` ack (`"I understand the risks" / "Toggle on to
+    confirm and enable Export."`); the whole group's visibility binds
+    to `compose_plaintext_warning_visible(state)`.
+    `compose_submit_button_sensitive` extended to dim the Export
+    button until either the active format does not require the
+    warning or the user has ack'd it; the existing overwrite-gate
+    composition is unchanged so a destination that triggers both
+    gates requires both acks before submit enables. Two pre-existing
+    happy-path tests
+    (`compose_submit_button_sensitive_true_when_destination_set_and_no_overwrite_needed`,
+    `compose_submit_button_sensitive_true_when_overwrite_gate_acked`)
+    switched to the encrypted format to isolate the gates under
+    test. Pinned by
+    `tests/export_dialog_logic.rs::export_dialog_state_new_plaintext_warning_not_acknowledged`,
+    `export_dialog_state_set_plaintext_warning_acknowledged_true`,
+    `export_dialog_state_set_plaintext_warning_acknowledged_back_to_false`,
+    `export_dialog_state_set_destination_resets_plaintext_ack_on_path_change`,
+    `export_dialog_state_set_destination_keeps_plaintext_ack_when_path_and_format_match`,
+    `export_dialog_state_set_format_resets_plaintext_ack_on_format_change`,
+    `export_dialog_state_set_format_keeps_plaintext_ack_when_format_unchanged`,
+    `export_dialog_state_set_format_resets_plaintext_ack_onto_plaintext_from_encrypted`,
+    `compose_plaintext_warning_visible_true_on_plaintext_format`,
+    `compose_plaintext_warning_visible_false_on_encrypted_format`,
+    `compose_plaintext_warning_visible_true_on_default_state`,
+    `compose_plaintext_warning_body_matches_paladin_core_verbatim`,
+    `compose_submit_button_sensitive_false_when_plaintext_warning_visible_unacked`,
+    `compose_submit_button_sensitive_true_after_plaintext_warning_acked`,
+    `compose_submit_button_sensitive_true_on_encrypted_format_without_plaintext_ack`,
+    `compose_submit_button_sensitive_false_after_plaintext_ack_revoked`,
+    `compose_submit_button_sensitive_requires_both_overwrite_and_plaintext_ack_when_both_armed`,
+    `apply_msg_plaintext_warning_acknowledged_true_updates_state`,
+    `apply_msg_plaintext_warning_acknowledged_false_clears_state`,
+    `format_export_dialog_plaintext_warning_group_title_is_non_empty`,
+    `format_export_dialog_plaintext_warning_ack_title_is_non_empty`, and
+    `format_export_dialog_plaintext_warning_ack_subtitle_is_non_empty`.)
   - [ ] Reset overwrite and plaintext-warning confirmations when
     the destination or format changes; clear the passphrase rows
     and re-prompt when the destination or format changes after
