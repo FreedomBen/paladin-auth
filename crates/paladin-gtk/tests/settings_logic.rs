@@ -2441,3 +2441,211 @@ fn settings_component_input_and_output_match_dispatch_edges() {
     }
     assert_types::<SettingsComponent>();
 }
+
+// ---------------------------------------------------------------------------
+// classify_settings_save_result — shared kind-based routing for the
+// in-process and worker paths. Mirrors the back-half of
+// `SettingsState::apply_save_result` so the dialog and the
+// `gio::spawn_blocking` worker stay lock-stepped on which typed error
+// maps to which `SaveOutcome` variant.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn classify_settings_save_result_success_maps_to_save_outcome_success() {
+    use paladin_gtk::settings::{classify_settings_save_result, AcceptedChange, SaveOutcome};
+    let outcome = classify_settings_save_result(AcceptedChange::AutoLockEnabled(true), Ok(()));
+    assert!(matches!(outcome, SaveOutcome::Success));
+}
+
+#[test]
+fn classify_settings_save_result_save_not_committed_maps_to_rollback() {
+    use paladin_gtk::settings::{
+        classify_settings_save_result, AcceptedChange, SaveOutcome, SettingsField,
+    };
+    let outcome = classify_settings_save_result(
+        AcceptedChange::AutoLockSecs(120),
+        Err(save_not_committed_no_backup()),
+    );
+    match outcome {
+        SaveOutcome::Rollback { field, .. } => {
+            assert_eq!(field, SettingsField::AutoLockSecs);
+        }
+        other => panic!("expected Rollback, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_settings_save_result_save_durability_unconfirmed_maps_to_durability_warning() {
+    use paladin_core::PaladinError;
+    use paladin_gtk::settings::{
+        classify_settings_save_result, AcceptedChange, SaveOutcome, SettingsField,
+    };
+    let outcome = classify_settings_save_result(
+        AcceptedChange::ClipboardClearEnabled(true),
+        Err(PaladinError::SaveDurabilityUnconfirmed),
+    );
+    match outcome {
+        SaveOutcome::DurabilityWarning { field, .. } => {
+            assert_eq!(field, SettingsField::ClipboardClearEnabled);
+        }
+        other => panic!("expected DurabilityWarning, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_settings_save_result_other_error_maps_to_inline() {
+    use paladin_core::PaladinError;
+    use paladin_gtk::settings::{
+        classify_settings_save_result, AcceptedChange, SaveOutcome, SettingsField,
+    };
+    let err = PaladinError::IoError {
+        operation: "rename",
+        source: std::io::Error::other("synthetic"),
+    };
+    let outcome = classify_settings_save_result(AcceptedChange::ClipboardClearSecs(60), Err(err));
+    match outcome {
+        SaveOutcome::Inline { field, .. } => {
+            assert_eq!(field, SettingsField::ClipboardClearSecs);
+        }
+        other => panic!("expected Inline, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// apply_save_outcome — back-half of apply_save_result, called by the
+// worker dispatch path so the state machine can consume a typed
+// SaveOutcome without re-classifying the error.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_save_outcome_success_promotes_attempted_value_to_committed() {
+    use paladin_gtk::settings::{AcceptedChange, SaveOutcome, SettingsState};
+    let mut state = SettingsState::new(defaults());
+    let prior = state.committed().auto_lock_enabled();
+    state.apply_save_outcome(
+        AcceptedChange::AutoLockEnabled(!prior),
+        SaveOutcome::Success,
+    );
+    assert_eq!(state.committed().auto_lock_enabled(), !prior);
+    assert!(matches!(state.last_outcome(), Some(SaveOutcome::Success)));
+}
+
+#[test]
+fn apply_save_outcome_durability_warning_promotes_attempted_value_to_committed() {
+    use paladin_core::PaladinError;
+    use paladin_gtk::settings::{
+        AcceptedChange, InlineWarning, SaveOutcome, SettingsField, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    let target = paladin_core::CLIPBOARD_CLEAR_SECS_MAX;
+    let warning = InlineWarning::from_error(&PaladinError::SaveDurabilityUnconfirmed);
+    state.apply_save_outcome(
+        AcceptedChange::ClipboardClearSecs(target),
+        SaveOutcome::DurabilityWarning {
+            warning,
+            field: SettingsField::ClipboardClearSecs,
+        },
+    );
+    assert_eq!(state.committed().clipboard_clear_secs(), target);
+    assert!(matches!(
+        state.last_outcome(),
+        Some(SaveOutcome::DurabilityWarning { .. })
+    ));
+}
+
+#[test]
+fn apply_save_outcome_rollback_leaves_committed_unchanged() {
+    use paladin_gtk::settings::{
+        AcceptedChange, InlineError, SaveOutcome, SettingsField, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    let prior = state.committed().auto_lock_secs();
+    let err = save_not_committed_no_backup();
+    state.apply_save_outcome(
+        AcceptedChange::AutoLockSecs(prior.wrapping_add(60)),
+        SaveOutcome::Rollback {
+            error: InlineError::from_error(&err),
+            field: SettingsField::AutoLockSecs,
+        },
+    );
+    assert_eq!(
+        state.committed().auto_lock_secs(),
+        prior,
+        "Rollback must leave the committed value unchanged",
+    );
+    assert!(matches!(
+        state.last_outcome(),
+        Some(SaveOutcome::Rollback { .. })
+    ));
+}
+
+#[test]
+fn apply_save_outcome_inline_leaves_committed_unchanged() {
+    use paladin_core::PaladinError;
+    use paladin_gtk::settings::{
+        AcceptedChange, InlineError, SaveOutcome, SettingsField, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    let prior = state.committed().clipboard_clear_enabled();
+    let err = PaladinError::IoError {
+        operation: "rename",
+        source: std::io::Error::other("synthetic"),
+    };
+    state.apply_save_outcome(
+        AcceptedChange::ClipboardClearEnabled(!prior),
+        SaveOutcome::Inline {
+            error: InlineError::from_error(&err),
+            field: SettingsField::ClipboardClearEnabled,
+        },
+    );
+    assert_eq!(
+        state.committed().clipboard_clear_enabled(),
+        prior,
+        "Inline error must leave the committed value unchanged",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// apply_settings_dialog_msg — message-routing dispatch tested without
+// driving the real relm4 Component::update runtime.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_settings_dialog_msg_worker_completed_promotes_on_success() {
+    use paladin_gtk::settings::{
+        apply_settings_dialog_msg, AcceptedChange, SaveOutcome, SettingsDialogMsg, SettingsState,
+        SettingsWorkerEffect,
+    };
+    let mut state = SettingsState::new(defaults());
+    let prior = state.committed().auto_lock_enabled();
+    let effect = SettingsWorkerEffect {
+        change: AcceptedChange::AutoLockEnabled(!prior),
+        outcome: SaveOutcome::Success,
+    };
+    apply_settings_dialog_msg(&mut state, SettingsDialogMsg::WorkerCompleted(effect));
+    assert_eq!(state.committed().auto_lock_enabled(), !prior);
+}
+
+#[test]
+fn apply_settings_dialog_msg_worker_completed_rolls_back_inline_error() {
+    use paladin_gtk::settings::{
+        apply_settings_dialog_msg, AcceptedChange, InlineError, SaveOutcome, SettingsDialogMsg,
+        SettingsField, SettingsState, SettingsWorkerEffect,
+    };
+    let mut state = SettingsState::new(defaults());
+    let prior = state.committed().auto_lock_secs();
+    let err = save_not_committed_no_backup();
+    let effect = SettingsWorkerEffect {
+        change: AcceptedChange::AutoLockSecs(prior.wrapping_add(60)),
+        outcome: SaveOutcome::Rollback {
+            error: InlineError::from_error(&err),
+            field: SettingsField::AutoLockSecs,
+        },
+    };
+    apply_settings_dialog_msg(&mut state, SettingsDialogMsg::WorkerCompleted(effect));
+    assert_eq!(state.committed().auto_lock_secs(), prior);
+    assert!(matches!(
+        state.last_outcome(),
+        Some(SaveOutcome::Rollback { .. })
+    ));
+}

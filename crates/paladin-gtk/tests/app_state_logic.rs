@@ -11575,3 +11575,418 @@ fn passphrase_should_arm_idle_after_failure_returns_none() {
         "Failures keep the dialog open — no re-arm decision to take",
     );
 }
+
+// ---------------------------------------------------------------------------
+// SettingsComponent dispatch composers — pre-worker `Unlocked →
+// UnlockedBusy` busy-gate, `compose_settings_worker_input` bundling,
+// `compose_settings_dispatch` aggregator over the typed
+// `SettingsWorkerEffect`.
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"SettingsComponent" L3443+:
+// live-apply through `Vault::mutate_and_save`; dialog stays mounted
+// across every save; success raises an `AdwToast`; auto-lock
+// changes re-ask `IdlePolicy::should_arm`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn submit_settings_app_state_from_unlocked_returns_unlocked_busy_preserving_path() {
+    use paladin_gtk::app::state::submit_settings_app_state;
+    let path = vault_path();
+    let unlocked = AppState::Unlocked { path: path.clone() };
+    let next = submit_settings_app_state(&unlocked)
+        .expect("Unlocked must transition to UnlockedBusy on settings submit");
+    assert!(matches!(next, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn submit_settings_app_state_from_non_unlocked_returns_none() {
+    use paladin_gtk::app::state::submit_settings_app_state;
+    let path = vault_path();
+    assert!(submit_settings_app_state(&AppState::Missing { path: path.clone() }).is_none());
+    assert!(submit_settings_app_state(&AppState::Locked { path: path.clone() }).is_none());
+    assert!(submit_settings_app_state(&AppState::UnlockedBusy { path: path.clone() }).is_none());
+    let startup = decide_state_from_inspect(&path, Err(invalid_header_err()))
+        .expect("inspect Err yields StartupError state");
+    assert!(submit_settings_app_state(&startup).is_none());
+}
+
+#[test]
+fn apply_submit_settings_inplace_from_unlocked_mutates_to_unlocked_busy_and_returns_true() {
+    use paladin_gtk::app::state::apply_submit_settings_inplace;
+    let path = vault_path();
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let mutated = apply_submit_settings_inplace(&mut state);
+    assert!(mutated);
+    assert!(matches!(state, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_submit_settings_inplace_from_non_unlocked_returns_false_and_keeps_state() {
+    use paladin_gtk::app::state::apply_submit_settings_inplace;
+    let path = vault_path();
+    for variant in [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+    ] {
+        let mut state = variant.clone();
+        let mutated = apply_submit_settings_inplace(&mut state);
+        assert!(!mutated);
+        match (&state, &variant) {
+            (AppState::Missing { .. }, AppState::Missing { .. })
+            | (AppState::Locked { .. }, AppState::Locked { .. })
+            | (AppState::UnlockedBusy { .. }, AppState::UnlockedBusy { .. }) => {}
+            other => panic!("source variant must be preserved, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::similar_names)]
+fn compose_settings_worker_input_from_unlocked_bundles_pair_and_patch() {
+    use paladin_gtk::app::state::compose_settings_worker_input;
+    let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+    let unlocked = AppState::Unlocked { path: path.clone() };
+    let patch = paladin_core::SettingPatch::AutoLockEnabled(true);
+
+    let input = compose_settings_worker_input(&unlocked, (vault, store), patch)
+        .expect("Unlocked source must produce a SettingsWorkerInput");
+    assert_eq!(
+        input.patch,
+        paladin_core::SettingPatch::AutoLockEnabled(true)
+    );
+    assert_eq!(input.vault.summaries().count(), 0);
+}
+
+#[test]
+#[allow(clippy::similar_names)]
+fn compose_settings_worker_input_from_non_unlocked_returns_pair_back() {
+    use paladin_gtk::app::state::compose_settings_worker_input;
+    for variant in ["missing", "locked", "unlocked_busy", "startup_error"] {
+        let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+        let source = match variant {
+            "missing" => AppState::Missing { path: path.clone() },
+            "locked" => AppState::Locked { path: path.clone() },
+            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
+            "startup_error" => decide_state_from_inspect(&path, Err(invalid_header_err()))
+                .expect("inspect Err yields StartupError state"),
+            _ => unreachable!(),
+        };
+        let result = compose_settings_worker_input(
+            &source,
+            (vault, store),
+            paladin_core::SettingPatch::AutoLockEnabled(true),
+        );
+        assert!(
+            result.is_err(),
+            "non-Unlocked source must return Err(pair), variant={variant}",
+        );
+        let (returned_vault, _returned_store) = result.err().unwrap();
+        assert_eq!(returned_vault.summaries().count(), 0);
+    }
+}
+
+#[test]
+fn apply_settings_vault_install_inplace_writes_pair_into_empty_slot() {
+    use paladin_gtk::app::state::apply_settings_vault_install_inplace;
+    let (_tempdir, _path, vault, store) = fresh_plaintext_pair();
+    let mut slot: Option<(Vault, Store)> = None;
+    apply_settings_vault_install_inplace(&mut slot, (vault, store));
+    assert!(slot.is_some());
+}
+
+#[test]
+fn apply_settings_vault_install_inplace_replaces_existing_slot() {
+    use paladin_gtk::app::state::apply_settings_vault_install_inplace;
+    let (_tempdir1, _path1, vault1, store1) = fresh_plaintext_pair();
+    let (_tempdir2, _path2, vault2, store2) = fresh_plaintext_pair();
+    let mut slot: Option<(Vault, Store)> = Some((vault1, store1));
+    apply_settings_vault_install_inplace(&mut slot, (vault2, store2));
+    assert!(slot.is_some());
+}
+
+// ---------------------------------------------------------------------------
+// compose_settings_dispatch — aggregates app_state rollback,
+// dialog_msg forward, success_toast, and reask_idle projections from
+// the typed `SettingsWorkerEffect`.
+// ---------------------------------------------------------------------------
+
+fn settings_effect_success_auto_lock_enabled(
+    value: bool,
+) -> paladin_gtk::settings::SettingsWorkerEffect {
+    paladin_gtk::settings::SettingsWorkerEffect {
+        change: paladin_gtk::settings::AcceptedChange::AutoLockEnabled(value),
+        outcome: paladin_gtk::settings::SaveOutcome::Success,
+    }
+}
+
+fn settings_effect_success_clipboard_clear_enabled(
+    value: bool,
+) -> paladin_gtk::settings::SettingsWorkerEffect {
+    paladin_gtk::settings::SettingsWorkerEffect {
+        change: paladin_gtk::settings::AcceptedChange::ClipboardClearEnabled(value),
+        outcome: paladin_gtk::settings::SaveOutcome::Success,
+    }
+}
+
+fn settings_effect_rollback_auto_lock_secs(
+    value: u32,
+) -> paladin_gtk::settings::SettingsWorkerEffect {
+    use paladin_gtk::settings::InlineError;
+    let err = paladin_core::PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    paladin_gtk::settings::SettingsWorkerEffect {
+        change: paladin_gtk::settings::AcceptedChange::AutoLockSecs(value),
+        outcome: paladin_gtk::settings::SaveOutcome::Rollback {
+            error: InlineError::from_error(&err),
+            field: paladin_gtk::settings::SettingsField::AutoLockSecs,
+        },
+    }
+}
+
+fn settings_effect_durability_warning_auto_lock_enabled(
+    value: bool,
+) -> paladin_gtk::settings::SettingsWorkerEffect {
+    use paladin_gtk::settings::InlineWarning;
+    let err = paladin_core::PaladinError::SaveDurabilityUnconfirmed;
+    paladin_gtk::settings::SettingsWorkerEffect {
+        change: paladin_gtk::settings::AcceptedChange::AutoLockEnabled(value),
+        outcome: paladin_gtk::settings::SaveOutcome::DurabilityWarning {
+            warning: InlineWarning::from_error(&err),
+            field: paladin_gtk::settings::SettingsField::AutoLockEnabled,
+        },
+    }
+}
+
+fn settings_effect_inline_clipboard_clear_secs(
+    value: u32,
+) -> paladin_gtk::settings::SettingsWorkerEffect {
+    use paladin_gtk::settings::InlineError;
+    let err = paladin_core::PaladinError::IoError {
+        operation: "rename",
+        source: io::Error::other("synthetic"),
+    };
+    paladin_gtk::settings::SettingsWorkerEffect {
+        change: paladin_gtk::settings::AcceptedChange::ClipboardClearSecs(value),
+        outcome: paladin_gtk::settings::SaveOutcome::Inline {
+            error: InlineError::from_error(&err),
+            field: paladin_gtk::settings::SettingsField::ClipboardClearSecs,
+        },
+    }
+}
+
+#[test]
+fn compose_settings_dispatch_success_rolls_busy_back_and_forwards_worker_completed() {
+    use paladin_gtk::app::state::compose_settings_dispatch;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let dispatch =
+        compose_settings_dispatch(&busy, &settings_effect_success_auto_lock_enabled(true));
+    assert!(
+        matches!(dispatch.app_state, Some(AppState::Unlocked { .. })),
+        "Success must roll the busy gate back to Unlocked",
+    );
+    assert!(
+        matches!(
+            dispatch.dialog_msg,
+            Some(paladin_gtk::settings::SettingsDialogMsg::WorkerCompleted(_))
+        ),
+        "Every effect forwards WorkerCompleted so the dialog stays in sync",
+    );
+    assert!(
+        dispatch.success_toast.is_some(),
+        "Success must raise the settings-saved AdwToast",
+    );
+}
+
+#[test]
+fn compose_settings_dispatch_success_clipboard_does_not_reask_idle() {
+    use paladin_gtk::app::state::compose_settings_dispatch;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path };
+    let dispatch = compose_settings_dispatch(
+        &busy,
+        &settings_effect_success_clipboard_clear_enabled(true),
+    );
+    assert!(
+        !dispatch.reask_idle,
+        "Clipboard-clear changes never affect IdlePolicy — reask_idle must stay false",
+    );
+}
+
+#[test]
+fn compose_settings_dispatch_success_auto_lock_reasks_idle() {
+    use paladin_gtk::app::state::compose_settings_dispatch;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path };
+    let dispatch =
+        compose_settings_dispatch(&busy, &settings_effect_success_auto_lock_enabled(true));
+    assert!(
+        dispatch.reask_idle,
+        "Auto-lock change with committed outcome must re-ask IdlePolicy::should_arm",
+    );
+}
+
+#[test]
+fn compose_settings_dispatch_durability_warning_keeps_committed_and_reasks_idle() {
+    use paladin_gtk::app::state::compose_settings_dispatch;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path };
+    let dispatch = compose_settings_dispatch(
+        &busy,
+        &settings_effect_durability_warning_auto_lock_enabled(true),
+    );
+    assert!(
+        dispatch.success_toast.is_none(),
+        "DurabilityWarning attaches to the row body, not the toast surface",
+    );
+    assert!(
+        dispatch.reask_idle,
+        "DurabilityWarning still committed the value to disk — re-ask IdlePolicy",
+    );
+}
+
+#[test]
+fn compose_settings_dispatch_rollback_does_not_reask_idle() {
+    use paladin_gtk::app::state::compose_settings_dispatch;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path };
+    let dispatch = compose_settings_dispatch(&busy, &settings_effect_rollback_auto_lock_secs(120));
+    assert!(
+        dispatch.success_toast.is_none(),
+        "Rollback inline-renders the error on the row; no toast",
+    );
+    assert!(
+        !dispatch.reask_idle,
+        "Rollback leaves on-disk policy unchanged — IdlePolicy must not be re-asked",
+    );
+    assert!(
+        matches!(dispatch.app_state, Some(AppState::Unlocked { .. })),
+        "Busy gate rolls back even on Rollback",
+    );
+}
+
+#[test]
+fn compose_settings_dispatch_inline_does_not_reask_idle() {
+    use paladin_gtk::app::state::compose_settings_dispatch;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path };
+    let dispatch =
+        compose_settings_dispatch(&busy, &settings_effect_inline_clipboard_clear_secs(60));
+    assert!(
+        dispatch.success_toast.is_none(),
+        "Inline-error attaches to the row body",
+    );
+    assert!(
+        !dispatch.reask_idle,
+        "Clipboard change with inline error never re-asks IdlePolicy",
+    );
+}
+
+#[test]
+fn compose_settings_dispatch_from_non_unlocked_busy_returns_no_app_state() {
+    use paladin_gtk::app::state::compose_settings_dispatch;
+    let path = vault_path();
+    let effect = settings_effect_success_auto_lock_enabled(true);
+    for source in [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ] {
+        let dispatch = compose_settings_dispatch(&source, &effect);
+        assert!(
+            dispatch.app_state.is_none(),
+            "non-UnlockedBusy source must not install a phantom Unlocked",
+        );
+    }
+}
+
+#[test]
+fn apply_settings_dispatch_inplace_applies_unlocked_rollback() {
+    use paladin_gtk::app::state::{apply_settings_dispatch_inplace, compose_settings_dispatch};
+    let path = vault_path();
+    let mut state = AppState::UnlockedBusy { path: path.clone() };
+    let dispatch =
+        compose_settings_dispatch(&state, &settings_effect_success_auto_lock_enabled(true));
+    let mutated = apply_settings_dispatch_inplace(&mut state, &dispatch);
+    assert!(mutated);
+    assert!(matches!(state, AppState::Unlocked { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_settings_dispatch_inplace_noop_when_app_state_is_none() {
+    use paladin_gtk::app::state::{apply_settings_dispatch_inplace, compose_settings_dispatch};
+    let path = vault_path();
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let dispatch =
+        compose_settings_dispatch(&state, &settings_effect_success_auto_lock_enabled(true));
+    let mutated = apply_settings_dispatch_inplace(&mut state, &dispatch);
+    assert!(!mutated);
+    assert!(matches!(state, AppState::Unlocked { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// run_settings_worker — `gio::spawn_blocking` body that runs
+// `Vault::mutate_and_save(|v| v.apply_setting_patch(patch))` and
+// classifies the typed result through `classify_settings_save_result`.
+//
+// Exercised against tempfile-backed plaintext vaults so the full
+// round-trip (mutate + persist + reopen) is asserted; no GTK /
+// libadwaita main loop required.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_settings_worker_success_persists_auto_lock_enabled_change() {
+    use paladin_gtk::settings::{run_settings_worker, SaveOutcome, SettingsWorkerInput};
+
+    let (_tempdir, vault_file, vault, store) = fresh_plaintext_pair();
+    let prior_enabled = vault.settings().auto_lock_enabled();
+    let patch = paladin_core::SettingPatch::AutoLockEnabled(!prior_enabled);
+
+    let completion = run_settings_worker(SettingsWorkerInput {
+        vault,
+        store,
+        patch,
+    });
+    assert!(
+        matches!(completion.effect.outcome, SaveOutcome::Success),
+        "AutoLockEnabled flip on a tempfile vault must succeed",
+    );
+    assert_eq!(
+        completion.vault.settings().auto_lock_enabled(),
+        !prior_enabled,
+        "The returned vault carries the applied patch",
+    );
+
+    // Reopen from disk to confirm the persist actually happened.
+    let (reopened, _store) =
+        paladin_core::Store::open(&vault_file, paladin_core::VaultLock::Plaintext)
+            .expect("reopen plaintext vault after settings save");
+    assert_eq!(
+        reopened.settings().auto_lock_enabled(),
+        !prior_enabled,
+        "The on-disk vault carries the applied patch after run_settings_worker",
+    );
+}
+
+#[test]
+fn run_settings_worker_success_persists_clipboard_clear_secs_change() {
+    use paladin_gtk::settings::{run_settings_worker, SaveOutcome, SettingsWorkerInput};
+
+    let (_tempdir, _path, vault, store) = fresh_plaintext_pair();
+    let target = paladin_core::CLIPBOARD_CLEAR_SECS_MAX;
+    let patch = paladin_core::SettingPatch::ClipboardClearSecs(target);
+
+    let completion = run_settings_worker(SettingsWorkerInput {
+        vault,
+        store,
+        patch,
+    });
+    assert!(matches!(completion.effect.outcome, SaveOutcome::Success));
+    assert_eq!(completion.vault.settings().clipboard_clear_secs(), target);
+}

@@ -51,7 +51,7 @@ use libadwaita::prelude::*;
 use relm4::prelude::*;
 
 use paladin_core::{
-    ErrorKind, PaladinError, SettingPatch, AUTO_LOCK_SECS_MAX, AUTO_LOCK_SECS_MIN,
+    ErrorKind, PaladinError, SettingPatch, Store, Vault, AUTO_LOCK_SECS_MAX, AUTO_LOCK_SECS_MIN,
     CLIPBOARD_CLEAR_SECS_MAX, CLIPBOARD_CLEAR_SECS_MIN,
 };
 
@@ -1312,6 +1312,157 @@ pub fn format_settings_dialog_spinner_debounce() -> std::time::Duration {
     std::time::Duration::from_millis(500)
 }
 
+/// Classify the `Vault::mutate_and_save` typed result into the
+/// [`SaveOutcome`] the `SettingsComponent` consumes.
+///
+/// Shared by [`SettingsState::apply_save_result`] (the in-process
+/// path used in pure-logic tests) and [`run_settings_worker`] (the
+/// `gio::spawn_blocking` path used by `AppModel`). Keeping the
+/// `kind()`-based routing in one place per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors" ensures the dialog
+/// and the worker stay in lock-step on which typed error maps to
+/// `Rollback` vs `DurabilityWarning` vs `Inline`.
+#[must_use]
+pub fn classify_settings_save_result(
+    change: AcceptedChange,
+    result: Result<(), PaladinError>,
+) -> SaveOutcome {
+    match result {
+        Ok(()) => SaveOutcome::Success,
+        Err(err) if err.kind() == ErrorKind::SaveDurabilityUnconfirmed => {
+            SaveOutcome::DurabilityWarning {
+                warning: InlineWarning::from_error(&err),
+                field: change.field(),
+            }
+        }
+        Err(err) if err.kind() == ErrorKind::SaveNotCommitted => SaveOutcome::Rollback {
+            error: InlineError::from_error(&err),
+            field: change.field(),
+        },
+        Err(err) => SaveOutcome::Inline {
+            error: InlineError::from_error(&err),
+            field: change.field(),
+        },
+    }
+}
+
+/// Inputs consumed by [`run_settings_worker`].
+///
+/// Carries the live `(Vault, Store)` pair plus the typed
+/// [`SettingPatch`] that triggered the dispatch. The worker
+/// **always** returns the pair via
+/// [`SettingsWorkerCompletion`] on every branch (success and typed
+/// failure) so `AppModel::update` can reinstall it before applying
+/// the UI outcome — `Vault::mutate_and_save` is authoritative for the
+/// rollback / durability-unconfirmed semantics per DESIGN.md §4.3.
+///
+/// `Clone` / `PartialEq` are deliberately not derived because
+/// [`Vault`] and [`Store`] are non-`Clone`.
+#[derive(Debug)]
+pub struct SettingsWorkerInput {
+    /// Live vault from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// into the worker so `mutate_and_save` can borrow it mutably
+    /// without keeping `AppModel` in `Unlocked` for the duration of
+    /// the save call.
+    pub vault: Vault,
+    /// Live store from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// alongside `vault` so the same `(Vault, Store)` pair returns
+    /// from the worker even on typed failure.
+    pub store: Store,
+    /// Typed §5 patch forwarded from
+    /// [`DebounceOutcome::Save`] / [`ToggleOutcome::Save`].
+    /// `SettingPatch` derives `Copy`, so moving it through the worker
+    /// closure does not consume the dispatch site's value.
+    pub patch: SettingPatch,
+}
+
+/// Outcome of [`run_settings_worker`] for `AppModel::update` and the
+/// live [`SettingsComponent`] controller to apply.
+///
+/// Routed to the dialog as [`SettingsDialogMsg::WorkerCompleted`] so
+/// the typed [`SaveOutcome`] flows into
+/// [`SettingsState::apply_save_outcome`]: success / durability-warning
+/// promote the attempted value to the committed snapshot, rollback /
+/// inline leave it unchanged. The [`AcceptedChange`] is carried
+/// alongside the outcome because the worker no longer holds the
+/// dialog's [`SettingsState`] and the dialog's
+/// `apply_save_outcome` needs it to know which field to promote
+/// (or which row to attach the error/warning to via [`SaveOutcome`]).
+#[derive(Debug, Clone)]
+pub struct SettingsWorkerEffect {
+    /// The §5 setting that the worker attempted to commit, threaded
+    /// through [`accepted_change_from_setting_patch`] off the input
+    /// [`SettingPatch`].
+    pub change: AcceptedChange,
+    /// Typed routing for the dialog and the inline subtitle helpers.
+    pub outcome: SaveOutcome,
+}
+
+/// Bundle returned by [`run_settings_worker`].
+///
+/// Carries the live `(Vault, Store)` pair on every branch so
+/// `AppModel::update` can reinstall it via
+/// `apply_settings_vault_install_inplace` before applying the UI
+/// outcome — `Vault::mutate_and_save` already restores the snapshot
+/// on `save_not_committed`, so the returned vault is the
+/// authoritative post-effect state regardless of
+/// [`SettingsWorkerEffect::outcome`]. Per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" > "Every
+/// worker returns `(Vault, Store, EffectOutcome)`".
+///
+/// `Clone` / `PartialEq` are deliberately not derived for the same
+/// reason as on [`SettingsWorkerInput`].
+#[derive(Debug)]
+pub struct SettingsWorkerCompletion {
+    /// Routed effect for `AppModel::update` and the live
+    /// [`SettingsComponent`] controller to apply.
+    pub effect: SettingsWorkerEffect,
+    /// Live vault after the `mutate_and_save` call. On success the
+    /// patch is applied; on rollback the snapshot is restored; on
+    /// `save_durability_unconfirmed` the patch is applied but the
+    /// parent-directory `fsync` failed.
+    pub vault: Vault,
+    /// Live store moved through unchanged so `AppModel::update` can
+    /// reinstall the `(Vault, Store)` pair after the worker returns.
+    pub store: Store,
+}
+
+/// Synchronous body of the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.apply_setting_patch(patch))` settings
+/// worker fired by `AppModel::update` from
+/// `AppMsg::SettingsDialogAction(SettingsDialogOutput::Submit)`.
+///
+/// Consumes the [`SettingsWorkerInput`] by value, runs
+/// `vault.mutate_and_save(&store, |v| v.apply_setting_patch(patch))`,
+/// and bundles the outcome into a [`SettingsWorkerCompletion`] via
+/// [`classify_settings_save_result`]. The live `(Vault, Store)` pair
+/// is always returned so `AppModel` reinstalls it regardless of the
+/// typed effect — `mutate_and_save` is authoritative for the
+/// rollback / durability-unconfirmed semantics per DESIGN.md §4.3.
+///
+/// Extracting the worker body as a pure function lets
+/// `AppModel::update`'s closure stay a thin
+/// `gio::spawn_blocking(move || run_settings_worker(input))` while
+/// the real `mutate_and_save` call stays unit-testable in
+/// `tests/settings_logic.rs` against tempfile-backed plaintext
+/// vaults — no GTK / libadwaita main loop required.
+#[must_use]
+pub fn run_settings_worker(input: SettingsWorkerInput) -> SettingsWorkerCompletion {
+    let SettingsWorkerInput {
+        mut vault,
+        store,
+        patch,
+    } = input;
+    let change = accepted_change_from_setting_patch(&patch);
+    let result = vault.mutate_and_save(&store, |v| v.apply_setting_patch(patch));
+    let outcome = classify_settings_save_result(change, result);
+    SettingsWorkerCompletion {
+        effect: SettingsWorkerEffect { change, outcome },
+        vault,
+        store,
+    }
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
@@ -1494,29 +1645,32 @@ impl SettingsState {
         change: AcceptedChange,
         result: Result<(), PaladinError>,
     ) -> SaveOutcome {
-        let outcome = match result {
-            Ok(()) => {
-                self.commit_attempted(change);
-                SaveOutcome::Success
-            }
-            Err(err) if err.kind() == ErrorKind::SaveDurabilityUnconfirmed => {
-                self.commit_attempted(change);
-                SaveOutcome::DurabilityWarning {
-                    warning: InlineWarning::from_error(&err),
-                    field: change.field(),
-                }
-            }
-            Err(err) if err.kind() == ErrorKind::SaveNotCommitted => SaveOutcome::Rollback {
-                error: InlineError::from_error(&err),
-                field: change.field(),
-            },
-            Err(err) => SaveOutcome::Inline {
-                error: InlineError::from_error(&err),
-                field: change.field(),
-            },
-        };
-        self.last_outcome = Some(outcome.clone());
+        let outcome = classify_settings_save_result(change, result);
+        self.apply_save_outcome(change, outcome.clone());
         outcome
+    }
+
+    /// Apply a [`SaveOutcome`] that was already classified by
+    /// [`classify_settings_save_result`] — used by the
+    /// `gio::spawn_blocking` worker dispatch path that ships the
+    /// typed outcome back from `AppModel` via
+    /// [`SettingsDialogMsg::WorkerCompleted`].
+    ///
+    /// Mirrors the back-half of [`Self::apply_save_result`]: promotes
+    /// the attempted value to the committed snapshot for success /
+    /// durability-warning branches, leaves it unchanged on rollback /
+    /// inline branches, and stamps `last_outcome` so the
+    /// `compose_settings_dialog_inline_subtitle_*_for_field` helpers
+    /// can read the row-attached error / warning back off
+    /// `&SettingsState` for the next `#[watch]` tick.
+    pub fn apply_save_outcome(&mut self, change: AcceptedChange, outcome: SaveOutcome) {
+        match outcome {
+            SaveOutcome::Success | SaveOutcome::DurabilityWarning { .. } => {
+                self.commit_attempted(change);
+            }
+            SaveOutcome::Rollback { .. } | SaveOutcome::Inline { .. } => {}
+        }
+        self.last_outcome = Some(outcome);
     }
 
     fn commit_attempted(&mut self, change: AcceptedChange) {
@@ -1543,15 +1697,26 @@ pub struct SettingsDialogInit {
 
 /// Messages handled by [`SettingsComponent`].
 ///
-/// This milestone scaffolds the read-only `AdwPreferencesDialog` mount;
-/// the toggle / spinner / debounce-tick / save-result transitions
-/// described in `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-/// `SettingsComponent` land in follow-up commits alongside the
-/// live-apply behavior. The empty enum is the deliberate v0.2 starting
-/// point — relm4 requires the associated `Input` type to exist even
-/// when no inbound messages are wired yet.
-#[derive(Debug)]
-pub enum SettingsDialogMsg {}
+/// Toggle / spinner / debounce-tick variants are wired in a follow-up
+/// commit alongside the `AdwSwitchRow` / `AdwSpinRow` widget mount.
+/// The [`Self::WorkerCompleted`] variant is forwarded from
+/// `AppModel::update`'s
+/// `AppMsg::SettingsWorkerCompleted` arm so the dialog can route the
+/// typed [`SettingsWorkerEffect`] through
+/// [`SettingsState::apply_save_outcome`] without taking another lap
+/// through the `Vault::mutate_and_save` round-trip.
+#[derive(Debug, Clone)]
+pub enum SettingsDialogMsg {
+    /// `gio::spawn_blocking` worker finished. Carries the typed
+    /// [`SettingsWorkerEffect`] (the [`AcceptedChange`] the worker
+    /// attempted to commit and the routed [`SaveOutcome`]) so the
+    /// dialog promotes the visible value to committed on
+    /// success / durability-warning, leaves it on rollback / inline,
+    /// and stamps `last_outcome` so the inline-subtitle compose
+    /// helpers can paint the row body / CSS class on the next
+    /// `#[watch]` tick.
+    WorkerCompleted(SettingsWorkerEffect),
+}
 
 /// Messages emitted by [`SettingsComponent`] for `AppModel` to consume.
 ///
@@ -1593,6 +1758,18 @@ pub struct SettingsComponent {
     state: SettingsState,
 }
 
+/// Apply a single [`SettingsDialogMsg`] to the dialog's
+/// [`SettingsState`]. Extracted so the message routing can be
+/// exercised in pure-logic tests without driving the real
+/// `relm4::Component::update` runtime.
+pub fn apply_settings_dialog_msg(state: &mut SettingsState, msg: SettingsDialogMsg) {
+    match msg {
+        SettingsDialogMsg::WorkerCompleted(SettingsWorkerEffect { change, outcome }) => {
+            state.apply_save_outcome(change, outcome);
+        }
+    }
+}
+
 #[allow(missing_docs)]
 #[relm4::component(pub)]
 impl SimpleComponent for SettingsComponent {
@@ -1629,9 +1806,13 @@ impl SimpleComponent for SettingsComponent {
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
-        // No inbound messages handled at this milestone — see
-        // `SettingsDialogMsg` doc comment for the upcoming
-        // toggle / spinner / debounce / save-result transitions.
+    fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>) {
+        // Pure-logic dispatch lives in
+        // [`apply_settings_dialog_msg`] so the message-routing rules
+        // can be exercised in `tests/settings_logic.rs` without
+        // driving the real relm4 `Component::update` runtime. Toggle /
+        // spinner inbound variants land in a follow-up commit
+        // alongside the `AdwSwitchRow` / `AdwSpinRow` widget mount.
+        apply_settings_dialog_msg(&mut self.state, msg);
     }
 }

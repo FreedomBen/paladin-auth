@@ -74,6 +74,9 @@ use crate::passphrase_dialog::{
 };
 use crate::remove_dialog::{RemoveDialogMsg, RemoveWorkerEffect, RemoveWorkerInput};
 use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
+use crate::settings::{
+    AcceptedChange, SaveOutcome, SettingsDialogMsg, SettingsWorkerEffect, SettingsWorkerInput,
+};
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
 use crate::unlock_dialog::{
     route_unlock_open_error, InlineError, UnlockDialogMsg, UnlockOpenRouting,
@@ -4198,6 +4201,295 @@ pub fn apply_passphrase_dispatch_inplace(
     state: &mut AppState,
     dispatch: &PassphraseDispatch,
 ) -> bool {
+    if let Some(new_state) = dispatch.app_state.as_ref() {
+        *state = new_state.clone();
+        true
+    } else {
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SettingsComponent — pre-worker / post-worker composers
+//
+// Mirrors the `RemoveDialog` / `RenameDialog` shape: a typed
+// [`SettingsWorkerEffect`] (carrying the [`AcceptedChange`] and the
+// classified [`SaveOutcome`]) routes through `compose_settings_dispatch`
+// into `(app_state, dialog_msg, success_toast, reask_idle)`. The
+// dialog stays mounted on every branch (live-apply does not close the
+// `AdwPreferencesDialog` after each save), so there is no
+// `drop_dialog` field — `dialog_msg` is always
+// `Some(WorkerCompleted(effect))` so the state machine in the live
+// `SettingsComponent` can run `apply_save_outcome` on the carried
+// `AcceptedChange` / `SaveOutcome`.
+//
+// `reask_idle` flips on for auto-lock changes whose `SaveOutcome` left
+// the new value on disk (Success / DurabilityWarning) per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"SettingsComponent" line 3468:
+// "Re-ask `IdlePolicy::should_arm` after auto-lock toggle or timeout
+// changes so the timer state tracks the new policy without
+// re-inspecting the file." Clipboard-clear changes never affect the
+// auto-lock policy, so they always return `false`. Rollback / inline
+// outcomes leave the on-disk policy unchanged, so they also return
+// `false`.
+// ---------------------------------------------------------------------------
+
+/// Pre-worker `Unlocked → UnlockedBusy` transition for the
+/// `gio::spawn_blocking` settings save worker dispatched by
+/// `AppMsg::SettingsDialogAction(SettingsDialogOutput::Submit)`.
+///
+/// Mirrors [`submit_remove_app_state`] / [`submit_rename_app_state`]:
+/// returns `Some(UnlockedBusy { path })` iff `current` is
+/// [`AppState::Unlocked`], and `None` from every other state
+/// (`Missing`, `Locked`, `UnlockedBusy`, `StartupError`). The `None`
+/// arm is the defensive case for a stray dispatch — `AppModel` must
+/// not silently install a phantom `UnlockedBusy` that would clobber
+/// the idle state.
+#[must_use]
+pub fn submit_settings_app_state(current: &AppState) -> Option<AppState> {
+    current.clone().enter_busy()
+}
+
+/// Apply [`submit_settings_app_state`]'s transition in-place to
+/// `state`, leaving it unchanged when the transition would return
+/// `None`.
+///
+/// Returns `true` when the state actually transitioned (source was
+/// `Unlocked` → destination is `UnlockedBusy`), `false` otherwise.
+/// `AppModel::update` uses the `true` return to gate the
+/// `gio::spawn_blocking` worker spawn.
+pub fn apply_submit_settings_inplace(state: &mut AppState) -> bool {
+    if let Some(new_state) = submit_settings_app_state(state) {
+        *state = new_state;
+        true
+    } else {
+        false
+    }
+}
+
+/// Compose the [`SettingsWorkerInput`] payload for the
+/// `gio::spawn_blocking` settings save worker.
+///
+/// Bundles the live `(Vault, Store)` pair and the typed
+/// [`paladin_core::SettingPatch`] from the dialog's
+/// `DebounceOutcome::Save` / `ToggleOutcome::Save` into a
+/// [`SettingsWorkerInput`] for
+/// [`crate::settings::run_settings_worker`]. Gates on the
+/// pre-transition source state: only [`AppState::Unlocked`] returns
+/// `Ok(input)`; every other variant returns `Err((vault, store))` so
+/// the caller can reinstall the pair without losing the live unlocked
+/// vault.
+///
+/// `Result` rather than `Option` because the `(Vault, Store)` pair is
+/// non-`Clone` — dropping it on a stray dispatch would lose the
+/// user's open vault. The `Err((vault, store))` branch hands the pair
+/// back so [`apply_settings_vault_install_inplace`] can put it back
+/// in `AppModel.vault`.
+///
+/// # Errors
+///
+/// Returns `Err((vault, store))` when `current` is not
+/// [`AppState::Unlocked`]; the pair is unchanged.
+pub fn compose_settings_worker_input(
+    current: &AppState,
+    pair: (Vault, Store),
+    patch: paladin_core::SettingPatch,
+) -> Result<SettingsWorkerInput, (Vault, Store)> {
+    match current {
+        AppState::Unlocked { .. } => {
+            let (vault, store) = pair;
+            Ok(SettingsWorkerInput {
+                vault,
+                store,
+                patch,
+            })
+        }
+        AppState::Missing { .. }
+        | AppState::Locked { .. }
+        | AppState::UnlockedBusy { .. }
+        | AppState::StartupError { .. } => Err(pair),
+    }
+}
+
+/// Install the worker's `(Vault, Store)` pair from
+/// [`crate::settings::SettingsWorkerCompletion`] into
+/// `AppModel::vault` in-place.
+///
+/// Symmetric partner of [`apply_rename_vault_install_inplace`] for
+/// the settings path. The pair is always reinstalled —
+/// `Vault::mutate_and_save` is authoritative for the rollback /
+/// durability-unconfirmed semantics per DESIGN.md §4.3, so the
+/// returned vault reflects the committed state regardless of which
+/// [`SaveOutcome`] the worker classified.
+pub fn apply_settings_vault_install_inplace(
+    vault_slot: &mut Option<(Vault, Store)>,
+    pair: (Vault, Store),
+) {
+    *vault_slot = Some(pair);
+}
+
+/// `UnlockedBusy → Unlocked` rollback projection for the settings
+/// worker outcome.
+///
+/// Mirrors [`rename_final_app_state`]: every [`SettingsWorkerEffect`]
+/// branch lands on the same `UnlockedBusy → Unlocked` rollback via
+/// [`AppState::leave_busy`]. `Vault::mutate_and_save` is
+/// authoritative for the §4.3 rollback / durability-unconfirmed
+/// semantics, so the state machine returns to `Unlocked` uniformly
+/// across success / durability-warning / rollback / inline branches.
+///
+/// Returns `Some(Unlocked { path })` iff `current` is
+/// [`AppState::UnlockedBusy`], and `None` from every other state.
+#[must_use]
+pub fn settings_final_app_state(
+    current: &AppState,
+    _effect: &SettingsWorkerEffect,
+) -> Option<AppState> {
+    current.clone().leave_busy()
+}
+
+/// Inline-message projection for the settings worker outcome.
+///
+/// Always `Some(SettingsDialogMsg::WorkerCompleted(effect))` — the
+/// dialog stays mounted on every branch and routes the typed effect
+/// through [`crate::settings::apply_settings_dialog_msg`] so
+/// `SettingsState::apply_save_outcome` promotes / leaves the
+/// committed value and stamps `last_outcome` for the inline-subtitle
+/// helpers.
+#[must_use]
+pub fn settings_dialog_msg_after(effect: &SettingsWorkerEffect) -> Option<SettingsDialogMsg> {
+    Some(SettingsDialogMsg::WorkerCompleted(effect.clone()))
+}
+
+/// Toast-body projection for the settings worker outcome.
+///
+/// * [`SaveOutcome::Success`] →
+///   `Some(format_settings_dialog_saved_toast().to_string())` per the
+///   plan checklist line 3465 ("On successful live-apply, keep the
+///   committed value visible and post a non-blocking settings-saved
+///   `AdwToast` through the shared toast overlay").
+/// * Every other [`SaveOutcome`] (`DurabilityWarning`, `Rollback`,
+///   `Inline`) → `None`. The dialog's inline-subtitle row body is
+///   the surface that conveys the warning / error — no toast is
+///   layered on top because the row already carries the typed
+///   message.
+#[must_use]
+pub fn settings_success_toast_after(effect: &SettingsWorkerEffect) -> Option<String> {
+    match effect.outcome {
+        SaveOutcome::Success => {
+            Some(crate::settings::format_settings_dialog_saved_toast().to_string())
+        }
+        SaveOutcome::DurabilityWarning { .. }
+        | SaveOutcome::Rollback { .. }
+        | SaveOutcome::Inline { .. } => None,
+    }
+}
+
+/// Idle-policy re-ask projection for the settings worker outcome.
+///
+/// Returns `true` iff `AppModel::update` should consult
+/// [`paladin_core::policy::auto_lock::IdlePolicy::should_arm`] against
+/// the reinstalled vault after applying this effect:
+///
+/// * Auto-lock change ([`AcceptedChange::AutoLockEnabled`] or
+///   [`AcceptedChange::AutoLockSecs`]) **and** outcome left the new
+///   value on disk ([`SaveOutcome::Success`] or
+///   [`SaveOutcome::DurabilityWarning`]) → `true`. The committed
+///   `auto_lock_enabled` / `auto_lock_timeout_secs` value drives
+///   `IdlePolicy::should_arm`, so the timer state must re-evaluate.
+/// * Auto-lock change but the on-disk policy did not move
+///   ([`SaveOutcome::Rollback`] / [`SaveOutcome::Inline`]) → `false`.
+///   `Vault::mutate_and_save` restored the snapshot, so the
+///   committed policy is unchanged.
+/// * Clipboard-clear change (either field) → `false` regardless of
+///   outcome. `IdlePolicy::should_arm` reads only the auto-lock
+///   inputs from `VaultSettings`; the clipboard-clear toggles /
+///   spinners cannot affect it.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` line 3468: "Re-ask
+/// `IdlePolicy::should_arm` after auto-lock toggle or timeout changes
+/// so the timer state tracks the new policy without re-inspecting the
+/// file."
+#[must_use]
+pub fn settings_reask_idle_after(effect: &SettingsWorkerEffect) -> bool {
+    let affects_idle = matches!(
+        effect.change,
+        AcceptedChange::AutoLockEnabled(_) | AcceptedChange::AutoLockSecs(_)
+    );
+    let committed = matches!(
+        effect.outcome,
+        SaveOutcome::Success | SaveOutcome::DurabilityWarning { .. }
+    );
+    affects_idle && committed
+}
+
+/// Bundle of dispatch decisions for the settings worker outcome.
+///
+/// Mirrors [`RenameDispatch`] for the settings path, sans
+/// `drop_dialog` because live-apply keeps the `AdwPreferencesDialog`
+/// mounted across every save. The dispatch site applies the four
+/// decisions in one shot:
+///
+/// * `app_state` → install via [`apply_settings_dispatch_inplace`].
+/// * `dialog_msg` → forward to the live `SettingsComponent`
+///   controller so it can run
+///   [`crate::settings::apply_settings_dialog_msg`].
+/// * `success_toast` → raise on the shared `adw::ToastOverlay` on
+///   success only.
+/// * `reask_idle` → consult `idle_should_arm(vault)` against the
+///   reinstalled pair when `true`.
+#[derive(Debug, Clone)]
+pub struct SettingsDispatch {
+    /// New [`AppState`] to install on `AppModel.state`. `Some` for
+    /// the `UnlockedBusy → Unlocked` rollback that
+    /// [`settings_final_app_state`] returns regardless of typed
+    /// effect; `None` is the defensive case where the worker outcome
+    /// arrives but `current` is not [`AppState::UnlockedBusy`].
+    pub app_state: Option<AppState>,
+    /// Inline message to forward to the live
+    /// [`crate::settings::SettingsComponent`] controller. Always
+    /// `Some(WorkerCompleted(effect))` so the dialog's state machine
+    /// runs [`crate::settings::SettingsState::apply_save_outcome`]
+    /// over the typed [`SettingsWorkerEffect`].
+    pub dialog_msg: Option<SettingsDialogMsg>,
+    /// Optional `AdwToast` body to raise on the
+    /// `adw::ToastOverlay` after applying the worker outcome.
+    /// `Some(body)` on [`SaveOutcome::Success`]; `None` on every
+    /// other outcome (the row's inline subtitle is the surface that
+    /// conveys the warning / error).
+    pub success_toast: Option<String>,
+    /// Whether `AppModel::update` should consult
+    /// [`paladin_core::policy::auto_lock::IdlePolicy::should_arm`]
+    /// against the reinstalled vault after applying this effect.
+    /// `true` only when the change is an auto-lock field AND the
+    /// outcome left the new value on disk
+    /// ([`SaveOutcome::Success`] / [`SaveOutcome::DurabilityWarning`]).
+    pub reask_idle: bool,
+}
+
+/// Aggregate the settings-dispatch projections into a single
+/// [`SettingsDispatch`].
+#[must_use]
+pub fn compose_settings_dispatch(
+    current: &AppState,
+    effect: &SettingsWorkerEffect,
+) -> SettingsDispatch {
+    SettingsDispatch {
+        app_state: settings_final_app_state(current, effect),
+        dialog_msg: settings_dialog_msg_after(effect),
+        success_toast: settings_success_toast_after(effect),
+        reask_idle: settings_reask_idle_after(effect),
+    }
+}
+
+/// Apply [`compose_settings_dispatch`]'s state field in-place to
+/// `state`, leaving it unchanged when the dispatch carries
+/// `app_state = None`.
+///
+/// Returns `true` when the state actually transitioned, `false`
+/// otherwise. `AppModel::update` can use the `true` return to gate
+/// any state-installation-only follow-up work.
+pub fn apply_settings_dispatch_inplace(state: &mut AppState, dispatch: &SettingsDispatch) -> bool {
     if let Some(new_state) = dispatch.app_state.as_ref() {
         *state = new_state.clone();
         true
