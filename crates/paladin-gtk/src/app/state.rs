@@ -60,7 +60,9 @@ use paladin_core::{
     Account, AccountId, PaladinError, Store, ValidatedAccount, Vault, VaultLock, VaultStatus,
 };
 
-use crate::add_account::{AddAccountMsg, AddWorkerEffect, AddWorkerInput, QrWorkerInput};
+use crate::add_account::{
+    AddAccountMsg, AddWorkerEffect, AddWorkerInput, QrWorkerEffect, QrWorkerInput,
+};
 use crate::remove_dialog::{RemoveDialogMsg, RemoveWorkerEffect, RemoveWorkerInput};
 use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
@@ -1195,6 +1197,48 @@ pub fn compose_qr_worker_input(
         | AppState::UnlockedBusy { .. }
         | AppState::StartupError { .. } => Err(pair),
     }
+}
+
+/// Unified state-transition composer for the clipboard-QR add worker
+/// outcome.
+///
+/// Symmetric partner of [`add_final_app_state`] for the QR sub-path.
+/// Both Add sub-paths share the same `Unlocked → UnlockedBusy →
+/// Unlocked` busy-gate lifecycle because they both consume the live
+/// `(Vault, Store)` pair through `Vault::mutate_and_save`. Every
+/// [`QrWorkerEffect`] variant — `Success(ImportReport)` from a
+/// successful `import_accounts` merge and `Failure(AddPostEffectOutcome)`
+/// for the `save_not_committed` / `save_durability_unconfirmed` /
+/// defensive `validation_error` / `invalid_state` projections —
+/// lands on the same `UnlockedBusy → Unlocked` rollback via
+/// [`AppState::leave_busy`]. The dialog-drop / inline-message
+/// decisions split off the typed effect in sibling composers; this
+/// composer owns only the state-machine roll-back.
+///
+/// `effect` is accepted for signature symmetry with
+/// [`add_final_app_state`] (and so a future routing refinement can
+/// branch on it without changing call sites) but is not inspected:
+/// the QR worker reinstalls the live `(Vault, Store)` pair through
+/// [`apply_add_vault_install_inplace`] regardless of effect, so the
+/// state machine returns to `Unlocked` uniformly. The dialog drop /
+/// inline-message / counts-panel routing handled elsewhere is what
+/// differs across effects.
+///
+/// Returns `Some(Unlocked { path })` iff `current` is
+/// [`AppState::UnlockedBusy`], and `None` from every other state.
+/// The `None` arm is the defensive case for a stray completion: a
+/// QR completion arriving while `current` is not `UnlockedBusy` must
+/// not silently install a phantom `Unlocked` over another idle
+/// state.
+///
+/// The composer is shape-only — it delegates to
+/// [`AppState::leave_busy`] without re-deriving the transition — so
+/// the side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+#[must_use]
+pub fn qr_final_app_state(current: &AppState, _effect: &QrWorkerEffect) -> Option<AppState> {
+    current.clone().leave_busy()
 }
 
 /// Apply [`submit_unlock_app_state`] in-place to `state`, leaving
