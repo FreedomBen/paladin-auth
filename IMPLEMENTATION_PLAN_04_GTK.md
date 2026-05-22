@@ -3728,9 +3728,32 @@ sign-off.
   `Vault::is_encrypted()` to decide whether to arm the auto-lock
   timer (encrypted only) and to track the visible vault-mode flag
   across passphrase transitions.
-  - [ ] Wire `gtk::EventControllerKey` and pointer motion controllers
+  - [x] Wire `gtk::EventControllerKey` and pointer motion controllers
     at the `AppModel` root so idle events feed
     `paladin_core::policy::auto_lock::IdlePolicy`.
+    (`wire_app_window_idle_controllers` attaches one
+    `gtk::EventControllerKey` and one `gtk::EventControllerMotion`
+    on the root `adw::ApplicationWindow`; both post
+    `AppMsg::IdleEvent(Instant::now())` per event. The update arm
+    calls `IdleSource::refresh` against the live `(Vault, Store)`
+    pair so the deadline routes through
+    `paladin_core::policy::auto_lock::IdlePolicy::next_deadline`,
+    keeping the plaintext-no-op and `auto_lock_enabled` opt-in
+    rules in core. `IdleSource` (`auto_lock.rs`) holds the current
+    deadline behind `new` / `refresh` / `deadline` / `is_armed` /
+    `is_expired` / `disarm`; `Quit` calls `disarm` so a stray
+    post-quit timer wake sees an empty source. Pinned by
+    `idle_source_new_is_disarmed`,
+    `idle_source_default_matches_new`,
+    `idle_source_refresh_arms_for_encrypted_with_enabled_setting`,
+    `idle_source_refresh_disarms_plaintext_regardless_of_setting`,
+    `idle_source_refresh_disarms_when_setting_is_off`,
+    `idle_source_refresh_after_prior_arm_resets_against_new_now`,
+    `idle_source_refresh_can_disarm_a_previously_armed_source`,
+    `idle_source_is_expired_matches_policy_when_armed`,
+    `idle_source_is_expired_returns_false_when_disarmed`,
+    `idle_source_disarm_clears_deadline`, and
+    `idle_source_refresh_consistent_with_idle_event_deadline_helper`.)
   - [ ] Drive the auto-lock timer via `glib::timeout_add_local`
     against `IdlePolicy::next_deadline` / `is_expired`; arm only
     when `IdlePolicy::should_arm` returns `true` for the current

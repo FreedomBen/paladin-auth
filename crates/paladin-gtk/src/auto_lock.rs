@@ -124,3 +124,80 @@ pub fn lock_on_expiry<Reveal, Modal>(
         pending_clipboard_clear,
     }
 }
+
+/// The GTK side's record of the currently armed auto-lock deadline.
+///
+/// `AppModel` owns one [`IdleSource`] for the lifetime of the app.
+/// Every `gtk::EventControllerKey` / `gtk::EventControllerMotion`
+/// event refreshes the deadline through [`Self::refresh`], which
+/// routes the arm decision through
+/// [`IdlePolicy`][paladin_core::policy::auto_lock::IdlePolicy]: the
+/// plaintext-no-op rule and the opt-in
+/// [`VaultSettings::auto_lock_enabled`][paladin_core::VaultSettings::auto_lock_enabled]
+/// gate live in core, so the wiring side cannot drift.
+///
+/// The source is stateful purely so the GUI has one place to read
+/// "current deadline" (the timer needs it to schedule
+/// `glib::timeout_add_local` in a follow-up sub-task) and one place
+/// to clear it on lock / quit / vault drop. The actual policy math
+/// is delegated to `IdlePolicy` on every refresh.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct IdleSource {
+    deadline: Option<Instant>,
+}
+
+impl IdleSource {
+    /// Build a fresh, disarmed source. Equivalent to
+    /// [`IdleSource::default`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self { deadline: None }
+    }
+
+    /// Current armed deadline, or `None` when disarmed.
+    #[must_use]
+    pub fn deadline(&self) -> Option<Instant> {
+        self.deadline
+    }
+
+    /// Whether an armed deadline is currently held.
+    #[must_use]
+    pub fn is_armed(&self) -> bool {
+        self.deadline.is_some()
+    }
+
+    /// Refresh the deadline relative to `now` against the live
+    /// `vault`.
+    ///
+    /// Routes through [`idle_event_deadline`] (and therefore
+    /// [`IdlePolicy::next_deadline`][paladin_core::policy::auto_lock::IdlePolicy::next_deadline]),
+    /// so plaintext vaults disarm regardless of the user's
+    /// `auto_lock_enabled` setting and encrypted vaults with the
+    /// setting disabled also disarm. Returns the new deadline.
+    ///
+    /// Calling this on every idle event (key press / pointer
+    /// motion) pushes the deadline forward by exactly
+    /// `auto_lock_timeout_secs`, so a busy user keeps the timer
+    /// rolling and an idle one trips it.
+    pub fn refresh(&mut self, now: Instant, vault: &Vault) -> Option<Instant> {
+        self.deadline = idle_event_deadline(now, vault);
+        self.deadline
+    }
+
+    /// Whether the armed deadline has elapsed by `now`.
+    ///
+    /// Routes through [`is_expired`][crate::auto_lock::is_expired]
+    /// (and therefore
+    /// [`IdlePolicy::is_expired`][paladin_core::policy::auto_lock::IdlePolicy::is_expired]).
+    /// A disarmed source never reports expiry — the timer must not
+    /// fire while plaintext or opted-out.
+    #[must_use]
+    pub fn is_expired(&self, now: Instant) -> bool {
+        self.deadline.is_some_and(|d| is_expired(d, now))
+    }
+
+    /// Clear the deadline. Used on lock, quit, and vault drop.
+    pub fn disarm(&mut self) {
+        self.deadline = None;
+    }
+}

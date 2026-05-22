@@ -102,7 +102,7 @@ use crate::app::state::{
     compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
     run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
 };
-use crate::auto_lock::idle_should_arm;
+use crate::auto_lock::{idle_should_arm, IdleSource};
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
 };
@@ -367,6 +367,21 @@ pub struct AppModel {
     /// Add dialog is not mounted). Initialized to `false` for the
     /// same reason as [`Self::last_account_list_busy`].
     last_add_dialog_busy: bool,
+    /// Current auto-lock idle-deadline tracker.
+    ///
+    /// Refreshed on every [`AppMsg::IdleEvent`] dispatched by the
+    /// root `adw::ApplicationWindow`'s
+    /// [`gtk::EventControllerKey`] and
+    /// [`gtk::EventControllerMotion`]; the refresh routes through
+    /// [`paladin_core::policy::auto_lock::IdlePolicy`] so the
+    /// plaintext-no-op and opt-in rules live in core. Stays
+    /// disarmed for [`AppState::Missing`] / [`AppState::Locked`] /
+    /// [`AppState::StartupError`] and for plaintext / opted-out
+    /// encrypted vaults; the follow-up timer + expiry sub-tasks
+    /// will read [`IdleSource::deadline`] to schedule the
+    /// `glib::timeout_add_local` source and [`IdleSource::is_expired`]
+    /// on wake. Disarmed on `Quit` so the next launch starts clean.
+    idle_source: IdleSource,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -433,6 +448,7 @@ impl std::fmt::Debug for AppModel {
             )
             .field("last_account_list_busy", &self.last_account_list_busy)
             .field("last_add_dialog_busy", &self.last_add_dialog_busy)
+            .field("idle_source", &self.idle_source)
             .finish()
     }
 }
@@ -1129,6 +1145,27 @@ pub enum AppMsg {
         /// [`crate::clipboard_clear::evaluate_wake`].
         current: zeroize::Zeroizing<Vec<u8>>,
     },
+    /// Posted by the root `adw::ApplicationWindow`'s
+    /// [`gtk::EventControllerKey`] and
+    /// [`gtk::EventControllerMotion`] handlers whenever a key
+    /// press or pointer motion arrives.
+    ///
+    /// The handler refreshes [`AppModel::idle_source`] against the
+    /// live `(Vault, Store)` pair via [`IdleSource::refresh`], which
+    /// routes through
+    /// [`paladin_core::policy::auto_lock::IdlePolicy::next_deadline`]:
+    /// encrypted opted-in vaults push the deadline forward by exactly
+    /// `auto_lock_timeout_secs`; plaintext and opted-out vaults stay
+    /// disarmed. The follow-up timer + expiry sub-tasks (per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock
+    /// parity") consume the refreshed deadline.
+    ///
+    /// A stray idle event that lands in `Missing` / `Locked` /
+    /// `StartupError` (no live vault) is a benign no-op: the handler
+    /// returns early when [`AppModel::vault`] is `None`. The
+    /// controllers stay attached across state transitions so the
+    /// next unlock immediately starts refreshing without re-wiring.
+    IdleEvent(Instant),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -1309,6 +1346,16 @@ impl SimpleComponent for AppModel {
         wire_app_window_action_activations(&action_group, sender.input_sender());
         wire_app_window_action_group(&root, &action_group);
 
+        // Attach the root-window idle controllers so every key
+        // press and pointer motion posts `AppMsg::IdleEvent(now)`
+        // for the auto-lock policy refresh. The controllers stay
+        // attached across state transitions so the next unlock
+        // immediately starts feeding `IdleSource` — the refresh
+        // itself is gated on a live vault inside the update
+        // handler, so stray events in `Missing` / `Locked` /
+        // `StartupError` are benign no-ops.
+        wire_app_window_idle_controllers(&root, sender.input_sender());
+
         // Register the pinned `<Control>n` / `<Control>q` /
         // `<Control>comma` accelerators on the shared application
         // so the Add, Quit, and Preferences `gio::SimpleAction`s
@@ -1392,6 +1439,7 @@ impl SimpleComponent for AppModel {
             pending_clipboard: None,
             last_account_list_busy: false,
             last_add_dialog_busy: false,
+            idle_source: IdleSource::new(),
         };
 
         // Install the TOTP ticker if the resolved startup state is
@@ -1429,6 +1477,9 @@ impl SimpleComponent for AppModel {
                 // not touched here.
                 self.reveal_windows.clear();
                 self.pending_clipboard = None;
+                // Clear the armed auto-lock deadline so a stray
+                // post-quit timer wake would see a disarmed source.
+                self.idle_source.disarm();
                 relm4::main_application().quit();
             }
             AppMsg::Tick {
@@ -1480,6 +1531,25 @@ impl SimpleComponent for AppModel {
                         self.pending_clipboard = None;
                     }
                     Some(WakeDecision::Stale) | None => {}
+                }
+            }
+            AppMsg::IdleEvent(now) => {
+                // Root-window key / pointer-motion controllers fired.
+                // Refresh `idle_source` against the live vault so the
+                // deadline rolls forward by `auto_lock_timeout_secs`;
+                // when no vault is unlocked, the event is a benign
+                // no-op (the `Missing` / `Locked` / `StartupError`
+                // states have no deadline to maintain). The arm /
+                // disarm decision lives inside `IdleSource::refresh`,
+                // which routes through
+                // `IdlePolicy::next_deadline`, so plaintext and
+                // opted-out vaults stay disarmed without a GUI-side
+                // shortcut. The follow-up timer + expiry sub-tasks
+                // consume `self.idle_source.deadline()` and
+                // `self.idle_source.is_expired(...)` to schedule and
+                // resolve the `glib::timeout_add_local` source.
+                if let Some((vault, _store)) = self.vault.as_ref() {
+                    self.idle_source.refresh(now, vault);
                 }
             }
             AppMsg::StartupErrorRetry => {
@@ -5263,6 +5333,53 @@ pub fn wire_app_window_action_group(
     group: &gtk::gio::SimpleActionGroup,
 ) {
     window.insert_action_group(format_app_action_group_name(), Some(group));
+}
+
+/// Attach the root-window idle controllers that drive the
+/// auto-lock policy refresh.
+///
+/// Adds one [`gtk::EventControllerKey`] and one
+/// [`gtk::EventControllerMotion`] to `window`, both posting
+/// [`AppMsg::IdleEvent`] with a freshly sampled
+/// [`Instant::now`] every time a key press or pointer motion
+/// arrives. The update handler consumes the message by calling
+/// [`crate::auto_lock::IdleSource::refresh`], which routes the
+/// deadline arithmetic through
+/// [`paladin_core::policy::auto_lock::IdlePolicy::next_deadline`]
+/// — so the plaintext-no-op rule and the
+/// `auto_lock_enabled` opt-in gate live in core, not in this
+/// wiring. The key controller's
+/// [`connect_key_pressed`][gtk::EventControllerKey::connect_key_pressed]
+/// closure returns [`gtk::glib::Propagation::Proceed`] so other
+/// handlers (notably the `<Control>n` / `<Control>q` /
+/// `<Control>comma` accelerators registered by
+/// [`wire_app_window_accelerators`] and the search-bar's own key
+/// controller) still receive the press unchanged.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock
+/// parity" sub-task *"Wire `gtk::EventControllerKey` and pointer
+/// motion controllers at the `AppModel` root so idle events feed
+/// `paladin_core::policy::auto_lock::IdlePolicy`."*
+///
+/// Pure side-effect helper (no return value).
+pub fn wire_app_window_idle_controllers(
+    window: &adw::ApplicationWindow,
+    input_sender: &relm4::Sender<AppMsg>,
+) {
+    let key_controller = gtk::EventControllerKey::new();
+    let key_sender = input_sender.clone();
+    key_controller.connect_key_pressed(move |_, _, _, _| {
+        let _ = key_sender.send(AppMsg::IdleEvent(Instant::now()));
+        gtk::glib::Propagation::Proceed
+    });
+    window.add_controller(key_controller);
+
+    let motion_controller = gtk::EventControllerMotion::new();
+    let motion_sender = input_sender.clone();
+    motion_controller.connect_motion(move |_, _, _| {
+        let _ = motion_sender.send(AppMsg::IdleEvent(Instant::now()));
+    });
+    window.add_controller(motion_controller);
 }
 
 /// Install `connect_activate` closures on every

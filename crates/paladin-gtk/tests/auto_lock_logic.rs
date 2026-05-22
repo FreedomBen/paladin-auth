@@ -31,7 +31,7 @@ use paladin_core::{
 };
 
 use paladin_gtk::auto_lock::{
-    idle_event_deadline, idle_should_arm, is_expired, lock_on_expiry, UnlockedDiscards,
+    idle_event_deadline, idle_should_arm, is_expired, lock_on_expiry, IdleSource, UnlockedDiscards,
 };
 
 // ---------------------------------------------------------------------------
@@ -384,4 +384,205 @@ fn default_settings_never_arms_via_idle_policy_route() {
     let now = Instant::now();
     assert_eq!(IdlePolicy::next_deadline(now, true, &settings), None);
     assert_eq!(IdlePolicy::next_deadline(now, false, &settings), None);
+}
+
+// ---------------------------------------------------------------------------
+// `IdleSource` — the GTK side's record of the current armed deadline.
+//
+// The GUI wires `gtk::EventControllerKey` / `gtk::EventControllerMotion`
+// at the `AppModel` root; each event refreshes the deadline through
+// `IdleSource::refresh`, which routes through `IdlePolicy::next_deadline`
+// so the plaintext-no-op and arm rules live in core, not in the wiring.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn idle_source_new_is_disarmed() {
+    let src = IdleSource::new();
+    assert_eq!(src.deadline(), None);
+    assert!(!src.is_armed());
+    assert!(!src.is_expired(Instant::now()));
+}
+
+#[test]
+fn idle_source_default_matches_new() {
+    let default_src = IdleSource::default();
+    let new_src = IdleSource::new();
+    assert_eq!(default_src.deadline(), new_src.deadline());
+    assert_eq!(default_src.is_armed(), new_src.is_armed());
+}
+
+#[test]
+fn idle_source_refresh_arms_for_encrypted_with_enabled_setting() {
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(45).unwrap();
+    vault.save(&store).unwrap();
+
+    let mut src = IdleSource::new();
+    let now = Instant::now();
+    let armed = src.refresh(now, &vault);
+
+    assert_eq!(armed, Some(now + Duration::from_secs(45)));
+    assert_eq!(src.deadline(), armed);
+    assert!(src.is_armed());
+
+    // Pinned to the policy, not a GUI shortcut.
+    assert_eq!(
+        armed,
+        IdlePolicy::next_deadline(now, true, vault.settings())
+    );
+}
+
+#[test]
+fn idle_source_refresh_disarms_plaintext_regardless_of_setting() {
+    // Plaintext vaults always disarm — the rule lives in
+    // `IdlePolicy::should_arm`, not in `IdleSource`.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(60).unwrap();
+    vault.save(&store).unwrap();
+
+    let mut src = IdleSource::new();
+    assert_eq!(src.refresh(Instant::now(), &vault), None);
+    assert!(!src.is_armed());
+    assert_eq!(src.deadline(), None);
+}
+
+#[test]
+fn idle_source_refresh_disarms_when_setting_is_off() {
+    let tmp = secure_tempdir();
+    let (vault, _store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    assert!(
+        !vault.settings().auto_lock_enabled(),
+        "default is false (opt-in)"
+    );
+
+    let mut src = IdleSource::new();
+    assert_eq!(src.refresh(Instant::now(), &vault), None);
+    assert!(!src.is_armed());
+}
+
+#[test]
+fn idle_source_refresh_after_prior_arm_resets_against_new_now() {
+    // Every idle event (key press / pointer motion) pushes the
+    // deadline forward by exactly `auto_lock_timeout_secs` — the
+    // policy returns `now + timeout`, so a later refresh sees a
+    // later deadline.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(60).unwrap();
+    vault.save(&store).unwrap();
+
+    let mut src = IdleSource::new();
+    let t1 = Instant::now();
+    let d1 = src.refresh(t1, &vault).expect("armed at t1");
+
+    let t2 = t1 + Duration::from_secs(7);
+    let d2 = src.refresh(t2, &vault).expect("armed at t2");
+
+    assert_eq!(d1, t1 + Duration::from_secs(60));
+    assert_eq!(d2, t2 + Duration::from_secs(60));
+    assert!(d2 > d1, "later idle event must produce a later deadline");
+    assert_eq!(src.deadline(), Some(d2));
+}
+
+#[test]
+fn idle_source_refresh_can_disarm_a_previously_armed_source() {
+    // A passphrase-remove transition flips the vault to plaintext;
+    // re-asking `refresh` with the new vault must clear the prior
+    // armed deadline so the timer code never sees a stale value.
+    let tmp = secure_tempdir();
+    let (mut enc_vault, enc_store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    enc_vault.set_auto_lock_enabled(true);
+    enc_vault.set_auto_lock_timeout_secs(60).unwrap();
+    enc_vault.save(&enc_store).unwrap();
+
+    let mut src = IdleSource::new();
+    assert!(src.refresh(Instant::now(), &enc_vault).is_some());
+    assert!(src.is_armed());
+
+    let tmp2 = secure_tempdir();
+    let (mut plain_vault, plain_store) = create_plaintext(&tmp2.path().join("plain.bin"));
+    plain_vault.set_auto_lock_enabled(true);
+    plain_vault.set_auto_lock_timeout_secs(60).unwrap();
+    plain_vault.save(&plain_store).unwrap();
+
+    assert_eq!(src.refresh(Instant::now(), &plain_vault), None);
+    assert!(!src.is_armed());
+    assert_eq!(src.deadline(), None);
+}
+
+#[test]
+fn idle_source_is_expired_matches_policy_when_armed() {
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    // 30 s is `AUTO_LOCK_SECS_MIN` — the smallest accepted setting.
+    vault.set_auto_lock_timeout_secs(30).unwrap();
+    vault.save(&store).unwrap();
+
+    let mut src = IdleSource::new();
+    let now = Instant::now();
+    let deadline = src.refresh(now, &vault).expect("armed");
+
+    assert!(!src.is_expired(now));
+    assert!(!src.is_expired(now + Duration::from_secs(29)));
+    assert!(
+        src.is_expired(deadline),
+        "tick that lands on the deadline fires the lock"
+    );
+    assert!(src.is_expired(now + Duration::from_secs(31)));
+    assert_eq!(
+        src.is_expired(now + Duration::from_secs(31)),
+        is_expired(deadline, now + Duration::from_secs(31)),
+    );
+}
+
+#[test]
+fn idle_source_is_expired_returns_false_when_disarmed() {
+    // A disarmed source never reports expiry, even far in the
+    // future — the timer must not fire while plaintext / opted-out.
+    let src = IdleSource::new();
+    assert!(!src.is_expired(Instant::now() + Duration::from_secs(86_400)));
+    assert!(!src.is_expired(Instant::now()));
+}
+
+#[test]
+fn idle_source_disarm_clears_deadline() {
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.save(&store).unwrap();
+
+    let mut src = IdleSource::new();
+    src.refresh(Instant::now(), &vault).expect("armed");
+    assert!(src.is_armed());
+
+    src.disarm();
+    assert!(!src.is_armed());
+    assert_eq!(src.deadline(), None);
+    assert!(!src.is_expired(Instant::now() + Duration::from_secs(3_600)));
+}
+
+#[test]
+fn idle_source_refresh_consistent_with_idle_event_deadline_helper() {
+    // Sanity: `IdleSource::refresh` and the bare
+    // `idle_event_deadline` helper produce the same value, so the
+    // GUI cannot drift between the stateful and pure-function
+    // routes.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(180).unwrap();
+    vault.save(&store).unwrap();
+
+    let now = Instant::now();
+    let mut src = IdleSource::new();
+    let armed = src.refresh(now, &vault);
+
+    assert_eq!(armed, idle_event_deadline(now, &vault));
+    assert!(idle_should_arm(&vault));
 }
