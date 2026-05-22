@@ -10546,3 +10546,102 @@ fn qr_pipeline_failure_keeps_pair_installed_and_returns_to_unlocked_with_inline_
         "state must roll back to Unlocked on Failure (busy gate always releases)",
     );
 }
+
+#[test]
+fn qr_pipeline_failure_keep_with_warning_keeps_pair_installed_refreshes_list_and_keeps_dialog_mounted(
+) {
+    // Durability-unconfirmed path: simulate a `save_durability_unconfirmed`
+    // outcome from `Vault::mutate_and_save`. The merged accounts already
+    // live in memory (matching the on-disk primary that committed past the
+    // rename point), so the dispatch must:
+    //
+    // * Release the busy gate back to `Unlocked` so the row factory can
+    //   re-project the live list.
+    // * Forward `WorkerFailed(AddPostEffectOutcome::KeepWithWarning(_))`
+    //   to the still-mounted `AddAccountComponent` so the durability
+    //   warning renders via `post_effect_warning_label` against the
+    //   dialog body where the counts panel would have been on Success.
+    // * Set `refresh_list == true` so the visible row set picks up the
+    //   newly merged accounts (the spec's "keeping the imported accounts
+    //   visible" rule).
+    // * Keep `drop_dialog == false` so the user sees the warning before
+    //   dismissing.
+    //
+    // Mirror of `qr_pipeline_failure_keeps_pair_installed_and_returns_to_unlocked_with_inline_dialog_msg`
+    // for the `KeepWithWarning` branch. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"`AddAccountComponent` QR clipboard image path" > "Handle
+    // `save_durability_unconfirmed` by keeping the imported accounts visible
+    // and surfacing the warning on the counts panel".
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, QrWorkerCompletion,
+        QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::{
+        apply_add_vault_install_inplace, apply_qr_dispatch_inplace, compose_qr_dispatch,
+    };
+
+    let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let mut vault_slot: Option<(Vault, Store)> = Some((vault, store));
+    let _worker_input = compose_qr_worker_input(
+        &state,
+        vault_slot.take().expect("vault slot is filled"),
+        fresh_qr_batch(),
+        SystemTime::UNIX_EPOCH,
+    )
+    .expect("compose returns Ok when state is Unlocked");
+
+    apply_submit_add_inplace(&mut state);
+    assert!(matches!(state, AppState::UnlockedBusy { .. }));
+
+    // Synthesize a typed `save_durability_unconfirmed` failure as if
+    // `mutate_and_save` had committed past the rename point but the
+    // parent fsync was not confirmed. The worker hands the pair back
+    // (post-commit vault state) regardless of the typed outcome, so
+    // the test reuses a fresh plaintext pair to stand in.
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    assert!(matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)));
+    let (_tempdir2, _path2, vault, store) = fresh_plaintext_pair();
+    let completion = QrWorkerCompletion {
+        effect: QrWorkerEffect::Failure(outcome),
+        vault,
+        store,
+    };
+    let QrWorkerCompletion {
+        effect,
+        vault,
+        store,
+    } = completion;
+
+    apply_add_vault_install_inplace(&mut vault_slot, (vault, store));
+    assert!(
+        vault_slot.is_some(),
+        "pair must be reinstalled even on durability-unconfirmed failure",
+    );
+
+    let dispatch = compose_qr_dispatch(&state, &effect);
+    assert!(
+        !dispatch.drop_dialog,
+        "drop_dialog == false on KeepWithWarning (dialog stays mounted so warning renders)",
+    );
+    assert!(
+        dispatch.refresh_list,
+        "refresh_list == true on KeepWithWarning (merged accounts live on disk; list must surface them)",
+    );
+    match dispatch.dialog_msg.as_ref() {
+        Some(AddAccountMsg::WorkerFailed(AddPostEffectOutcome::KeepWithWarning(_))) => {}
+        other => panic!(
+            "dialog_msg must carry WorkerFailed(KeepWithWarning) on durability-unconfirmed, got {other:?}",
+        ),
+    }
+    let dispatched = apply_qr_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        dispatched,
+        "apply_qr_dispatch_inplace must transition on UnlockedBusy source",
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { path: ref p } if *p == path),
+        "state must roll back to Unlocked on KeepWithWarning (busy gate always releases)",
+    );
+}

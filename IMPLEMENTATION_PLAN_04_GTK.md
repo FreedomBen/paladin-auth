@@ -2795,11 +2795,44 @@ sign-off.
     `tests/app_state_logic.rs::apply_qr_dispatch_inplace_*` /
     `qr_pipeline_success_returns_to_unlocked_with_imported_account_and_keeps_dialog_mounted`
     composition-order pin.
-  - [ ] Handle `save_not_committed` by restoring the
+  - [x] Handle `save_not_committed` by restoring the
     `Vault::mutate_and_save` snapshot and keeping the Add dialog open
     with the inline error; handle `save_durability_unconfirmed` by
     keeping the imported accounts visible and surfacing the warning on
     the counts panel.
+    The rollback / durability-unconfirmed semantics live in
+    `Vault::mutate_and_save` itself (DESIGN.md §4.3); the QR worker
+    forwards the typed outcome through
+    `classify_add_post_effect_error` into
+    `QrWorkerEffect::Failure(AddPostEffectOutcome)`, and
+    `compose_qr_dispatch` routes the two branches:
+    `Inline` → `drop_dialog: false`, `refresh_list: false`,
+    `dialog_msg: Some(WorkerFailed(Inline))` (dialog stays mounted,
+    inline error renders, list keeps the rolled-back snapshot);
+    `KeepWithWarning` → `drop_dialog: false`, `refresh_list: true`,
+    `dialog_msg: Some(WorkerFailed(KeepWithWarning))` (dialog stays
+    mounted, the durability warning renders via
+    `post_effect_warning_label` against the body where the counts
+    panel would sit, and the list re-projects so the newly merged
+    accounts surface). The `apply_msg(WorkerFailed)` arm drains any
+    prior `qr_success_counts` so a stale post-success panel from an
+    earlier scan does not co-exist with the freshly rendered inline
+    error or durability warning; the typed outcome is parked on
+    `worker_outcome` so the existing `post_effect_inline_error_label` /
+    `post_effect_warning_label` projections drive the body text.
+    Pinned by
+    `tests/add_account_logic.rs::apply_msg_worker_failed_inline_clears_prior_qr_success_counts`,
+    `apply_msg_worker_failed_keep_with_warning_clears_prior_qr_success_counts`
+    (dialog-side clearing invariant) and
+    `tests/app_state_logic.rs::qr_pipeline_failure_keeps_pair_installed_and_returns_to_unlocked_with_inline_dialog_msg`,
+    `qr_pipeline_failure_keep_with_warning_keeps_pair_installed_refreshes_list_and_keeps_dialog_mounted`
+    (full QR worker → dispatch → app-state pipeline pins for both
+    failure branches), on top of the existing
+    `compose_qr_dispatch_failure_inline_keeps_dialog_mounted_no_refresh`,
+    `compose_qr_dispatch_failure_keep_with_warning_refreshes_and_keeps_mounted`,
+    `apply_msg_worker_failed_emits_no_output_and_stores_outcome`, and
+    `apply_msg_worker_failed_keep_with_warning_stores_outcome`
+    invariants.
   - [ ] Surface no-image, image-decode failure, zero-decoded-QRs,
     and invalid-payload errors inline in the Add dialog; never
     mutate vault state on failure.

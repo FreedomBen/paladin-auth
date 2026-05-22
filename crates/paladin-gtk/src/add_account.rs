@@ -3850,6 +3850,29 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             Some(AddAccountOutput::Cancel)
         }
         AddAccountMsg::WorkerFailed(outcome) => {
+            // Drain any prior QR counts panel so the fresh post-effect
+            // body renders alone. Two QR-sub-path edge cases are
+            // covered here:
+            //
+            // * `Inline` (e.g. `save_not_committed`): the vault rolled
+            //   back so there are no fresh imported accounts to count;
+            //   leaving a stale panel from an earlier scan would
+            //   render alongside the inline error and mislead the
+            //   user about the latest attempt.
+            // * `KeepWithWarning` (`save_durability_unconfirmed`):
+            //   `Vault::mutate_and_save` commits past the rename point
+            //   but discards the closure's `ImportReport`, so the
+            //   dialog has no fresh counts to show. The durability
+            //   warning renders via `post_effect_warning_label`
+            //   against the still-mounted dialog body — that surface
+            //   is the "counts panel" the spec
+            //   (IMPLEMENTATION_PLAN_04_GTK.md §"`AddAccountComponent`
+            //   QR clipboard image path") routes the warning to.
+            //
+            // Mirror of the `QrSuccess` arm's `worker_outcome = None`
+            // drop, run the other direction. Manual / URI sub-paths
+            // never set `qr_success_counts` so this is a no-op there.
+            state.qr_success_counts = None;
             state.worker_outcome = Some(outcome);
             None
         }

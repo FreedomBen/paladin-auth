@@ -9874,6 +9874,118 @@ fn apply_msg_switch_path_same_qr_preserves_counts() {
 }
 
 #[test]
+fn apply_msg_worker_failed_inline_clears_prior_qr_success_counts() {
+    // QR sub-path `save_not_committed` path: when a fresh QR worker
+    // attempt fails with an `Inline` outcome after an earlier scan
+    // parked a counts panel, the prior panel must drain. The dialog
+    // body would otherwise render a stale `imported/skipped/warning`
+    // row alongside the freshly-rendered inline error, which is
+    // confusing and not the spec's contract. Mirror of the
+    // `apply_msg_qr_success_clears_prior_worker_outcome` rule, run
+    // the other direction. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"`AddAccountComponent` QR clipboard image path" > "Handle
+    // `save_not_committed` by … keeping the Add dialog open with
+    // the inline error".
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, AddAccountMsg, AddDialogState,
+        AddPostEffectOutcome,
+    };
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary {
+            imported: 3,
+            skipped: 1,
+            warnings: 0,
+        }),
+    );
+    assert!(
+        state.qr_success_counts().is_some(),
+        "precondition: counts panel parked"
+    );
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    });
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "save_not_committed must route to Inline",
+    );
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+
+    assert!(
+        state.qr_success_counts().is_none(),
+        "WorkerFailed(Inline) drains a stale counts panel so the inline error renders alone",
+    );
+    assert!(
+        matches!(
+            state.worker_outcome(),
+            Some(AddPostEffectOutcome::Inline(_))
+        ),
+        "WorkerFailed still parks the typed Inline outcome for the dialog body to render",
+    );
+}
+
+#[test]
+fn apply_msg_worker_failed_keep_with_warning_clears_prior_qr_success_counts() {
+    // QR sub-path `save_durability_unconfirmed`: a fresh QR worker
+    // attempt that commits but cannot confirm durability must drain
+    // any prior counts panel before rendering the warning. The
+    // committed report (and therefore the count breakdown) is
+    // discarded by `Vault::mutate_and_save` on the durability-
+    // unconfirmed branch, so the dialog has no fresh counts to show
+    // — leaving a stale panel from an earlier scan would mislead the
+    // user about the latest attempt. The warning still renders via
+    // the existing `post_effect_warning_label` projection against
+    // `worker_outcome`. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"`AddAccountComponent` QR clipboard image path" > "Handle
+    // `save_durability_unconfirmed` by keeping the imported accounts
+    // visible and surfacing the warning on the counts panel".
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, AddAccountMsg, AddDialogState,
+        AddPostEffectOutcome,
+    };
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary {
+            imported: 5,
+            skipped: 0,
+            warnings: 1,
+        }),
+    );
+    assert!(
+        state.qr_success_counts().is_some(),
+        "precondition: counts panel parked"
+    );
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)),
+        "save_durability_unconfirmed must route to KeepWithWarning",
+    );
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+
+    assert!(
+        state.qr_success_counts().is_none(),
+        "WorkerFailed(KeepWithWarning) drains a stale counts panel — the durability \
+         warning carries the user-visible status from here, not stale prior counts",
+    );
+    assert!(
+        matches!(
+            state.worker_outcome(),
+            Some(AddPostEffectOutcome::KeepWithWarning(_))
+        ),
+        "WorkerFailed still parks the typed KeepWithWarning outcome for the body warning to render",
+    );
+}
+
+#[test]
 fn compose_qr_counts_panel_visible_returns_false_for_default_state() {
     // Read-side mirror of `qr_success_counts_is_none_by_default`:
     // the widget binds a `#[watch]` over `compose_qr_counts_panel_visible`
