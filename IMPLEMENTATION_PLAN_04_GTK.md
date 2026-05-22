@@ -4142,10 +4142,39 @@ sign-off.
     `desktop_entry_terminal_is_false`,
     `desktop_entry_has_a_summary_comment_field`, and
     `desktop_entry_basename_matches_appstream_launchable_filename`.)
-  - [ ] Write `data/metainfo/org.tamx.Paladin.Gui.metainfo.xml`
+  - [x] Write `data/metainfo/org.tamx.Paladin.Gui.metainfo.xml`
     AppStream metadata with the matching
     `<launchable type="desktop-id">` plus screenshots and release
     notes for v0.2.
+    (Shipped at
+    `crates/paladin-gtk/data/metainfo/org.tamx.Paladin.Gui.metainfo.xml`.
+    `<component type="desktop-application">` with `<id>` matching
+    `paladin_gtk::APP_ID`,
+    `<launchable type="desktop-id">org.tamx.Paladin.Gui.desktop</launchable>`
+    pinned against the §11.3 desktop entry basename,
+    `<metadata_license>CC0-1.0</metadata_license>`,
+    `<project_license>AGPL-3.0-or-later</project_license>`,
+    `<name>Paladin</name>`, a one-sentence `<summary>`, a `<description>`
+    block, `<categories>`, `<keywords>`, homepage / bugtracker /
+    `vcs-browser` `<url>` entries pointing at the
+    `[workspace.package]` URLs, an empty `<content_rating type="oars-1.1" />`
+    block (Flathub / GNOME Software prerequisite), a default
+    `<screenshots>` slot, `<provides><binary>paladin-gtk</binary></provides>`,
+    and a v0.2 `<releases>` entry with `type="development"` release
+    notes. `appstreamcli validate --no-net` passes (the network warnings
+    are the validator failing to download placeholder asset URLs in
+    an offline environment, not metadata bugs). Pinned by
+    `tests/metainfo_logic.rs`: existence and basename pinning against
+    `APP_ID`, XML declaration, SPDX header,
+    `<component type="desktop-application">`, `<id>` ↔ `APP_ID`,
+    `<launchable>` ↔ desktop file basename, `<metadata_license>` ∈
+    {FSFAP, MIT, CC0-1.0, CC-BY-3.0, CC-BY-4.0, 0BSD},
+    `<project_license>` ↔ `AGPL-3.0-or-later`, `<name>` ↔ `Paladin`,
+    `<summary>` non-empty + ≤80 chars + no trailing period,
+    `<description>` present, `<releases>` with at least one
+    `<release>`, `<screenshots>` block, homepage / bugtracker URLs,
+    a developer block (`<developer>` or legacy `<developer_name>`),
+    and the `<content_rating>` declaration.)
   - [ ] Ship the scalable app icon at
     `data/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg` and
     16/24/32/48 PNG fallbacks under
