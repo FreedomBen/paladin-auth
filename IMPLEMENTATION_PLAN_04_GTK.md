@@ -3997,9 +3997,32 @@ sign-off.
     value when an effect is in flight; refuse toggle changes that
     would overlap an active vault effect until the control is
     re-enabled.
-  - [ ] Route workers that fail before returning the pair to
+  - [x] Route workers that fail before returning the pair to
     `StartupErrorComponent` without trying to reconstruct in-memory
     vault state.
+    (Every `gtk::glib::spawn_future_local` wrapper around a
+    `gtk::gio::spawn_blocking(move || run_X_worker(input))` now
+    matches on the `JoinHandle::await` result: `Ok(completion)`
+    posts the typed `AppMsg::XWorkerCompleted(completion)`; `Err(_)`
+    posts `AppMsg::WorkerPanic(EffectKind::X)`. The handler routes
+    through the new `AppModel::handle_worker_panic` helper which
+    calls `handle_worker_lost` on `self.effects`, drops the
+    `EffectOwnership` slot, clears the (already-`None`) `vault`
+    slot, tears down the ticker / auto-lock `glib::SourceId`s,
+    wipes open HOTP reveal windows and the pending clipboard
+    auto-clear buffer, builds the rendered body via
+    `StartupError::from_worker_panic(kind)`, and remounts the
+    surface through `Self::remount_for_state` with the previously-
+    resolved path preserved. The `Passphrase*` workers determine
+    the panic kind from `SubmitPayload::sub_flow()` so the typed
+    instrumentation reflects the requested sub-flow. The QR
+    clipboard import path reuses `EffectKind::AddAccount` to match
+    its dispatch-side classification.
+    Pinned by `startup_error_from_worker_panic_*`,
+    `format_worker_panic_message_*`, and
+    `format_startup_error_marker_collapses_worker_panic_body_to_single_line`
+    in `tests/startup_error_logic.rs`, plus
+    `handle_worker_lost_*` in `tests/app_state_logic.rs`.)
 - [x] GUI runtime and dependency guardrails.
   - [x] Use GTK / GLib / Relm4 as the GUI event loop and run long work
     through `gio::spawn_blocking`; do not use `tokio` directly from

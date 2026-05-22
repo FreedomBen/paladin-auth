@@ -843,3 +843,155 @@ fn dispatch_startup_error_output_is_exhaustive_retry_and_quit_only() {
         "quit",
     );
 }
+
+// ---------------------------------------------------------------------------
+// StartupError::from_worker_panic — `gio::spawn_blocking` worker-panic
+// routing per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+// ownership" > "Route workers that fail before returning the pair".
+//
+// A worker panic interrupts the durability contract of the in-flight
+// save, so `AppModel` drops `Vault`, transitions to
+// `AppState::StartupError`, and presents `StartupErrorComponent` with
+// retry + quit. The carried [`EffectKind`] is preserved for
+// instrumentation; the rendered body is grep-able through
+// `format_worker_panic_message`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn startup_error_from_worker_panic_carries_effect_kind_in_source() {
+    use paladin_gtk::effect_ownership::EffectKind;
+    use paladin_gtk::startup_error::StartupError;
+
+    let err = StartupError::from_worker_panic(EffectKind::HotpAdvance);
+    assert_eq!(
+        err.source,
+        StartupErrorSource::WorkerPanic(EffectKind::HotpAdvance),
+    );
+}
+
+#[test]
+fn startup_error_from_worker_panic_kind_is_io_error() {
+    use paladin_gtk::effect_ownership::EffectKind;
+    use paladin_gtk::startup_error::StartupError;
+
+    // Worker panics interrupt the in-flight save durability contract
+    // — `ErrorKind::IoError` is the closest match in the typed §5
+    // palette without leaking a GUI-specific kind into paladin_core.
+    let err = StartupError::from_worker_panic(EffectKind::AddAccount);
+    assert_eq!(err.kind, ErrorKind::IoError);
+}
+
+#[test]
+fn startup_error_from_worker_panic_rendered_body_names_the_effect() {
+    use paladin_gtk::effect_ownership::EffectKind;
+    use paladin_gtk::startup_error::{format_worker_panic_message, StartupError};
+
+    let err = StartupError::from_worker_panic(EffectKind::Import);
+    assert_eq!(
+        err.rendered,
+        format_worker_panic_message(EffectKind::Import)
+    );
+    assert!(
+        err.rendered.contains("import"),
+        "Worker-panic body must name the failed effect ({:?}); got: {:?}",
+        EffectKind::Import,
+        err.rendered,
+    );
+    assert!(
+        err.rendered.contains("Restart Paladin"),
+        "Worker-panic body must instruct the user to restart; got: {:?}",
+        err.rendered,
+    );
+}
+
+#[test]
+fn format_worker_panic_message_is_single_line_for_marker_compatibility() {
+    use paladin_gtk::effect_ownership::EffectKind;
+    use paladin_gtk::startup_error::format_worker_panic_message;
+
+    // `format_startup_error_marker` collapses `'\n' → '|'` for
+    // single-line `xvfb-run` stdout matching. The worker-panic body
+    // is single-line by design so the marker stays clean.
+    let body = format_worker_panic_message(EffectKind::PassphraseRemove);
+    assert!(
+        !body.contains('\n'),
+        "format_worker_panic_message must produce single-line output; got: {body:?}",
+    );
+}
+
+#[test]
+fn format_worker_panic_message_covers_every_effect_kind_variant() {
+    use paladin_gtk::effect_ownership::EffectKind;
+    use paladin_gtk::startup_error::format_worker_panic_message;
+
+    // Every `EffectKind` variant must produce a non-empty rendered
+    // body. The match in `EffectKind::user_name` covers every
+    // variant; this test pins that contract from the panic-routing
+    // side so a new variant must be wired through `user_name` (and
+    // therefore through this message format) before it compiles.
+    for kind in [
+        EffectKind::HotpAdvance,
+        EffectKind::AddAccount,
+        EffectKind::RemoveAccount,
+        EffectKind::RenameAccount,
+        EffectKind::Import,
+        EffectKind::Export,
+        EffectKind::Settings,
+        EffectKind::PassphraseSet,
+        EffectKind::PassphraseChange,
+        EffectKind::PassphraseRemove,
+    ] {
+        let body = format_worker_panic_message(kind);
+        assert!(
+            !body.is_empty(),
+            "format_worker_panic_message produced empty body for {kind:?}",
+        );
+    }
+}
+
+#[test]
+fn format_startup_error_marker_collapses_worker_panic_body_to_single_line() {
+    use paladin_gtk::effect_ownership::EffectKind;
+    use paladin_gtk::startup_error::StartupError;
+
+    // The smoke test in `tests/gtk_smoke.rs` greps a single-line
+    // marker from stdout — defensively cover the worker-panic
+    // variant since the format helper is shared across every
+    // StartupError source.
+    let err = StartupError::from_worker_panic(EffectKind::Export);
+    let marker = format_startup_error_marker(&err);
+    assert!(marker.starts_with(STARTUP_ERROR_MARKER_PREFIX));
+    assert!(
+        !marker.contains('\n'),
+        "Marker must be single-line; got: {marker:?}",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// EffectKind::user_name — human-readable wording for the
+// worker-panic surface. Pinned here so future variants must update
+// the format helper before this test compiles, and so the wording
+// remains grep-able.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn effect_kind_user_name_matches_expected_wording() {
+    use paladin_gtk::effect_ownership::EffectKind;
+
+    assert_eq!(EffectKind::HotpAdvance.user_name(), "HOTP advance");
+    assert_eq!(EffectKind::AddAccount.user_name(), "add account");
+    assert_eq!(EffectKind::RemoveAccount.user_name(), "remove account");
+    assert_eq!(EffectKind::RenameAccount.user_name(), "rename account");
+    assert_eq!(EffectKind::Import.user_name(), "import");
+    assert_eq!(EffectKind::Export.user_name(), "export");
+    assert_eq!(EffectKind::Settings.user_name(), "settings save");
+    assert_eq!(EffectKind::PassphraseSet.user_name(), "passphrase set");
+    assert_eq!(
+        EffectKind::PassphraseChange.user_name(),
+        "passphrase change"
+    );
+    assert_eq!(
+        EffectKind::PassphraseRemove.user_name(),
+        "passphrase remove"
+    );
+}

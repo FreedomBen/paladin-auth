@@ -101,7 +101,8 @@ use crate::app::state::{
     compose_settings_dispatch, compose_settings_worker_input, compose_unlock_dispatch,
     compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
     handle_auto_lock_expiry, handle_effect_completion, handle_effect_request, handle_quit_request,
-    initial_effects_for, run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
+    handle_worker_lost, initial_effects_for, run_unlock_worker, AppState, OpenErrorOutcome,
+    UnlockWorkerCompletion,
 };
 use crate::auto_lock::{
     auto_lock_timer_transition, evaluate_timer_fire, idle_should_arm, lock_on_expiry,
@@ -1233,6 +1234,17 @@ pub enum AppMsg {
     /// `glib` callback so the deadline comparison does not race
     /// against main-loop dispatch latency.
     AutoLockTimerFired(Instant),
+    /// Posted by a `gtk::glib::spawn_future_local` wrapper when its
+    /// `gio::spawn_blocking` worker join handle returns `Err` (i.e.
+    /// the worker panicked or otherwise failed to return its
+    /// `(Vault, Store)` pair). Carries the [`EffectKind`] of the
+    /// failed worker for instrumentation and the rendered error body.
+    ///
+    /// `AppModel` routes the surface to [`crate::startup_error::StartupErrorComponent`]
+    /// without trying to reconstruct in-memory vault state per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership"
+    /// > "Route workers that fail before returning the pair".
+    WorkerPanic(EffectKind),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -1634,6 +1646,21 @@ impl SimpleComponent for AppModel {
             AppMsg::AutoLockTimerFired(fired_at) => {
                 self.handle_auto_lock_timer_fired(fired_at, &sender);
             }
+            AppMsg::WorkerPanic(kind) => {
+                // A `gio::spawn_blocking` worker panicked / failed
+                // before returning its `(Vault, Store)` pair. Per
+                // `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+                // ownership": route the in-flight effect machinery
+                // to its `StartupError` state (clearing any deferred
+                // quit / lock flags — `StartupErrorComponent` owns
+                // its own quit affordance), drop any stray vault
+                // slot, build the rendered `StartupError` body via
+                // `StartupError::from_worker_panic`, and remount the
+                // surface through `StartupErrorComponent`. The pair
+                // is already gone (the worker held it), so we do not
+                // attempt to reconstruct in-memory vault state.
+                self.handle_worker_panic(kind, &sender);
+            }
             AppMsg::StartupErrorRetry => {
                 // User clicked the StartupErrorComponent Retry
                 // button. Re-run the same probe sequence
@@ -1760,11 +1787,15 @@ impl SimpleComponent for AppModel {
                     self.state = Some(busy_state);
                     let sender = sender.clone();
                     gtk::glib::spawn_future_local(async move {
-                        let completion =
-                            gtk::gio::spawn_blocking(move || run_hotp_advance_worker(input))
-                                .await
-                                .expect("Vault::hotp_advance worker panicked");
-                        sender.input(AppMsg::HotpAdvanceWorkerCompleted(completion));
+                        match gtk::gio::spawn_blocking(move || run_hotp_advance_worker(input)).await
+                        {
+                            Ok(completion) => {
+                                sender.input(AppMsg::HotpAdvanceWorkerCompleted(completion));
+                            }
+                            Err(_) => {
+                                sender.input(AppMsg::WorkerPanic(EffectKind::HotpAdvance));
+                            }
+                        }
                     });
                 }
             }
@@ -1929,10 +1960,14 @@ impl SimpleComponent for AppModel {
                 if let Some(input) = worker_input {
                     let sender = sender.clone();
                     gtk::glib::spawn_future_local(async move {
-                        let completion = gtk::gio::spawn_blocking(move || run_rename_worker(input))
-                            .await
-                            .expect("Vault::mutate_and_save rename worker panicked");
-                        sender.input(AppMsg::RenameWorkerCompleted(completion));
+                        match gtk::gio::spawn_blocking(move || run_rename_worker(input)).await {
+                            Ok(completion) => {
+                                sender.input(AppMsg::RenameWorkerCompleted(completion));
+                            }
+                            Err(_) => {
+                                sender.input(AppMsg::WorkerPanic(EffectKind::RenameAccount));
+                            }
+                        }
                     });
                 }
             }
@@ -2045,11 +2080,14 @@ impl SimpleComponent for AppModel {
                     }
                     let sender = sender.clone();
                     gtk::glib::spawn_future_local(async move {
-                        let completion =
-                            gtk::gio::spawn_blocking(move || run_settings_worker(input))
-                                .await
-                                .expect("Vault settings worker panicked");
-                        sender.input(AppMsg::SettingsWorkerCompleted(completion));
+                        match gtk::gio::spawn_blocking(move || run_settings_worker(input)).await {
+                            Ok(completion) => {
+                                sender.input(AppMsg::SettingsWorkerCompleted(completion));
+                            }
+                            Err(_) => {
+                                sender.input(AppMsg::WorkerPanic(EffectKind::Settings));
+                            }
+                        }
                     });
                 }
             }
@@ -2235,10 +2273,14 @@ impl SimpleComponent for AppModel {
                 if let Some(input) = worker_input {
                     let sender = sender.clone();
                     gtk::glib::spawn_future_local(async move {
-                        let completion = gtk::gio::spawn_blocking(move || run_import_worker(input))
-                            .await
-                            .expect("Vault::mutate_and_save import worker panicked");
-                        sender.input(AppMsg::ImportWorkerCompleted(completion));
+                        match gtk::gio::spawn_blocking(move || run_import_worker(input)).await {
+                            Ok(completion) => {
+                                sender.input(AppMsg::ImportWorkerCompleted(completion));
+                            }
+                            Err(_) => {
+                                sender.input(AppMsg::WorkerPanic(EffectKind::Import));
+                            }
+                        }
                     });
                 }
             }
@@ -2432,10 +2474,14 @@ impl SimpleComponent for AppModel {
                     }
                     let sender = sender.clone();
                     gtk::glib::spawn_future_local(async move {
-                        let completion = gtk::gio::spawn_blocking(move || run_export_worker(input))
-                            .await
-                            .expect("write_secret_file_atomic export worker panicked");
-                        sender.input(AppMsg::ExportWorkerCompleted(completion));
+                        match gtk::gio::spawn_blocking(move || run_export_worker(input)).await {
+                            Ok(completion) => {
+                                sender.input(AppMsg::ExportWorkerCompleted(completion));
+                            }
+                            Err(_) => {
+                                sender.input(AppMsg::WorkerPanic(EffectKind::Export));
+                            }
+                        }
                     });
                 }
             }
@@ -2625,13 +2671,21 @@ impl SimpleComponent for AppModel {
                     if let Some(state) = self.state.as_mut() {
                         apply_submit_passphrase_inplace(state);
                     }
+                    let panic_kind = match input.payload.sub_flow() {
+                        SubFlow::Set => EffectKind::PassphraseSet,
+                        SubFlow::Change => EffectKind::PassphraseChange,
+                        SubFlow::Remove => EffectKind::PassphraseRemove,
+                    };
                     let sender = sender.clone();
                     gtk::glib::spawn_future_local(async move {
-                        let completion =
-                            gtk::gio::spawn_blocking(move || run_passphrase_worker(input))
-                                .await
-                                .expect("Vault passphrase-transition worker panicked");
-                        sender.input(AppMsg::PassphraseWorkerCompleted(completion));
+                        match gtk::gio::spawn_blocking(move || run_passphrase_worker(input)).await {
+                            Ok(completion) => {
+                                sender.input(AppMsg::PassphraseWorkerCompleted(completion));
+                            }
+                            Err(_) => {
+                                sender.input(AppMsg::WorkerPanic(panic_kind));
+                            }
+                        }
                     });
                 } else {
                     // The dispatch was refused (state was not `Unlocked`
@@ -2874,10 +2928,10 @@ impl SimpleComponent for AppModel {
                 if let Some(input) = worker_input {
                     let sender = sender.clone();
                     gtk::glib::spawn_future_local(async move {
-                        let completion = gtk::gio::spawn_blocking(move || run_add_worker(input))
-                            .await
-                            .expect("Vault::mutate_and_save add worker panicked");
-                        sender.input(AppMsg::AddWorkerCompleted(completion));
+                        match gtk::gio::spawn_blocking(move || run_add_worker(input)).await {
+                            Ok(completion) => sender.input(AppMsg::AddWorkerCompleted(completion)),
+                            Err(_) => sender.input(AppMsg::WorkerPanic(EffectKind::AddAccount)),
+                        }
                     });
                 }
             }
@@ -3054,11 +3108,14 @@ impl SimpleComponent for AppModel {
                         if let Some(input) = worker_input {
                             let sender = sender.clone();
                             gtk::glib::spawn_future_local(async move {
-                                let completion =
-                                    gtk::gio::spawn_blocking(move || run_qr_worker(input))
-                                        .await
-                                        .expect("Vault::mutate_and_save QR worker panicked");
-                                sender.input(AppMsg::QrWorkerCompleted(completion));
+                                match gtk::gio::spawn_blocking(move || run_qr_worker(input)).await {
+                                    Ok(completion) => {
+                                        sender.input(AppMsg::QrWorkerCompleted(completion));
+                                    }
+                                    Err(_) => {
+                                        sender.input(AppMsg::WorkerPanic(EffectKind::AddAccount));
+                                    }
+                                }
                             });
                         }
                     }
@@ -3130,10 +3187,14 @@ impl SimpleComponent for AppModel {
                 if let Some(input) = worker_input {
                     let sender = sender.clone();
                     gtk::glib::spawn_future_local(async move {
-                        let completion = gtk::gio::spawn_blocking(move || run_remove_worker(input))
-                            .await
-                            .expect("Vault::mutate_and_save remove worker panicked");
-                        sender.input(AppMsg::RemoveWorkerCompleted(completion));
+                        match gtk::gio::spawn_blocking(move || run_remove_worker(input)).await {
+                            Ok(completion) => {
+                                sender.input(AppMsg::RemoveWorkerCompleted(completion));
+                            }
+                            Err(_) => {
+                                sender.input(AppMsg::WorkerPanic(EffectKind::RemoveAccount));
+                            }
+                        }
                     });
                 }
             }
@@ -3814,6 +3875,62 @@ impl AppModel {
                 relm4::main_application().quit();
             }
         }
+    }
+
+    /// Route a `gio::spawn_blocking` worker panic / pair-loss
+    /// failure to [`crate::startup_error::StartupErrorComponent`].
+    ///
+    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// ownership" > "Route workers that fail before returning the
+    /// pair", this:
+    ///
+    /// * Routes the in-flight effect-ownership state machine to
+    ///   `StartupError` via [`handle_worker_lost`], clearing any
+    ///   deferred quit / lock flags (`StartupErrorComponent` owns
+    ///   its own retry / quit affordances).
+    /// * Drops the [`crate::effect_ownership::EffectOwnership`] slot
+    ///   on `self.effects` so a stale completion arriving later
+    ///   from the panicked worker (defensive — `spawn_blocking`
+    ///   tasks do not normally outlive a join-err callback) cannot
+    ///   resurrect `Unlocked`.
+    /// * Drops every open HOTP reveal window and the pending
+    ///   clipboard auto-clear slot in lockstep with the lost vault
+    ///   so the `Zeroizing<...>` secret buffers wipe immediately
+    ///   per DESIGN §"Memory hygiene".
+    /// * Tears down the ticker / auto-lock `glib::SourceId`s — they
+    ///   re-install after a successful `StartupErrorRetry`.
+    /// * Builds the rendered body via
+    ///   [`StartupError::from_worker_panic`] and remounts the
+    ///   surface through [`Self::remount_for_state`] with the
+    ///   previously-resolved path preserved.
+    ///
+    /// `self.vault` is already `None` (the worker held the pair);
+    /// no reconstruction is attempted.
+    fn handle_worker_panic(&mut self, kind: EffectKind, sender: &ComponentSender<Self>) {
+        handle_worker_lost(self.effects.as_mut());
+        self.effects = None;
+        self.vault = None;
+        if let Some(source_id) = self.ticker_source.take() {
+            source_id.remove();
+        }
+        if let Some(source_id) = self.auto_lock_source.take() {
+            source_id.remove();
+        }
+        self.reveal_windows.clear();
+        self.pending_clipboard = None;
+        self.idle_source.disarm();
+
+        let path = self
+            .state
+            .as_ref()
+            .and_then(AppState::path)
+            .map(Path::to_path_buf);
+        let new_state = AppState::StartupError {
+            path,
+            error: StartupError::from_worker_panic(kind),
+        };
+        self.remount_for_state(&new_state, sender);
+        self.state = Some(new_state);
     }
 }
 

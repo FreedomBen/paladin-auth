@@ -72,6 +72,32 @@ pub enum EffectKind {
     PassphraseRemove,
 }
 
+impl EffectKind {
+    /// Short user-facing name for this effect, used by surfaces that
+    /// render the effect in human-readable text (e.g. the
+    /// `StartupErrorComponent` body when a worker panics or otherwise
+    /// fails before returning the `(Vault, Store)` pair).
+    ///
+    /// Returns a `&'static str` without allocating. Pinned by
+    /// `tests/effect_ownership_logic.rs::effect_kind_user_name_*` so
+    /// the wording is grep-able and stable.
+    #[must_use]
+    pub fn user_name(&self) -> &'static str {
+        match self {
+            Self::HotpAdvance => "HOTP advance",
+            Self::AddAccount => "add account",
+            Self::RemoveAccount => "remove account",
+            Self::RenameAccount => "rename account",
+            Self::Import => "import",
+            Self::Export => "export",
+            Self::Settings => "settings save",
+            Self::PassphraseSet => "passphrase set",
+            Self::PassphraseChange => "passphrase change",
+            Self::PassphraseRemove => "passphrase remove",
+        }
+    }
+}
+
 /// Top-level app state tracked by [`EffectOwnership`].
 ///
 /// The state machine here only models the *unlocked* portion of

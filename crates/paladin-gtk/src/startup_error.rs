@@ -40,6 +40,8 @@ use relm4::ComponentSender;
 
 use paladin_core::{format_unsafe_permissions, ErrorKind, PaladinError, VaultStatus};
 
+use crate::effect_ownership::EffectKind;
+
 /// Which startup step produced the error.
 ///
 /// The `StartupErrorComponent` does not branch on the source for its
@@ -55,6 +57,14 @@ pub enum StartupErrorSource {
     Inspect,
     /// `paladin_core::open(path, lock)` returned a non-passphrase `Err`.
     Open,
+    /// A `gio::spawn_blocking` worker panicked or otherwise failed
+    /// to return its `(Vault, Store)` pair to the dispatch site.
+    /// `AppModel` routes the surface to `StartupErrorComponent`
+    /// rather than reconstructing in-memory vault state per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    /// Carries the [`EffectKind`] of the failed worker for
+    /// instrumentation and rendered-body wording.
+    WorkerPanic(EffectKind),
 }
 
 /// Non-mutating startup / open error displayed by
@@ -109,6 +119,25 @@ impl StartupError {
             rendered: render_startup_error(err),
         }
     }
+
+    /// Build a [`StartupError`] for a `gio::spawn_blocking` worker
+    /// that panicked / failed before returning its `(Vault, Store)`
+    /// pair.
+    ///
+    /// The rendered body comes from [`format_worker_panic_message`]
+    /// so the wording is grep-able and pinned by tests. `kind`
+    /// resolves to [`ErrorKind::IoError`] — a worker panic interrupts
+    /// the durability contract of the in-flight save, which is the
+    /// closest match in the typed §5 error palette without leaking
+    /// a GUI-specific kind into `paladin_core`.
+    #[must_use]
+    pub fn from_worker_panic(effect: EffectKind) -> Self {
+        Self {
+            source: StartupErrorSource::WorkerPanic(effect),
+            kind: ErrorKind::IoError,
+            rendered: format_worker_panic_message(effect),
+        }
+    }
 }
 
 /// Decision tag for routing a [`PaladinError`] returned by
@@ -149,6 +178,27 @@ pub fn classify_open_error(err: &PaladinError) -> OpenErrorRouting {
 #[must_use]
 pub fn render_startup_error(err: &PaladinError) -> String {
     format_unsafe_permissions(err).unwrap_or_else(|| err.to_string())
+}
+
+/// Render the `StartupErrorComponent` body text for a worker-panic
+/// transition.
+///
+/// Names the affected operation through [`EffectKind::user_name`] and
+/// instructs the user to restart Paladin. The exact wording is
+/// pinned by tests in `tests/startup_error_logic.rs` so a future
+/// rewording does not silently break instrumentation that greps for
+/// it. The leading sentence stays single-line so
+/// [`format_startup_error_marker`]'s `'\n' → '|'` substitution does
+/// not corrupt the smoke-test stdout marker.
+///
+/// No TUI parity: the TUI does not run vault work on a separate
+/// thread, so it has no worker-panic surface.
+#[must_use]
+pub fn format_worker_panic_message(effect: EffectKind) -> String {
+    format!(
+        "A background task ({}) failed unexpectedly. Restart Paladin to continue.",
+        effect.user_name(),
+    )
 }
 
 /// Stdout marker prefix emitted under `--exit-after-startup` once
