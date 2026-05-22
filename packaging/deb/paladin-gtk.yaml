@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# nfpm manifest for the paladin-gtk Debian (.deb) package.
+#
+# Per IMPLEMENTATION_PLAN_04_GTK.md §"Linux distribution and signing"
+# and the Milestone 7 packaging checklist, this manifest installs the
+# release binary, the freedesktop desktop entry, the AppStream
+# metainfo, and the hicolor icon set on the canonical FHS paths the
+# §11 packaging dry-run validates against. Maintainer scripts are
+# intentionally absent — paladin-gtk packages never create or alter
+# user vault state. The runtime baselines (libgtk-4-1 (>= 4.16) and
+# libadwaita-1-0 (>= 1.6)) mirror the build-time gtk4 (v4_16) and
+# libadwaita (v1_6) crate features so an installed .deb cannot land
+# on a system whose libraries fall below the GUI's widget floor.
+#
+# The contract pinned by this file is covered by
+# crates/paladin-gtk/tests/packaging_deb_nfpm_manifest_logic.rs;
+# changes here that break that contract fail
+# `cargo test --workspace --all-targets` independently of whether
+# `nfpm` itself is installed on the runner.
+
+name: paladin-gtk
+arch: amd64
+platform: linux
+
+# Inherits from `${PALADIN_VERSION}` injected by the release pipeline
+# (see IMPLEMENTATION_PLAN_04_GTK.md §"Reproducible builds"). The
+# release tag drives the value so the .deb version, the workspace
+# `[workspace.package].version`, and the AppStream <release> tag all
+# stay in lockstep.
+version: ${PALADIN_VERSION}
+
+section: utils
+priority: optional
+
+maintainer: Benjamin Porter <ben@ameelio.org>
+vendor: tamx
+description: Paladin: Rust OTP authenticator (TOTP + HOTP) with CLI, TUI, and GTK front-ends
+homepage: https://paladin.tamx.org
+license: AGPL-3.0-or-later
+
+# Runtime baselines mirror the build-time gtk4 (v4_16) and libadwaita
+# (v1_6) crate features. Distributions whose stable channel ships
+# older libraries cannot install paladin-gtk until their baselines
+# rise — accepted in §11.3 as a deliberate trade-off rather than
+# carrying a deprecated-widget compatibility shim.
+depends:
+  - libgtk-4-1 (>= 4.16)
+  - libadwaita-1-0 (>= 1.6)
+
+contents:
+  # Release binary. mode: 0755 is required because nfpm defaults file
+  # mode to 0644, which would land a non-executable binary in /usr/bin.
+  - src: target/release/paladin-gtk
+    dst: /usr/bin/paladin-gtk
+    file_info:
+      mode: 0755
+
+  # Freedesktop .desktop entry. Validated by `desktop-file-validate`
+  # during the packaging dry-run; the in-tree contents are pinned by
+  # crates/paladin-gtk/tests/desktop_entry_logic.rs.
+  - src: crates/paladin-gtk/data/org.tamx.Paladin.Gui.desktop
+    dst: /usr/share/applications/org.tamx.Paladin.Gui.desktop
+    file_info:
+      mode: 0644
+
+  # AppStream metainfo. Validated by `appstreamcli validate --no-net`
+  # during the packaging dry-run; the in-tree contents are pinned by
+  # crates/paladin-gtk/tests/metainfo_logic.rs.
+  - src: crates/paladin-gtk/data/metainfo/org.tamx.Paladin.Gui.metainfo.xml
+    dst: /usr/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml
+    file_info:
+      mode: 0644
+
+  # Hicolor application icons. Scalable and symbolic SVGs cover modern
+  # GTK4 / libadwaita icon-theme lookups; PNG sizes round out the
+  # legacy launcher fallbacks the freedesktop icon-theme spec
+  # resolves. Layout mirrors crates/paladin-gtk/data/icons/hicolor/
+  # so the gresource bundle and the installed icons resolve from the
+  # same source files.
+  - src: crates/paladin-gtk/data/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg
+    file_info:
+      mode: 0644
+  - src: crates/paladin-gtk/data/icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg
+    dst: /usr/share/icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg
+    file_info:
+      mode: 0644
+  - src: crates/paladin-gtk/data/icons/hicolor/16x16/apps/org.tamx.Paladin.Gui.png
+    dst: /usr/share/icons/hicolor/16x16/apps/org.tamx.Paladin.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-gtk/data/icons/hicolor/24x24/apps/org.tamx.Paladin.Gui.png
+    dst: /usr/share/icons/hicolor/24x24/apps/org.tamx.Paladin.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-gtk/data/icons/hicolor/32x32/apps/org.tamx.Paladin.Gui.png
+    dst: /usr/share/icons/hicolor/32x32/apps/org.tamx.Paladin.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-gtk/data/icons/hicolor/48x48/apps/org.tamx.Paladin.Gui.png
+    dst: /usr/share/icons/hicolor/48x48/apps/org.tamx.Paladin.Gui.png
+    file_info:
+      mode: 0644
+
+# No `scripts:` section: paladin-gtk packages must not run preinst,
+# postinst, prerm, or postrm hooks. Vault files live under
+# $XDG_DATA_HOME/paladin/ and are only created by `paladin init` or
+# the GUI's InitDialog — package state and user state are kept
+# strictly separate per IMPLEMENTATION_PLAN_04_GTK.md §11.3.

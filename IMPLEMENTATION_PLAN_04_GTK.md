@@ -4291,11 +4291,35 @@ sign-off.
     from the GUI-binary set `["otp", "totp", "hotp", "authenticator",
     "gtk"]` / `["gui", "authentication"]`, or if either facet is
     accidentally moved onto `[workspace.package]`.
-  - [ ] Add `packaging/deb/paladin-gtk.yaml` (`nfpm`) installing
+  - [x] Add `packaging/deb/paladin-gtk.yaml` (`nfpm`) installing
     `/usr/bin/paladin-gtk`, the desktop entry, the AppStream
     metainfo, and the hicolor icon set; declare
     `libgtk-4-1 (>= 4.16)` and `libadwaita-1-0 (>= 1.6)`; no
-    maintainer scripts.
+    maintainer scripts. Pinned by
+    `tests/packaging_deb_nfpm_manifest_logic.rs`:
+    `deb_manifest_exists_at_expected_path`,
+    `deb_manifest_starts_with_spdx_license_header`,
+    `deb_manifest_declares_package_name_paladin_gtk`,
+    `deb_manifest_declares_linux_platform_and_amd64_arch`,
+    `deb_manifest_declares_workspace_license`,
+    `deb_manifest_declares_workspace_homepage`,
+    `deb_manifest_declares_required_runtime_depends_with_exact_versions`,
+    `deb_manifest_declares_no_extra_depends_beyond_baseline_set`,
+    `deb_manifest_installs_every_required_destination`,
+    `deb_manifest_sources_each_install_from_the_expected_in_tree_path`,
+    `deb_manifest_in_tree_sources_all_exist_under_the_workspace`,
+    `deb_manifest_has_no_maintainer_scripts_section`, and
+    `deb_manifest_binary_install_uses_executable_mode` — together
+    these read `packaging/deb/paladin-gtk.yaml` as plain text (no
+    `serde_yaml` dep lands in the test deck) and fail if the
+    manifest stops installing `/usr/bin/paladin-gtk` (with
+    `mode: 0755`), the desktop entry at `/usr/share/applications/`,
+    the AppStream metainfo at `/usr/share/metainfo/`, or any of the
+    hicolor scalable / symbolic / 16x16 / 24x24 / 32x32 / 48x48
+    icon paths; if any `src` references a missing in-tree path; if
+    `depends:` drifts from the exact `libgtk-4-1 (>= 4.16)` /
+    `libadwaita-1-0 (>= 1.6)` baseline pair; or if a `scripts:`
+    section sneaks in.
   - [ ] Add `packaging/rpm/paladin-gtk.yaml` (`nfpm`) installing the
     same payload with matching `gtk4` / `libadwaita` package names.
   - [ ] Add `packaging/flatpak/paladin-gtk.yml` declaring
