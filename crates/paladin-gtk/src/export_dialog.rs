@@ -66,6 +66,8 @@ use relm4::prelude::*;
 use paladin_core::{format_plaintext_export_warning, EncryptionOptions, ErrorKind, PaladinError};
 use secrecy::SecretString;
 
+use crate::secret_fields::SecretEntry;
+
 /// Format-selector choice surfaced by the `ExportDialog`'s segmented
 /// control.
 ///
@@ -245,6 +247,29 @@ pub fn format_export_dialog_plaintext_warning_ack_title() -> &'static str {
 #[must_use]
 pub fn format_export_dialog_plaintext_warning_ack_subtitle() -> &'static str {
     "Toggle on to confirm and enable Export."
+}
+
+/// `adw::PreferencesGroup` title for the encrypted-bundle twice-
+/// confirm passphrase group. Only revealed when the active format
+/// requires a passphrase per [`compose_passphrase_rows_visible`].
+#[must_use]
+pub fn format_export_dialog_passphrase_group_title() -> &'static str {
+    "Bundle passphrase"
+}
+
+/// Pinned `AdwPasswordEntryRow` title for the bundle-passphrase entry.
+#[must_use]
+pub fn format_export_dialog_passphrase_row_title() -> &'static str {
+    "Passphrase"
+}
+
+/// Pinned `AdwPasswordEntryRow` title for the confirm-passphrase
+/// entry. The widget mounts it directly below the passphrase row;
+/// the submit button stays dim until both rows are non-empty and
+/// match.
+#[must_use]
+pub fn format_export_dialog_confirm_passphrase_row_title() -> &'static str {
+    "Confirm passphrase"
 }
 
 /// Footer Cancel button label.
@@ -567,6 +592,16 @@ pub enum ExportDialogMsg {
     /// Mirror semantics to [`Self::OverwriteAcknowledged`]: rearming
     /// the gate dims the submit button until the user re-acks.
     PlaintextWarningAcknowledged(bool),
+    /// Per-keystroke shadow of the encrypted-bundle passphrase entry.
+    /// The widget's `AdwPasswordEntryRow.connect_changed` handler
+    /// fires this so the Paladin-owned [`SecretEntry`] shadow tracks
+    /// the GTK buffer verbatim; the dispatch arm routes through
+    /// [`ExportDialogState::set_passphrase`], which zeroizes the
+    /// prior buffer contents in place.
+    PassphraseChanged(String),
+    /// Per-keystroke shadow of the confirm-passphrase entry. Same
+    /// dispatch shape as [`Self::PassphraseChanged`].
+    ConfirmPassphraseChanged(String),
     /// User clicked the explicit Cancel button. The dispatch arm
     /// emits [`ExportDialogOutput::Cancel`] so `AppModel` drops the
     /// live controller and the form draft is discarded.
@@ -610,21 +645,33 @@ pub enum ExportDialogOutput {
 ///
 /// Owns the destination-path + format form draft plus the inline
 /// overwrite-acknowledgement gate (arms when the picked destination
-/// already exists on disk) and the plaintext-export-warning ack
-/// (arms on the [`ExportFormatChoice::PlaintextOtpauth`] path).
-/// Subsequent sub-items extend the struct with the twice-confirm
-/// passphrase [`crate::secret_fields::SecretEntry`] buffer, the busy
-/// latch, and the post-worker rendering slots. The widget layer
-/// drives this via [`apply_msg`] and reads it via the `compose_*`
-/// helpers so the state stays unit-testable in
-/// `tests/export_dialog_logic.rs`.
-#[derive(Debug, Default)]
+/// already exists on disk), the plaintext-export-warning ack
+/// (arms on the [`ExportFormatChoice::PlaintextOtpauth`] path), and
+/// the twice-confirm passphrase [`SecretEntry`] buffers used on the
+/// [`ExportFormatChoice::EncryptedPaladin`] path. Subsequent sub-items
+/// extend the struct with the busy latch and the post-worker
+/// rendering slots. The widget layer drives this via [`apply_msg`] and
+/// reads it via the `compose_*` helpers so the state stays unit-
+/// testable in `tests/export_dialog_logic.rs`.
+///
+/// Not `Debug` because [`SecretEntry`] deliberately opts out of
+/// `Debug` so a stray `dbg!` cannot leak the bundle passphrase
+/// through the error log; not `Clone` for the same reason — the
+/// zeroizing buffers must not be duplicated.
+#[derive(Default)]
 pub struct ExportDialogState {
     destination_path: Option<PathBuf>,
     destination_exists: bool,
     format: ExportFormatChoice,
     overwrite_acknowledged: bool,
     plaintext_warning_acknowledged: bool,
+    /// Bundle passphrase entry buffer. Inner [`zeroize::Zeroizing`]
+    /// wipes on drop / clear; cleared whenever the destination or
+    /// format changes per [`passphrase_needs_reset`].
+    passphrase: SecretEntry,
+    /// Confirm-passphrase entry buffer. Same lifecycle as
+    /// [`Self::passphrase`].
+    confirm_passphrase: SecretEntry,
 }
 
 impl ExportDialogState {
@@ -682,27 +729,35 @@ impl ExportDialogState {
     /// The widget calls this from the [`gtk::FileDialog`] callback
     /// after the user picks a file and runs `Path::try_exists`.
     ///
-    /// Resets the overwrite-acknowledgement and the plaintext-warning
-    /// acknowledgements when the path or format has changed per
+    /// Resets the overwrite-acknowledgement, the plaintext-warning
+    /// acknowledgement, and the twice-confirm passphrase entries when
+    /// the path or format has changed per
     /// [`overwrite_gate_needs_reset`] /
-    /// [`plaintext_warning_needs_reset`]: a stale ack must never carry
-    /// across to a different file. Subsequent sub-items extend this
-    /// setter to clear the twice-confirm passphrase entries via
-    /// [`passphrase_needs_reset`].
+    /// [`plaintext_warning_needs_reset`] / [`passphrase_needs_reset`]:
+    /// a stale ack or typed passphrase must never carry across to a
+    /// different file. Re-picking the exact same path is idempotent
+    /// — the typed passphrase survives so a probe-only refresh does
+    /// not erase the user's input.
     pub fn set_destination(&mut self, path: PathBuf, exists: bool) {
         let format = self.format;
-        let (reset_overwrite, reset_plaintext) = match self.destination_path.as_deref() {
-            Some(prev) => (
-                overwrite_gate_needs_reset(prev, format, &path, format),
-                plaintext_warning_needs_reset(prev, format, &path, format),
-            ),
-            None => (true, true),
-        };
+        let (reset_overwrite, reset_plaintext, reset_passphrase) =
+            match self.destination_path.as_deref() {
+                Some(prev) => (
+                    overwrite_gate_needs_reset(prev, format, &path, format),
+                    plaintext_warning_needs_reset(prev, format, &path, format),
+                    passphrase_needs_reset(prev, format, &path, format),
+                ),
+                None => (true, true, false),
+            };
         if reset_overwrite {
             self.overwrite_acknowledged = false;
         }
         if reset_plaintext {
             self.plaintext_warning_acknowledged = false;
+        }
+        if reset_passphrase {
+            self.passphrase.clear();
+            self.confirm_passphrase.clear();
         }
         self.destination_path = Some(path);
         self.destination_exists = exists;
@@ -712,40 +767,47 @@ impl ExportDialogState {
     /// `adw::ComboRow` `connect_selected_notify` handler when
     /// [`format_choice_from_index`] decodes the selection.
     ///
-    /// Resets the overwrite-acknowledgement and the plaintext-warning
-    /// acknowledgements when the format changes per
-    /// [`overwrite_gate_needs_reset`] /
-    /// [`plaintext_warning_needs_reset`]: both gates are keyed to
-    /// `(path, format)` because the two formats write distinct
-    /// payloads even at the same path. The plaintext-warning ack
-    /// also resets on a same-path encrypted-to-plaintext switch so
-    /// any tick that survived the format hop is invalidated.
-    /// Subsequent sub-items extend this setter to clear passphrase
-    /// state when the format changes, mirroring the existing reset
-    /// helpers.
+    /// Resets the overwrite-acknowledgement, the plaintext-warning
+    /// acknowledgement, and the twice-confirm passphrase entries when
+    /// the format changes per [`overwrite_gate_needs_reset`] /
+    /// [`plaintext_warning_needs_reset`] / [`passphrase_needs_reset`]:
+    /// all three are keyed to `(path, format)` because the two formats
+    /// write distinct payloads even at the same path. The plaintext-
+    /// warning ack and passphrase rows also reset on a same-path
+    /// format hop (regardless of destination) so any value that
+    /// survived the hop is invalidated and the user re-prompts from a
+    /// clean slate.
     pub fn set_format(&mut self, format: ExportFormatChoice) {
         let prev_format = self.format;
-        let (reset_overwrite, reset_plaintext) = match self.destination_path.as_deref() {
-            Some(prev_dest) => (
-                overwrite_gate_needs_reset(prev_dest, prev_format, prev_dest, format),
-                plaintext_warning_needs_reset(prev_dest, prev_format, prev_dest, format),
-            ),
-            // No destination yet. The overwrite ack tracks the
-            // (path, format) pair against an actual file, so a
-            // format-only change cannot invalidate an ack against
-            // nothing. The plaintext ack, by contrast, is keyed to
-            // the format selector regardless of destination — the
-            // widget reveals the warning whenever the plaintext
-            // format is active. A format-only switch off (or onto)
-            // plaintext must clear any pre-destination ack so the
-            // warning is re-acknowledged.
-            None => (false, prev_format != format),
-        };
+        let (reset_overwrite, reset_plaintext, reset_passphrase) =
+            match self.destination_path.as_deref() {
+                Some(prev_dest) => (
+                    overwrite_gate_needs_reset(prev_dest, prev_format, prev_dest, format),
+                    plaintext_warning_needs_reset(prev_dest, prev_format, prev_dest, format),
+                    passphrase_needs_reset(prev_dest, prev_format, prev_dest, format),
+                ),
+                // No destination yet. The overwrite ack tracks the
+                // (path, format) pair against an actual file, so a
+                // format-only change cannot invalidate an ack against
+                // nothing. The plaintext ack and the passphrase rows,
+                // by contrast, are keyed to the format selector
+                // regardless of destination — the widget reveals the
+                // warning whenever the plaintext format is active and
+                // the passphrase rows whenever the encrypted format
+                // is active. A format-only switch must clear any
+                // pre-destination ack / typed passphrase so the next
+                // entry is re-prompted from a clean slate.
+                None => (false, prev_format != format, prev_format != format),
+            };
         if reset_overwrite {
             self.overwrite_acknowledged = false;
         }
         if reset_plaintext {
             self.plaintext_warning_acknowledged = false;
+        }
+        if reset_passphrase {
+            self.passphrase.clear();
+            self.confirm_passphrase.clear();
         }
         self.format = format;
     }
@@ -764,6 +826,35 @@ impl ExportDialogState {
     /// the gate so the user can step back from an ack they regret.
     pub fn set_plaintext_warning_acknowledged(&mut self, acknowledged: bool) {
         self.plaintext_warning_acknowledged = acknowledged;
+    }
+
+    /// Current bundle-passphrase entry text. Empty when no passphrase
+    /// is required (plaintext format) or the user has not yet typed.
+    #[must_use]
+    pub fn passphrase_text(&self) -> &str {
+        self.passphrase.text()
+    }
+
+    /// Current confirm-passphrase entry text. Empty when no passphrase
+    /// is required (plaintext format) or the user has not yet typed.
+    #[must_use]
+    pub fn confirm_passphrase_text(&self) -> &str {
+        self.confirm_passphrase.text()
+    }
+
+    /// Replace the bundle-passphrase entry buffer. The widget calls
+    /// this from the `AdwPasswordEntryRow` `connect_changed` handler
+    /// per keystroke so the Paladin-owned shadow tracks the GTK
+    /// `gtk::EntryBuffer` verbatim; the prior buffer contents are
+    /// zeroized in place via [`SecretEntry::set`].
+    pub fn set_passphrase(&mut self, text: &str) {
+        self.passphrase.set(text);
+    }
+
+    /// Replace the confirm-passphrase entry buffer. Same per-keystroke
+    /// semantics as [`Self::set_passphrase`].
+    pub fn set_confirm_passphrase(&mut self, text: &str) {
+        self.confirm_passphrase.set(text);
     }
 }
 
@@ -825,6 +916,24 @@ pub fn compose_plaintext_warning_body() -> String {
     plaintext_warning_body()
 }
 
+/// `gtk::Widget::set_visible` binding for the encrypted-bundle
+/// twice-confirm passphrase rows.
+///
+/// Returns `true` iff the active format is the encrypted Paladin
+/// bundle ([`ExportFormatChoice::requires_passphrase`]). The widget
+/// mounts the two `AdwPasswordEntryRow` rows inside an
+/// `adw::PreferencesGroup` and reveals it through this predicate so
+/// the rows are only visible when an encrypted write is at stake.
+/// Destination presence is intentionally not part of the predicate
+/// — the rows are keyed to the format selector so the user can type
+/// a passphrase before committing to a destination; the
+/// destination-change reset rule ([`passphrase_needs_reset`]) wipes
+/// any typed value once the destination is set and then changes.
+#[must_use]
+pub fn compose_passphrase_rows_visible(state: &ExportDialogState) -> bool {
+    state.format().requires_passphrase()
+}
+
 /// `gtk::Button::set_sensitive` binding for the footer Export button.
 ///
 /// Returns `true` only when:
@@ -832,11 +941,11 @@ pub fn compose_plaintext_warning_body() -> String {
 /// * Either the destination does not already exist, or the user has
 ///   ack'd the inline overwrite gate, and
 /// * Either the active format does not require the plaintext
-///   warning, or the user has ack'd the plaintext-warning gate.
-///
-/// Subsequent sub-items extend the predicate with the twice-confirm
-/// passphrase gate so the Export button enables only when every
-/// required gate is satisfied.
+///   warning, or the user has ack'd the plaintext-warning gate, and
+/// * Either the active format does not require the twice-confirm
+///   passphrase rows (plaintext path), or both rows are non-empty
+///   AND match (so the worker dispatch never hands an empty or
+///   mismatched pair to [`prepare_encrypted_export`]).
 #[must_use]
 pub fn compose_submit_button_sensitive(state: &ExportDialogState) -> bool {
     if state.destination_path().is_none() {
@@ -847,6 +956,13 @@ pub fn compose_submit_button_sensitive(state: &ExportDialogState) -> bool {
     }
     if compose_plaintext_warning_visible(state) && !state.is_plaintext_warning_acknowledged() {
         return false;
+    }
+    if compose_passphrase_rows_visible(state) {
+        let passphrase = state.passphrase_text();
+        let confirm = state.confirm_passphrase_text();
+        if passphrase.is_empty() || passphrase != confirm {
+            return false;
+        }
     }
     true
 }
@@ -879,6 +995,14 @@ pub fn apply_msg(
         }
         ExportDialogMsg::PlaintextWarningAcknowledged(acknowledged) => {
             state.set_plaintext_warning_acknowledged(acknowledged);
+            None
+        }
+        ExportDialogMsg::PassphraseChanged(text) => {
+            state.set_passphrase(&text);
+            None
+        }
+        ExportDialogMsg::ConfirmPassphraseChanged(text) => {
+            state.set_confirm_passphrase(&text);
             None
         }
         ExportDialogMsg::Cancel => Some(ExportDialogOutput::Cancel),
@@ -1031,6 +1155,35 @@ impl SimpleComponent for ExportDialogComponent {
                                 sender.input(
                                     ExportDialogMsg::PlaintextWarningAcknowledged(
                                         row.is_active(),
+                                    ),
+                                );
+                            },
+                        },
+                    },
+
+                    #[name = "passphrase_group"]
+                    adw::PreferencesGroup {
+                        set_title: format_export_dialog_passphrase_group_title(),
+                        #[watch]
+                        set_visible: compose_passphrase_rows_visible(&model.state),
+
+                        #[name = "passphrase_row"]
+                        add = &adw::PasswordEntryRow {
+                            set_title: format_export_dialog_passphrase_row_title(),
+                            connect_changed[sender] => move |entry| {
+                                sender.input(ExportDialogMsg::PassphraseChanged(
+                                    entry.text().to_string(),
+                                ));
+                            },
+                        },
+
+                        #[name = "confirm_passphrase_row"]
+                        add = &adw::PasswordEntryRow {
+                            set_title: format_export_dialog_confirm_passphrase_row_title(),
+                            connect_changed[sender] => move |entry| {
+                                sender.input(
+                                    ExportDialogMsg::ConfirmPassphraseChanged(
+                                        entry.text().to_string(),
                                     ),
                                 );
                             },

@@ -764,10 +764,13 @@ fn compose_submit_button_sensitive_true_when_destination_set_and_no_overwrite_ne
     let mut state = ExportDialogState::new();
     // Switch to encrypted to isolate the destination-presence gate
     // from the plaintext-warning gate; the encrypted-path twice-
-    // confirm passphrase row lands in a follow-up sub-item, so for
-    // now the encrypted path's only gate is destination presence.
+    // confirm passphrase row is satisfied with matching non-empty
+    // entries below so this test exercises destination presence
+    // alone.
     state.set_format(ExportFormatChoice::EncryptedPaladin);
     state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
     assert!(compose_submit_button_sensitive(&state));
 }
 
@@ -1045,10 +1048,14 @@ fn compose_submit_button_sensitive_true_when_overwrite_gate_acked() {
 
     let mut state = ExportDialogState::new();
     // Switch to encrypted so this test isolates the overwrite gate
-    // from the plaintext-warning gate.
+    // from the plaintext-warning gate; fill the twice-confirm
+    // passphrase rows so the encrypted-format passphrase gate is
+    // satisfied and the overwrite gate is the only remaining toggle.
     state.set_format(ExportFormatChoice::EncryptedPaladin);
     state.set_destination(dest_a(), true);
     state.set_overwrite_acknowledged(true);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
     assert!(compose_submit_button_sensitive(&state));
 }
 
@@ -1327,12 +1334,15 @@ fn compose_submit_button_sensitive_true_on_encrypted_format_without_plaintext_ac
     use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
 
     // Encrypted path hides the plaintext warning entirely, so the
-    // ack is irrelevant. Subsequent sub-items extend this to require
-    // the twice-confirm passphrase rows; for now the encrypted-path
-    // submit enables on destination presence alone.
+    // ack is irrelevant. The encrypted-path twice-confirm passphrase
+    // gate is the relevant gate here — satisfy it with matching
+    // non-empty entries so the test isolates the plaintext-ack
+    // independence.
     let mut state = ExportDialogState::new();
     state.set_format(ExportFormatChoice::EncryptedPaladin);
     state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
     assert!(compose_submit_button_sensitive(&state));
 }
 
@@ -1424,4 +1434,340 @@ fn format_export_dialog_plaintext_warning_ack_subtitle_is_non_empty() {
     use paladin_gtk::export_dialog::format_export_dialog_plaintext_warning_ack_subtitle;
 
     assert!(!format_export_dialog_plaintext_warning_ack_subtitle().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Twice-confirm passphrase rows — encrypted-format gate, clear on
+// destination / format change
+// ---------------------------------------------------------------------------
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// `ExportDialogComponent` > "Reset overwrite and plaintext-warning
+// confirmations when the destination or format changes; clear the
+// passphrase rows and re-prompt when the destination or format
+// changes after passphrase entry." and "Prompt twice for the
+// encrypted-bundle passphrase; reject mismatch with
+// `invalid_passphrase` (`reason: "confirmation_mismatch"`) and
+// zero-length with `invalid_passphrase` (`reason: "zero_length"`)
+// inline." The widget mounts two `AdwPasswordEntryRow` entries
+// (passphrase + confirm) inside an `adw::PreferencesGroup` whose
+// visibility binds to the encrypted-format predicate
+// `compose_passphrase_rows_visible`; the submit button stays dim
+// until both rows are non-empty AND match.
+
+#[test]
+fn export_dialog_state_new_has_empty_passphrase() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let state = ExportDialogState::new();
+    assert_eq!(state.passphrase_text(), "");
+}
+
+#[test]
+fn export_dialog_state_new_has_empty_confirm_passphrase() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let state = ExportDialogState::new();
+    assert_eq!(state.confirm_passphrase_text(), "");
+}
+
+#[test]
+fn export_dialog_state_set_passphrase_updates_text() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_passphrase("hunter2");
+    assert_eq!(state.passphrase_text(), "hunter2");
+}
+
+#[test]
+fn export_dialog_state_set_passphrase_replaces_prior_text() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_passphrase("first");
+    state.set_passphrase("second");
+    assert_eq!(state.passphrase_text(), "second");
+}
+
+#[test]
+fn export_dialog_state_set_confirm_passphrase_updates_text() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_confirm_passphrase("hunter2");
+    assert_eq!(state.confirm_passphrase_text(), "hunter2");
+}
+
+#[test]
+fn export_dialog_state_set_confirm_passphrase_replaces_prior_text() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_confirm_passphrase("first");
+    state.set_confirm_passphrase("second");
+    assert_eq!(state.confirm_passphrase_text(), "second");
+}
+
+#[test]
+fn export_dialog_state_set_destination_clears_passphrase_on_path_change() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+    state.set_destination(dest_b(), false);
+    assert_eq!(state.passphrase_text(), "");
+    assert_eq!(state.confirm_passphrase_text(), "");
+}
+
+#[test]
+fn export_dialog_state_set_destination_keeps_passphrase_when_path_and_format_match() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+    // Re-picking the same path is idempotent; the typed passphrase
+    // must survive so an `exists` probe-only refresh does not erase
+    // the user's input.
+    state.set_destination(dest_a(), false);
+    assert_eq!(state.passphrase_text(), "hunter2");
+    assert_eq!(state.confirm_passphrase_text(), "hunter2");
+}
+
+#[test]
+fn export_dialog_state_set_format_clears_passphrase_on_format_change_off_encrypted() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+    state.set_format(ExportFormatChoice::PlaintextOtpauth);
+    assert_eq!(state.passphrase_text(), "");
+    assert_eq!(state.confirm_passphrase_text(), "");
+}
+
+#[test]
+fn export_dialog_state_set_format_clears_passphrase_on_format_change_onto_encrypted() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    // Even though the rows were hidden on the plaintext path, any
+    // residual text invalidates on a switch back onto the encrypted
+    // path — the user re-prompts from a clean slate.
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+    state.set_format(ExportFormatChoice::PlaintextOtpauth);
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    assert_eq!(state.passphrase_text(), "");
+    assert_eq!(state.confirm_passphrase_text(), "");
+}
+
+#[test]
+fn export_dialog_state_set_format_keeps_passphrase_when_format_unchanged() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    assert_eq!(state.passphrase_text(), "hunter2");
+    assert_eq!(state.confirm_passphrase_text(), "hunter2");
+}
+
+#[test]
+fn compose_passphrase_rows_visible_true_on_encrypted_format() {
+    use paladin_gtk::export_dialog::{compose_passphrase_rows_visible, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    assert!(compose_passphrase_rows_visible(&state));
+}
+
+#[test]
+fn compose_passphrase_rows_visible_false_on_plaintext_format() {
+    use paladin_gtk::export_dialog::{compose_passphrase_rows_visible, ExportDialogState};
+
+    let state = ExportDialogState::new();
+    assert!(!compose_passphrase_rows_visible(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_false_on_encrypted_without_passphrase() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    // Passphrase rows empty — submit must stay dim even though every
+    // other gate is satisfied (no overwrite, no plaintext-warning).
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_false_on_encrypted_with_only_passphrase_no_confirm() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_false_on_encrypted_with_only_confirm_no_passphrase() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_confirm_passphrase("hunter2");
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_false_on_encrypted_with_mismatched_passphrases() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter3");
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_true_on_encrypted_with_matching_passphrases() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+    assert!(compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_unaffected_by_passphrases_on_plaintext() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    // Plaintext path hides the passphrase rows entirely. Even if a
+    // hidden residual value existed, the plaintext-format predicate
+    // means the passphrase gate is not consulted — only the plaintext
+    // warning ack matters.
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+    // No passphrases typed at all.
+    assert!(compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_false_after_passphrases_cleared_by_destination_change() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+    assert!(compose_submit_button_sensitive(&state));
+    state.set_destination(dest_b(), false);
+    // Destination change clears the passphrase rows; submit dims.
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_false_after_passphrases_cleared_by_format_change() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    // Switch onto encrypted, fill rows, switch back off, switch back
+    // on — the rows must be empty so submit dims.
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_destination(dest_a(), false);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+    state.set_format(ExportFormatChoice::PlaintextOtpauth);
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn apply_msg_passphrase_changed_updates_state_and_emits_no_output() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    let output = apply_msg(
+        &mut state,
+        ExportDialogMsg::PassphraseChanged("hunter2".to_string()),
+    );
+    assert!(output.is_none());
+    assert_eq!(state.passphrase_text(), "hunter2");
+}
+
+#[test]
+fn apply_msg_confirm_passphrase_changed_updates_state_and_emits_no_output() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    let output = apply_msg(
+        &mut state,
+        ExportDialogMsg::ConfirmPassphraseChanged("hunter2".to_string()),
+    );
+    assert!(output.is_none());
+    assert_eq!(state.confirm_passphrase_text(), "hunter2");
+}
+
+#[test]
+fn apply_msg_passphrase_changed_to_empty_string_clears_text() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    apply_msg(
+        &mut state,
+        ExportDialogMsg::PassphraseChanged("hunter2".to_string()),
+    );
+    apply_msg(
+        &mut state,
+        ExportDialogMsg::PassphraseChanged(String::new()),
+    );
+    assert_eq!(state.passphrase_text(), "");
+}
+
+// ---------------------------------------------------------------------------
+// Passphrase row labels — non-empty fixed strings the view! binds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_export_dialog_passphrase_group_title_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_passphrase_group_title;
+
+    assert!(!format_export_dialog_passphrase_group_title().is_empty());
+}
+
+#[test]
+fn format_export_dialog_passphrase_row_title_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_passphrase_row_title;
+
+    assert!(!format_export_dialog_passphrase_row_title().is_empty());
+}
+
+#[test]
+fn format_export_dialog_confirm_passphrase_row_title_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_confirm_passphrase_row_title;
+
+    assert!(!format_export_dialog_confirm_passphrase_row_title().is_empty());
 }

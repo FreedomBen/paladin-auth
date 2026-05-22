@@ -3139,10 +3139,66 @@ sign-off.
     `format_export_dialog_plaintext_warning_group_title_is_non_empty`,
     `format_export_dialog_plaintext_warning_ack_title_is_non_empty`, and
     `format_export_dialog_plaintext_warning_ack_subtitle_is_non_empty`.)
-  - [ ] Reset overwrite and plaintext-warning confirmations when
+  - [x] Reset overwrite and plaintext-warning confirmations when
     the destination or format changes; clear the passphrase rows
     and re-prompt when the destination or format changes after
     passphrase entry.
+    (`ExportDialogState` gains a twice-confirm passphrase pair held
+    in two `crate::secret_fields::SecretEntry` buffers
+    (`passphrase` / `confirm_passphrase`) so the typed bytes wipe on
+    drop / clear; `Debug` is dropped from the derive list to match
+    `ImportDialogState` and prevent a stray `dbg!` from leaking the
+    bundle passphrase. New `passphrase_text()` /
+    `confirm_passphrase_text()` accessors and
+    `set_passphrase(&str)` / `set_confirm_passphrase(&str)` setters
+    drive the entries; `set_destination` / `set_format` route
+    through the existing `passphrase_needs_reset` helper so a path
+    or format change zeroizes both buffers, while idempotent
+    re-pick of the same `(path, format)` pair preserves the typed
+    input. Pre-destination format-only switches reset the
+    passphrase rows symmetrically with the plaintext-warning reset
+    so the encrypted ↔ plaintext hop always re-prompts from a clean
+    slate. New `ExportDialogMsg::PassphraseChanged(String)` /
+    `ConfirmPassphraseChanged(String)` per-keystroke shadow
+    messages route through `apply_msg` into the new setters; the
+    view! macro mounts an `adw::PreferencesGroup` "Bundle
+    passphrase" whose visibility binds to
+    `compose_passphrase_rows_visible(state)` (returns
+    `state.format().requires_passphrase()`) with two
+    `adw::PasswordEntryRow` rows titled "Passphrase" and "Confirm
+    passphrase" wired via `connect_changed`. The submit-button
+    gate `compose_submit_button_sensitive` extends to refuse the
+    encrypted path when either row is empty or the pair mismatches,
+    so the worker dispatch (subsequent sub-item) never hands
+    `prepare_encrypted_export` a `SubmitRejection::ZeroLength` /
+    `ConfirmationMismatch` pair. Pinned by
+    `tests/export_dialog_logic.rs::export_dialog_state_new_has_empty_passphrase`,
+    `export_dialog_state_new_has_empty_confirm_passphrase`,
+    `export_dialog_state_set_passphrase_updates_text`,
+    `export_dialog_state_set_passphrase_replaces_prior_text`,
+    `export_dialog_state_set_confirm_passphrase_updates_text`,
+    `export_dialog_state_set_confirm_passphrase_replaces_prior_text`,
+    `export_dialog_state_set_destination_clears_passphrase_on_path_change`,
+    `export_dialog_state_set_destination_keeps_passphrase_when_path_and_format_match`,
+    `export_dialog_state_set_format_clears_passphrase_on_format_change_off_encrypted`,
+    `export_dialog_state_set_format_clears_passphrase_on_format_change_onto_encrypted`,
+    `export_dialog_state_set_format_keeps_passphrase_when_format_unchanged`,
+    `compose_passphrase_rows_visible_true_on_encrypted_format`,
+    `compose_passphrase_rows_visible_false_on_plaintext_format`,
+    `compose_submit_button_sensitive_false_on_encrypted_without_passphrase`,
+    `compose_submit_button_sensitive_false_on_encrypted_with_only_passphrase_no_confirm`,
+    `compose_submit_button_sensitive_false_on_encrypted_with_only_confirm_no_passphrase`,
+    `compose_submit_button_sensitive_false_on_encrypted_with_mismatched_passphrases`,
+    `compose_submit_button_sensitive_true_on_encrypted_with_matching_passphrases`,
+    `compose_submit_button_sensitive_unaffected_by_passphrases_on_plaintext`,
+    `compose_submit_button_sensitive_false_after_passphrases_cleared_by_destination_change`,
+    `compose_submit_button_sensitive_false_after_passphrases_cleared_by_format_change`,
+    `apply_msg_passphrase_changed_updates_state_and_emits_no_output`,
+    `apply_msg_confirm_passphrase_changed_updates_state_and_emits_no_output`,
+    `apply_msg_passphrase_changed_to_empty_string_clears_text`,
+    `format_export_dialog_passphrase_group_title_is_non_empty`,
+    `format_export_dialog_passphrase_row_title_is_non_empty`, and
+    `format_export_dialog_confirm_passphrase_row_title_is_non_empty`.)
   - [ ] Prompt twice for the encrypted-bundle passphrase; reject
     mismatch with `invalid_passphrase`
     (`reason: "confirmation_mismatch"`) and zero-length with
