@@ -31,7 +31,9 @@ use paladin_core::{
 };
 
 use paladin_gtk::auto_lock::{
-    idle_event_deadline, idle_should_arm, is_expired, lock_on_expiry, IdleSource, UnlockedDiscards,
+    auto_lock_timer_transition, evaluate_timer_fire, idle_event_deadline, idle_should_arm,
+    is_expired, lock_on_expiry, AutoLockFireDecision, AutoLockTimerTransition, IdleSource,
+    UnlockedDiscards,
 };
 
 // ---------------------------------------------------------------------------
@@ -585,4 +587,185 @@ fn idle_source_refresh_consistent_with_idle_event_deadline_helper() {
 
     assert_eq!(armed, idle_event_deadline(now, &vault));
     assert!(idle_should_arm(&vault));
+}
+
+// ---------------------------------------------------------------------------
+// `auto_lock_timer_transition` — pure-logic driver for the
+// `glib::timeout_add_local` source that backs the auto-lock countdown.
+//
+// Mirrors `ticker_transition`'s four-cell truth table so the widget
+// layer's install / teardown call sites stay exhaustive and the
+// `IdlePolicy` arm/disarm decision lives in core.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn auto_lock_timer_transition_install_when_armed_and_not_installed() {
+    // Fresh unlock: IdleSource just armed for an encrypted opted-in
+    // vault, no timer running yet → install a fresh source.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(60).unwrap();
+    vault.save(&store).unwrap();
+
+    let now = Instant::now();
+    let mut src = IdleSource::new();
+    src.refresh(now, &vault).expect("armed");
+
+    let transition = auto_lock_timer_transition(false, &src, now);
+    assert_eq!(
+        transition,
+        AutoLockTimerTransition::Install(Duration::from_secs(60))
+    );
+}
+
+#[test]
+fn auto_lock_timer_transition_teardown_when_disarmed_and_installed() {
+    // The vault transitioned to plaintext (or the user disabled
+    // auto-lock) while a timer was running → tear down.
+    let src = IdleSource::new();
+    let now = Instant::now();
+    assert!(!src.is_armed());
+
+    let transition = auto_lock_timer_transition(true, &src, now);
+    assert_eq!(transition, AutoLockTimerTransition::Teardown);
+}
+
+#[test]
+fn auto_lock_timer_transition_nochange_when_armed_and_installed() {
+    // Steady state during an unlocked encrypted session: the timer
+    // is running, the source still has an armed deadline. The
+    // existing one-shot source will fire and `evaluate_timer_fire`
+    // re-arms if needed — no churn on every idle event.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.save(&store).unwrap();
+
+    let now = Instant::now();
+    let mut src = IdleSource::new();
+    src.refresh(now, &vault).expect("armed");
+
+    let transition = auto_lock_timer_transition(true, &src, now);
+    assert_eq!(transition, AutoLockTimerTransition::NoChange);
+}
+
+#[test]
+fn auto_lock_timer_transition_nochange_when_disarmed_and_not_installed() {
+    // Steady state in `Missing` / `Locked` / `StartupError` or for a
+    // plaintext / opted-out unlocked vault: nothing armed, nothing
+    // installed — no `glib::source_remove` calls and no install.
+    let src = IdleSource::new();
+    let now = Instant::now();
+
+    let transition = auto_lock_timer_transition(false, &src, now);
+    assert_eq!(transition, AutoLockTimerTransition::NoChange);
+}
+
+#[test]
+fn auto_lock_timer_transition_install_uses_deadline_minus_now() {
+    // The install variant carries the exact `Duration` to pass to
+    // `glib::timeout_add_local` — derived from `deadline - now`, not
+    // a fresh `auto_lock_timeout_secs` fetch — so a stale deadline
+    // (refresh skipped between probe and install) still produces a
+    // tight wake.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(120).unwrap();
+    vault.save(&store).unwrap();
+
+    let armed_at = Instant::now();
+    let mut src = IdleSource::new();
+    src.refresh(armed_at, &vault).expect("armed");
+
+    // Caller observes the source 30 s after arming; the install
+    // delay must be the remaining 90 s, not the full 120 s.
+    let later = armed_at + Duration::from_secs(30);
+    let transition = auto_lock_timer_transition(false, &src, later);
+    assert_eq!(
+        transition,
+        AutoLockTimerTransition::Install(Duration::from_secs(90))
+    );
+}
+
+#[test]
+fn auto_lock_timer_transition_install_saturates_at_zero_when_now_past_deadline() {
+    // If `now` somehow passes `deadline` before the source was
+    // installed (e.g. a slow probe), the install duration saturates
+    // at `0`: `glib::timeout_add_local` will fire immediately and
+    // `evaluate_timer_fire` will then resolve to `Lock`.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(30).unwrap();
+    vault.save(&store).unwrap();
+
+    let armed_at = Instant::now();
+    let mut src = IdleSource::new();
+    src.refresh(armed_at, &vault).expect("armed");
+
+    let way_later = armed_at + Duration::from_secs(120);
+    let transition = auto_lock_timer_transition(false, &src, way_later);
+    assert_eq!(transition, AutoLockTimerTransition::Install(Duration::ZERO));
+}
+
+// ---------------------------------------------------------------------------
+// `evaluate_timer_fire` — pure-logic decision for what a
+// `glib::timeout_add_local` callback should do when it fires.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn evaluate_timer_fire_lock_when_expired() {
+    // The deadline elapsed by the time the source fired — lock.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(30).unwrap();
+    vault.save(&store).unwrap();
+
+    let armed_at = Instant::now();
+    let mut src = IdleSource::new();
+    src.refresh(armed_at, &vault).expect("armed");
+
+    let fire_at = armed_at + Duration::from_secs(30);
+    let decision = evaluate_timer_fire(&src, fire_at);
+    assert_eq!(decision, AutoLockFireDecision::Lock);
+}
+
+#[test]
+fn evaluate_timer_fire_reschedule_when_armed_in_future() {
+    // The deadline got pushed forward by an idle event after the
+    // source was scheduled; the early fire resolves to a
+    // `Reschedule(remaining)` so the caller installs a fresh
+    // one-shot for the new deadline.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted(&tmp.path().join("vault.bin"), "hunter2");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(300).unwrap();
+    vault.save(&store).unwrap();
+
+    let armed_at = Instant::now();
+    let mut src = IdleSource::new();
+    src.refresh(armed_at, &vault).expect("armed");
+
+    // Fire happens 100 s in — 200 s of deadline remain.
+    let fire_at = armed_at + Duration::from_secs(100);
+    let decision = evaluate_timer_fire(&src, fire_at);
+    assert_eq!(
+        decision,
+        AutoLockFireDecision::Reschedule(Duration::from_secs(200))
+    );
+}
+
+#[test]
+fn evaluate_timer_fire_cancel_when_disarmed() {
+    // Source was disarmed after install (e.g. user toggled off
+    // auto-lock, or the vault dropped to plaintext through a
+    // passphrase transition) — the in-flight callback resolves to
+    // `Cancel` rather than `Lock` so the user does not get locked
+    // out by a stale timer.
+    let src = IdleSource::new();
+    let decision = evaluate_timer_fire(&src, Instant::now());
+    assert_eq!(decision, AutoLockFireDecision::Cancel);
 }

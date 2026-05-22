@@ -102,7 +102,10 @@ use crate::app::state::{
     compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
     run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
 };
-use crate::auto_lock::{idle_should_arm, IdleSource};
+use crate::auto_lock::{
+    auto_lock_timer_transition, evaluate_timer_fire, idle_should_arm, lock_on_expiry,
+    AutoLockFireDecision, AutoLockTimerTransition, IdleSource, LockedTransition, UnlockedDiscards,
+};
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
 };
@@ -382,6 +385,20 @@ pub struct AppModel {
     /// `glib::timeout_add_local` source and [`IdleSource::is_expired`]
     /// on wake. Disarmed on `Quit` so the next launch starts clean.
     idle_source: IdleSource,
+    /// Live `glib::timeout_add_local` one-shot source backing the
+    /// auto-lock countdown.
+    ///
+    /// Installed by [`AppModel::apply_auto_lock_timer_transition`]
+    /// when [`IdleSource::is_armed`] flips from `false` to `true`
+    /// (encrypted vault unlocked with `auto_lock_enabled`); torn down
+    /// on lock, quit, plaintext / opted-out transitions, and on every
+    /// successful expiry via [`AppMsg::AutoLockTimerFired`]. The
+    /// source ID is stored as an [`Option`] because
+    /// [`glib::SourceId::remove`] consumes the ID — a consumed
+    /// `SourceId` cannot be re-removed. See
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+    /// "Drive the auto-lock timer via `glib::timeout_add_local`".
+    auto_lock_source: Option<glib::SourceId>,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -449,6 +466,10 @@ impl std::fmt::Debug for AppModel {
             .field("last_account_list_busy", &self.last_account_list_busy)
             .field("last_add_dialog_busy", &self.last_add_dialog_busy)
             .field("idle_source", &self.idle_source)
+            .field(
+                "auto_lock_source",
+                &self.auto_lock_source.as_ref().map(|_| "<installed>"),
+            )
             .finish()
     }
 }
@@ -1166,6 +1187,31 @@ pub enum AppMsg {
     /// controllers stay attached across state transitions so the
     /// next unlock immediately starts refreshing without re-wiring.
     IdleEvent(Instant),
+    /// Fired by the live `glib::timeout_add_local` one-shot source
+    /// installed via [`AppModel::apply_auto_lock_timer_transition`].
+    ///
+    /// The handler resolves the firing against the current
+    /// [`AppModel::idle_source`] via
+    /// [`crate::auto_lock::evaluate_timer_fire`]:
+    ///
+    /// * [`AutoLockFireDecision::Lock`] — the deadline elapsed.
+    ///   Drop `Vault`, switch [`AppModel::state`] to
+    ///   [`AppState::Locked`] via
+    ///   [`crate::auto_lock::lock_on_expiry`], discard open HOTP
+    ///   reveal windows, the search query, and any open dialog,
+    ///   then re-present [`crate::unlock_dialog::UnlockDialogComponent`].
+    /// * [`AutoLockFireDecision::Reschedule`] — the deadline got
+    ///   pushed forward by a key press / pointer motion between
+    ///   install and fire; install a fresh one-shot for the new
+    ///   remaining duration.
+    /// * [`AutoLockFireDecision::Cancel`] — the source got
+    ///   disarmed (passphrase transition to plaintext, auto-lock
+    ///   toggled off); drop the fired timer without locking.
+    ///
+    /// The carried [`Instant`] is sampled at fire time inside the
+    /// `glib` callback so the deadline comparison does not race
+    /// against main-loop dispatch latency.
+    AutoLockTimerFired(Instant),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -1440,6 +1486,7 @@ impl SimpleComponent for AppModel {
             last_account_list_busy: false,
             last_add_dialog_busy: false,
             idle_source: IdleSource::new(),
+            auto_lock_source: None,
         };
 
         // Install the TOTP ticker if the resolved startup state is
@@ -1467,6 +1514,9 @@ impl SimpleComponent for AppModel {
         match msg {
             AppMsg::Quit => {
                 if let Some(source_id) = self.ticker_source.take() {
+                    source_id.remove();
+                }
+                if let Some(source_id) = self.auto_lock_source.take() {
                     source_id.remove();
                 }
                 // Drop every open reveal so the `Zeroizing<String>`
@@ -1544,13 +1594,20 @@ impl SimpleComponent for AppModel {
                 // which routes through
                 // `IdlePolicy::next_deadline`, so plaintext and
                 // opted-out vaults stay disarmed without a GUI-side
-                // shortcut. The follow-up timer + expiry sub-tasks
-                // consume `self.idle_source.deadline()` and
-                // `self.idle_source.is_expired(...)` to schedule and
-                // resolve the `glib::timeout_add_local` source.
+                // shortcut. The dispatch epilogue's
+                // `apply_auto_lock_timer_transition` call then
+                // installs / tears down the `glib::timeout_add_local`
+                // source against the refreshed deadline; an
+                // already-installed source is left to fire and
+                // `AppMsg::AutoLockTimerFired` resolves to
+                // `Reschedule` if the deadline got pushed forward
+                // here.
                 if let Some((vault, _store)) = self.vault.as_ref() {
                     self.idle_source.refresh(now, vault);
                 }
+            }
+            AppMsg::AutoLockTimerFired(fired_at) => {
+                self.handle_auto_lock_timer_fired(fired_at, &sender);
             }
             AppMsg::StartupErrorRetry => {
                 // User clicked the StartupErrorComponent Retry
@@ -3390,6 +3447,15 @@ impl SimpleComponent for AppModel {
         // dialog cancel) so this call is a benign no-op in the
         // common case.
         self.apply_ticker_transition(&sender);
+        // Reconcile the auto-lock timer source against the live
+        // `idle_source` deadline. The pure-logic
+        // `auto_lock_timer_transition(was_installed, idle_source,
+        // now)` collapses to `NoChange` for every steady-state
+        // dispatch (`IdleEvent` refresh against an already-armed
+        // source, plaintext / opted-out vaults that stay disarmed)
+        // so this call is a benign no-op outside the arm / disarm
+        // transitions.
+        self.apply_auto_lock_timer_transition(&sender);
         self.prune_reveals_if_locked();
         self.sync_account_list_busy();
         self.sync_add_dialog_busy();
@@ -3507,6 +3573,196 @@ impl AppModel {
     /// to the §"Milestone 7 checklist" > TOTP ticker bullet "Tear
     /// down the ticker on `Locked` / `StartupError` transitions
     /// and reinstall on `Unlocked`".
+    /// Reconcile the live `glib::timeout_add_local` auto-lock source
+    /// against the current [`IdleSource`] deadline.
+    ///
+    /// Routes through [`auto_lock_timer_transition`] so the
+    /// four-cell truth table (`NoChange` / `Install(d)` / `Teardown`)
+    /// is the same pure-logic decision exercised by
+    /// `tests/auto_lock_logic.rs`. Called from the dispatch epilogue
+    /// after every `AppMsg::update`, so every state transition that
+    /// flips `is_armed` (unlock success, lock, init success,
+    /// passphrase set / remove, auto-lock toggle, plaintext drop)
+    /// propagates to the timer source without per-call site plumbing.
+    /// Steady-state dispatches (`IdleEvent` refresh against an
+    /// already-armed source, missing / locked / errored windows) all
+    /// resolve to `NoChange` so no `glib::source_remove` /
+    /// `glib::timeout_add_local` round-trip is paid for benign
+    /// updates.
+    fn apply_auto_lock_timer_transition(&mut self, sender: &ComponentSender<Self>) {
+        let now = Instant::now();
+        let was_installed = self.auto_lock_source.is_some();
+        match auto_lock_timer_transition(was_installed, &self.idle_source, now) {
+            AutoLockTimerTransition::NoChange => {}
+            AutoLockTimerTransition::Install(delay) => {
+                let send = sender.input_sender().clone();
+                let source_id = glib::timeout_add_local_once(delay, move || {
+                    let _ = send.send(AppMsg::AutoLockTimerFired(Instant::now()));
+                });
+                self.auto_lock_source = Some(source_id);
+            }
+            AutoLockTimerTransition::Teardown => {
+                if let Some(source_id) = self.auto_lock_source.take() {
+                    source_id.remove();
+                }
+            }
+        }
+    }
+
+    /// Resolve an [`AppMsg::AutoLockTimerFired`] firing against the
+    /// current [`IdleSource`] state.
+    ///
+    /// Routes the decision through [`evaluate_timer_fire`]:
+    ///
+    /// * [`AutoLockFireDecision::Lock`] — drop `Vault`, switch
+    ///   `AppModel` to [`AppState::Locked`] via [`lock_on_expiry`],
+    ///   discard open HOTP reveal windows, the search query, and any
+    ///   open dialog, then re-present
+    ///   [`crate::unlock_dialog::UnlockDialogComponent`] through
+    ///   [`Self::remount_for_state`].
+    /// * [`AutoLockFireDecision::Reschedule`] — install a fresh
+    ///   one-shot for the new remaining duration. The previous
+    ///   source already fired (this very dispatch is the
+    ///   consumption); the `auto_lock_source` slot is cleared first
+    ///   so the install assigns a fresh source id.
+    /// * [`AutoLockFireDecision::Cancel`] — drop the source slot
+    ///   without locking; the timer fired but the source was
+    ///   disarmed in the meantime (passphrase transition to
+    ///   plaintext, user toggled auto-lock off, etc).
+    fn handle_auto_lock_timer_fired(&mut self, fired_at: Instant, sender: &ComponentSender<Self>) {
+        // The one-shot source has already fired and consumed itself;
+        // drop the cached `SourceId` so the next install assigns a
+        // fresh one.
+        self.auto_lock_source = None;
+
+        match evaluate_timer_fire(&self.idle_source, fired_at) {
+            AutoLockFireDecision::Lock => {
+                self.lock_on_auto_lock_expiry(sender);
+            }
+            AutoLockFireDecision::Reschedule(delay) => {
+                let send = sender.input_sender().clone();
+                let source_id = glib::timeout_add_local_once(delay, move || {
+                    let _ = send.send(AppMsg::AutoLockTimerFired(Instant::now()));
+                });
+                self.auto_lock_source = Some(source_id);
+            }
+            AutoLockFireDecision::Cancel => {
+                // Source got disarmed between install and fire;
+                // nothing else to do.
+            }
+        }
+    }
+
+    /// Apply the auto-lock expiry transition.
+    ///
+    /// Bundles every `AppModel` field that must not outlive the
+    /// unlocked session and hands them by value to
+    /// [`lock_on_expiry`], which carries forward only the resolved
+    /// vault path (and any pending clipboard auto-clear). The
+    /// returned [`LockedTransition`] seeds the new
+    /// [`AppState::Locked`] and the re-presented
+    /// [`crate::unlock_dialog::UnlockDialogComponent`] via
+    /// [`Self::remount_for_state`].
+    ///
+    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Auto-lock and clipboard
+    /// auto-clear (per §7)" *"On expiry, drop `Vault` and switch
+    /// `AppModel` to `Locked`, re-presenting `UnlockComponent`.
+    /// Locking discards open HOTP reveal windows, the search query,
+    /// and any open dialog; a clipboard auto-clear timer scheduled
+    /// before lock survives lock and still fires only-if-unchanged"*.
+    fn lock_on_auto_lock_expiry(&mut self, sender: &ComponentSender<Self>) {
+        // The fired path can only land while we held a live vault
+        // (every other state disarms the source through the dispatch
+        // epilogue), but be defensive: a stray fire that lands with
+        // no vault is a benign no-op — drop the search query and
+        // disarm so subsequent dispatches see clean state.
+        let Some((vault, store)) = self.vault.take() else {
+            self.search_query.clear();
+            self.idle_source.disarm();
+            return;
+        };
+        let Some(state) = self.state.as_ref() else {
+            // Same defensive branch for a missing state: reinstall
+            // the pair so we don't leak `(Vault, Store)`.
+            self.vault = Some((vault, store));
+            return;
+        };
+        let Some(path) = state.path().map(std::path::Path::to_path_buf) else {
+            // `Unlocked` / `UnlockedBusy` always carry a path, but
+            // route a missing path defensively rather than panicking.
+            self.vault = Some((vault, store));
+            return;
+        };
+
+        // Tear down any modal dialog widgets before
+        // `remount_for_state` walks the content children; the dialog
+        // controllers themselves are dropped here so their secret
+        // buffers (passphrase entries, add-account base32 secret,
+        // duplicate `ValidatedAccount`, pending `VaultInit`) zeroize
+        // in lockstep with the vault drop.
+        let rename_dialog = self.rename_dialog.take();
+        let remove_dialog = self.remove_dialog.take();
+        let add_dialog = self.add_dialog.take();
+        let settings_dialog = self.settings_dialog.take();
+        let import_dialog = self.import_dialog.take();
+        let export_dialog = self.export_dialog.take();
+        let passphrase_dialog = self.passphrase_dialog.take();
+
+        // Reveal-window map and pending clipboard are extracted by
+        // value so `lock_on_expiry` is the one place that decides
+        // what survives lock. Per the design,
+        // `pending_clipboard_clear` is carried forward (the timer
+        // scheduled before lock still fires only-if-unchanged); the
+        // reveal windows are discarded with their zeroizing code
+        // wrappers.
+        let reveal_windows = std::mem::take(&mut self.reveal_windows);
+        let pending_clipboard = self.pending_clipboard.take();
+        let search_query = std::mem::take(&mut self.search_query);
+
+        // Aggregate the dialog handles into a single "modal" payload
+        // for `UnlockedDiscards` — `lock_on_expiry` doesn't care
+        // about the concrete types, only that they are moved by value
+        // and dropped at the lock boundary.
+        let modal = (
+            rename_dialog,
+            remove_dialog,
+            add_dialog,
+            settings_dialog,
+            import_dialog,
+            export_dialog,
+            passphrase_dialog,
+        );
+
+        let discards = UnlockedDiscards::<_, _> {
+            search_query,
+            hotp_reveal: Some(reveal_windows),
+            modal: Some(modal),
+        };
+
+        let LockedTransition {
+            path,
+            pending_clipboard_clear,
+        } = lock_on_expiry(path, vault, store, discards, pending_clipboard);
+
+        // Restore the pending clipboard slot (which `lock_on_expiry`
+        // carries forward verbatim) so the per-tick wake still fires
+        // only-if-unchanged after lock. The reveal windows and dialog
+        // controllers are intentionally NOT restored.
+        self.pending_clipboard = pending_clipboard_clear;
+
+        // Disarm the idle source so any in-flight `IdleEvent` posted
+        // before the next dispatch sees a clean state. The
+        // dispatch epilogue's `apply_auto_lock_timer_transition`
+        // then tears down `auto_lock_source` (already cleared by
+        // `handle_auto_lock_timer_fired`'s `Lock` branch — the
+        // one-shot consumed itself).
+        self.idle_source.disarm();
+
+        let new_state = AppState::Locked { path };
+        self.remount_for_state(&new_state, sender);
+        self.state = Some(new_state);
+    }
+
     fn apply_ticker_transition(&mut self, sender: &ComponentSender<Self>) {
         let Some(state) = self.state.as_ref() else {
             // Pre-init or post-Quit; tear down any source so a

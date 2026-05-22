@@ -3754,14 +3754,58 @@ sign-off.
     `idle_source_is_expired_returns_false_when_disarmed`,
     `idle_source_disarm_clears_deadline`, and
     `idle_source_refresh_consistent_with_idle_event_deadline_helper`.)
-  - [ ] Drive the auto-lock timer via `glib::timeout_add_local`
+  - [x] Drive the auto-lock timer via `glib::timeout_add_local`
     against `IdlePolicy::next_deadline` / `is_expired`; arm only
     when `IdlePolicy::should_arm` returns `true` for the current
     `Vault::is_encrypted()` value so plaintext vaults remain
     unarmed via the core decision (not a GUI shortcut).
-  - [ ] On expiry, drop `Vault`, switch `AppModel` to `Locked`,
+    (`auto_lock_timer_transition` collapses the
+    `(was_installed, IdleSource::is_armed())` matrix into the typed
+    `NoChange` / `Install(remaining)` / `Teardown` outcome — the
+    `Install` duration is `deadline.saturating_duration_since(now)`
+    so a slow probe past the deadline still saturates at zero rather
+    than wrapping. `AppModel::apply_auto_lock_timer_transition`
+    routes the decision into `glib::timeout_add_local_once` and is
+    called from the dispatch epilogue alongside the TOTP ticker
+    transition. Pinned by
+    `auto_lock_timer_transition_install_when_armed_and_not_installed`,
+    `auto_lock_timer_transition_teardown_when_disarmed_and_installed`,
+    `auto_lock_timer_transition_nochange_when_armed_and_installed`,
+    `auto_lock_timer_transition_nochange_when_disarmed_and_not_installed`,
+    `auto_lock_timer_transition_install_uses_deadline_minus_now`, and
+    `auto_lock_timer_transition_install_saturates_at_zero_when_now_past_deadline`.
+    The `glib::timeout_add_local_once` callback posts
+    `AppMsg::AutoLockTimerFired(Instant::now())`; the fire handler
+    resolves the firing through `evaluate_timer_fire` so a deadline
+    pushed forward between install and fire produces
+    `Reschedule(remaining)` instead of an early lock — pinned by
+    `evaluate_timer_fire_lock_when_expired`,
+    `evaluate_timer_fire_reschedule_when_armed_in_future`, and
+    `evaluate_timer_fire_cancel_when_disarmed`.)
+  - [x] On expiry, drop `Vault`, switch `AppModel` to `Locked`,
     discard open HOTP reveal windows, the search query, and any
     open dialog, then re-present `UnlockComponent`.
+    (`AppModel::lock_on_auto_lock_expiry` moves the live
+    `(Vault, Store)` pair, the reveal-window map, the search query,
+    and every open dialog controller (rename / remove / add /
+    settings / import / export / passphrase) by value into
+    `crate::auto_lock::lock_on_expiry`, which returns a
+    `LockedTransition` carrying only the path and any pending
+    clipboard auto-clear. The reinstated pending clipboard preserves
+    the only-if-unchanged wake across lock per
+    `IMPLEMENTATION_PLAN_04_GTK.md` §"Tests >
+    `tests/clipboard_clear_logic.rs`"; the reveal windows and dialog
+    controllers are intentionally dropped so their zeroizing
+    secret buffers wipe in lockstep with the vault drop. The new
+    `AppState::Locked { path }` is then mounted through
+    `AppModel::remount_for_state`, which presents
+    `UnlockDialogComponent` over the cleared content tree. Pinned by
+    the pre-existing
+    `lock_on_expiry_carries_only_the_path_forward`,
+    `lock_on_expiry_discards_open_reveal_and_modal_when_none`, and
+    `lock_on_expiry_drops_vault_so_secrets_do_not_outlive_lock`
+    tests against `crate::auto_lock::lock_on_expiry` — the
+    pure-logic contract the `AppModel` glue routes through.)
   - [ ] Re-ask `IdlePolicy::should_arm` after every successful
     `PassphraseDialog` transition so arm/disarm tracks the on-disk
     vault mode without re-inspecting the file.

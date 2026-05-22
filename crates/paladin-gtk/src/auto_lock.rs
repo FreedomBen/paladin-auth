@@ -17,7 +17,7 @@
 //! drift into a GUI shortcut.
 
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use paladin_core::policy::auto_lock::IdlePolicy;
 use paladin_core::{Store, Vault};
@@ -199,5 +199,113 @@ impl IdleSource {
     /// Clear the deadline. Used on lock, quit, and vault drop.
     pub fn disarm(&mut self) {
         self.deadline = None;
+    }
+}
+
+/// Lifecycle transition the auto-lock `glib::timeout_add_local` driver
+/// should apply when the `(was_installed, idle_source)` pair changes.
+///
+/// Mirrors [`crate::ticker::TickerTransition`]'s typed-decision shape
+/// so the widget layer's install / teardown call sites are exhaustive
+/// against the four cells of the truth table and cannot thrash the
+/// source by ignoring a no-op transition. The
+/// [`IdlePolicy`][paladin_core::policy::auto_lock::IdlePolicy]
+/// arm/disarm decision lives in core; this enum is the pure-logic
+/// glue between [`IdleSource::is_armed`] and the GTK timeout source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoLockTimerTransition {
+    /// No change — the source is already in the right state for the
+    /// current `(was_installed, idle_source)` pair. The widget layer
+    /// makes no `glib::timeout_add_local` / `glib::source_remove`
+    /// calls.
+    NoChange,
+    /// Install a fresh `glib::timeout_add_local` one-shot source at
+    /// the carried [`Duration`] (computed as
+    /// `deadline.saturating_duration_since(now)` so a slow probe past
+    /// the deadline still saturates at zero rather than wrapping).
+    Install(Duration),
+    /// Tear down the existing `glib::timeout_add_local` source. Used
+    /// on lock, quit, and any transition that disarms the source
+    /// (plaintext / opted-out / passphrase removal).
+    Teardown,
+}
+
+/// Collapse the `(was_installed, idle_source.is_armed())` matrix into
+/// a single [`AutoLockTimerTransition`] outcome.
+///
+/// The four outcomes:
+///
+/// | `was_installed` | `idle_source.is_armed()` | result                |
+/// |-----------------|--------------------------|-----------------------|
+/// | `false`         | `true`                   | `Install(remaining)`  |
+/// | `true`          | `false`                  | `Teardown`            |
+/// | `true`          | `true`                   | `NoChange`            |
+/// | `false`         | `false`                  | `NoChange`            |
+///
+/// The `NoChange` cell for an armed source plus an installed source
+/// is deliberate: the existing one-shot will fire and
+/// [`evaluate_timer_fire`] will resolve to `Reschedule` if the
+/// deadline got pushed forward in the interim. That avoids a
+/// `glib::source_remove` + `glib::timeout_add_local` round trip on
+/// every key press.
+///
+/// The `Install` duration is `deadline.saturating_duration_since(now)`
+/// so a `now` past the deadline produces `Duration::ZERO`; the source
+/// fires immediately and [`evaluate_timer_fire`] resolves to `Lock`.
+#[must_use]
+pub fn auto_lock_timer_transition(
+    was_installed: bool,
+    idle_source: &IdleSource,
+    now: Instant,
+) -> AutoLockTimerTransition {
+    match (was_installed, idle_source.deadline()) {
+        (true, None) => AutoLockTimerTransition::Teardown,
+        (false, Some(deadline)) => {
+            AutoLockTimerTransition::Install(deadline.saturating_duration_since(now))
+        }
+        (false, None) | (true, Some(_)) => AutoLockTimerTransition::NoChange,
+    }
+}
+
+/// Pure-logic decision for what an auto-lock
+/// `glib::timeout_add_local` callback should do when it fires.
+///
+/// `Lock` triggers the §"Auto-lock and clipboard auto-clear" expiry
+/// transition — the model drops `Vault`, switches `AppModel` to
+/// `Locked`, discards open HOTP reveal windows, the search query, and
+/// any open dialog, then re-presents `UnlockComponent`.
+/// `Reschedule(remaining)` installs a fresh one-shot for the new
+/// deadline (the previous source must have fired early because the
+/// deadline got pushed forward by an idle event after install).
+/// `Cancel` drops the timer without locking (source was disarmed
+/// after install — e.g. a passphrase transition replaced the vault
+/// with a plaintext one, or the user toggled auto-lock off).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoLockFireDecision {
+    /// Lock the vault — the source's deadline elapsed by `now`.
+    Lock,
+    /// Source is still armed but the deadline is in the future.
+    /// Install a fresh one-shot at the carried [`Duration`].
+    Reschedule(Duration),
+    /// Source is disarmed; drop the fired timer without locking.
+    Cancel,
+}
+
+/// Resolve a fired auto-lock timer against the current
+/// [`IdleSource`] state.
+///
+/// The fire handler in `AppModel` consumes the returned
+/// [`AutoLockFireDecision`] to either lock the vault, reschedule a
+/// fresh one-shot for the new deadline, or drop the timer without
+/// locking. The decision routes the expiry check through
+/// [`IdleSource::is_expired`] (and therefore
+/// [`IdlePolicy::is_expired`][paladin_core::policy::auto_lock::IdlePolicy::is_expired])
+/// so the monotonic comparison lives in core.
+#[must_use]
+pub fn evaluate_timer_fire(idle_source: &IdleSource, now: Instant) -> AutoLockFireDecision {
+    match idle_source.deadline() {
+        None => AutoLockFireDecision::Cancel,
+        Some(deadline) if is_expired(deadline, now) => AutoLockFireDecision::Lock,
+        Some(deadline) => AutoLockFireDecision::Reschedule(deadline.saturating_duration_since(now)),
     }
 }
