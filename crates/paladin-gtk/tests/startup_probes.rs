@@ -18,10 +18,34 @@
 //! string format is locked here.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use paladin_gtk::app::model::{run_startup_probes, startup_state_marker, StartupOutcome};
 use paladin_gtk::app::state::AppState;
 use paladin_gtk::startup_error::StartupErrorSource;
+
+/// Ensure `gtk4::init()` runs at most once for the lifetime of the
+/// test binary, regardless of how many tests need a live GTK
+/// environment.
+///
+/// `gtk4::init()` is documented as idempotent, but calling it
+/// repeatedly across multiple tests in a single thread (which is
+/// what `--test-threads=1` produces) interleaves with the
+/// just-dropped widgets from the prior test that have not yet had
+/// their pending `GLib` teardown messages flushed. The resulting
+/// memory state can SIGSEGV when the next `gtk4::Button::new()`
+/// touches the same global object pool. Caching the outcome in an
+/// [`OnceLock`] sidesteps the reentry entirely: every test reads the
+/// same `bool` and only the first call exercises the C-side init.
+///
+/// Returns `true` when GTK is initialized on this process and tests
+/// may construct widgets, `false` when init failed (typically
+/// "no display server"; CI runs under `xvfb-run` per the Milestone
+/// 7 checklist) and callers should `return` rather than crash.
+fn ensure_gtk_initialized() -> bool {
+    static GTK_INIT: OnceLock<bool> = OnceLock::new();
+    *GTK_INIT.get_or_init(|| gtk4::init().is_ok())
+}
 
 /// Helper: create a plaintext vault at `<tempdir>/vault.bin` and
 /// drop the `(Vault, Store)` pair so the file is closed before the
@@ -573,7 +597,7 @@ fn apply_app_search_button_visibility_updates_existing_button_for_a_new_state() 
     // will construct successfully. On dev environments without
     // a display server we skip rather than fail — CI runs
     // under `xvfb-run` per the Milestone 7 checklist.
-    if gtk4::init().is_err() {
+    if !ensure_gtk_initialized() {
         println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
         return;
     }
@@ -2219,7 +2243,7 @@ fn format_app_window_accelerator_bindings_parse_via_gtk_accelerator_parse() {
     use gtk4::glib::translate::IntoGlib;
     use paladin_gtk::app::model::format_app_window_accelerator_bindings;
 
-    if gtk4::init().is_err() {
+    if !ensure_gtk_initialized() {
         println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
         return;
     }
@@ -2488,7 +2512,7 @@ fn build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a
     // display server we skip the assertions rather than fail —
     // the `xvfb-run`-driven `tests/gtk_smoke.rs` still covers
     // the end-to-end dialog mount.
-    if gtk4::init().is_err() {
+    if !ensure_gtk_initialized() {
         println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
         return;
     }
@@ -3190,7 +3214,7 @@ fn apply_app_add_button_sensitive_updates_existing_button_for_a_new_state() {
     use paladin_gtk::app::state::AppState;
     use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
 
-    if gtk4::init().is_err() {
+    if !ensure_gtk_initialized() {
         println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
         return;
     }
@@ -3299,7 +3323,7 @@ fn apply_app_add_button_visibility_updates_existing_button_for_a_new_state() {
     // construct successfully. On dev environments without a
     // display server we skip rather than fail — CI runs under
     // `xvfb-run` per the Milestone 7 checklist.
-    if gtk4::init().is_err() {
+    if !ensure_gtk_initialized() {
         println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
         return;
     }
