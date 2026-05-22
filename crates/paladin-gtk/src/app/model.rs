@@ -1904,6 +1904,45 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
+            AppMsg::AddAccountAction(AddAccountOutput::RequestScanClipboard) => {
+                // Clipboard-QR activation entry point. Symmetric
+                // with `RequestSaveClick`: the dialog forwards the
+                // page-local Scan button click up to `AppModel`
+                // because the live `gdk::Display` / `gdk::Clipboard`
+                // / `gdk::TextureDownloader` round-trip and the
+                // `Vault::mutate_and_save(|v|
+                // v.import_accounts(...))` worker both live on the
+                // parent.
+                //
+                // Initial-stage landing: the request is wired
+                // through the dispatch so the staged rollout's next
+                // commits (texture-layout validation via
+                // `crate::qr_clipboard::prepare_rgba_layout`,
+                // `gdk::MemoryFormat::R8g8b8a8` download,
+                // `run_qr_worker` dispatch on `gio::spawn_blocking`,
+                // and `QrSuccess` / `WorkerFailed` routing) can
+                // attach behavior on top of this arm without
+                // re-plumbing the message path. The current arm is
+                // a defensive no-op: short-circuit when the cached
+                // `(Vault, Store)` pair or `AppState::Unlocked`
+                // cache is unavailable (`UnlockedBusy`, `Locked`,
+                // `Missing`, `StartupError`) so a stray dispatch
+                // during a worker round trip cannot punch through.
+                if let (Some(_controller), Some(_), Some(app_state)) = (
+                    self.add_dialog.as_ref(),
+                    self.vault.as_ref(),
+                    self.state.as_ref(),
+                ) {
+                    if matches!(app_state, AppState::Unlocked { .. }) {
+                        // GDK clipboard read + texture download +
+                        // `run_qr_worker` dispatch land in follow-
+                        // up commits per
+                        // `IMPLEMENTATION_PLAN_04_GTK.md` §
+                        // "`AddAccountComponent` QR clipboard image
+                        // path" sub-items L2666-L2673.
+                    }
+                }
+            }
             AppMsg::RemoveDialogAction(RemoveDialogOutput::SubmitConfirm { account_id }) => {
                 // Entry side of the `gio::spawn_blocking
                 // Vault::mutate_and_save(|v| v.remove(account_id))`

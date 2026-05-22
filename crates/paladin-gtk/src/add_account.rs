@@ -1437,15 +1437,16 @@ pub enum AddAccountMsg {
     /// `AddPath::Qr => false` arm) and presents this page-local
     /// "Scan clipboard" button instead.
     ///
-    /// Initial milestone landing: the variant exists so the
-    /// widget's `connect_clicked[sender] => sender.input(...)` can
-    /// dispatch into [`apply_msg`], but the `AppModel`-side handler
-    /// that reads the GDK clipboard, runs the worker, and routes
-    /// success / failure back through [`Self::QrSuccess`] /
-    /// [`Self::WorkerFailed`] lands in follow-up commits — parity
-    /// with the [`Self::WorkerFailed`] staged rollout. For now the
-    /// arm is a state-side no-op; see
-    /// `tests/add_account_logic.rs::apply_msg_scan_clipboard_clicked_emits_no_output_in_initial_stage`.
+    /// [`apply_msg`] emits
+    /// [`AddAccountOutput::RequestScanClipboard`] without mutating
+    /// dialog state so the parent can drive the clipboard read
+    /// against the live `(Vault, Store)` pair. The follow-up
+    /// `AppModel`-side handler reads the GDK clipboard, runs the
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v|
+    /// v.import_accounts(...))` worker, and routes success /
+    /// failure back through [`Self::QrSuccess`] /
+    /// [`Self::WorkerFailed`]. Pinned by
+    /// `tests/add_account_logic.rs::apply_msg_scan_clipboard_clicked_emits_request_scan_clipboard_output`.
     ScanClipboardClicked,
     /// Clipboard-QR worker reported a successful import. `AppModel`
     /// extracts the [`QrImportSummary`] from the worker's
@@ -1489,9 +1490,15 @@ pub enum AddAccountMsg {
 ///
 /// `Cancel` dismisses the dialog; `Submit` ships the validated
 /// [`Account`] to `AppModel` so the `gio::spawn_blocking
-/// Vault::mutate_and_save(|v| v.add(account))` worker can run. The
-/// QR sub-path (`Vec<ValidatedAccount>`) lands as a separate variant
-/// alongside the QR widget body in a follow-up commit.
+/// Vault::mutate_and_save(|v| v.add(account))` worker can run.
+/// `RequestScanClipboard` is the QR sub-path's wake-up signal —
+/// `AppModel` reads `gdk::Display::default().clipboard()`, validates
+/// the texture layout via [`crate::qr_clipboard::prepare_rgba_layout`],
+/// downloads through `gdk::TextureDownloader` with
+/// `gdk::MemoryFormat::R8g8b8a8`, and dispatches the
+/// `gio::spawn_blocking Vault::mutate_and_save(|v|
+/// v.import_accounts(...))` worker — the dialog never owns the
+/// `(Vault, Store)` pair, so the request has no payload.
 #[derive(Debug, Clone)]
 pub enum AddAccountOutput {
     /// User dismissed the dialog without saving. `AppModel` drops
@@ -1549,6 +1556,30 @@ pub enum AddAccountOutput {
     /// during a worker round trip cannot punch through to a
     /// duplicate check the live state cannot answer.
     RequestSaveClick,
+    /// Page-local "Scan clipboard" activation request emitted by
+    /// the QR sub-path. The dialog cannot drive the clipboard read
+    /// itself: the live `gdk::Display` / `gdk::Clipboard` /
+    /// `gdk::TextureDownloader` round-trip and the
+    /// `Vault::mutate_and_save(|v| v.import_accounts(...))` worker
+    /// both belong to the parent. `AppModel` reads
+    /// `gdk::Display::default().clipboard()`, validates the texture
+    /// layout via [`crate::qr_clipboard::prepare_rgba_layout`],
+    /// downloads through a `gdk::TextureDownloader` set to
+    /// `gdk::MemoryFormat::R8g8b8a8`, hands the buffer to
+    /// [`crate::qr_clipboard::decode_clipboard_qr`], and dispatches
+    /// [`crate::add_account::run_qr_worker`] on
+    /// `gio::spawn_blocking`. Success returns through
+    /// [`AddAccountMsg::QrSuccess`]; failure routes through
+    /// [`AddAccountMsg::WorkerFailed`].
+    ///
+    /// Symmetric partner of [`Self::RequestSaveClick`]: a payload-
+    /// less wake-up signal the parent fulfils against its live
+    /// `(Vault, Store)` pair. `AppModel` defensively no-ops this
+    /// dispatch when the cached pair is unavailable
+    /// (`UnlockedBusy`, `Locked`, `Missing`, `StartupError`) so a
+    /// stray click during a worker round trip cannot trigger a
+    /// second concurrent merge.
+    RequestScanClipboard,
 }
 
 /// Construction parameters for [`AddAccountComponent`].
@@ -4114,20 +4145,23 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             Some(AddAccountOutput::RequestSaveClick)
         }
         AddAccountMsg::ScanClipboardClicked => {
-            // Initial-stage landing: see the
-            // `AddAccountMsg::ScanClipboardClicked` doc-comment. The
-            // GDK clipboard read, the `decode_clipboard_qr` call,
-            // and the QR worker dispatch all land in follow-up
-            // commits alongside the `AddAccountOutput`
-            // request variant and the `AppModel`-side handler.
-            // Mutating state here would conflate the page-local
-            // activation signal with downstream side effects the
-            // parent has not yet wired, so the arm is deliberately
-            // a no-op until the staged rollout is complete. Pinned
-            // by `apply_msg_scan_clipboard_clicked_emits_no_output_in_initial_stage` /
+            // Symmetric partner of the `SaveClicked` arm above: the
+            // dialog cannot drive the GDK clipboard read or the
+            // `Vault::mutate_and_save(|v| v.import_accounts(...))`
+            // worker itself (the live `(Vault, Store)` pair lives
+            // on `AppModel`), so the arm forwards the page-local
+            // activation up to the parent without mutating state.
+            // `AppModel` reads `gdk::Display::default().clipboard()`,
+            // runs `crate::qr_clipboard::prepare_rgba_layout`,
+            // downloads via `gdk::TextureDownloader` set to
+            // `gdk::MemoryFormat::R8g8b8a8`, and dispatches the QR
+            // worker on `gio::spawn_blocking`. Success / failure
+            // route back through `AddAccountMsg::QrSuccess` /
+            // `AddAccountMsg::WorkerFailed`. Pinned by
+            // `apply_msg_scan_clipboard_clicked_emits_request_scan_clipboard_output` /
             // `apply_msg_scan_clipboard_clicked_preserves_active_path` /
             // `apply_msg_scan_clipboard_clicked_does_not_disturb_manual_or_uri_buffers`.
-            None
+            Some(AddAccountOutput::RequestScanClipboard)
         }
         AddAccountMsg::QrSuccess(summary) => {
             // Clear any prior pre-effect inline_error and post-
@@ -4502,18 +4536,17 @@ impl SimpleComponent for AddAccountComponent {
                     // the clipboard-image-read pipeline instead.
                     //
                     // The click dispatches `AddAccountMsg::ScanClipboardClicked`
-                    // into `apply_msg`. The current initial-stage
-                    // arm is a state-side no-op; the
-                    // `AppModel`-side handler that reads the GDK
+                    // into `apply_msg`, which forwards an
+                    // `AddAccountOutput::RequestScanClipboard` to
+                    // `AppModel`. The parent reads the GDK
                     // clipboard via `gdk::Display::default().clipboard()`,
                     // downloads the texture through
                     // `gdk::TextureDownloader` set to
                     // `gdk::MemoryFormat::R8g8b8a8`, runs
                     // `crate::qr_clipboard::decode_clipboard_qr`,
-                    // and dispatches the QR worker lands in
-                    // follow-up commits alongside the matching
-                    // `AddAccountOutput` request variant — parity
-                    // with the staged `WorkerFailed` rollout.
+                    // and dispatches the QR worker against the
+                    // live `(Vault, Store)` pair — the dialog
+                    // never owns that pair.
                     //
                     // Sensitivity binds through
                     // `compose_scan_clipboard_button_sensitive`,

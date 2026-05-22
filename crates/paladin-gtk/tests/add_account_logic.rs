@@ -10788,17 +10788,15 @@ fn compose_scan_clipboard_button_sensitive_inactive_when_busy() {
 }
 
 #[test]
-fn apply_msg_scan_clipboard_clicked_emits_no_output_in_initial_stage() {
-    // Initial milestone landing: the `AddAccountMsg::ScanClipboardClicked`
-    // variant exists so the widget's button click can dispatch into
-    // the `apply_msg` routing, but the AppModel-side handler that
-    // actually reads `gdk::Clipboard`, allocates the RGBA buffer,
-    // calls `decode_clipboard_qr`, and dispatches the QR worker
-    // lands in a follow-up commit alongside the
-    // `AddAccountOutput::RequestScanClipboard` (or equivalent) wiring.
-    // Pin the no-output behavior so the staged rollout stays
-    // explicit — parity with the `WorkerFailed` variant's staged
-    // landing in commit `ae8fd44`.
+fn apply_msg_scan_clipboard_clicked_emits_request_scan_clipboard_output() {
+    // The `AddAccountMsg::ScanClipboardClicked` arm forwards the
+    // page-local activation up to `AppModel` via
+    // `AddAccountOutput::RequestScanClipboard` — symmetric with
+    // `RequestSaveClick` on the manual / URI paths. The dialog
+    // cannot drive the GDK clipboard read itself: the live
+    // `gdk::Display` / `gdk::Clipboard` / `gdk::TextureDownloader`
+    // round-trip and the `Vault::mutate_and_save(|v|
+    // v.import_accounts(...))` worker both belong to the parent.
     use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
     use paladin_gtk::secret_fields::AddPath;
 
@@ -10807,10 +10805,10 @@ fn apply_msg_scan_clipboard_clicked_emits_no_output_in_initial_stage() {
     let output: Option<AddAccountOutput> =
         apply_msg(&mut state, AddAccountMsg::ScanClipboardClicked);
     assert!(
-        output.is_none(),
-        "the initial-stage Scan clipboard click is a state-side no-op; \
-         the parent wiring that reads the GDK clipboard and dispatches a QR worker \
-         lands in a follow-up commit",
+        matches!(output, Some(AddAccountOutput::RequestScanClipboard)),
+        "ScanClipboardClicked must emit AddAccountOutput::RequestScanClipboard \
+         so AppModel can run the clipboard read against the live (Vault, Store) pair; \
+         got {output:?}",
     );
 }
 
