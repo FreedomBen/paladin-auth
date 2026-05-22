@@ -4320,8 +4320,33 @@ sign-off.
     `depends:` drifts from the exact `libgtk-4-1 (>= 4.16)` /
     `libadwaita-1-0 (>= 1.6)` baseline pair; or if a `scripts:`
     section sneaks in.
-  - [ ] Add `packaging/rpm/paladin-gtk.yaml` (`nfpm`) installing the
+  - [x] Add `packaging/rpm/paladin-gtk.yaml` (`nfpm`) installing the
     same payload with matching `gtk4` / `libadwaita` package names.
+    Pinned by `tests/packaging_rpm_nfpm_manifest_logic.rs`:
+    `rpm_manifest_exists_at_expected_path`,
+    `rpm_manifest_starts_with_spdx_license_header`,
+    `rpm_manifest_declares_package_name_paladin_gtk`,
+    `rpm_manifest_declares_linux_platform_and_amd64_arch`,
+    `rpm_manifest_declares_workspace_license`,
+    `rpm_manifest_declares_workspace_homepage`,
+    `rpm_manifest_declares_required_runtime_depends_with_fedora_package_names`,
+    `rpm_manifest_declares_no_extra_depends_beyond_baseline_set`,
+    `rpm_manifest_does_not_use_debian_package_names`,
+    `rpm_manifest_installs_every_required_destination`,
+    `rpm_manifest_sources_each_install_from_the_expected_in_tree_path`,
+    `rpm_manifest_in_tree_sources_all_exist_under_the_workspace`,
+    `rpm_manifest_has_no_maintainer_scripts_section`,
+    `rpm_manifest_binary_install_uses_executable_mode`, and
+    `rpm_manifest_install_layout_matches_deb_manifest_layout` — the
+    last of these is a cross-format check that asserts the `.rpm`
+    and `.deb` manifests stage byte-identical `dst:` layouts so
+    Fedora and Debian users land on the same filesystem footprint.
+    Together they fail if the manifest stops installing any of the
+    Milestone 7 destinations, if any `src` references a missing in-
+    tree path, if `depends:` drifts from `gtk4 >= 4.16` /
+    `libadwaita >= 1.6`, if a Debian-style `libgtk-4-1` /
+    `libadwaita-1-0` name slips in, or if a `scripts:` section
+    sneaks in.
   - [ ] Add `packaging/flatpak/paladin-gtk.yml` declaring
     `org.gnome.Platform//47` and the matching SDK, the §11.4 sandbox
     permissions (`xdg-data/paladin:create`,
