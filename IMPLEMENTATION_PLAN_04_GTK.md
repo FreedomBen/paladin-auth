@@ -4411,10 +4411,55 @@ sign-off.
     the strict-shell-mode directive, drops any `linuxdeploy` flag,
     bakes in a literal semver, or drifts the `UPDATE_INFORMATION`
     pointer away from the `FreedomBen/paladin` GitHub Releases feed.
-  - [ ] Make the build reproducible: vendored deps,
+  - [x] Make the build reproducible: vendored deps,
     `cargo build --locked`, `SOURCE_DATE_EPOCH` from the release
     tag, with the gresource bundle and `linuxdeploy` step both
     deterministic.
+    (The workspace toolchain stays pinned in `rust-toolchain.toml`
+    at the workspace root — `channel = "1.94.1"` matches the
+    `[workspace.package].rust-version = "1.94"` floor, and the
+    `profile = "minimal"` + explicit `components = ["rustfmt",
+    "clippy"]` list keeps the release toolchain footprint to
+    exactly the components the §10 CI gate needs. The AppImage
+    assembly script (`packaging/appimage/build-appimage.sh`) reads
+    `SOURCE_DATE_EPOCH` from the environment and re-exports it
+    when set, so the release pipeline's tag-derived timestamp
+    propagates through `cargo build`, `linuxdeploy`,
+    `linuxdeploy-plugin-gtk`, and the `mksquashfs` step
+    `appimagetool` invokes transitively — that propagation is
+    what makes successive runs of the same tag produce
+    byte-identical `.AppImage` output. The fallback
+    `cargo build --release --locked -p paladin-gtk` invocation
+    keeps the lockfile authoritative at build time. Vendored
+    deps land via `cargo vendor` in the release pipeline (the
+    `vendor/` tree is not committed; the Flatpak manifest
+    already exercises the `--offline` + vendored-source mode
+    pinned by
+    `tests/packaging_flatpak_manifest_logic.rs::flatpak_manifest_uses_locked_offline_cargo_build`).
+    The gresource bundle stays deterministic via `build.rs`
+    invoking `glib_build_tools::compile_resources` against the
+    fixed-order `data/paladin-gtk.gresource.xml` alias list
+    (pinned by `tests/gresource_manifest_logic.rs::manifest_uses_explicit_file_entries_not_globs`).
+    Pinned by
+    `tests/packaging_reproducible_build_logic.rs::rust_toolchain_file_exists_at_workspace_root`,
+    `rust_toolchain_declares_toolchain_table_header`,
+    `rust_toolchain_pins_a_concrete_channel_version`,
+    `rust_toolchain_declares_rustfmt_and_clippy_components`,
+    `rust_toolchain_uses_minimal_profile`,
+    `rust_toolchain_channel_matches_workspace_rust_version_floor`,
+    `appimage_script_reads_source_date_epoch_from_environment`,
+    `appimage_script_exports_source_date_epoch_for_linuxdeploy_subprocess`,
+    `appimage_script_uses_cargo_build_locked`,
+    `appimage_script_cargo_invocations_target_release_profile`,
+    `extract_toolchain_channel_returns_quoted_value`,
+    `extract_toolchain_channel_returns_none_when_absent`,
+    `extract_toolchain_channel_handles_single_quotes`,
+    `extract_workspace_rust_version_returns_value_inside_workspace_package`,
+    and
+    `extract_workspace_rust_version_ignores_rust_version_outside_workspace_package` —
+    together these fail if the toolchain pin drifts, the AppImage
+    script stops propagating `SOURCE_DATE_EPOCH`, or a `cargo
+    build` invocation in the script drops `--locked` / `--release`.)
   - [ ] Sign `.deb`, `.rpm`, and AppImage with `minisign` per §11.6;
     publish the public key + signature alongside each artifact on
     GitHub Releases.

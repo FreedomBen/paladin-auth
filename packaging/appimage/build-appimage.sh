@@ -10,10 +10,22 @@
 # or pixbuf loader set is older than the bundled binary requires.
 #
 # Inputs (env vars):
-#   PALADIN_VERSION   Required. Release-tag-derived semver the release
-#                     pipeline injects, matching the workspace
-#                     [workspace.package].version. Drives the output
-#                     filename and ${OUTPUT}'s version slot.
+#   PALADIN_VERSION    Required. Release-tag-derived semver the release
+#                      pipeline injects, matching the workspace
+#                      [workspace.package].version. Drives the output
+#                      filename and ${OUTPUT}'s version slot.
+#   SOURCE_DATE_EPOCH  Optional. Release-tag-derived Unix timestamp
+#                      (DESIGN.md §11.6 "Reproducible builds"). When
+#                      set, the script exports it so the cargo build,
+#                      linuxdeploy, linuxdeploy-plugin-gtk, and the
+#                      mksquashfs step appimagetool invokes all see
+#                      it — which is what makes successive runs of
+#                      the same tag produce byte-identical .AppImage
+#                      output. The release pipeline injects it from
+#                      `git log -1 --format=%ct ${tag}`; local dry
+#                      runs may leave it unset (the resulting
+#                      .AppImage is then unreproducible but
+#                      otherwise correct).
 #
 # Inputs (CLI):
 #   none. The release artifact paths are computed from
@@ -47,6 +59,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 cd "${WORKSPACE_ROOT}"
+
+# Export SOURCE_DATE_EPOCH (if set by the release pipeline) so every
+# subprocess this script spawns — cargo build, linuxdeploy,
+# linuxdeploy-plugin-gtk, and the mksquashfs step appimagetool invokes
+# transitively — embeds the same tag-timestamp instead of wall-clock
+# `now`. That is what DESIGN.md §11.6 "Reproducible builds" relies on
+# to guarantee byte-identical AppImage output across re-runs of the
+# same tag. Pinned by
+# crates/paladin-gtk/tests/packaging_reproducible_build_logic.rs::appimage_script_exports_source_date_epoch_for_linuxdeploy_subprocess.
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+  export SOURCE_DATE_EPOCH
+fi
 
 # Build the release binary if it is not already present. The release
 # pipeline ordinarily runs `cargo build --release --locked` ahead of
