@@ -31,8 +31,8 @@ use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Algorithm, Cod
 use paladin_gtk::account_row::{
     apply_busy_mask, code_display, copy_enabled, counter_display, kebab_enabled, kebab_visible,
     next_button_enabled, next_button_visible, progress_display, progress_fraction,
-    progress_visible, project_row, summary_display_label, CodeDisplay, CounterText,
-    ProgressDisplay, RowDisplay,
+    progress_urgency, progress_visible, project_row, summary_display_label, CodeDisplay,
+    CounterText, ProgressDisplay, ProgressUrgency, RowDisplay, PROGRESS_URGENCY_CSS_CLASSES,
 };
 
 // ---------------------------------------------------------------------------
@@ -251,6 +251,144 @@ fn progress_fraction_zero_period_returns_zero_defensively() {
         seconds_remaining: 5,
     };
     assert!(progress_fraction(&p).abs() < f64::EPSILON);
+}
+
+// ---------------------------------------------------------------------------
+// `progress_urgency` — TOTP gauge color band (`Plenty` / `Warning` / `Critical`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn progress_urgency_full_window_is_plenty() {
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 30,
+    };
+    assert_eq!(progress_urgency(&p), ProgressUrgency::Plenty);
+}
+
+#[test]
+fn progress_urgency_just_above_plenty_threshold_is_plenty() {
+    // 16s remaining → still green.
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 16,
+    };
+    assert_eq!(progress_urgency(&p), ProgressUrgency::Plenty);
+}
+
+#[test]
+fn progress_urgency_at_plenty_threshold_flips_to_warning() {
+    // 15s remaining → yellow.  "Green until 15 seconds remaining"
+    // means the instant the bar shows 15, the user has flipped into
+    // the warning band.
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 15,
+    };
+    assert_eq!(progress_urgency(&p), ProgressUrgency::Warning);
+}
+
+#[test]
+fn progress_urgency_just_above_critical_threshold_is_warning() {
+    // 6s remaining → still yellow.
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 6,
+    };
+    assert_eq!(progress_urgency(&p), ProgressUrgency::Warning);
+}
+
+#[test]
+fn progress_urgency_at_critical_threshold_flips_to_critical() {
+    // 5s remaining → red.  "Yellow until 5 seconds remaining"
+    // means the instant the bar shows 5, the user has flipped into
+    // the critical band.
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 5,
+    };
+    assert_eq!(progress_urgency(&p), ProgressUrgency::Critical);
+}
+
+#[test]
+fn progress_urgency_one_second_remaining_is_critical() {
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 1,
+    };
+    assert_eq!(progress_urgency(&p), ProgressUrgency::Critical);
+}
+
+#[test]
+fn progress_urgency_zero_seconds_remaining_is_critical() {
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 0,
+    };
+    assert_eq!(progress_urgency(&p), ProgressUrgency::Critical);
+}
+
+#[test]
+fn progress_urgency_clamps_overflow_to_period_then_classifies() {
+    // `paladin_core` pins seconds_remaining to `1..=period`, but the
+    // helper clamps defensively — a >period value still classifies
+    // by the clamped count, not the raw input.
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 999,
+    };
+    assert_eq!(progress_urgency(&p), ProgressUrgency::Plenty);
+}
+
+#[test]
+fn progress_urgency_zero_period_is_critical_defensively() {
+    // `paladin_core::validation` rejects a zero period upstream;
+    // the helper still returns a total result rather than panicking.
+    let p = ProgressDisplay {
+        period_secs: 0,
+        seconds_remaining: 30,
+    };
+    assert_eq!(progress_urgency(&p), ProgressUrgency::Critical);
+}
+
+#[test]
+fn progress_urgency_short_period_lands_in_matching_band() {
+    // Short-period TOTP (rare but legal): a 10s period with 10s
+    // remaining is fully fresh but still within the warning band,
+    // because urgency is absolute seconds — the user-visible meaning
+    // is "how much time you have to read + copy."
+    let p = ProgressDisplay {
+        period_secs: 10,
+        seconds_remaining: 10,
+    };
+    assert_eq!(progress_urgency(&p), ProgressUrgency::Warning);
+}
+
+#[test]
+fn progress_urgency_css_class_matches_canonical_slice() {
+    // The `bind_row` "wipe all three, add the active one" pattern
+    // relies on every urgency's class living in
+    // `PROGRESS_URGENCY_CSS_CLASSES`.
+    for urgency in [
+        ProgressUrgency::Plenty,
+        ProgressUrgency::Warning,
+        ProgressUrgency::Critical,
+    ] {
+        assert!(
+            PROGRESS_URGENCY_CSS_CLASSES.contains(&urgency.css_class()),
+            "{urgency:?} css_class missing from PROGRESS_URGENCY_CSS_CLASSES",
+        );
+    }
+}
+
+#[test]
+fn progress_urgency_css_classes_are_adwaita_semantics() {
+    // Locks the three Adwaita semantic style classes the bind layer
+    // toggles — these names must match Adwaita so the bar tracks the
+    // user's theme rather than baking hex colors.
+    assert_eq!(ProgressUrgency::Plenty.css_class(), "success");
+    assert_eq!(ProgressUrgency::Warning.css_class(), "warning");
+    assert_eq!(ProgressUrgency::Critical.css_class(), "error");
 }
 
 // ---------------------------------------------------------------------------

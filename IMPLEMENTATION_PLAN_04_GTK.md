@@ -1176,6 +1176,12 @@ These run without a display server. Each lives under
   issuer / label combinations.
 - [x] TOTP rows show copy + progress controls; HOTP rows show copy
   only during reveal and expose the "next" action.
+- [x] TOTP gauge urgency (`progress_urgency`) classifies bands by
+  absolute seconds remaining: `>15s` → `ProgressUrgency::Plenty`
+  (Adwaita `.success`), `6..=15s` → `ProgressUrgency::Warning`
+  (`.warning`), `<=5s` → `ProgressUrgency::Critical` (`.error`).
+  Boundary transitions at 16→15 and 6→5 flip the class; clamped
+  overflow and the defensive `period_secs == 0` path are total.
 - [x] Hidden HOTP rows show the stored next counter; revealed rows
   show `Code.counter_used` until the reveal expires.
 - [x] Row projections keep code / counter display decisions pure so
@@ -1902,7 +1908,18 @@ sign-off.
     rows hide the bar via `progress_visible`. Per-tick refresh
     publishes a fresh `RowDisplay { progress: Some(_), .. }` through
     the existing `LiveDisplayCache`, so the bar updates in lockstep
-    with the visible code without a separate signal.
+    with the visible code without a separate signal. The bar fill is
+    colored by remaining-window urgency: `bind_row` strips every
+    class in `crate::account_row::PROGRESS_URGENCY_CSS_CLASSES`
+    before adding the active class returned by
+    `crate::account_row::progress_urgency(&ProgressDisplay).css_class()`
+    — `>15s` → `success` (green), `6..=15s` → `warning` (yellow),
+    `<=5s` → `error` (red). Adwaita's semantic style classes keep
+    the colors themable (light / dark / high-contrast) and
+    accessible without baking hex colors. Urgency thresholds are
+    absolute seconds (not fractions of the period) so the
+    user-visible meaning — "how much time you have to read and
+    copy the code" — stays constant across `period` values.
   - [x] For HOTP rows, render the "next" button that activates the
     `hotp_peek` / `hotp_advance` reveal worker (see "HOTP reveal"
     item below). The `AccountListOutput::AdvanceHotp(AccountId)`

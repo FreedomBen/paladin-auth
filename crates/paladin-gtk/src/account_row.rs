@@ -279,6 +279,79 @@ pub fn progress_fraction(progress: &ProgressDisplay) -> f64 {
     f64::from(remaining) / f64::from(progress.period_secs)
 }
 
+/// Adwaita CSS style classes [`bind_row`] toggles on the row's
+/// `gtk::ProgressBar` to color the fill by remaining-window urgency.
+///
+/// Indexed by the [`ProgressUrgency`] variant order so [`bind_row`]
+/// can wipe all three before adding the active one — the row never
+/// carries a stale urgency class between binds.  Using Adwaita's
+/// semantic classes (`success` / `warning` / `error`) rather than
+/// hardcoded hex keeps the bar themable (light / dark / high-contrast)
+/// and accessible.
+pub const PROGRESS_URGENCY_CSS_CLASSES: [&str; 3] = ["success", "warning", "error"];
+
+/// Urgency band of a TOTP gauge, used by [`bind_row`] to color the
+/// row's `gtk::ProgressBar` fill.
+///
+/// Bands are absolute seconds-remaining rather than fractions of the
+/// period — the user-visible meaning is "how much time you have to
+/// read and copy the code," which is the same regardless of the
+/// account's period.  TOTP accounts with periods shorter than a
+/// threshold simply mount in the matching band.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressUrgency {
+    /// More than 15 seconds remain.  Renders via the Adwaita
+    /// `.success` style class (green in default themes).
+    Plenty,
+    /// 6..=15 seconds remain.  Renders via the Adwaita `.warning`
+    /// style class (yellow in default themes).
+    Warning,
+    /// 0..=5 seconds remain — the window is about to rotate.
+    /// Renders via the Adwaita `.error` style class (red in default
+    /// themes).
+    Critical,
+}
+
+impl ProgressUrgency {
+    /// Returns the Adwaita CSS style class that colors the
+    /// `gtk::ProgressBar` fill for this urgency band.
+    ///
+    /// One of [`PROGRESS_URGENCY_CSS_CLASSES`]; the slice is the
+    /// canonical wipe-set [`bind_row`] strips before adding the
+    /// active class.
+    #[must_use]
+    pub fn css_class(self) -> &'static str {
+        match self {
+            Self::Plenty => PROGRESS_URGENCY_CSS_CLASSES[0],
+            Self::Warning => PROGRESS_URGENCY_CSS_CLASSES[1],
+            Self::Critical => PROGRESS_URGENCY_CSS_CLASSES[2],
+        }
+    }
+}
+
+/// Classify a [`ProgressDisplay`] into a [`ProgressUrgency`] band.
+///
+/// Thresholds, in seconds remaining (clamped to `period_secs` so a
+/// defensively over-large `seconds_remaining` never escapes the
+/// projection): `>15` → [`ProgressUrgency::Plenty`], `6..=15` →
+/// [`ProgressUrgency::Warning`], `<=5` → [`ProgressUrgency::Critical`].
+///
+/// A zero `period_secs` clamps remaining to zero and lands in
+/// [`ProgressUrgency::Critical`] defensively — `paladin_core::validation`
+/// rejects a zero period upstream, so this path never fires in
+/// practice but keeps the helper total.
+#[must_use]
+pub fn progress_urgency(progress: &ProgressDisplay) -> ProgressUrgency {
+    let remaining = progress.seconds_remaining.min(progress.period_secs);
+    if remaining > 15 {
+        ProgressUrgency::Plenty
+    } else if remaining > 5 {
+        ProgressUrgency::Warning
+    } else {
+        ProgressUrgency::Critical
+    }
+}
+
 /// Body for the row's code label.
 ///
 /// The widget renders [`CodeDisplay::Hidden`] as the row's hidden
@@ -890,8 +963,14 @@ pub fn bind_row(container: &gtk::Box, display: &RowDisplay) {
     code.set_label(&code_text);
 
     progress.set_visible(display.progress_visible);
+    for class in PROGRESS_URGENCY_CSS_CLASSES {
+        progress.remove_css_class(class);
+    }
     match display.progress {
-        Some(p) => progress.set_fraction(progress_fraction(&p)),
+        Some(p) => {
+            progress.set_fraction(progress_fraction(&p));
+            progress.add_css_class(progress_urgency(&p).css_class());
+        }
         None => progress.set_fraction(0.0),
     }
 
