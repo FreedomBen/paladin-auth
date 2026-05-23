@@ -1594,7 +1594,7 @@ impl SimpleComponent for AppModel {
         // `StartupError` are benign no-ops.
         wire_app_window_idle_controllers(&root, sender.input_sender());
 
-        // Register the pinned `<Control>n` / `<Control>q` /
+        // Register the pinned `<Control><Shift>n` / `<Control>q` /
         // `<Control>comma` accelerators on the shared application
         // so the Add, Quit, and Preferences `gio::SimpleAction`s
         // inserted on the bundled action group resolve through
@@ -5881,22 +5881,29 @@ pub fn format_app_add_button_action_name() -> &'static str {
 /// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Header bar > Add".
 ///
-/// Returns the gtk-rs accelerator spelling `"<Control>n"` —
-/// the same `<Ctrl>N` shortcut referenced verbatim on
-/// [`build_app_add_action`] and [`build_app_window_action_group`]
-/// docstrings. The widget binding consumes this via
+/// Returns the gtk-rs accelerator spelling `"<Control><Shift>n"` —
+/// the GNOME-HIG "New X" pattern (e.g. Files' "New Folder").
+/// The single-modifier slot `<Control>n` is reserved for the
+/// account-list "move one row down" mirror in
+/// [`crate::account_list::dispatch_list_box_nav`] / the search
+/// entry's [`crate::account_list::dispatch_search_entry_to_list_nav`],
+/// so the Add accelerator lives on the compound
+/// `<Control><Shift>` slot instead.
+///
+/// The widget binding consumes this via
 /// `gio::Application::set_accels_for_action(format_app_add_button_action(),
 /// &[format_app_add_button_accelerator()])` so the menu and
 /// button-driven activation paths share one shortcut surface
 /// against a single source of truth, instead of re-spelling
-/// `"<Control>n"` at the wiring site (which would silently
-/// drift away from the documented shortcut on a future rename).
+/// `"<Control><Shift>n"` at the wiring site (which would
+/// silently drift away from the documented shortcut on a future
+/// rename).
 ///
-/// The `<Control>n` form (uppercase modifier in angle brackets,
-/// lowercase key letter) matches gtk-rs `accels_for_action`'s
-/// recognised spelling; `<Primary>` would also resolve on Linux
-/// but `<Control>` keeps the helper aligned with the existing
-/// in-source documentation references.
+/// The `<Control><Shift>n` form (uppercase modifier names in
+/// angle brackets, lowercase key letter) matches gtk-rs
+/// `accels_for_action`'s recognised spelling; `<Primary>` would
+/// also resolve on Linux but `<Control>` keeps the helper aligned
+/// with the existing in-source documentation references.
 ///
 /// Pure — returns a `'static str` without allocating. Sibling
 /// of [`format_app_add_button_action`] (the fully-qualified
@@ -5906,7 +5913,7 @@ pub fn format_app_add_button_action_name() -> &'static str {
 /// source of truth.
 #[must_use]
 pub fn format_app_add_button_accelerator() -> &'static str {
-    "<Control>n"
+    "<Control><Shift>n"
 }
 
 /// Ordered `(accelerator, fully-qualified action target)` pairs
@@ -5916,8 +5923,8 @@ pub fn format_app_add_button_accelerator() -> &'static str {
 /// "Primary menu" / "Header bar > Add".
 ///
 /// Returns the four pinned accelerator surfaces in pinned
-/// order: Add (`<Control>n` → `app.add`), Quit (`<Control>q` →
-/// `app.quit`), Preferences (`<Control>comma` →
+/// order: Add (`<Control><Shift>n` → `app.add`), Quit
+/// (`<Control>q` → `app.quit`), Preferences (`<Control>comma` →
 /// `app.preferences`), and Keyboard Shortcuts
 /// (`<Control>question` → `app.shortcuts`). Each pair sources
 /// its accelerator from the matching `format_app_*_accelerator`
@@ -6378,9 +6385,9 @@ pub fn apply_app_busy_spinner(spinner: &gtk::Spinner, state: Option<&AppState>) 
 /// extension group, depending on how the binding chooses to
 /// scope action ownership); either path keeps the `+` button's
 /// affordance and the primary menu's affordances on the same
-/// `app` group prefix so the `<Ctrl>N` accelerator wired via
-/// `gio::Application::set_accels_for_action("app.add",
-/// &["<Control>n"])` resolves through this action.
+/// `app` group prefix so the `<Ctrl><Shift>N` accelerator wired
+/// via `gio::Application::set_accels_for_action("app.add",
+/// &["<Control><Shift>n"])` resolves through this action.
 ///
 /// Centralizing the construction in one helper means the bare
 /// action name (`"add"`), its parameter shape (no parameter),
@@ -6689,7 +6696,7 @@ pub fn wire_app_window_action_group(
 /// wiring. The key controller's
 /// [`connect_key_pressed`][gtk::EventControllerKey::connect_key_pressed]
 /// closure returns [`gtk::glib::Propagation::Proceed`] so other
-/// handlers (notably the `<Control>n` / `<Control>q` /
+/// handlers (notably the `<Control><Shift>n` / `<Control>q` /
 /// `<Control>comma` accelerators registered by
 /// [`wire_app_window_accelerators`] and the search-bar's own key
 /// controller) still receive the press unchanged.
@@ -6787,8 +6794,8 @@ pub fn dispatch_app_window_search_focus_key(
 /// not also reach the entry. On no match it returns
 /// [`gtk::glib::Propagation::Proceed`] so every other key (every
 /// printable character forwarded by `set_key_capture_widget`,
-/// `Ctrl+N` / `Ctrl+Q` / `Ctrl+,` / `Ctrl+?` accelerators, the
-/// `gtk::EventControllerKey` installed by
+/// `Ctrl+Shift+N` / `Ctrl+Q` / `Ctrl+,` / `Ctrl+?` accelerators,
+/// the `gtk::EventControllerKey` installed by
 /// [`wire_app_window_idle_controllers`]) is unaffected. The
 /// controller stays attached across state transitions; the
 /// `AppMsg::FocusSearch` handler is a benign no-op when
@@ -7022,10 +7029,10 @@ pub fn dispatch_startup_error_output(out: StartupErrorOutput) -> AppMsg {
 ///
 /// Centralizing the construction in one helper means the
 /// widget binding inserts a single group rather than two — the
-/// `<Ctrl>N` accelerator wired via
+/// `<Ctrl><Shift>N` accelerator wired via
 /// `gio::Application::set_accels_for_action("app.add",
-/// &["<Control>n"])` resolves through this group along with
-/// every menu accelerator. Sibling of
+/// &["<Control><Shift>n"])` resolves through this group along
+/// with every menu accelerator. Sibling of
 /// [`build_app_primary_menu_model`] on the menu side and
 /// [`build_app_primary_action_group`] /
 /// [`build_app_add_action`] on the per-half construction side;

@@ -522,8 +522,9 @@ pub fn default_row_activation(
 ///
 /// Returned by [`dispatch_list_box_nav`] to abstract over the
 /// equivalent ways the user can request "move one row up" or
-/// "move one row down": the literal arrow keys, and the vim-style
-/// Ctrl+K / Ctrl+J mirrors.
+/// "move one row down": the literal arrow keys, the vim-style
+/// Ctrl+K / Ctrl+J mirrors, and the readline-style Ctrl+P /
+/// Ctrl+N mirrors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListNavIntent {
     /// Move one row earlier in the list (or, at the first row,
@@ -540,13 +541,21 @@ pub enum ListNavIntent {
 ///
 /// Returns `true` when `keyval` / `mods` describes a request to
 /// hand keyboard focus from the search entry to the first row of
-/// the account list — namely the bare Down arrow or Ctrl+J. Any
-/// press carrying ALT / SUPER / HYPER / META is rejected (those
-/// compound chords are reserved for other shortcuts), and bare `j`
-/// returns `false` so the user can still type a literal "j" into
-/// the query. The Down arrow with `CONTROL_MASK` also returns
-/// `false` so `Ctrl+Down` (a different conventional shortcut on
-/// some platforms) is not stolen.
+/// the account list — namely the bare Down arrow, Ctrl+J (vim-
+/// style "move down" mirror), or Ctrl+N (readline-style "next"
+/// mirror). Any press carrying ALT / SUPER / HYPER / META is
+/// rejected (those compound chords are reserved for other
+/// shortcuts), and bare `j` / `n` return `false` so the user can
+/// still type those literals into the query. The Down arrow with
+/// `CONTROL_MASK` also returns `false` so `Ctrl+Down` (a different
+/// conventional shortcut on some platforms) is not stolen.
+///
+/// Ctrl+N additionally rejects `SHIFT_MASK` so the
+/// `<Control><Shift>n` "Add account" app accelerator (see
+/// [`crate::app::model::format_app_add_button_accelerator`])
+/// propagates untouched. Ctrl+J keeps its existing
+/// shift-tolerant behavior because no other accelerator currently
+/// reserves `<Control><Shift>j`.
 ///
 /// Pure logic so unit tests can pin the dispatch table without
 /// spinning up a display server.
@@ -563,9 +572,11 @@ pub fn dispatch_search_entry_to_list_nav(
         return false;
     }
     let ctrl = mods.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+    let shift = mods.contains(gtk::gdk::ModifierType::SHIFT_MASK);
     match keyval {
         gtk::gdk::Key::Down if !ctrl => true,
         gtk::gdk::Key::j | gtk::gdk::Key::J if ctrl => true,
+        gtk::gdk::Key::n | gtk::gdk::Key::N if ctrl && !shift => true,
         _ => false,
     }
 }
@@ -575,16 +586,25 @@ pub fn dispatch_search_entry_to_list_nav(
 /// [`wire_account_list_navigation_controllers`].
 ///
 /// Returns [`Some(ListNavIntent::Up)`][ListNavIntent::Up] for the
-/// bare Up arrow or Ctrl+K, and
+/// bare Up arrow, Ctrl+K (vim-style "move up" mirror), or
+/// Ctrl+P (readline-style "previous" mirror), and
 /// [`Some(ListNavIntent::Down)`][ListNavIntent::Down] for the bare
-/// Down arrow or Ctrl+J. Any press carrying ALT / SUPER / HYPER /
-/// META is rejected, as are arrow-key presses combined with
+/// Down arrow, Ctrl+J, or Ctrl+N. Any press carrying ALT / SUPER /
+/// HYPER / META is rejected, as are arrow-key presses combined with
 /// CONTROL (`Ctrl+Up` / `Ctrl+Down` are different shortcuts on some
-/// platforms and must not be stolen). Bare `j` / `k` return `None`
-/// so they keep the typing-to-search path open at the window-level
-/// `set_key_capture_widget`. Returns `None` for everything else,
-/// letting `gtk::ListBox`'s built-in `Home` / `End` / `Page_Up` /
-/// `Page_Down` bindings keep working.
+/// platforms and must not be stolen). Bare `j` / `k` / `n` / `p`
+/// return `None` so they keep the typing-to-search path open at the
+/// window-level `set_key_capture_widget`. Returns `None` for
+/// everything else, letting `gtk::ListBox`'s built-in `Home` /
+/// `End` / `Page_Up` / `Page_Down` bindings keep working.
+///
+/// Ctrl+N additionally rejects `SHIFT_MASK` so the
+/// `<Control><Shift>n` "Add account" app accelerator (see
+/// [`crate::app::model::format_app_add_button_accelerator`])
+/// propagates untouched. Ctrl+J / Ctrl+K / Ctrl+P keep their
+/// shift-tolerant behavior because no other accelerator currently
+/// reserves `<Control><Shift>j` / `<Control><Shift>k` /
+/// `<Control><Shift>p`.
 ///
 /// Pure logic so unit tests can pin the dispatch table without
 /// spinning up a display server.
@@ -601,11 +621,15 @@ pub fn dispatch_list_box_nav(
         return None;
     }
     let ctrl = mods.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+    let shift = mods.contains(gtk::gdk::ModifierType::SHIFT_MASK);
     match keyval {
         gtk::gdk::Key::Up if !ctrl => Some(ListNavIntent::Up),
         gtk::gdk::Key::Down if !ctrl => Some(ListNavIntent::Down),
-        gtk::gdk::Key::k | gtk::gdk::Key::K if ctrl => Some(ListNavIntent::Up),
+        gtk::gdk::Key::k | gtk::gdk::Key::K | gtk::gdk::Key::p | gtk::gdk::Key::P if ctrl => {
+            Some(ListNavIntent::Up)
+        }
         gtk::gdk::Key::j | gtk::gdk::Key::J if ctrl => Some(ListNavIntent::Down),
+        gtk::gdk::Key::n | gtk::gdk::Key::N if ctrl && !shift => Some(ListNavIntent::Down),
         _ => None,
     }
 }
@@ -759,7 +783,7 @@ pub enum AccountListMsg {
     /// Reveal the `gtk::SearchBar` and move keyboard focus onto the
     /// embedded `gtk::SearchEntry`. Posted by `AppModel` in response
     /// to the window-level `/` or `Ctrl+L` accelerator (and also by
-    /// the up-arrow / Ctrl+K edge handler in
+    /// the up-arrow / Ctrl+K / Ctrl+P edge handler in
     /// [`wire_account_list_navigation_controllers`]) so the user
     /// can start refining the search query without first reaching
     /// for the mouse or the header-bar toggle. Existing query text
@@ -875,10 +899,11 @@ impl SimpleComponent for AccountListComponent {
         });
 
         // Wire the cross-widget arrow-key navigation pair so Down /
-        // Ctrl+J hands focus from the search entry into the first
-        // row, Up / Ctrl+K at the first row hands focus back to the
-        // entry (with its query selected for replace-on-type), and
-        // Ctrl+J / Ctrl+K mirror the bare arrow keys inside the list.
+        // Ctrl+J / Ctrl+N hands focus from the search entry into the
+        // first row, Up / Ctrl+K / Ctrl+P at the first row hands
+        // focus back to the entry (with its query selected for
+        // replace-on-type), and Ctrl+J / Ctrl+K / Ctrl+N / Ctrl+P
+        // mirror the bare arrow keys inside the list.
         wire_account_list_navigation_controllers(&search_entry, factory.widget());
 
         // Enter on the focused `gtk::ListBoxRow` (or a double-click)
@@ -1071,17 +1096,19 @@ fn apply_list_box_selection(
 ///
 /// Two controllers cover four cases:
 ///
-/// * On `search_entry`: pressing Down (or Ctrl+J) hands keyboard
-///   focus to the first row of `list_box` (selecting it in the
-///   process). When the filtered list is empty the press is
+/// * On `search_entry`: pressing Down (or Ctrl+J / Ctrl+N) hands
+///   keyboard focus to the first row of `list_box` (selecting it
+///   in the process). When the filtered list is empty the press is
 ///   propagated so it remains a benign no-op.
-/// * On `list_box`: pressing Up (or Ctrl+K) while the focused row
-///   is the first row hands focus back to `search_entry` and calls
+/// * On `list_box`: pressing Up (or Ctrl+K / Ctrl+P) while the
+///   focused row is the first row hands focus back to
+///   `search_entry` and calls
 ///   [`gtk::Editable::select_region(0, -1)`][gtk::EditableExt::select_region]
 ///   so typing immediately replaces the prior query (matching the
 ///   `/` / Ctrl+L focus-search behavior). Up at any other row
 ///   moves the selection / focus one row earlier. Down (or
-///   Ctrl+J) moves one row later, stopping at the last row.
+///   Ctrl+J / Ctrl+N) moves one row later, stopping at the last
+///   row.
 ///
 /// Both controllers run at
 /// [`gtk::PropagationPhase::Capture`] so they fire before

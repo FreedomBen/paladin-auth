@@ -1704,7 +1704,7 @@ fn format_app_menu_preferences_accelerator_returns_control_comma() {
     // `format_app_add_button_accelerator` on the other pinned-
     // accelerator surfaces; together the trio is what a future
     // `wire_app_window_accelerators` helper iterates against
-    // `[(<Control>n, app.add), (<Control>q, app.quit),
+    // `[(<Control><Shift>n, app.add), (<Control>q, app.quit),
     //  (<Control>comma, app.preferences)]`.
     use paladin_gtk::app::model::format_app_menu_preferences_accelerator;
 
@@ -1891,7 +1891,7 @@ fn format_app_menu_quit_accelerator_returns_control_q() {
     // bar `+` button side; together they pin the two primary
     // keyboard surfaces (Add and Quit) against the same helper
     // shape, so a future `wire_app_window_accelerators` helper
-    // can iterate `[(<Control>n, app.add), (<Control>q, app.quit), …]`
+    // can iterate `[(<Control><Shift>n, app.add), (<Control>q, app.quit), …]`
     // against a single source of truth.
     use paladin_gtk::app::model::format_app_menu_quit_accelerator;
 
@@ -2286,28 +2286,31 @@ fn format_app_add_button_action_name_round_trips_with_group_and_target() {
 }
 
 #[test]
-fn format_app_add_button_accelerator_returns_control_n() {
+fn format_app_add_button_accelerator_returns_control_shift_n() {
     // The header-bar `+` button's `gio::SimpleAction` is wired
-    // to the `<Control>n` keyboard accelerator per
+    // to the `<Control><Shift>n` keyboard accelerator per
     // `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
-    // "Header bar > Add" and the existing `<Ctrl>N` docstring
-    // references on `build_app_add_action` /
-    // `build_app_window_action_group`. The widget binding hands
-    // this accelerator string to
+    // "Header bar > Add" — the GNOME-HIG "New X" pattern (e.g.
+    // Files' "New Folder"). The single-modifier slot `<Control>n`
+    // is reserved for the account-list "move one row down" mirror
+    // in `account_list::dispatch_list_box_nav` /
+    // `account_list::dispatch_search_entry_to_list_nav`, so Add
+    // lives on the compound `<Control><Shift>` slot instead. The
+    // widget binding hands this accelerator string to
     // `gio::Application::set_accels_for_action(format_app_add_button_action(),
     //  &[format_app_add_button_accelerator()])` so the menu and
     // button-driven activation paths share the same shortcut
     // surface against a single source of truth. Pinning the
     // accelerator here keeps the docstring references and the
-    // future wiring helper aligned without re-spelling the string
-    // in two places.
+    // wiring helper aligned without re-spelling the string in two
+    // places.
     //
-    // The `<Control>n` spelling is the gtk-rs `accels_for_action`
-    // form (uppercase modifier in angle brackets, lowercase key
-    // letter); `Primary` would also resolve on Linux but
-    // `<Control>` matches the existing in-source documentation
-    // (`build_app_add_action` references `<Control>n` verbatim)
-    // so we keep the docstring and the helper in lockstep.
+    // The `<Control><Shift>n` spelling is the gtk-rs
+    // `accels_for_action` form (uppercase modifier names in angle
+    // brackets, lowercase key letter); `Primary` would also resolve
+    // on Linux but `<Control>` matches the existing in-source
+    // documentation so we keep the docstring and the helper in
+    // lockstep.
     //
     // Pure — returns a `'static str` without allocating. Sibling
     // of `format_app_add_button_action` (the fully-qualified action
@@ -2319,8 +2322,8 @@ fn format_app_add_button_accelerator_returns_control_n() {
 
     assert_eq!(
         format_app_add_button_accelerator(),
-        "<Control>n",
-        "header-bar + button accelerator must be the gtk-rs `<Control>n` form for `set_accels_for_action`",
+        "<Control><Shift>n",
+        "header-bar + button accelerator must be the gtk-rs `<Control><Shift>n` form for `set_accels_for_action`",
     );
 }
 
@@ -2366,7 +2369,7 @@ fn format_app_window_accelerator_bindings_returns_four_pinned_pairs_in_order() {
             format_app_add_button_accelerator(),
             format_app_add_button_action()
         ),
-        "first binding must be the header-bar + button's `<Control>n` -> `app.add`",
+        "first binding must be the header-bar + button's `<Control><Shift>n` -> `app.add`",
     );
     assert_eq!(
         bindings[1],
@@ -2468,7 +2471,7 @@ fn format_app_window_accelerator_bindings_accelerators_are_distinct() {
     // Defensive companion to
     // `format_app_window_accelerator_bindings_targets_are_distinct`
     // on the accelerator side: two pinned surfaces sharing the
-    // same accelerator (e.g. an accidental `<Control>n` on both
+    // same accelerator (e.g. an accidental `<Control>q` on both
     // Add and Preferences) would create a runtime collision where
     // the keyboard shortcut fires whichever action gtk-rs
     // resolves second, masking the intent of the spec. The
@@ -3724,10 +3727,10 @@ fn build_app_window_action_group_bundles_primary_actions_and_add_action() {
     // Some(&group))`. It carries every menu target spelled by
     // `format_app_primary_menu_entries` (`"app.import"`,
     // `"app.export"`, …, `"app.quit"`) plus the header-bar
-    // `+` button's `"app.add"` target so the `<Ctrl>N`
+    // `+` button's `"app.add"` target so the `<Ctrl><Shift>N`
     // accelerator wired via
     // `gio::Application::set_accels_for_action("app.add",
-    // &["<Control>n"])` resolves through this group.
+    // &["<Control><Shift>n"])` resolves through this group.
     // Centralizing the construction in one helper means the
     // widget binding inserts a single group rather than two
     // (or hand-spelling the action names) so the bare action
@@ -5816,7 +5819,7 @@ fn format_app_primary_menu_entries_targets_dispatch_to_app_msg() {
 #[test]
 fn app_msg_carries_open_add_dialog_variant() {
     // Per §"libadwaita usage" and §"Component tree": the
-    // header-bar `+` button (and the `<Control>n` accelerator
+    // header-bar `+` button (and the `<Control><Shift>n` accelerator
     // bound to the same `"app.add"` `SimpleAction`) routes its
     // activation through `dispatch_app_window_action` to
     // `AppMsg::OpenAddDialog`, whose handler mounts a fresh
@@ -6174,9 +6177,11 @@ fn format_app_window_accelerator_bindings_accelerators_carry_modifier_prefix() {
     // text entry in the search bar and any dialog `gtk::Entry`
     // — typing `n`, `q`, or `comma` into the search field would
     // fire `app.add` / `app.quit` / `app.preferences` instead
-    // of being inserted into the buffer. The three pinned
-    // accelerators today all use the `<Control>` modifier
-    // (`<Control>n`, `<Control>q`, `<Control>comma`), and the
+    // of being inserted into the buffer. The pinned accelerators
+    // today all start with the `<Control>` modifier (Add uses
+    // `<Control><Shift>n` per the GNOME "New X" pattern; Quit
+    // and Preferences use the single-modifier forms `<Control>q`
+    // and `<Control>comma`), and the
     // GNOME-HIG accelerator convention for menu / header-bar
     // shortcuts requires at least one modifier key so the
     // shortcut does not steal a printable keysym. This
@@ -6944,48 +6949,48 @@ fn format_app_window_accelerator_bindings_accelerators_use_control_modifier() {
 }
 
 #[test]
-fn format_app_window_accelerator_bindings_accelerators_carry_exactly_one_modifier_block() {
+fn format_app_window_accelerator_bindings_accelerators_carry_one_or_two_modifier_blocks() {
     // Defense-in-depth sibling of
     // `format_app_window_accelerator_bindings_accelerators_use_control_modifier`
     // (which pins the leading `<Control>` modifier block) and
     // `format_app_window_accelerator_bindings_accelerators_carry_modifier_prefix`
     // (which pins each accelerator starts with a non-empty `<…>`
     // block followed by a keysym). Both companions guard the
-    // single-block / `<Control>` invariants but leave the
-    // exactly-one-modifier-block invariant ungated, so a future
-    // refactor that compounded modifiers — e.g.
-    // `"<Control><Shift>n"` or `"<Control><Alt>q"` — would slip
-    // past the leading-prefix check while diverging from the
-    // single-modifier GNOME convention and intercepting a
-    // different keyboard shortcut surface than the docstring on
-    // each per-accelerator helper claims.
+    // shape but leave the modifier-block-count invariant ungated,
+    // so a future refactor that introduced a three-modifier
+    // accelerator — `"<Control><Shift><Alt>n"` — would slip past
+    // the leading-prefix check while diverging from the documented
+    // shortcut surface on each per-accelerator helper.
     //
-    // Mirrors the `gio::Application::set_accels_for_action` form
-    // for the primary menu shortcuts: the GNOME convention is
-    // one modifier per primary application action; compound
-    // modifiers belong on power-user shortcuts (text-buffer
-    // operations, IDE-style multi-modifier chords) which do not
+    // The GNOME HIG default is a single `<Control>` modifier for
+    // primary application actions. The Add accelerator
+    // (`<Control><Shift>n`) is the documented exception: the
+    // single-modifier `<Control>n` slot is reserved for the
+    // account-list "move one row down" mirror in
+    // `account_list::dispatch_list_box_nav`, so Add follows the
+    // GNOME "New X" pattern (compound `<Control><Shift>`) instead.
+    // Three-or-more modifier chords belong on power-user shortcuts
+    // (text-buffer operations, IDE-style chords) which do not
     // currently appear in the application menu surface.
     //
     // The assertion counts the `<` and `>` ASCII bytes in each
-    // accelerator: an exactly-one-block accelerator like
-    // `"<Control>n"` has one `<` and one `>`. A compound
-    // `"<Control><Shift>n"` would have two each. The keysym
-    // segment (`"n"`, `"q"`, `"comma"`, etc.) contains no angle
-    // brackets so the count maps directly to the modifier-block
-    // count.
+    // accelerator: a single-block accelerator like `"<Control>q"`
+    // has one `<` and one `>`. A two-block accelerator like
+    // `"<Control><Shift>n"` has two each. The keysym segment
+    // (`"n"`, `"q"`, `"comma"`, etc.) contains no angle brackets
+    // so the count maps directly to the modifier-block count.
     use paladin_gtk::app::model::format_app_window_accelerator_bindings;
 
     for (accel, target) in format_app_window_accelerator_bindings() {
         let open_count = accel.bytes().filter(|&b| b == b'<').count();
         let close_count = accel.bytes().filter(|&b| b == b'>').count();
-        assert_eq!(
-            open_count, 1,
-            "format_app_window_accelerator_bindings accelerator for target {target:?} must contain exactly one `<` ASCII byte so the single-modifier-block GNOME convention holds; compound modifiers like `<Control><Shift>n` belong on power-user shortcuts not primary application actions; got {open_count} `<` byte(s) in {accel:?}",
+        assert!(
+            (1..=2).contains(&open_count),
+            "format_app_window_accelerator_bindings accelerator for target {target:?} must contain one or two `<` ASCII bytes so the GNOME single-modifier convention (or the documented `<Control><Shift>` compound for the Add \"New X\" accelerator) holds; three-or-more modifier chords belong on power-user shortcuts not primary application actions; got {open_count} `<` byte(s) in {accel:?}",
         );
         assert_eq!(
-            close_count, 1,
-            "format_app_window_accelerator_bindings accelerator for target {target:?} must contain exactly one `>` ASCII byte so the single-modifier-block GNOME convention holds; got {close_count} `>` byte(s) in {accel:?}",
+            open_count, close_count,
+            "format_app_window_accelerator_bindings accelerator for target {target:?} must have balanced `<` and `>` ASCII bytes; got {open_count} `<` and {close_count} `>` in {accel:?}",
         );
     }
 }
@@ -6994,9 +6999,8 @@ fn format_app_window_accelerator_bindings_accelerators_carry_exactly_one_modifie
 fn format_app_window_accelerator_bindings_accelerators_have_a_non_empty_keysym_after_the_modifier_block(
 ) {
     // Defense-in-depth sibling of
-    // `format_app_window_accelerator_bindings_accelerators_carry_exactly_one_modifier_block`
-    // (which pins exactly one `<` and one `>` ASCII byte per
-    // accelerator) and
+    // `format_app_window_accelerator_bindings_accelerators_carry_one_or_two_modifier_blocks`
+    // (which pins one or two `<…>` blocks per accelerator) and
     // `format_app_window_accelerator_bindings_accelerators_carry_modifier_prefix`
     // (which pins each accelerator starts with a non-empty `<…>`
     // block). Both companions guard the modifier-block shape but
@@ -7013,13 +7017,14 @@ fn format_app_window_accelerator_bindings_accelerators_have_a_non_empty_keysym_a
     // the gtk::init-using parse sibling
     // (`format_app_window_accelerator_bindings_parse_via_gtk_accelerator_parse`)
     // without an Once-gated init helper. The assertion finds the
-    // closing `>` byte (already pinned to exactly one occurrence
-    // by the `_carry_exactly_one_modifier_block` companion) and
-    // checks that the substring after it is non-empty so a
-    // regression that returned `"<Control>"` for any of the three
-    // primary keyboard surfaces fails at the pinned layer rather
-    // than only surfacing when a user pressed `Ctrl+N` and nothing
-    // happened.
+    // first `>` byte closing the leading modifier block (pinned
+    // to one or two `<…>` blocks total by the
+    // `_carry_one_or_two_modifier_blocks` companion) and checks
+    // that the substring after it (any additional `<…>` block
+    // plus the trailing keysym) is non-empty so a regression that
+    // returned `"<Control>"` for any of the keyboard surfaces
+    // fails at the pinned layer rather than only surfacing when a
+    // user pressed `Ctrl+Q` and nothing happened.
     use paladin_gtk::app::model::format_app_window_accelerator_bindings;
 
     for (accel, target) in format_app_window_accelerator_bindings() {
@@ -7041,8 +7046,8 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
     // Defense-in-depth sibling of
     // `format_app_window_accelerator_bindings_accelerators_have_a_non_empty_keysym_after_the_modifier_block`
     // (which pins a non-empty keysym suffix) and
-    // `format_app_window_accelerator_bindings_accelerators_carry_exactly_one_modifier_block`
-    // (which pins exactly one `<…>` block) and
+    // `format_app_window_accelerator_bindings_accelerators_carry_one_or_two_modifier_blocks`
+    // (which pins one or two `<…>` blocks) and
     // `format_app_window_accelerator_bindings_parse_via_gtk_accelerator_parse`
     // (which round-trips each spelling through gtk::accelerator_parse
     // but skips without a display server).
@@ -9204,11 +9209,13 @@ fn format_app_window_accelerator_bindings_accelerators_keysym_is_ascii_only_afte
     // override stays ASCII-compatible against the X11 / GDK
     // keysym vocabulary.
     //
-    // The assertion locates the closing `>` byte (already
-    // pinned to exactly one occurrence by the
-    // `_carry_exactly_one_modifier_block` companion), slices
-    // the suffix after it (the keysym portion), and walks each
-    // char to surface a regression with a message naming the
+    // The assertion locates the first `>` byte closing the
+    // leading modifier block (pinned to one or two `<…>` blocks
+    // total by the `_carry_one_or_two_modifier_blocks`
+    // companion), slices the suffix after it (any additional
+    // `<…>` block plus the trailing keysym — both ASCII per the
+    // GNOME modifier vocabulary), and walks each char to surface
+    // a regression with a message naming the
     // offending non-ASCII byte at the byte offset within the
     // keysym and the offending action target. Scoped to a
     // pure string-shape check (no `gtk::accelerator_parse`

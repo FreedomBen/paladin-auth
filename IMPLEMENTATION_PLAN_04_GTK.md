@@ -221,25 +221,30 @@ inclusion.
   `gtk::EventControllerKey` instances installed by
   `wire_account_list_navigation_controllers`:
 
-  * On the `gtk::SearchEntry`: Down (or Ctrl+J — vim-style
+  * On the `gtk::SearchEntry`: Down (or Ctrl+J — vim-style — or
+    Ctrl+N — readline-style — both via
     `dispatch_search_entry_to_list_nav`) hands keyboard focus to
     the first row of the `gtk::ListBox` and selects it. When the
     filtered list is empty the press propagates as a benign no-op.
-  * On the `gtk::ListBox`: Up / Ctrl+K (`ListNavIntent::Up`)
-    moves the selection / focus one row earlier; at the first
-    row it instead hands focus back to the search entry and
-    re-selects its full contents so the user can replace-on-type.
-    Down / Ctrl+J (`ListNavIntent::Down`) moves the selection /
-    focus one row later, stopping at the last row (no wrap).
-    Home / End / PageUp / PageDown — and every key outside the
-    `dispatch_list_box_nav` table — propagate untouched so
-    `gtk::ListBox`'s built-in bindings keep working.
+  * On the `gtk::ListBox`: Up / Ctrl+K / Ctrl+P
+    (`ListNavIntent::Up`) moves the selection / focus one row
+    earlier; at the first row it instead hands focus back to the
+    search entry and re-selects its full contents so the user can
+    replace-on-type. Down / Ctrl+J / Ctrl+N
+    (`ListNavIntent::Down`) moves the selection / focus one row
+    later, stopping at the last row (no wrap). Home / End / PageUp
+    / PageDown — and every key outside the `dispatch_list_box_nav`
+    table — propagate untouched so `gtk::ListBox`'s built-in
+    bindings keep working.
 
   Both controllers reject ALT / SUPER / HYPER / META compound
   chords and leave arrow keys combined with CONTROL alone
   (`Ctrl+Up` / `Ctrl+Down` are different platform shortcuts).
-  Bare `j` / `k` are left to bubble so the `set_key_capture_widget`
-  "type to search" path keeps working.
+  Bare `j` / `k` / `n` / `p` are left to bubble so the
+  `set_key_capture_widget` "type to search" path keeps working.
+  Ctrl+N with SHIFT also bubbles so the `<Control><Shift>n`
+  "Add account" app accelerator reaches `gio::Application::
+  set_accels_for_action`.
 
   Enter on the focused row (or a double-click) routes through
   `gtk::ListBox::row-activated` → `AccountListMsg::ActivateRow`,
@@ -3798,16 +3803,20 @@ sign-off.
     `gtk::SearchEntry` and the account-list `gtk::ListBox`. A pair
     of capture-phase `gtk::EventControllerKey` instances installed
     by `wire_account_list_navigation_controllers` route Down /
-    Ctrl+J on the search entry to "focus + select first row"; Up /
-    Ctrl+K on the first row to "focus + select-all search entry";
-    Up / Down on any other row to one-row movement; and Ctrl+K /
-    Ctrl+J on any row as the vim-style mirror of the bare arrow
-    keys. Bare `j` / `k` are left to bubble so the
-    `set_key_capture_widget` "type to search" path keeps working;
-    Home / End / PageUp / PageDown propagate untouched so
-    `gtk::ListBox`'s built-in bindings keep working. Compound
-    chords carrying ALT / SUPER / HYPER / META are rejected, and
-    arrow keys combined with CONTROL are left alone.
+    Ctrl+J / Ctrl+N on the search entry to "focus + select first
+    row"; Up / Ctrl+K / Ctrl+P on the first row to "focus +
+    select-all search entry"; Up / Down on any other row to
+    one-row movement; and Ctrl+K / Ctrl+J / Ctrl+P / Ctrl+N on any
+    row as the vim-style (J/K) and readline-style (N/P) mirrors of
+    the bare arrow keys. Bare `j` / `k` / `n` / `p` are left to
+    bubble so the `set_key_capture_widget` "type to search" path
+    keeps working; Home / End / PageUp / PageDown propagate
+    untouched so `gtk::ListBox`'s built-in bindings keep working.
+    Compound chords carrying ALT / SUPER / HYPER / META are
+    rejected, arrow keys combined with CONTROL are left alone, and
+    Ctrl+Shift+N is left alone so the `<Control><Shift>n`
+    "Add account" app accelerator reaches `gio::Application::
+    set_accels_for_action`.
     (Pinned by `dispatch_search_entry_to_list_nav`,
     `dispatch_list_box_nav` / `ListNavIntent`, the widget binding
     `wire_account_list_navigation_controllers`, and the dispatch
@@ -4021,9 +4030,13 @@ sign-off.
     pinned `format_app_window_accelerator_bindings` quadruple plus the
     matching menu labels. The window contains one `GtkShortcutsSection`
     with one `GtkShortcutsGroup` (title "General") whose four
-    `GtkShortcutsShortcut` entries are, in order: `<Control>n` "New
-    account", `<Control>comma` "Preferences", `<Control>question`
-    "Keyboard Shortcuts", `<Control>q` "Quit". XML escaping of `<` /
+    `GtkShortcutsShortcut` entries are, in order:
+    `<Control><Shift>n` "New account" (single-modifier `<Control>n`
+    is reserved for the account-list "move down" mirror per the
+    `dispatch_list_box_nav` table, so Add follows the GNOME "New X"
+    compound-modifier pattern), `<Control>comma` "Preferences",
+    `<Control>question` "Keyboard Shortcuts", `<Control>q` "Quit".
+    XML escaping of `<` /
     `>` in accelerator strings is unit-tested.
   - [ ] Pinned tests in `tests/startup_probes.rs` mirror the existing
     accelerator/action pin tests:

@@ -56,10 +56,13 @@ pub fn format_app_shortcuts_window_section_title() -> &'static str {
 /// Each pair sources both fields from `paladin-gtk`'s existing
 /// pinned helpers:
 ///
-/// * `(<Control>n, "Add account")` — same accelerator as
+/// * `(<Control><Shift>n, "Add account")` — same accelerator as
 ///   [`format_app_add_button_accelerator`] and same wording as
 ///   [`format_app_add_button_tooltip`], so the row mirrors the
-///   header-bar `+` button surface.
+///   header-bar `+` button surface. (`<Control>n` itself is the
+///   account-list "move down" mirror in
+///   [`crate::account_list::dispatch_list_box_nav`], so Add lives
+///   on the `<Control><Shift>` slot per the GNOME "New X" pattern.)
 /// * `(slash <Control>k, "Search accounts")` —
 ///   [`format_app_search_focus_accelerator`] /
 ///   [`format_app_search_focus_label`] mirror the window-level
@@ -183,9 +186,9 @@ pub fn format_app_shortcuts_window_xml() -> String {
 ///
 /// Necessary because every accelerator string emitted by
 /// [`format_app_shortcuts_window_entries`] embeds the literal `<`
-/// and `>` characters around the modifier name (e.g.
-/// `<Control>n`); without escaping, `gtk::Builder` would fail to
-/// parse the template.
+/// and `>` characters around the modifier name(s) (e.g.
+/// `<Control><Shift>n`); without escaping, `gtk::Builder` would
+/// fail to parse the template.
 #[must_use]
 fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -358,7 +361,10 @@ mod tests {
         assert_eq!(xml_escape("&"), "&amp;");
         assert_eq!(xml_escape("\""), "&quot;");
         assert_eq!(xml_escape("'"), "&apos;");
-        assert_eq!(xml_escape("<Control>n"), "&lt;Control&gt;n");
+        assert_eq!(
+            xml_escape("<Control><Shift>n"),
+            "&lt;Control&gt;&lt;Shift&gt;n",
+        );
         assert_eq!(xml_escape("plain"), "plain");
     }
 }
