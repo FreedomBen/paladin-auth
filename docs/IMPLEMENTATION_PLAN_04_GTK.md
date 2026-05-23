@@ -5644,7 +5644,7 @@ below reflects those resolutions.
 - [x] Helper `column_view::any_totp` predicate over the current `Vec<AccountRowModel>` so `AccountListComponent` can hide the "Time" column entirely when no row has a TOTP kind. (Live wiring of `column.set_visible` lands with the `account_list.rs` rewrite.)
 
 #### Sortable columns
-- [ ] Attach a `gtk::Sorter` to the "Account" column that sorts by `(issuer, label)` case-insensitive. Clicking the column header toggles sort direction; default is unsorted (preserves vault insertion order from `docs/DESIGN.md`).
+- [ ] Attach a `gtk::Sorter` to the "Account" column that sorts by `(issuer, label)` case-insensitive. Clicking the column header toggles sort direction; default is unsorted (preserves vault insertion order from `docs/DESIGN.md`). The pure-logic sort key is shipped as `column_view::account_column_sort_key(&AccountRowModel) -> (String, String)`; the `AccountListComponent` rewrite wraps it in a `gtk::CustomSorter`.
 - [ ] Code, Time, Copy, and Kebab columns are non-sortable (live-changing values or action affordances).
 - [ ] Cross-check `docs/DESIGN.md` § listing-order contract — the default (unsorted) view must still equal vault insertion order. Clicking a sortable header is a user-initiated override and does not persist across restarts.
 

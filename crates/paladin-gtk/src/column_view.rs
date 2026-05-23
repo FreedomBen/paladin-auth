@@ -954,3 +954,33 @@ pub fn any_totp(rows: &[AccountRowModel]) -> bool {
     rows.iter()
         .any(|row| matches!(row.kind, paladin_core::AccountKindSummary::Totp))
 }
+
+/// Case-folded `(issuer, display_label)` sort key for the "Account"
+/// `gtk::ColumnViewColumn`.
+///
+/// Used by `AccountListComponent` to back a `gtk::CustomSorter`
+/// that orders the column by `(issuer, label)` case-insensitive
+/// when the user clicks the column header.  The default unsorted
+/// view still preserves the vault insertion order from
+/// `docs/DESIGN.md` §"listing-order"; clicking the header is a
+/// user-initiated override and does not persist across restarts —
+/// see `docs/IMPLEMENTATION_PLAN_04_GTK.md` §A.4 "Sortable columns".
+///
+/// Pure projection: identical inputs always return identical
+/// outputs, which is the contract `gtk::Sorter` relies on when it
+/// re-evaluates the key after a model mutation.
+///
+/// Rows whose `issuer` is `None` collate before all named issuers
+/// because the projection maps `None -> ""`.  This keeps
+/// unnamed-issuer rows visible at the top of an ascending sort
+/// rather than buried mid-list under an implicit fallback bucket.
+#[must_use]
+pub fn account_column_sort_key(model: &AccountRowModel) -> (String, String) {
+    let issuer = model
+        .issuer
+        .as_deref()
+        .map(str::to_lowercase)
+        .unwrap_or_default();
+    let label = model.display_label.to_lowercase();
+    (issuer, label)
+}

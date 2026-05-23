@@ -16,7 +16,8 @@
 use paladin_core::{AccountId, AccountKindSummary};
 use paladin_gtk::account_list::AccountRowModel;
 use paladin_gtk::column_view::{
-    apply_splice_plan, interleave_section_headers, splice_plan, InterleavedRow, RowKey, SpliceOp,
+    account_column_sort_key, apply_splice_plan, interleave_section_headers, splice_plan,
+    InterleavedRow, RowKey, SpliceOp,
 };
 use paladin_gtk::row_item::RowItem;
 
@@ -379,6 +380,95 @@ fn interleave_enabled_inserts_section_header_at_each_issuer_change() {
 fn interleave_empty_input_yields_empty_output() {
     assert!(interleave_section_headers(&[], true).is_empty());
     assert!(interleave_section_headers(&[], false).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// splice_plan generalized over RowKey (account ids + section titles).
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// account_column_sort_key — pure logic
+// ---------------------------------------------------------------------------
+
+fn model_with(issuer: Option<&str>, label: &str) -> AccountRowModel {
+    AccountRowModel {
+        id: AccountId::new(),
+        display_label: label.to_string(),
+        kind: AccountKindSummary::Totp,
+        counter: None,
+        icon_hint: None,
+        issuer: issuer.map(str::to_string),
+    }
+}
+
+#[test]
+fn sort_key_is_case_insensitive_on_issuer() {
+    // Two rows with the same issuer modulo case must compare equal
+    // on the primary key so the secondary (label) breaks the tie.
+    let a = account_column_sort_key(&model_with(Some("Acme"), "Acme:alice"));
+    let b = account_column_sort_key(&model_with(Some("acme"), "acme:bob"));
+    assert_eq!(
+        a.0, b.0,
+        "issuer comparison must fold case so `Acme` and `acme` group together"
+    );
+}
+
+#[test]
+fn sort_key_is_case_insensitive_on_label() {
+    // Within an issuer, label comparison must also fold case so
+    // `Alice` and `alice` collate next to each other rather than
+    // bisecting the issuer's run.
+    let a = account_column_sort_key(&model_with(Some("Acme"), "Acme:Alice"));
+    let b = account_column_sort_key(&model_with(Some("Acme"), "acme:alice"));
+    assert_eq!(a.1, b.1);
+}
+
+#[test]
+fn sort_key_missing_issuer_collates_with_empty_string() {
+    // Rows whose issuer is `None` project to the empty string so
+    // they collate before all named issuers when ascending — a
+    // stable placement the user can see in one glance rather than
+    // surprises buried mid-list.
+    let key = account_column_sort_key(&model_with(None, "bare-label"));
+    assert_eq!(key.0, "");
+}
+
+#[test]
+fn sort_key_orders_rows_alphabetically() {
+    // Spot-check a stable sort against the pure key — this is the
+    // contract the `gtk::Sorter` attached to the Account column
+    // will preserve in the live ColumnView.
+    let mut rows = [
+        model_with(Some("Github"), "Github:zoe"),
+        model_with(Some("Acme"), "Acme:bob"),
+        model_with(Some("acme"), "Acme:alice"),
+        model_with(None, "loose"),
+        model_with(Some("github"), "Github:adam"),
+    ];
+    rows.sort_by_key(account_column_sort_key);
+    let labels: Vec<&str> = rows.iter().map(|r| r.display_label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "loose",       // None < anything named
+            "Acme:alice",  // case-insensitive issuer sort: acme/Acme
+            "Acme:bob",    // …then by case-folded label
+            "Github:adam", // github sorts after acme
+            "Github:zoe",
+        ],
+    );
+}
+
+#[test]
+fn sort_key_is_stable_across_clones() {
+    // The key function must be a pure projection — calling it
+    // twice on the same model returns the same key.  This is the
+    // contract the gtk::Sorter wrapper relies on (`gtk::Sorter`
+    // can re-evaluate the sort key any time the model changes).
+    let row = model_with(Some("Issuer"), "Issuer:Label");
+    let a = account_column_sort_key(&row);
+    let b = account_column_sort_key(&row);
+    assert_eq!(a, b);
 }
 
 // ---------------------------------------------------------------------------
