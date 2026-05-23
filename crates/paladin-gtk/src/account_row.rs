@@ -600,7 +600,7 @@ impl FactoryComponent for AccountRowComponent {
     fn init_root(&self) -> Self::Root {
         gtk::ListBoxRow::builder()
             .selectable(true)
-            .activatable(false)
+            .activatable(true)
             .build()
     }
 
