@@ -51,14 +51,15 @@ use std::time::SystemTime;
 
 use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Code, Vault};
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Padding, Paragraph};
+use ratatui::widgets::{Padding, Paragraph};
 use ratatui::Frame;
 use secrecy::ExposeSecret;
 
 use crate::app::state::{AppState, HotpReveal, StatusLine};
 use crate::search::filtered_account_ids;
+use crate::view::theme;
 
 /// Width of the issuer/label column inside an account row. Truncated
 /// titles end with `…` so the column never bleeds into the code
@@ -92,9 +93,13 @@ const GAUGE_EMPTY: char = '░';
 /// `no_color` suppresses foreground / background color attributes
 /// on styled cells (the `--no-color` flag and the `NO_COLOR`
 /// environment variable both flow here through
-/// [`crate::cli::should_disable_color`]). For this slice that
-/// affects only the bottom-line status row; other styled paths in
-/// the modal renderers gain the same gating in their own slices.
+/// [`crate::cli::should_disable_color`]). It gates the accent-colored
+/// border / title, the TOTP-code / period-gauge color tier
+/// (cyan / yellow / red as the rotation window drains), the
+/// search-match highlight, the HOTP `▸ press n to advance` tint,
+/// the plaintext-mode title chip, and the bottom-line status tints.
+/// Modifiers like bold / dim / reversed survive the gating so the
+/// hierarchy remains legible in monochrome terminals.
 pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color: bool) {
     let AppState::Unlocked {
         vault,
@@ -110,9 +115,9 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color
     };
 
     let area = frame.area();
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Paladin ")
+    let title = list_title_line(vault, no_color);
+    let block = theme::bordered_block(no_color)
+        .title(title)
         .padding(Padding::symmetric(1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -166,6 +171,8 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color
             hotp_reveal.as_ref(),
             *viewport_offset,
             now,
+            search_query,
+            no_color,
         );
     }
 
@@ -199,29 +206,13 @@ fn bottom_line(status_line: Option<&StatusLine>, no_color: bool) -> Line<'_> {
     match status_line {
         Some(StatusLine::Error(msg)) => Line::from(Span::styled(
             msg.as_str(),
-            fg_unless_no_color(Color::Red, no_color),
+            theme::fg(theme::ERROR, no_color),
         )),
         Some(StatusLine::Confirmation(msg)) => Line::from(Span::styled(
             msg.as_str(),
-            fg_unless_no_color(Color::Green, no_color),
+            theme::fg(theme::SUCCESS, no_color),
         )),
         None => Line::from("[↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find"),
-    }
-}
-
-/// Build a foreground-only [`Style`] honoring the `--no-color`
-/// policy: returns `Style::default().fg(color)` in styled mode and
-/// `Style::default()` (no fg attribute) when `no_color` is set.
-///
-/// Local to `list.rs` for this slice; the same helper shape will
-/// move to a shared `view::style` module once the other modal
-/// renderers grow their own `no_color` gating per the
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Global flags" section.
-fn fg_unless_no_color(color: Color, no_color: bool) -> Style {
-    if no_color {
-        Style::default()
-    } else {
-        Style::default().fg(color)
     }
 }
 
@@ -249,6 +240,8 @@ fn render_rows(
     hotp_reveal: Option<&HotpReveal>,
     viewport_offset: u16,
     now: SystemTime,
+    search_query: &str,
+    no_color: bool,
 ) {
     let capacity = area.height as usize;
     for (idx, account) in vault
@@ -266,13 +259,20 @@ fn render_rows(
         let summary = account.summary();
         let is_selected = selected.is_some_and(|sel| *sel == summary.id);
         let line = match summary.kind {
-            AccountKindSummary::Totp => render_totp_row(vault, &summary, is_selected, now),
+            AccountKindSummary::Totp => {
+                render_totp_row(vault, &summary, is_selected, now, search_query, no_color)
+            }
             AccountKindSummary::Hotp => {
                 let reveal = hotp_reveal.filter(|r| r.account_id == summary.id);
-                render_hotp_row(&summary, is_selected, reveal)
+                render_hotp_row(&summary, is_selected, reveal, search_query, no_color)
             }
         };
-        frame.render_widget(Paragraph::new(line), row);
+        let paragraph = if is_selected {
+            Paragraph::new(line).style(theme::selected_row_style())
+        } else {
+            Paragraph::new(line)
+        };
+        frame.render_widget(paragraph, row);
     }
 }
 
@@ -281,13 +281,22 @@ fn render_rows(
 /// pre-Unix-epoch `now`) falls back to `------` so the row stays
 /// the same shape as a healthy row and never panics on a transient
 /// `now` argument.
+///
+/// `search_query`, when non-empty, drives an ASCII case-insensitive
+/// highlight on matching substrings inside the title column so the
+/// user can see at a glance which characters survived the search
+/// predicate. `no_color` drops the foreground attributes while
+/// keeping the bold modifier on the code digits so the visual
+/// hierarchy survives in monochrome terminals.
 fn render_totp_row(
     vault: &Vault,
     summary: &AccountSummary,
     is_selected: bool,
     now: SystemTime,
-) -> String {
-    let prefix = format_row_prefix(summary, is_selected, None);
+    search_query: &str,
+    no_color: bool,
+) -> Line<'static> {
+    let prefix_text = format_row_prefix(summary, is_selected, None);
     let period = summary.period.unwrap_or(30);
     let (code_text, secs_remaining) = match vault.totp_code(summary.id, now) {
         Ok(Code {
@@ -297,8 +306,17 @@ fn render_totp_row(
         }) => (format_code_digits(&code), seconds_remaining.unwrap_or(0)),
         Err(_) => ("------".to_string(), 0),
     };
-    let gauge = render_gauge(secs_remaining, period);
-    format!("{prefix}  {code_text:>CODE_COL_WIDTH$}   {gauge}  {secs_remaining:>3}s")
+    let gauge_text = render_gauge(secs_remaining, period);
+    let color = theme::code_color(secs_remaining, period);
+    let code_padded = format!("{code_text:>CODE_COL_WIDTH$}");
+
+    let mut spans = highlight_prefix_with_search(&prefix_text, search_query, no_color);
+    spans.push(Span::raw("  "));
+    spans.push(Span::styled(code_padded, theme::fg_bold(color, no_color)));
+    spans.push(Span::raw("   "));
+    spans.push(Span::styled(gauge_text, theme::fg(color, no_color)));
+    spans.push(Span::raw(format!("  {secs_remaining:>3}s")));
+    Line::from(spans)
 }
 
 /// Render a single HOTP row.
@@ -307,14 +325,16 @@ fn render_totp_row(
 ///   `summary.counter` — the *stored next counter*, which is the
 ///   value `hotp_advance` would consume on the next press of `n` —
 ///   and the right-side column shows the `▸ press n to advance`
-///   prompt. The renderer never touches the OTP layer on this path,
-///   so the next-counter code cannot leak.
+///   prompt rendered in dim yellow so the row reads as
+///   "action required". The renderer never touches the OTP layer on
+///   this path, so the next-counter code cannot leak.
 /// * Revealed (`reveal` is the active [`HotpReveal`] for this
 ///   account): title gets a `(#N)` suffix using
 ///   `reveal.counter_used` — the *pre-advance* counter that
 ///   produced the visible code — and the right-side column shows
-///   the visible code (formatted by [`format_code_digits`] for
-///   parity with TOTP rows).
+///   the visible code rendered in bold cyan (formatted by
+///   [`format_code_digits`] for parity with TOTP rows). HOTP codes
+///   never time out so they always render in the calm cyan tier.
 ///
 /// The caller is responsible for filtering `reveal` to the row's
 /// account; passing the reveal slot for a different account would
@@ -323,17 +343,101 @@ fn render_hotp_row(
     summary: &AccountSummary,
     is_selected: bool,
     reveal: Option<&HotpReveal>,
-) -> String {
+    search_query: &str,
+    no_color: bool,
+) -> Line<'static> {
     let stored_counter = summary.counter.unwrap_or(0);
-    let (counter_label, right_col) = match reveal {
+    let (counter_label, right_spans): (u64, Vec<Span<'static>>) = match reveal {
         Some(r) => {
             let code = format_code_digits(r.code.expose_secret());
-            (r.counter_used, format!("{code:>CODE_COL_WIDTH$}"))
+            let code_padded = format!("{code:>CODE_COL_WIDTH$}");
+            (
+                r.counter_used,
+                vec![Span::styled(
+                    code_padded,
+                    theme::fg_bold(theme::CODE_CALM, no_color),
+                )],
+            )
         }
-        None => (stored_counter, "▸ press n to advance".to_string()),
+        None => (
+            stored_counter,
+            vec![Span::styled(
+                "▸ press n to advance".to_string(),
+                theme::fg_dim(theme::WARN, no_color),
+            )],
+        ),
     };
-    let prefix = format_row_prefix(summary, is_selected, Some(counter_label));
-    format!("{prefix}  {right_col}")
+    let prefix_text = format_row_prefix(summary, is_selected, Some(counter_label));
+    let mut spans = highlight_prefix_with_search(&prefix_text, search_query, no_color);
+    spans.push(Span::raw("  "));
+    spans.extend(right_spans);
+    Line::from(spans)
+}
+
+/// Split the row prefix (`marker` + space + padded title) into spans
+/// that highlight ASCII case-insensitive matches of `query` in
+/// yellow-bold so the user sees which characters survived the search
+/// predicate. Non-ASCII titles or queries fall through to a single
+/// unstyled span so a stray UTF-8 character cannot mid-codepoint
+/// split the row.
+///
+/// The prefix layout is `{marker}{space}{title_padded_to_TITLE_COL_WIDTH}`
+/// — the marker and gutter never contain query characters, so the
+/// match search is anchored to the title portion only.
+fn highlight_prefix_with_search(prefix: &str, query: &str, no_color: bool) -> Vec<Span<'static>> {
+    let leader_chars = 2; // marker + gutter space
+    let chars: Vec<char> = prefix.chars().collect();
+    if query.is_empty() || chars.len() <= leader_chars {
+        return vec![Span::raw(prefix.to_string())];
+    }
+    let leader: String = chars[..leader_chars].iter().collect();
+    let title: String = chars[leader_chars..].iter().collect();
+    if !title.is_ascii() || !query.is_ascii() {
+        return vec![Span::raw(prefix.to_string())];
+    }
+    let lower_title = title.to_ascii_lowercase();
+    let lower_query = query.to_ascii_lowercase();
+    let mut spans: Vec<Span<'static>> = vec![Span::raw(leader)];
+    let hit_style = Style::default()
+        .add_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::UNDERLINED);
+    let hit_style = if no_color {
+        hit_style
+    } else {
+        hit_style.fg(theme::WARN)
+    };
+    let mut cursor = 0;
+    for (idx, _) in lower_title.match_indices(&lower_query) {
+        if idx > cursor {
+            spans.push(Span::raw(title[cursor..idx].to_string()));
+        }
+        let end = idx + lower_query.len();
+        spans.push(Span::styled(title[idx..end].to_string(), hit_style));
+        cursor = end;
+    }
+    if cursor < title.len() {
+        spans.push(Span::raw(title[cursor..].to_string()));
+    }
+    spans
+}
+
+/// Build the bordered block's title line. The base " Paladin "
+/// segment is rendered in bold accent; a plaintext-mode vault gets a
+/// `[plaintext]` warning chip appended in yellow so the user always
+/// sees that the vault is unencrypted, regardless of which screen
+/// they are on.
+fn list_title_line(vault: &Vault, no_color: bool) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        " Paladin ",
+        theme::fg_bold(theme::ACCENT, no_color),
+    )];
+    if !vault.is_encrypted() {
+        spans.push(Span::styled(
+            "[plaintext] ",
+            theme::fg_bold(theme::WARN, no_color),
+        ));
+    }
+    Line::from(spans)
 }
 
 /// Build the `{marker} {title-padded-to-32}` prefix shared by TOTP

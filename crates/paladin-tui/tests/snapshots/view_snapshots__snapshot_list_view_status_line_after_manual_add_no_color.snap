@@ -1,9 +1,8 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
-assertion_line: 955
 expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
 ---
-┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
 │ Search:                                                                      │
 │ ──────────────────────────────────────────────────────────────────────────── │
 │ ▶ GitHub (ben@example.com)            914 994   ██████░░░░   18s             │
@@ -16,4 +15,5 @@ expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
 │ Added GitHub:ben@example.com.                                                │
 └──────────────────────────────────────────────────────────────────────────────┘
 ─── styles ───
-(none)
+(1..22, 0) " Paladin [plaintext] " fg=Reset bg=Reset mod=BOLD
+(2..78, 3) "▶ GitHub (ben@example.com)            914 994   ██████░░░░   18s            " fg=Reset bg=Reset mod=BOLD | REVERSED

@@ -17,26 +17,34 @@
 use std::path::Path;
 
 use ratatui::layout::Alignment;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
 use paladin_core::format_plaintext_storage_warning;
 
 use crate::app::state::{CreateVaultMode, CreateVaultStep, PassphraseFieldFocus};
 use crate::prompt::PassphraseBuffer;
+use crate::view::theme;
 
 /// Render the create-vault wizard for the given vault `path` at the
 /// given `step`. `error`, when `Some`, is rendered as an inline red
 /// error line beneath the step body.
-pub fn render(frame: &mut Frame<'_>, path: &Path, step: &CreateVaultStep, error: Option<&str>) {
+pub fn render(
+    frame: &mut Frame<'_>,
+    path: &Path,
+    step: &CreateVaultStep,
+    error: Option<&str>,
+    no_color: bool,
+) {
     let area = frame.area();
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Paladin — create vault ")
-        .padding(Padding::symmetric(2, 1));
+    let block = theme::titled_block(
+        " Paladin — create vault ",
+        no_color,
+        Padding::symmetric(2, 1),
+    );
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -53,7 +61,7 @@ pub fn render(frame: &mut Frame<'_>, path: &Path, step: &CreateVaultStep, error:
 
     match step {
         CreateVaultStep::ChooseMode { selection } => render_choose_mode(&mut lines, *selection),
-        CreateVaultStep::ConfirmPlaintext => render_confirm_plaintext(&mut lines),
+        CreateVaultStep::ConfirmPlaintext => render_confirm_plaintext(&mut lines, no_color),
         CreateVaultStep::EnterPassphrase {
             passphrase,
             confirmation,
@@ -65,7 +73,7 @@ pub fn render(frame: &mut Frame<'_>, path: &Path, step: &CreateVaultStep, error:
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             msg.to_string(),
-            Style::default().fg(Color::Red),
+            theme::fg(theme::ERROR, no_color),
         )));
     }
 
@@ -92,14 +100,17 @@ fn render_choose_mode(lines: &mut Vec<Line<'_>>, selection: CreateVaultMode) {
     ));
 }
 
-fn render_confirm_plaintext(lines: &mut Vec<Line<'_>>) {
+fn render_confirm_plaintext(lines: &mut Vec<Line<'_>>, no_color: bool) {
     lines.push(Line::from(Span::styled(
         "Plaintext vault confirmation",
-        Style::default().add_modifier(Modifier::BOLD),
+        theme::fg_bold(theme::WARN, no_color),
     )));
     lines.push(Line::from(""));
     for warning_line in format_plaintext_storage_warning().lines() {
-        lines.push(Line::from(warning_line.to_string()));
+        lines.push(Line::from(Span::styled(
+            warning_line.to_string(),
+            theme::fg(theme::WARN, no_color),
+        )));
     }
     lines.push(Line::from(""));
     lines.push(Line::from("Press Enter to create a plaintext vault."));

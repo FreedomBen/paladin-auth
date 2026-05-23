@@ -1,9 +1,8 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
-assertion_line: 851
 expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
 ---
-┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
 │ Search:                                                                      │
 │ ──────────────────────────────────────────────────────────────────────────── │
 │ ▶ AWS (prod) (#41)                    123 456                                │
@@ -16,4 +15,5 @@ expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
 │ save durability unconfirmed                                                  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ─── styles ───
-(none)
+(1..22, 0) " Paladin [plaintext] " fg=Reset bg=Reset mod=BOLD
+(2..78, 3) "▶ AWS (prod) (#41)                    123 456                               " fg=Reset bg=Reset mod=BOLD | REVERSED

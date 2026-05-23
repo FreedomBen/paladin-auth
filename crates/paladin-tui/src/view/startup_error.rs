@@ -20,8 +20,10 @@ use std::path::Path;
 use ratatui::layout::Alignment;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Padding, Paragraph, Wrap};
 use ratatui::Frame;
+
+use crate::view::theme;
 
 /// Render the startup-error screen.
 ///
@@ -31,13 +33,14 @@ use ratatui::Frame;
 /// error text — `unsafe_permissions` errors carry the multi-line
 /// `Some(text)` from [`paladin_core::format_unsafe_permissions`]
 /// verbatim; every other variant carries the error's `Display`.
-pub fn render(frame: &mut Frame<'_>, path: Option<&Path>, message: &str) {
+pub fn render(frame: &mut Frame<'_>, path: Option<&Path>, message: &str, no_color: bool) {
     let area = frame.area();
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Paladin — startup error ")
-        .padding(Padding::symmetric(2, 1));
+    let block = theme::destructive_titled_block(
+        " Paladin — startup error ",
+        no_color,
+        Padding::symmetric(2, 1),
+    );
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

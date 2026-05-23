@@ -27,6 +27,7 @@ pub mod remove;
 pub mod rename;
 pub mod settings;
 pub mod startup_error;
+pub mod theme;
 pub mod unlock;
 
 use std::time::SystemTime;
@@ -64,10 +65,12 @@ pub(super) fn centered_rect(outer: Rect, width: u16, height: u16) -> Rect {
 /// `NO_COLOR` environment variable both flow here via
 /// [`crate::cli::should_disable_color`], wired through
 /// [`crate::app::render::draw_frame`] and
-/// [`crate::app::build_render_closure`]. For this slice the flag
-/// only gates the list-view's bottom-line status row; the modal
-/// renderers grow the same gating in their own slices per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Global flags".
+/// [`crate::app::build_render_closure`]. The flag is threaded all
+/// the way down to every per-screen and per-modal renderer through
+/// the [`crate::view::theme`] helpers, which drop the foreground
+/// attribute while preserving modifiers (`BOLD`, `DIM`, `REVERSED`)
+/// so the visual hierarchy degrades to a monochrome-but-still-legible
+/// rendering rather than a flat wall of text.
 ///
 /// Variants whose renderers have not yet landed in this slice draw
 /// nothing — the screen is left at the backend's default fill cell.
@@ -76,17 +79,17 @@ pub(super) fn centered_rect(outer: Rect, width: u16, height: u16) -> Rect {
 pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color: bool) {
     match state {
         AppState::CreateVault { path, step, error } => {
-            create_vault::render(frame, path, step, error.as_deref());
+            create_vault::render(frame, path, step, error.as_deref(), no_color);
         }
         AppState::StartupError { path, message } => {
-            startup_error::render(frame, path.as_deref(), message);
+            startup_error::render(frame, path.as_deref(), message, no_color);
         }
         AppState::Unlock {
             path,
             error,
             passphrase,
         } => {
-            unlock::render(frame, path, error.as_deref(), passphrase);
+            unlock::render(frame, path, error.as_deref(), passphrase, no_color);
         }
         AppState::Unlocked {
             modal,
@@ -96,7 +99,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color
         } => {
             list::render(frame, state, now, no_color);
             if let Some(open) = modal {
-                render_modal(frame, open, vault);
+                render_modal(frame, open, vault, no_color);
             }
             // The read-only Help overlay paints last so it sits on
             // top of any modal that might also be open. The reducer
@@ -107,7 +110,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color
             // dismiss-hint visible if the invariant were ever
             // violated by a future event-source bug.
             if *help_open {
-                help::render(frame);
+                help::render(frame, no_color);
             }
         }
         AppState::Locked { .. } => {
@@ -132,14 +135,16 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color
 /// confirmation prompt naming the selected account) can resolve their
 /// `AccountId` against the same in-memory vault the list view paints,
 /// rather than caching projection state on the modal struct.
-fn render_modal(frame: &mut Frame<'_>, modal: &Modal, vault: &Vault) {
+fn render_modal(frame: &mut Frame<'_>, modal: &Modal, vault: &Vault, no_color: bool) {
     match modal {
-        Modal::Add(add_modal) => add::render(frame, add_modal),
-        Modal::Remove(remove_modal) => remove::render(frame, remove_modal, vault),
-        Modal::Rename(rename_modal) => rename::render(frame, rename_modal, vault),
-        Modal::Import(import_modal) => import::render(frame, import_modal),
-        Modal::Export(export_modal) => export::render(frame, export_modal),
-        Modal::Passphrase(passphrase_modal) => passphrase::render(frame, passphrase_modal),
-        Modal::Settings(settings_modal) => settings::render(frame, settings_modal),
+        Modal::Add(add_modal) => add::render(frame, add_modal, no_color),
+        Modal::Remove(remove_modal) => remove::render(frame, remove_modal, vault, no_color),
+        Modal::Rename(rename_modal) => rename::render(frame, rename_modal, vault, no_color),
+        Modal::Import(import_modal) => import::render(frame, import_modal, no_color),
+        Modal::Export(export_modal) => export::render(frame, export_modal, no_color),
+        Modal::Passphrase(passphrase_modal) => {
+            passphrase::render(frame, passphrase_modal, no_color);
+        }
+        Modal::Settings(settings_modal) => settings::render(frame, settings_modal, no_color),
     }
 }

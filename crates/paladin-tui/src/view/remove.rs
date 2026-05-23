@@ -25,13 +25,13 @@
 
 use paladin_core::Vault;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Clear, Padding, Paragraph};
 use ratatui::Frame;
 
 use super::centered_rect;
 use crate::app::state::{format_account_display_label, RemoveModal};
+use crate::view::theme;
 
 /// Render the Remove modal onto `frame`, on top of whatever the
 /// caller already painted underneath.
@@ -43,14 +43,12 @@ use crate::app::state::{format_account_display_label, RemoveModal};
 /// the account has been removed out from under the modal (defensive
 /// branch — production flow closes the modal on `EffectResult::Remove`)
 /// the renderer falls back to a generic prompt rather than panicking.
-pub fn render(frame: &mut Frame<'_>, modal: &RemoveModal, vault: &Vault) {
+pub fn render(frame: &mut Frame<'_>, modal: &RemoveModal, vault: &Vault, no_color: bool) {
     let modal_area = centered_rect(frame.area(), 64, 10);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Remove account ")
-        .padding(Padding::symmetric(1, 0));
+    let block =
+        theme::destructive_titled_block(" Remove account ", no_color, Padding::symmetric(1, 0));
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
 
@@ -71,7 +69,7 @@ pub fn render(frame: &mut Frame<'_>, modal: &RemoveModal, vault: &Vault) {
     frame.render_widget(Paragraph::new(account_label_line(modal, vault)), chunks[2]);
 
     if let Some(error) = &modal.error {
-        render_inline_error(frame, chunks[3], error);
+        render_inline_error(frame, chunks[3], error, no_color);
     }
 
     let hint = "Enter confirms  ·  Esc cancels";
@@ -98,7 +96,7 @@ fn account_label_line(modal: &RemoveModal, vault: &Vault) -> Line<'static> {
 /// row below the account label, foreground red, mirroring the unlock
 /// screen's `decrypt_failed` styling and the Add modal's inline error
 /// so every inline-error surface in the TUI reads the same way.
-fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str) {
+fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str, no_color: bool) {
     let spacer_chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -108,7 +106,7 @@ fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             message.to_string(),
-            Style::default().fg(Color::Red),
+            theme::fg(theme::ERROR, no_color),
         ))),
         spacer_chunks[1],
     );

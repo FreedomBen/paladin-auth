@@ -41,13 +41,13 @@
 //! (matching the Add modal's deferred focus-highlighting precedent).
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Clear, Padding, Paragraph};
 use ratatui::Frame;
 
 use super::centered_rect;
 use crate::app::state::SettingsModal;
+use crate::view::theme;
 
 /// Width of the left-hand label column inside the modal. Long
 /// enough for the widest field name (`Clipboard-clear:`) so the
@@ -62,14 +62,11 @@ const LABEL_COL_WIDTH: usize = 18;
 /// underlying list-view cells don't show through. Mirrors the
 /// overlay pattern used by the Add / Remove / Rename / Import /
 /// Export / Passphrase modal renderers.
-pub fn render(frame: &mut Frame<'_>, modal: &SettingsModal) {
+pub fn render(frame: &mut Frame<'_>, modal: &SettingsModal, no_color: bool) {
     let modal_area = centered_rect(frame.area(), 64, 12);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Settings ")
-        .padding(Padding::symmetric(1, 0));
+    let block = theme::titled_block(" Settings ", no_color, Padding::symmetric(1, 0));
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
 
@@ -111,7 +108,7 @@ pub fn render(frame: &mut Frame<'_>, modal: &SettingsModal) {
     );
 
     if let Some(error) = &modal.error {
-        render_inline_error(frame, chunks[5], error);
+        render_inline_error(frame, chunks[5], error, no_color);
     }
 
     let hint = "Tab cycles fields  ·  Enter submit  ·  Esc cancel";
@@ -124,7 +121,7 @@ pub fn render(frame: &mut Frame<'_>, modal: &SettingsModal) {
 /// mirroring the unlock screen's `decrypt_failed` styling and the
 /// Add / Remove / Rename / Import / Passphrase modals' inline errors
 /// so every inline-error surface in the TUI reads the same way.
-fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str) {
+fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str, no_color: bool) {
     let spacer_chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -134,7 +131,7 @@ fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             message.to_string(),
-            Style::default().fg(Color::Red),
+            theme::fg(theme::ERROR, no_color),
         ))),
         spacer_chunks[1],
     );

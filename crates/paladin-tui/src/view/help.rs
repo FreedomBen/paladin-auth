@@ -27,12 +27,13 @@
 //! cells under the overlay don't bleed through transparent cells.
 
 use ratatui::layout::{Alignment, Constraint, Layout};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Clear, Padding, Paragraph};
 use ratatui::Frame;
 
 use super::centered_rect;
 use crate::keybindings::{Keybinding, KEYBINDINGS};
+use crate::view::theme;
 
 /// Overlay width in terminal cells. Wide enough that the longest
 /// documented `keys` string (`PgUp PgDn / Ctrl-B Ctrl-F`, 25 cells)
@@ -65,11 +66,11 @@ const GUTTER_WIDTH: usize = 2;
 /// Export / Passphrase / Settings modal renderers, with the
 /// difference that the Help overlay has no per-state shape — its
 /// content is fully determined by the `KEYBINDINGS` constant.
-pub fn render(frame: &mut Frame<'_>) {
+pub fn render(frame: &mut Frame<'_>, no_color: bool) {
     let action_col_width = action_col_width(OVERLAY_WIDTH);
     let body_lines: Vec<Line<'_>> = KEYBINDINGS
         .iter()
-        .flat_map(|kb| keybinding_lines(kb, action_col_width))
+        .flat_map(|kb| keybinding_lines(kb, action_col_width, no_color))
         .collect();
     let body_rows = u16::try_from(body_lines.len()).unwrap_or(u16::MAX);
 
@@ -79,10 +80,7 @@ pub fn render(frame: &mut Frame<'_>) {
     let area = centered_rect(frame.area(), OVERLAY_WIDTH, height);
     frame.render_widget(Clear, area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Help — keybindings ")
-        .padding(Padding::symmetric(1, 0));
+    let block = theme::titled_block(" Help — keybindings ", no_color, Padding::symmetric(1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -125,22 +123,27 @@ fn action_col_width(overlay_width: u16) -> usize {
 /// first chunk of wrapped action text; subsequent lines indent
 /// under the action column so the key column stays a clean strip
 /// on the left edge of the body.
-fn keybinding_lines(kb: &Keybinding, action_col_width: usize) -> Vec<Line<'static>> {
+fn keybinding_lines(
+    kb: &Keybinding,
+    action_col_width: usize,
+    no_color: bool,
+) -> Vec<Line<'static>> {
     let chunks = wrap_action(kb.action, action_col_width);
     let key_pad = " ".repeat(KEY_COL_WIDTH.saturating_sub(display_width(kb.keys)));
     let blank_keys = " ".repeat(KEY_COL_WIDTH);
     let gutter = " ".repeat(GUTTER_WIDTH);
+    let key_style = theme::fg_bold(theme::KEY_HINT, no_color);
 
     chunks
         .into_iter()
         .enumerate()
         .map(|(idx, chunk)| {
-            let prefix = if idx == 0 {
-                format!("{keys}{key_pad}", keys = kb.keys)
+            let key_span = if idx == 0 {
+                Span::styled(format!("{keys}{key_pad}", keys = kb.keys), key_style)
             } else {
-                blank_keys.clone()
+                Span::raw(blank_keys.clone())
             };
-            Line::from(format!("{prefix}{gutter}{chunk}"))
+            Line::from(vec![key_span, Span::raw(format!("{gutter}{chunk}"))])
         })
         .collect()
 }

@@ -47,13 +47,13 @@
 
 use paladin_core::{AccountKindInput, Algorithm};
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
 use super::centered_rect;
 use crate::app::state::{AddModal, AddMode, CountsPanel};
+use crate::view::theme;
 
 /// Width of the left-hand label column inside the modal. Long
 /// enough for the widest field name (`Period (s):`) so the value
@@ -100,15 +100,12 @@ const COUNTS_FIXED_ROWS: u16 = 7;
 /// When [`AddModal::counts_panel`] is `Some` the modal switches to
 /// the post-success summary layout, growing vertically if warnings
 /// would otherwise be truncated.
-pub fn render(frame: &mut Frame<'_>, modal: &AddModal) {
+pub fn render(frame: &mut Frame<'_>, modal: &AddModal, no_color: bool) {
     let modal_height = modal_height_for(modal);
     let modal_area = centered_rect(frame.area(), MODAL_WIDTH, modal_height);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Add account ")
-        .padding(Padding::symmetric(1, 0));
+    let block = theme::titled_block(" Add account ", no_color, Padding::symmetric(1, 0));
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
 
@@ -173,7 +170,7 @@ pub fn render(frame: &mut Frame<'_>, modal: &AddModal) {
     );
 
     if let Some(error) = &modal.error {
-        render_inline_error(frame, chunks[10], error);
+        render_inline_error(frame, chunks[10], error, no_color);
     }
 
     let hint = if modal.pending_duplicate_add.is_some() {
@@ -193,7 +190,12 @@ pub fn render(frame: &mut Frame<'_>, modal: &AddModal) {
 /// screen's spacing convention; foreground red matches the unlock
 /// screen's inline `decrypt_failed` styling so all inline error
 /// surfaces in the TUI read the same way.
-fn render_inline_error(frame: &mut Frame<'_>, spacer: ratatui::layout::Rect, message: &str) {
+fn render_inline_error(
+    frame: &mut Frame<'_>,
+    spacer: ratatui::layout::Rect,
+    message: &str,
+    no_color: bool,
+) {
     let spacer_chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -203,7 +205,7 @@ fn render_inline_error(frame: &mut Frame<'_>, spacer: ratatui::layout::Rect, mes
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             message.to_string(),
-            Style::default().fg(Color::Red),
+            theme::fg(theme::ERROR, no_color),
         ))),
         spacer_chunks[1],
     );

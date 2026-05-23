@@ -1,9 +1,8 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
-assertion_line: 685
 expression: rendered
 ---
-┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
 │ Search:                                                                      │
 │ ──────┌ Add account ─────────────────────────────────────────────────┐────── │
 │       │ Mode:   Manual       URI     ▶ QR ◀                          │       │

@@ -54,15 +54,15 @@
 //! submits.
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
 use paladin_core::format_plaintext_storage_warning;
 
 use super::centered_rect;
 use crate::app::state::{PassphraseModal, PassphraseSubFlow};
+use crate::view::theme;
 
 /// Width of the left-hand label column inside the modal. Long
 /// enough for the widest field name (`Passphrase:`) so the value
@@ -81,22 +81,31 @@ const LABEL_COL_WIDTH: usize = 13;
 /// The block grows taller for the `remove` sub-flow because its
 /// wrapped plaintext-storage warning consumes more rows than the
 /// twice-confirm input pair used by `set` / `change`.
-pub fn render(frame: &mut Frame<'_>, modal: &PassphraseModal) {
+pub fn render(frame: &mut Frame<'_>, modal: &PassphraseModal, no_color: bool) {
     let modal_area = centered_rect(frame.area(), 64, modal_height(modal.sub_flow));
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title_for(modal.sub_flow))
-        .padding(Padding::symmetric(1, 0));
+    let block = if matches!(modal.sub_flow, PassphraseSubFlow::Remove) {
+        theme::destructive_titled_block(
+            title_for(modal.sub_flow),
+            no_color,
+            Padding::symmetric(1, 0),
+        )
+    } else {
+        theme::titled_block(
+            title_for(modal.sub_flow),
+            no_color,
+            Padding::symmetric(1, 0),
+        )
+    };
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
 
     match modal.sub_flow {
         PassphraseSubFlow::Set | PassphraseSubFlow::Change => {
-            render_twice_confirm(frame, inner, modal);
+            render_twice_confirm(frame, inner, modal, no_color);
         }
-        PassphraseSubFlow::Remove => render_remove_warning(frame, inner, modal),
+        PassphraseSubFlow::Remove => render_remove_warning(frame, inner, modal, no_color),
     }
 }
 
@@ -118,7 +127,12 @@ fn modal_height(sub_flow: PassphraseSubFlow) -> u16 {
 /// passphrase input rows, a flexible spacer (carries the inline
 /// error when [`PassphraseModal::error`] is populated), and the
 /// centered `Enter submit  ·  Esc cancel` hint.
-fn render_twice_confirm(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseModal) {
+fn render_twice_confirm(
+    frame: &mut Frame<'_>,
+    inner: Rect,
+    modal: &PassphraseModal,
+    no_color: bool,
+) {
     let chunks = Layout::vertical([
         Constraint::Length(1), // intent
         Constraint::Length(1), // blank
@@ -146,7 +160,7 @@ fn render_twice_confirm(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseMo
     );
 
     if let Some(error) = &modal.error {
-        render_inline_error(frame, chunks[4], error);
+        render_inline_error(frame, chunks[4], error, no_color);
     }
 
     let hint = "Enter submit  ·  Esc cancel";
@@ -160,7 +174,12 @@ fn render_twice_confirm(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseMo
 /// is populated), and the centered `Enter confirm  ·  Esc cancel`
 /// hint (the verb shifts to `confirm` to flag the destructive
 /// mutation).
-fn render_remove_warning(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseModal) {
+fn render_remove_warning(
+    frame: &mut Frame<'_>,
+    inner: Rect,
+    modal: &PassphraseModal,
+    no_color: bool,
+) {
     let chunks = Layout::vertical([
         Constraint::Length(1), // intent
         Constraint::Length(1), // blank
@@ -172,7 +191,11 @@ fn render_remove_warning(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseM
 
     frame.render_widget(Paragraph::new(intent_line(modal.sub_flow)), chunks[0]);
     frame.render_widget(
-        Paragraph::new(format_plaintext_storage_warning()).wrap(Wrap { trim: true }),
+        Paragraph::new(Span::styled(
+            format_plaintext_storage_warning(),
+            theme::fg(theme::WARN, no_color),
+        ))
+        .wrap(Wrap { trim: true }),
         chunks[2],
     );
 
@@ -180,7 +203,7 @@ fn render_remove_warning(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseM
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 error.clone(),
-                Style::default().fg(Color::Red),
+                theme::fg(theme::ERROR, no_color),
             ))),
             chunks[3],
         );
@@ -196,7 +219,7 @@ fn render_remove_warning(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseM
 /// screen's `decrypt_failed` styling and the Add / Remove / Rename /
 /// Import modals' inline errors so every inline-error surface in the
 /// TUI reads the same way.
-fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str) {
+fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str, no_color: bool) {
     let spacer_chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -206,7 +229,7 @@ fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             message.to_string(),
-            Style::default().fg(Color::Red),
+            theme::fg(theme::ERROR, no_color),
         ))),
         spacer_chunks[1],
     );

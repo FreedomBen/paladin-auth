@@ -19,12 +19,13 @@
 use std::path::Path;
 
 use ratatui::layout::Alignment;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::prompt::PassphraseBuffer;
+use crate::view::theme;
 
 /// Render the unlock screen for the given vault `path`.
 ///
@@ -38,13 +39,11 @@ pub fn render(
     path: &Path,
     error: Option<&str>,
     passphrase: &PassphraseBuffer,
+    no_color: bool,
 ) {
     let area = frame.area();
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Paladin — unlock ")
-        .padding(Padding::symmetric(2, 1));
+    let block = theme::titled_block(" Paladin — unlock ", no_color, Padding::symmetric(2, 1));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -66,7 +65,7 @@ pub fn render(
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             msg.to_string(),
-            Style::default().fg(Color::Red),
+            theme::fg(theme::ERROR, no_color),
         )));
     }
 

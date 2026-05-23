@@ -36,13 +36,13 @@
 //! modals' inline-error slots.
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Clear, Padding, Paragraph};
 use ratatui::Frame;
 
 use super::centered_rect;
 use crate::app::state::{ExportFormat, ExportModal};
+use crate::view::theme;
 
 /// Width of the left-hand label column inside the modal. Long
 /// enough for the widest field name (`Destination:`) so the value
@@ -59,14 +59,11 @@ const LABEL_COL_WIDTH: usize = 13;
 /// renderers; the 72-cell width matches the Import modal so the
 /// segmented selectors line up across the two import / export
 /// flows.
-pub fn render(frame: &mut Frame<'_>, modal: &ExportModal) {
+pub fn render(frame: &mut Frame<'_>, modal: &ExportModal, no_color: bool) {
     let modal_area = centered_rect(frame.area(), 72, 10);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Export accounts ")
-        .padding(Padding::symmetric(1, 0));
+    let block = theme::titled_block(" Export accounts ", no_color, Padding::symmetric(1, 0));
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
 
@@ -91,7 +88,7 @@ pub fn render(frame: &mut Frame<'_>, modal: &ExportModal) {
     );
 
     if let Some(error) = &modal.error {
-        render_inline_error(frame, chunks[3], error);
+        render_inline_error(frame, chunks[3], error, no_color);
     }
 
     let hint = "Tab cycles fields  ·  Enter submit  ·  Esc cancel";
@@ -104,7 +101,7 @@ pub fn render(frame: &mut Frame<'_>, modal: &ExportModal) {
 /// the unlock screen's `decrypt_failed` styling and the Add / Remove
 /// / Rename modals' inline errors so every inline-error surface in
 /// the TUI reads the same way.
-fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str) {
+fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str, no_color: bool) {
     let spacer_chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -114,7 +111,7 @@ fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             message.to_string(),
-            Style::default().fg(Color::Red),
+            theme::fg(theme::ERROR, no_color),
         ))),
         spacer_chunks[1],
     );

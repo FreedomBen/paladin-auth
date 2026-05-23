@@ -3285,6 +3285,39 @@ goes to stderr at clap's normal usage exit code; there is no argv
 pre-scan equivalent of the CLI's strict-mode behavior because the TUI
 is never expected to be scripted.
 
+### Color palette (`view::theme`)
+
+Every styled cell routes through `view::theme` so the resolved
+`no_color` bool has a single chokepoint. When `no_color` is `true` the
+helpers drop foreground / background attributes but preserve modifiers
+(`BOLD`, `DIM`, `REVERSED`, `UNDERLINED`) so the visual hierarchy
+degrades to a monochrome-but-still-legible rendering rather than a
+flat wall of text. Named ratatui ANSI colors (not RGB triples) so the
+user's terminal theme decides exact hues:
+
+- `ACCENT` (Blue) — bordered-block borders + bold titles on every
+  full-screen view and modal except destructive ones.
+- `ERROR` (Red) — Remove modal border + title, every inline error
+  line (`decrypt_failed`, `save_not_committed`, etc.), the
+  startup-error screen border + title, and the `StatusLine::Error`
+  bottom-row tint.
+- `SUCCESS` (Green) — `StatusLine::Confirmation` bottom-row tint.
+- `CODE_CALM` (Cyan) — TOTP code digits and HOTP revealed-code
+  digits in the calm tier (bold), Help overlay key column (bold).
+- `WARN` (Yellow) — TOTP code / period-gauge color in the second
+  half of the rotation window, search-hit highlight (bold +
+  underlined) on the title column, plaintext-mode chip in the list
+  view title (`[plaintext]`, bold), HOTP `▸ press n to advance`
+  prompt (dim), plaintext-storage warning text in the create-vault
+  wizard and the passphrase-remove modal.
+- `URGENT` (Red) — TOTP code / period-gauge color in the final
+  ~6 % of the rotation window (≤ ~2 s on a 30 s period).
+- `KEY_HINT` (Cyan) — Help overlay key column (bold).
+
+Selected list-view rows render with `Modifier::REVERSED + BOLD` on
+the paragraph style so the highlight works regardless of the user's
+terminal theme and survives `--no-color`.
+
 ## Packaging (per §11)
 
 `paladin-tui` ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
