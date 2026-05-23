@@ -16,16 +16,29 @@
 //! insertion-order contract in `docs/DESIGN.md` rules out — falls
 //! back to a tail rebuild rather than tracking moves.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::rc::Rc;
 
 use paladin_core::AccountId;
+use relm4::gtk;
 use relm4::gtk::gio;
 use relm4::gtk::gio::prelude::*;
 use relm4::gtk::glib;
+use relm4::gtk::pango;
+use relm4::gtk::prelude::*;
+use relm4::Sender;
 
-use crate::account_list::{row_section_header, AccountRowModel};
-use crate::row_item::{RowItem, RowKind};
+use crate::account_list::{row_section_header, AccountListOutput, AccountRowModel};
+use crate::account_row::{
+    build_kebab_menu_model, dispatch_row_action, format_counter_label, progress_fraction,
+    progress_urgency, AccountRowOutput, CodeDisplay, HIDDEN_CODE_PLACEHOLDER,
+    PROGRESS_URGENCY_CSS_CLASSES, ROW_ACTION_GROUP_NAME, ROW_COPY_ACTION_NAME,
+    ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
+};
+use crate::icon_resolution::{resolve_display_icon, PLACEHOLDER_ICON_NAME};
+use crate::row_item::{RowItem, RowKind, ROW_ITEM_DISPLAY_CHANGED_SIGNAL};
 
 /// Stable identity for a row in the `gtk::ColumnView`'s store.
 ///
@@ -278,4 +291,668 @@ pub fn apply_splice_plan(store: &gio::ListStore, new_rows: &[AccountRowModel]) {
             }
         }
     }
+}
+
+/// Apply an [`interleave_section_headers`] result against a real
+/// `gio::ListStore<RowItem>`.
+///
+/// Snapshots the store's current [`RowKey`] order, computes the
+/// minimal plan against the interleaved sequence, then applies it.
+/// `RowItem` identity (account rows) and section-row reuse are both
+/// preserved across the diff so the live `gtk::SingleSelection`
+/// position survives a section-header toggle (when the toggle does
+/// not change which account rows are present).
+pub fn apply_interleaved_splice_plan(
+    store: &gio::ListStore,
+    new_rows: &[AccountRowModel],
+    show_section_headers: bool,
+) {
+    let n_old = store.n_items();
+
+    let mut old_keys: Vec<RowKey> = Vec::with_capacity(n_old as usize);
+    let mut by_key: HashMap<RowKey, RowItem> = HashMap::with_capacity(n_old as usize);
+    for i in 0..n_old {
+        let Some(obj) = store.item(i) else { continue };
+        let Ok(item) = obj.downcast::<RowItem>() else {
+            continue;
+        };
+        if let Some(key) = RowKey::from_row_item(&item) {
+            old_keys.push(key.clone());
+            by_key.insert(key, item);
+        }
+    }
+
+    let interleaved = interleave_section_headers(new_rows, show_section_headers);
+    let new_keys: Vec<RowKey> = interleaved
+        .iter()
+        .map(|row| match row {
+            InterleavedRow::Section(title) => RowKey::Section(title.clone()),
+            InterleavedRow::Account(idx) => RowKey::Account(new_rows[*idx].id),
+        })
+        .collect();
+    let plan = splice_plan(&old_keys, &new_keys);
+
+    for op in plan {
+        match op {
+            SpliceOp::Remove { position, n_remove } => {
+                let nothing: &[glib::Object] = &[];
+                store.splice(position, n_remove, nothing);
+            }
+            SpliceOp::Insert { position, indices } => {
+                let items: Vec<glib::Object> = indices
+                    .into_iter()
+                    .map(|i| {
+                        let row = &interleaved[i];
+                        let key = match row {
+                            InterleavedRow::Section(title) => RowKey::Section(title.clone()),
+                            InterleavedRow::Account(idx) => RowKey::Account(new_rows[*idx].id),
+                        };
+                        let existing = by_key.remove(&key);
+                        existing
+                            .unwrap_or_else(|| match row {
+                                InterleavedRow::Section(title) => RowItem::section(title),
+                                InterleavedRow::Account(idx) => {
+                                    RowItem::from_row_model(&new_rows[*idx])
+                                }
+                            })
+                            .upcast()
+                    })
+                    .collect();
+                store.splice(position, 0, &items);
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// Cell factories for `gtk::ColumnView`.
+//
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` Appendix A §A.2 / §A.4 the
+// five columns ("Account", "Code", "Time", "Copy", "Kebab") are each
+// driven by a `gtk::SignalListItemFactory`. Cells are recycled across
+// row positions: each factory's `setup` builds the widget tree once
+// per pool entry, `bind` wires the current `RowItem` to those widgets
+// (and subscribes to the `display-changed` signal so per-tick
+// refreshes flow through), and `unbind` tears the subscription down.
+//
+// Subscription tracking uses a shared `Rc<RefCell<HashMap>>` keyed by
+// `gtk::ListItem` pointer — the crate forbids `unsafe`, so we can't
+// stash a `SignalHandlerId` directly on the `ListItem` via the
+// (unsafe) glib data-attachment API. The `as_ptr` round-trip is safe
+// for the lifetime of the `ListItem`, which is what we need.
+// ===========================================================================
+
+/// Per-factory map of `gtk::ListItem` → live `display-changed`
+/// signal handler on the bound `RowItem`. `unbind` looks the entry
+/// up and disconnects it so the cell never receives stale updates
+/// for a row it is no longer rendering.
+type HandlerMap = Rc<RefCell<HashMap<usize, glib::SignalHandlerId>>>;
+
+fn list_item_key(list_item: &gtk::ListItem) -> usize {
+    list_item.as_ptr() as usize
+}
+
+fn cast_list_item(obj: &glib::Object) -> gtk::ListItem {
+    obj.downcast_ref::<gtk::ListItem>()
+        .expect("SignalListItemFactory item is a gtk::ListItem")
+        .clone()
+}
+
+fn try_row_item(list_item: &gtk::ListItem) -> Option<RowItem> {
+    list_item.item()?.downcast::<RowItem>().ok()
+}
+
+/// Disconnect the prior `display-changed` handler for `list_item`,
+/// if any. Called from every cell-factory `unbind`.
+fn drop_handler(handlers: &HandlerMap, list_item: &gtk::ListItem) {
+    let key = list_item_key(list_item);
+    let removed = handlers.borrow_mut().remove(&key);
+    if let Some(handler) = removed {
+        if let Some(item) = try_row_item(list_item) {
+            item.disconnect(handler);
+        }
+    }
+}
+
+/// Subscribe `rebind` to the current `RowItem`'s
+/// [`ROW_ITEM_DISPLAY_CHANGED_SIGNAL`] and stash the handler id in
+/// `handlers` keyed by `list_item` so the matching `unbind` can drop
+/// it. `rebind` is also called once immediately so the initial state
+/// of the widget reflects the bound row.
+fn install_display_subscription<F>(
+    handlers: &HandlerMap,
+    list_item: &gtk::ListItem,
+    item: &RowItem,
+    rebind: F,
+) where
+    F: Fn(&RowItem) + 'static,
+{
+    rebind(item);
+    let item_for_signal = item.clone();
+    let handler = item.connect_local(ROW_ITEM_DISPLAY_CHANGED_SIGNAL, false, move |_args| {
+        rebind(&item_for_signal);
+        None
+    });
+    handlers
+        .borrow_mut()
+        .insert(list_item_key(list_item), handler);
+}
+
+/// Build the cell factory for the "Account" column.
+///
+/// Cell layout (account row): leading icon (24 px) + ellipsized
+/// `<issuer>:<label>` `gtk::Label` (`hexpand`). Section rows render
+/// the heading text in a single bold-dim label and hide the icon.
+#[must_use]
+pub fn build_account_column_factory() -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    let handlers: HandlerMap = Rc::new(RefCell::new(HashMap::new()));
+
+    factory.connect_setup(|_, item| {
+        let list_item = cast_list_item(item);
+        let container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .build();
+        let icon = gtk::Image::builder()
+            .icon_name(PLACEHOLDER_ICON_NAME)
+            .valign(gtk::Align::Center)
+            .pixel_size(24)
+            .build();
+        let label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .xalign(0.0)
+            .hexpand(true)
+            .ellipsize(pango::EllipsizeMode::End)
+            .build();
+        container.append(&icon);
+        container.append(&label);
+        list_item.set_child(Some(&container));
+    });
+
+    let handlers_b = Rc::clone(&handlers);
+    factory.connect_bind(move |_, item| {
+        let list_item = cast_list_item(item);
+        let Some(row_item) = try_row_item(&list_item) else {
+            return;
+        };
+        let Some(container) = list_item.child().and_downcast::<gtk::Box>() else {
+            return;
+        };
+
+        // Section rows are non-selectable; account rows are selectable.
+        list_item.set_selectable(!row_item.is_section());
+
+        let container_for_rebind = container.clone();
+        install_display_subscription(&handlers_b, &list_item, &row_item, move |item| {
+            bind_account_cell(&container_for_rebind, item);
+        });
+    });
+
+    let handlers_u = Rc::clone(&handlers);
+    factory.connect_unbind(move |_, item| {
+        let list_item = cast_list_item(item);
+        drop_handler(&handlers_u, &list_item);
+    });
+
+    factory
+}
+
+fn bind_account_cell(container: &gtk::Box, item: &RowItem) {
+    let Some(icon) = container.first_child().and_downcast::<gtk::Image>() else {
+        return;
+    };
+    let Some(label) = icon.next_sibling().and_downcast::<gtk::Label>() else {
+        return;
+    };
+    match item.kind() {
+        RowKind::Section(title) => {
+            icon.set_visible(false);
+            label.set_label(&title);
+            label.remove_css_class("body");
+            label.add_css_class("dim-label");
+            label.add_css_class("heading");
+        }
+        RowKind::Account => {
+            icon.set_visible(true);
+            label.remove_css_class("dim-label");
+            label.remove_css_class("heading");
+            let display = item.display();
+            label.set_label(&display.label);
+            let icon_theme =
+                gtk::IconTheme::for_display(&gtk::prelude::WidgetExt::display(container));
+            let icon_hint = item.icon_hint();
+            let icon_name =
+                resolve_display_icon(icon_hint.as_deref(), |slug| icon_theme.has_icon(slug));
+            icon.set_icon_name(Some(icon_name));
+        }
+    }
+}
+
+/// Build the cell factory for the "Code" column.
+///
+/// Cell layout (account row): right-aligned `numeric`-class
+/// `gtk::Label` showing the visible code (or
+/// [`HIDDEN_CODE_PLACEHOLDER`] for hidden HOTP rows), an inline
+/// HOTP "next" `gtk::Button` immediately adjacent per §A.6 decision
+/// 4, and an optional `#N` counter `gtk::Label` for HOTP rows.
+/// Section rows render nothing.
+///
+/// The "next" button's `connect_clicked` closure is re-installed on
+/// each `bind` so it always closes over the *current* `RowItem`'s
+/// `AccountId`. The closure emits
+/// [`AccountListOutput::AdvanceHotp`] through the supplied sender.
+#[must_use]
+pub fn build_code_column_factory(sender: Sender<AccountListOutput>) -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    let handlers: HandlerMap = Rc::new(RefCell::new(HashMap::new()));
+    let click_handlers: Rc<RefCell<HashMap<usize, glib::SignalHandlerId>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+
+    factory.connect_setup(|_, item| {
+        let list_item = cast_list_item(item);
+        let container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .halign(gtk::Align::End)
+            .build();
+        let counter = gtk::Label::builder()
+            .halign(gtk::Align::End)
+            .xalign(1.0)
+            .build();
+        counter.add_css_class("dim-label");
+        let code = gtk::Label::builder()
+            .halign(gtk::Align::End)
+            .xalign(1.0)
+            .build();
+        code.add_css_class("numeric");
+        let next = gtk::Button::builder()
+            .icon_name("view-refresh-symbolic")
+            .tooltip_text("Reveal next HOTP code")
+            .valign(gtk::Align::Center)
+            .build();
+        next.add_css_class("flat");
+        container.append(&counter);
+        container.append(&code);
+        container.append(&next);
+        list_item.set_child(Some(&container));
+    });
+
+    let handlers_b = Rc::clone(&handlers);
+    let click_handlers_b = Rc::clone(&click_handlers);
+    factory.connect_bind(move |_, item| {
+        let list_item = cast_list_item(item);
+        let Some(row_item) = try_row_item(&list_item) else {
+            return;
+        };
+        let Some(container) = list_item.child().and_downcast::<gtk::Box>() else {
+            return;
+        };
+        let Some(next_button) =
+            container.last_child().and_downcast::<gtk::Button>()
+        else {
+            return;
+        };
+
+        let container_for_rebind = container.clone();
+        install_display_subscription(&handlers_b, &list_item, &row_item, move |item| {
+            bind_code_cell(&container_for_rebind, item);
+        });
+
+        // Wire the inline HOTP "next" button on every bind so it
+        // closes over the *current* `RowItem`'s `AccountId`. Drop
+        // any prior handler first so reused cells don't accumulate
+        // closures.
+        let key = list_item_key(&list_item);
+        if let Some(prev) = click_handlers_b.borrow_mut().remove(&key) {
+            next_button.disconnect(prev);
+        }
+        if let Some(id) = row_item.account_id() {
+            let sender_c = sender.clone();
+            let handler = next_button.connect_clicked(move |_| {
+                let _ = sender_c.send(AccountListOutput::AdvanceHotp(id));
+            });
+            click_handlers_b.borrow_mut().insert(key, handler);
+        }
+    });
+
+    let handlers_u = Rc::clone(&handlers);
+    let click_handlers_u = Rc::clone(&click_handlers);
+    factory.connect_unbind(move |_, item| {
+        let list_item = cast_list_item(item);
+        drop_handler(&handlers_u, &list_item);
+        let key = list_item_key(&list_item);
+        if let Some(handler) = click_handlers_u.borrow_mut().remove(&key) {
+            if let Some(button) = list_item
+                .child()
+                .and_then(|c| c.downcast::<gtk::Box>().ok())
+                .and_then(|c| c.last_child())
+                .and_then(|c| c.downcast::<gtk::Button>().ok())
+            {
+                button.disconnect(handler);
+            }
+        }
+    });
+
+    factory
+}
+
+fn bind_code_cell(container: &gtk::Box, item: &RowItem) {
+    let Some(counter) = container.first_child().and_downcast::<gtk::Label>() else {
+        return;
+    };
+    let Some(code) = counter.next_sibling().and_downcast::<gtk::Label>() else {
+        return;
+    };
+    let Some(next) = code.next_sibling().and_downcast::<gtk::Button>() else {
+        return;
+    };
+
+    if item.is_section() {
+        counter.set_visible(false);
+        code.set_visible(false);
+        next.set_visible(false);
+        return;
+    }
+
+    let mut display = item.display();
+    crate::account_row::apply_busy_mask(&mut display, item.busy());
+
+    code.set_visible(true);
+    if let Some(c) = display.counter {
+        counter.set_label(&format_counter_label(c));
+        counter.set_visible(true);
+    } else {
+        counter.set_label("");
+        counter.set_visible(false);
+    }
+
+    let code_text = match &display.code {
+        CodeDisplay::Hidden => HIDDEN_CODE_PLACEHOLDER.to_string(),
+        CodeDisplay::Visible(c) => c.clone(),
+    };
+    code.set_label(&code_text);
+
+    next.set_visible(display.next_button_visible);
+    next.set_sensitive(display.next_button_enabled);
+}
+
+/// Build the cell factory for the "Time" column.
+///
+/// Cell layout (account row): centered `gtk::ProgressBar` (96 px
+/// wide) bound to [`RowDisplay::progress`]. Section rows render an
+/// empty placeholder; HOTP account rows render an empty placeholder
+/// (no progress, no time window). The parent
+/// `AccountListComponent` toggles the column itself off when no
+/// account row carries a TOTP kind so vaults with only HOTP
+/// accounts hide the column entirely.
+#[must_use]
+pub fn build_time_column_factory() -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    let handlers: HandlerMap = Rc::new(RefCell::new(HashMap::new()));
+
+    factory.connect_setup(|_, item| {
+        let list_item = cast_list_item(item);
+        let progress = gtk::ProgressBar::builder()
+            .valign(gtk::Align::Center)
+            .width_request(96)
+            .show_text(false)
+            .build();
+        list_item.set_child(Some(&progress));
+    });
+
+    let handlers_b = Rc::clone(&handlers);
+    factory.connect_bind(move |_, item| {
+        let list_item = cast_list_item(item);
+        let Some(row_item) = try_row_item(&list_item) else {
+            return;
+        };
+        let Some(progress) = list_item.child().and_downcast::<gtk::ProgressBar>() else {
+            return;
+        };
+
+        let progress_for_rebind = progress.clone();
+        install_display_subscription(&handlers_b, &list_item, &row_item, move |item| {
+            bind_time_cell(&progress_for_rebind, item);
+        });
+    });
+
+    let handlers_u = Rc::clone(&handlers);
+    factory.connect_unbind(move |_, item| {
+        let list_item = cast_list_item(item);
+        drop_handler(&handlers_u, &list_item);
+    });
+
+    factory
+}
+
+fn bind_time_cell(progress: &gtk::ProgressBar, item: &RowItem) {
+    for class in PROGRESS_URGENCY_CSS_CLASSES {
+        progress.remove_css_class(class);
+    }
+    if item.is_section() {
+        progress.set_visible(false);
+        progress.set_fraction(0.0);
+        return;
+    }
+    let display = item.display();
+    progress.set_visible(display.progress_visible);
+    match display.progress {
+        Some(p) => {
+            progress.set_fraction(progress_fraction(&p));
+            progress.add_css_class(progress_urgency(&p).css_class());
+        }
+        None => progress.set_fraction(0.0),
+    }
+}
+
+/// Build the cell factory for the "Copy" column.
+///
+/// A single flat `gtk::Button` (`edit-copy-symbolic`) whose
+/// sensitive state mirrors [`RowDisplay::copy_enabled`] (busy mask
+/// already applied) and whose `connect_clicked` closure emits
+/// [`AccountListOutput::CopyCode`] for the bound row's `AccountId`.
+/// Re-installed on every `bind` so reused cells always close over
+/// the current row.
+#[must_use]
+pub fn build_copy_column_factory(sender: Sender<AccountListOutput>) -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    let handlers: HandlerMap = Rc::new(RefCell::new(HashMap::new()));
+    let click_handlers: Rc<RefCell<HashMap<usize, glib::SignalHandlerId>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+
+    factory.connect_setup(|_, item| {
+        let list_item = cast_list_item(item);
+        let button = gtk::Button::builder()
+            .icon_name("edit-copy-symbolic")
+            .tooltip_text("Copy code")
+            .valign(gtk::Align::Center)
+            .build();
+        button.add_css_class("flat");
+        list_item.set_child(Some(&button));
+    });
+
+    let handlers_b = Rc::clone(&handlers);
+    let click_handlers_b = Rc::clone(&click_handlers);
+    factory.connect_bind(move |_, item| {
+        let list_item = cast_list_item(item);
+        let Some(row_item) = try_row_item(&list_item) else {
+            return;
+        };
+        let Some(button) = list_item.child().and_downcast::<gtk::Button>() else {
+            return;
+        };
+
+        let button_for_rebind = button.clone();
+        install_display_subscription(&handlers_b, &list_item, &row_item, move |item| {
+            bind_copy_cell(&button_for_rebind, item);
+        });
+
+        let key = list_item_key(&list_item);
+        if let Some(prev) = click_handlers_b.borrow_mut().remove(&key) {
+            button.disconnect(prev);
+        }
+        if let Some(id) = row_item.account_id() {
+            let sender_c = sender.clone();
+            let handler = button.connect_clicked(move |_| {
+                let _ = sender_c.send(AccountListOutput::CopyCode(id));
+            });
+            click_handlers_b.borrow_mut().insert(key, handler);
+        }
+    });
+
+    let handlers_u = Rc::clone(&handlers);
+    let click_handlers_u = Rc::clone(&click_handlers);
+    factory.connect_unbind(move |_, item| {
+        let list_item = cast_list_item(item);
+        drop_handler(&handlers_u, &list_item);
+        let key = list_item_key(&list_item);
+        if let Some(handler) = click_handlers_u.borrow_mut().remove(&key) {
+            if let Some(button) = list_item.child().and_downcast::<gtk::Button>() {
+                button.disconnect(handler);
+            }
+        }
+    });
+
+    factory
+}
+
+fn bind_copy_cell(button: &gtk::Button, item: &RowItem) {
+    if item.is_section() {
+        button.set_visible(false);
+        return;
+    }
+    button.set_visible(true);
+    let mut display = item.display();
+    crate::account_row::apply_busy_mask(&mut display, item.busy());
+    button.set_sensitive(display.copy_enabled);
+}
+
+/// Build the cell factory for the "Kebab" (per-row overflow menu)
+/// column.
+///
+/// A single flat `gtk::MenuButton` (`view-more-symbolic`) carrying
+/// the shared [`build_kebab_menu_model`]. The per-row
+/// `gio::SimpleActionGroup` is installed on every `bind` so the
+/// "rename" / "remove" handlers close over the *current* row's id.
+/// Sensitive/visible state mirrors [`RowDisplay::kebab_visible`] /
+/// [`RowDisplay::kebab_enabled`] (busy mask already applied);
+/// section rows hide the button.
+#[must_use]
+pub fn build_kebab_column_factory(sender: Sender<AccountListOutput>) -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    let handlers: HandlerMap = Rc::new(RefCell::new(HashMap::new()));
+
+    factory.connect_setup(|_, item| {
+        let list_item = cast_list_item(item);
+        let kebab = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .tooltip_text("More actions")
+            .valign(gtk::Align::Center)
+            .menu_model(&build_kebab_menu_model())
+            .build();
+        kebab.add_css_class("flat");
+        list_item.set_child(Some(&kebab));
+    });
+
+    let handlers_b = Rc::clone(&handlers);
+    factory.connect_bind(move |_, item| {
+        let list_item = cast_list_item(item);
+        let Some(row_item) = try_row_item(&list_item) else {
+            return;
+        };
+        let Some(kebab) = list_item.child().and_downcast::<gtk::MenuButton>() else {
+            return;
+        };
+
+        // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` Appendix A §A.2.6
+        // the kebab needs a per-cell `gio::SimpleActionGroup` because
+        // its `gio::MenuModel` activates named gio actions. Install a
+        // fresh group on every `bind` so handlers close over the
+        // current row's `AccountId`. Reused cells replace the action
+        // group wholesale via `insert_action_group(..., Some)`.
+        if let Some(id) = row_item.account_id() {
+            let group = build_kebab_action_group(id, &sender);
+            kebab.insert_action_group(ROW_ACTION_GROUP_NAME, Some(&group));
+        } else {
+            kebab.insert_action_group(ROW_ACTION_GROUP_NAME, gio::ActionGroup::NONE);
+        }
+
+        let kebab_for_rebind = kebab.clone();
+        install_display_subscription(&handlers_b, &list_item, &row_item, move |item| {
+            bind_kebab_cell(&kebab_for_rebind, item);
+        });
+    });
+
+    let handlers_u = Rc::clone(&handlers);
+    factory.connect_unbind(move |_, item| {
+        let list_item = cast_list_item(item);
+        drop_handler(&handlers_u, &list_item);
+        if let Some(kebab) = list_item.child().and_downcast::<gtk::MenuButton>() {
+            kebab.insert_action_group(ROW_ACTION_GROUP_NAME, gio::ActionGroup::NONE);
+        }
+    });
+
+    factory
+}
+
+fn bind_kebab_cell(kebab: &gtk::MenuButton, item: &RowItem) {
+    if item.is_section() {
+        kebab.set_visible(false);
+        return;
+    }
+    kebab.set_visible(true);
+    let mut display = item.display();
+    crate::account_row::apply_busy_mask(&mut display, item.busy());
+    kebab.set_sensitive(display.kebab_enabled);
+}
+
+/// Construct the per-row `gio::SimpleActionGroup` that the kebab's
+/// `gio::MenuModel` activations target. Holds one action per
+/// [`ROW_RENAME_ACTION_NAME`] / [`ROW_REMOVE_ACTION_NAME`] /
+/// [`ROW_NEXT_ACTION_NAME`] / [`ROW_COPY_ACTION_NAME`]; each closure
+/// captures `id` and `sender` so an activation maps through
+/// [`dispatch_row_action`] onto the matching [`AccountRowOutput`],
+/// then onto an [`AccountListOutput`] for `AppModel`.
+fn build_kebab_action_group(
+    id: AccountId,
+    sender: &Sender<AccountListOutput>,
+) -> gio::SimpleActionGroup {
+    let actions = gio::SimpleActionGroup::new();
+    for action_name in [
+        ROW_RENAME_ACTION_NAME,
+        ROW_REMOVE_ACTION_NAME,
+        ROW_NEXT_ACTION_NAME,
+        ROW_COPY_ACTION_NAME,
+    ] {
+        let action = gio::SimpleAction::new(action_name, None);
+        let sender = sender.clone();
+        action.connect_activate(move |_, _| {
+            let Some(out) = dispatch_row_action(action_name, id) else {
+                return;
+            };
+            let routed = match out {
+                AccountRowOutput::RequestRename(id) => AccountListOutput::OpenRenameDialog(id),
+                AccountRowOutput::RequestRemove(id) => AccountListOutput::OpenRemoveDialog(id),
+                AccountRowOutput::RequestCopy(id) => AccountListOutput::CopyCode(id),
+                AccountRowOutput::RequestAdvance(id) => AccountListOutput::AdvanceHotp(id),
+            };
+            let _ = sender.send(routed);
+        });
+        actions.add_action(&action);
+    }
+    actions
+}
+
+/// `true` if any row in `rows` is a TOTP account.
+///
+/// Used by `AccountListComponent` to decide whether to show the
+/// "Time" `ColumnViewColumn` — HOTP-only vaults hide it entirely
+/// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` Appendix A §A.6
+/// decision 5. Pure helper so the predicate is testable without a
+/// `ColumnView`.
+#[must_use]
+pub fn any_totp(rows: &[AccountRowModel]) -> bool {
+    rows.iter()
+        .any(|row| matches!(row.kind, paladin_core::AccountKindSummary::Totp))
 }

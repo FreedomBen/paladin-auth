@@ -739,8 +739,11 @@ pub const HIDDEN_CODE_PLACEHOLDER: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{20
 /// The HOTP row never distinguishes `Stored` vs `Used` in the
 /// rendered text; the source of the counter is captured in the
 /// projection so future per-row diagnostics can branch on it
-/// without re-reading the row.
-fn format_counter_label(counter: CounterText) -> String {
+/// without re-reading the row. Re-exported so the `gtk::ColumnView`
+/// cell factories in [`crate::column_view`] share the same
+/// formatter the legacy `bind_row` walker used.
+#[must_use]
+pub fn format_counter_label(counter: CounterText) -> String {
     let n = match counter {
         CounterText::Stored(n) | CounterText::Used(n) => n,
     };

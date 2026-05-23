@@ -5635,13 +5635,13 @@ below reflects those resolutions.
 - [x] Build `splice_diff` helper that, given an old and new `Vec<AccountRowModel>`, computes the minimum (insert, remove) ops against the store keyed by `AccountId` — never `splice(0, N, N)`. Implemented as `column_view::splice_plan` (pure-logic op planner) + `column_view::apply_splice_plan` (driver against a real `gio::ListStore<RowItem>`); see `tests/column_view_logic.rs`.
 
 #### Cell factories
-- [ ] `build_account_column_factory` — icon (24px) + ellipsized label (hexpand).
-- [ ] `build_code_column_factory` — `numeric` CSS class label; bind to `display.code`.
-- [ ] `build_time_column_factory` — `gtk::ProgressBar` (width_request 96); bind to `display.progress_fraction` + urgency CSS class.
-- [ ] `build_copy_column_factory` — `gtk::Button` "edit-copy-symbolic"; activate emits `AccountListOutput::CopyCode(item.id())`. Sensitive bound to `display.copy_enabled`.
-- [ ] `build_kebab_column_factory` — `gtk::MenuButton` "view-more-symbolic"; menu model built once at setup time; per-cell action group rebound on each `bind` so the closures capture the current item's `AccountId`.
-- [ ] HOTP "next" affordance: rendered inline in the "Code" cell, immediately adjacent to the code label (matches today's layout). Visibility bound to `display.next_button_visible`; `connect_clicked` closure emits `AccountListOutput::AdvanceHotp(item.id())`.
-- [ ] Hide the "Time" column entirely when no live row has a TOTP kind (gate on `tick_dispatch_plan.is_empty()`-style predicate against the current store). Re-show it when the next Add or Refresh adds a TOTP row.
+- [x] `build_account_column_factory` — icon (24px) + ellipsized label (hexpand). (Section rows render a single full-width heading and hide the icon.)
+- [x] `build_code_column_factory` — `numeric` CSS class label; bind to `display.code`. Also wires the inline HOTP "next" button and a `dim-label` counter slot.
+- [x] `build_time_column_factory` — `gtk::ProgressBar` (width_request 96); bind to `display.progress_fraction` + urgency CSS class.
+- [x] `build_copy_column_factory` — `gtk::Button` "edit-copy-symbolic"; activate emits `AccountListOutput::CopyCode(item.id())`. Sensitive bound to `display.copy_enabled`.
+- [x] `build_kebab_column_factory` — `gtk::MenuButton` "view-more-symbolic"; menu model built once at setup time; per-cell `gio::SimpleActionGroup` rebound on each `bind` so the closures capture the current item's `AccountId`.
+- [x] HOTP "next" affordance: rendered inline in the "Code" cell, immediately adjacent to the code label (matches today's layout). Visibility bound to `display.next_button_visible`; `connect_clicked` closure emits `AccountListOutput::AdvanceHotp(item.id())`.
+- [x] Helper `column_view::any_totp` predicate over the current `Vec<AccountRowModel>` so `AccountListComponent` can hide the "Time" column entirely when no row has a TOTP kind. (Live wiring of `column.set_visible` lands with the `account_list.rs` rewrite.)
 
 #### Sortable columns
 - [ ] Attach a `gtk::Sorter` to the "Account" column that sorts by `(issuer, label)` case-insensitive. Clicking the column header toggles sort direction; default is unsorted (preserves vault insertion order from `docs/DESIGN.md`).
