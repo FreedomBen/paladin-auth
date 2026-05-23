@@ -824,8 +824,22 @@ end-to-end.
   when `clipboard_clear_enabled = false` and the reducer leaves
   `pending_clipboard_clear` untouched. `Err(())` surfaces the
   `clipboard_write_failed` status-line error per "Effect errors"
-  without scheduling. The executor-side `arboard` write that
-  produces the `Ok(value)` lands with the clipboard-adapter slice.)*
+  without scheduling. Executor-level: the `Effect::CopyCode` arm of
+  `paladin_tui::app::effect::execute` confirms the live `Unlocked`
+  state still owns the carried vault path (silent drop on
+  non-`Unlocked` / path-mismatch), resolves the code via
+  `Vault::totp_code(id, now)` for TOTP or the live `hotp_reveal`
+  slot's `SecretString` for HOTP (defensively re-gated on
+  `account_id`), writes through `paladin_tui::clipboard::write_text`,
+  samples `Instant::now()` after the write returns, and posts back
+  `EffectResult::CopyCode { account_id, result, completed_at }`
+  with `Ok(Zeroizing<Vec<u8>>)` carrying the bytes written or
+  `Err(())` on `arboard` failure. Asserted by
+  `copy_code::execute_copy_code_totp_writes_code_to_clipboard_and_sends_ok`,
+  `…_hotp_with_matching_reveal_writes_visible_code_and_sends_ok`,
+  `…_clipboard_write_failure_sends_err`, and the four
+  silent-drop / dropped-receiver siblings in
+  `tests/effect_tests.rs`.)*
 - [x] Stale tokens are ignored on wake.
   *(Reducer-level: `AppEvent::ClipboardClear { token, .. }` on
   `AppState::Locked` with a `Some(pending)` slot whose `token !=

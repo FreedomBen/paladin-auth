@@ -826,12 +826,16 @@ pub enum Effect {
     /// reducer level so the executor only ever sees emissions for
     /// codes the user can actually see.
     ///
-    /// The actual clipboard write, auto-clear scheduling, and
-    /// `ClipboardClearPolicy::should_clear` wiring land with the
-    /// clipboard adapter slice (see `docs/IMPLEMENTATION_PLAN_03_TUI.md`
-    /// "Clipboard auto-clear"); until then the executor consumes the
-    /// variant and returns `Continue` without touching the
-    /// clipboard.
+    /// The executor confirms the live `Unlocked` state still owns
+    /// `path` (silent drop on mismatch / non-`Unlocked`, mirroring
+    /// `Effect::Remove` / `Effect::Rename`), resolves the code via
+    /// `Vault::totp_code(id, now)` for TOTP or the live
+    /// `hotp_reveal` slot's `SecretString` for HOTP, writes through
+    /// `paladin_tui::clipboard::write_text`, samples
+    /// `Instant::now()` after the write, and posts back
+    /// `EffectResult::CopyCode` so the reducer can route the
+    /// success path through `ClipboardClearPolicy::schedule` or
+    /// surface `clipboard_write_failed` on `Err(())`.
     CopyCode {
         /// The current vault path; the executor uses it for error
         /// reporting and to verify the path the effect was emitted

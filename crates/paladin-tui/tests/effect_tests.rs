@@ -3442,3 +3442,406 @@ mod add_from_clipboard_qr {
         });
     }
 }
+
+// ---------------------------------------------------------------------------
+// Effect::CopyCode
+//
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings":
+// *"`Enter` — Copy selected code (TOTP: current; HOTP: visible only)."*
+//
+// The executor:
+//   1. Confirms the live `AppState::Unlocked` still points at the same
+//      vault path the effect carries (silent drop on mismatch / non-
+//      Unlocked, mirroring `Effect::Remove` / `Effect::Rename`).
+//   2. Resolves the code bytes — TOTP via `Vault::totp_code(id, now)`
+//      on the live wall clock; HOTP via the `hotp_reveal` slot
+//      (defensively re-gated on `account_id` match).
+//   3. Writes via `paladin_tui::clipboard::write_text` and samples
+//      `Instant::now()` after the write returns.
+//   4. Posts back `EffectResult::CopyCode { account_id, result,
+//      completed_at }` so the reducer can route the Ok path through
+//      `ClipboardClearPolicy::schedule` or surface
+//      `clipboard_write_failed` on `Err(())`.
+//
+// Tests use the `paladin-tui/test-hooks` clipboard DRYRUN seam so
+// the suite runs without a system clipboard server.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "test-hooks")]
+mod copy_code {
+    use super::*;
+
+    use paladin_core::{hotp_reveal_deadline, IconHintInput};
+    use paladin_tui::app::state::HotpReveal;
+    use paladin_tui::clipboard::{read_test_clipboard, seed_test_clipboard, test_clipboard_lock};
+
+    /// Run `body` with `PALADIN_CLIPBOARD_DRYRUN=mode` and the
+    /// process-wide test-clipboard lock held; clear the fake text
+    /// clipboard on exit so no test leaks state into the next.
+    fn with_dryrun<R>(mode: &str, body: impl FnOnce() -> R) -> R {
+        let _guard = test_clipboard_lock();
+        std::env::set_var("PALADIN_CLIPBOARD_DRYRUN", mode);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+        std::env::remove_var("PALADIN_CLIPBOARD_DRYRUN");
+        seed_test_clipboard("");
+        match result {
+            Ok(v) => v,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    fn add_hotp_account(vault: &mut Vault, store: &Store, label: &str) -> AccountId {
+        let input = AccountInput {
+            label: label.to_string(),
+            issuer: None,
+            secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+            algorithm: Algorithm::Sha1,
+            digits: 6,
+            kind: AccountKindInput::Hotp,
+            period_secs: None,
+            counter: Some(0),
+            icon_hint: IconHintInput::Default,
+        };
+        let validated = validate_manual(input, SystemTime::now()).expect("valid manual input");
+        let id = vault.add(validated.account);
+        vault.save(store).expect("commit added hotp account");
+        id
+    }
+
+    fn unlocked_with_hotp_and_reveal(
+        path: &Path,
+        label: &str,
+        visible_code: &str,
+    ) -> (AppState, AccountId) {
+        let (mut vault, store) = Store::create(path, VaultInit::Plaintext).expect("create vault");
+        vault.save(&store).expect("commit empty vault");
+        let id = add_hotp_account(&mut vault, &store, label);
+        let reveal = HotpReveal {
+            account_id: id,
+            counter_used: 0,
+            code: SecretString::from(visible_code.to_string()),
+            deadline: hotp_reveal_deadline(Instant::now()),
+        };
+        let state = AppState::Unlocked {
+            path: path.to_path_buf(),
+            vault,
+            store,
+            search_query: String::new(),
+            idle_deadline: None,
+            pending_clipboard_clear: None,
+            hotp_reveal: Some(reveal),
+            modal: None,
+            selected: Some(id),
+            pending_chord_leader: None,
+            viewport_height: 0,
+            viewport_offset: 0,
+            focus: Focus::List,
+            status_line: None,
+            help_open: false,
+        };
+        (state, id)
+    }
+
+    fn unlocked_with_hotp_no_reveal(path: &Path, label: &str) -> (AppState, AccountId) {
+        let (mut vault, store) = Store::create(path, VaultInit::Plaintext).expect("create vault");
+        vault.save(&store).expect("commit empty vault");
+        let id = add_hotp_account(&mut vault, &store, label);
+        let state = AppState::Unlocked {
+            path: path.to_path_buf(),
+            vault,
+            store,
+            search_query: String::new(),
+            idle_deadline: None,
+            pending_clipboard_clear: None,
+            hotp_reveal: None,
+            modal: None,
+            selected: Some(id),
+            pending_chord_leader: None,
+            viewport_height: 0,
+            viewport_offset: 0,
+            focus: Focus::List,
+            status_line: None,
+            help_open: false,
+        };
+        (state, id)
+    }
+
+    /// Happy path: `Effect::CopyCode` against an `Unlocked` TOTP
+    /// account writes a freshly generated code to the clipboard and
+    /// posts `EffectResult::CopyCode { Ok(value) }` whose `value`
+    /// matches what landed on the clipboard. `completed_at` is sampled
+    /// inside `execute()`'s window.
+    #[test]
+    fn execute_copy_code_totp_writes_code_to_clipboard_and_sends_ok() {
+        with_dryrun("1", || {
+            seed_test_clipboard("");
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let effect = Effect::CopyCode {
+                path: path.clone(),
+                account_id: id,
+            };
+
+            let before = Instant::now();
+            let outcome = execute(effect, &mut state, &tx);
+            let after = Instant::now();
+            assert_eq!(outcome, EffectOutcome::Continue);
+
+            let evt = rx.try_recv().expect("an AppEvent should be sent");
+            match evt {
+                AppEvent::EffectResult(EffectResult::CopyCode {
+                    account_id,
+                    result: Ok(value),
+                    completed_at,
+                }) => {
+                    assert_eq!(account_id, id, "result must carry the source account_id");
+                    let code_str = std::str::from_utf8(&value).expect("OTP digits are ASCII");
+                    assert_eq!(code_str.len(), 6, "default TOTP account is 6 digits");
+                    assert!(
+                        code_str.chars().all(|c| c.is_ascii_digit()),
+                        "TOTP code must be ASCII digits, got {code_str:?}"
+                    );
+                    assert_eq!(
+                        read_test_clipboard().as_bytes(),
+                        value.as_slice(),
+                        "clipboard must hold exactly the code bytes the executor wrote back"
+                    );
+                    assert!(
+                        completed_at >= before && completed_at <= after,
+                        "completed_at must be sampled inside [before, after] of execute()"
+                    );
+                }
+                other => panic!("expected EffectResult::CopyCode {{ Ok }}, got {other:?}"),
+            }
+            assert!(
+                rx.try_recv().is_err(),
+                "executor must emit exactly one AppEvent per Effect::CopyCode"
+            );
+        });
+    }
+
+    /// HOTP happy path: with a `hotp_reveal` slot matching the target
+    /// account, the executor reads the visible code straight out of
+    /// the slot's `SecretString` and writes it to the clipboard.
+    /// Mirrors the reducer-side "TOTP: current; HOTP: visible only"
+    /// gating.
+    #[test]
+    fn execute_copy_code_hotp_with_matching_reveal_writes_visible_code_and_sends_ok() {
+        with_dryrun("1", || {
+            seed_test_clipboard("");
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            let (mut state, id) = unlocked_with_hotp_and_reveal(&path, "github", "123456");
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let effect = Effect::CopyCode {
+                path: path.clone(),
+                account_id: id,
+            };
+            let outcome = execute(effect, &mut state, &tx);
+            assert_eq!(outcome, EffectOutcome::Continue);
+
+            let evt = rx.try_recv().expect("an AppEvent should be sent");
+            match evt {
+                AppEvent::EffectResult(EffectResult::CopyCode {
+                    account_id,
+                    result: Ok(value),
+                    ..
+                }) => {
+                    assert_eq!(account_id, id);
+                    assert_eq!(
+                        value.as_slice(),
+                        b"123456",
+                        "HOTP code must come from the live `hotp_reveal` slot, not a fresh generation"
+                    );
+                    assert_eq!(
+                        read_test_clipboard(),
+                        "123456",
+                        "clipboard must hold the visible HOTP code"
+                    );
+                }
+                other => panic!(
+                    "expected EffectResult::CopyCode {{ Ok }} for HOTP visible-reveal, got {other:?}"
+                ),
+            }
+        });
+    }
+
+    /// Clipboard write failure (`PALADIN_CLIPBOARD_DRYRUN=fail`) maps
+    /// to `EffectResult::CopyCode { Err(()) }` so the reducer can
+    /// surface the `clipboard_write_failed` status-line error per
+    /// "Effect errors": *"Copy: show a status-line error if clipboard
+    /// write fails; do not schedule auto-clear."*
+    #[test]
+    fn execute_copy_code_clipboard_write_failure_sends_err() {
+        with_dryrun("fail", || {
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let effect = Effect::CopyCode {
+                path: path.clone(),
+                account_id: id,
+            };
+            let outcome = execute(effect, &mut state, &tx);
+            assert_eq!(outcome, EffectOutcome::Continue);
+
+            let evt = rx.try_recv().expect("an AppEvent should be sent");
+            match evt {
+                AppEvent::EffectResult(EffectResult::CopyCode {
+                    account_id,
+                    result: Err(()),
+                    ..
+                }) => assert_eq!(account_id, id),
+                other => panic!(
+                    "expected EffectResult::CopyCode {{ Err }} under DRYRUN=fail, got {other:?}"
+                ),
+            }
+        });
+    }
+
+    /// Stale effect aimed at a path the live state no longer owns
+    /// must not touch the clipboard and must not emit a result —
+    /// follows the `Effect::Remove` / `Effect::Rename` silent-drop
+    /// precedent.
+    #[test]
+    fn execute_copy_code_with_mismatched_path_is_silently_dropped() {
+        with_dryrun("1", || {
+            seed_test_clipboard("PRIOR");
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let effect = Effect::CopyCode {
+                path: PathBuf::from("/some/other/vault.bin"),
+                account_id: id,
+            };
+            let outcome = execute(effect, &mut state, &tx);
+            assert_eq!(outcome, EffectOutcome::Continue);
+            assert!(
+                rx.try_recv().is_err(),
+                "path-mismatched Effect::CopyCode must not emit an AppEvent"
+            );
+            assert_eq!(
+                read_test_clipboard(),
+                "PRIOR",
+                "path-mismatched Effect::CopyCode must not touch the clipboard"
+            );
+        });
+    }
+
+    /// Stale effect arriving while the app is no longer `Unlocked`
+    /// (auto-lock fired, quit in flight, …) is silently dropped.
+    #[test]
+    fn execute_copy_code_on_non_unlocked_state_is_silently_dropped() {
+        with_dryrun("1", || {
+            seed_test_clipboard("PRIOR");
+            let mut state = dummy_state();
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let effect = Effect::CopyCode {
+                path: PathBuf::from("/dev/null/dummy-vault.bin"),
+                account_id: AccountId::new(),
+            };
+            let outcome = execute(effect, &mut state, &tx);
+            assert_eq!(outcome, EffectOutcome::Continue);
+            assert!(
+                rx.try_recv().is_err(),
+                "non-Unlocked Effect::CopyCode must not emit an AppEvent"
+            );
+            assert_eq!(
+                read_test_clipboard(),
+                "PRIOR",
+                "non-Unlocked Effect::CopyCode must not touch the clipboard"
+            );
+        });
+    }
+
+    /// Defensive: HOTP target with no matching `hotp_reveal` slot is a
+    /// silent drop. The reducer-side gating means we never reach this
+    /// path in normal flow; surfacing `clipboard_write_failed` for a
+    /// reducer-side bug would be misleading.
+    #[test]
+    fn execute_copy_code_hotp_without_matching_reveal_is_silently_dropped() {
+        with_dryrun("1", || {
+            seed_test_clipboard("PRIOR");
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            let (mut state, id) = unlocked_with_hotp_no_reveal(&path, "github");
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let effect = Effect::CopyCode {
+                path: path.clone(),
+                account_id: id,
+            };
+            let outcome = execute(effect, &mut state, &tx);
+            assert_eq!(outcome, EffectOutcome::Continue);
+            assert!(
+                rx.try_recv().is_err(),
+                "HOTP without matching reveal must be a silent drop"
+            );
+            assert_eq!(
+                read_test_clipboard(),
+                "PRIOR",
+                "HOTP without matching reveal must not touch the clipboard"
+            );
+        });
+    }
+
+    /// Defensive: a `CopyCode` for an `account_id` that is no longer
+    /// in the live vault (a reducer-side bug — the reducer captures
+    /// the id from the live `selected` slot which is kept in sync) is
+    /// a silent drop.
+    #[test]
+    fn execute_copy_code_with_unknown_account_id_is_silently_dropped() {
+        with_dryrun("1", || {
+            seed_test_clipboard("PRIOR");
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            let (mut state, _id) = unlocked_with_one_totp(&path, "github");
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let effect = Effect::CopyCode {
+                path: path.clone(),
+                account_id: AccountId::new(),
+            };
+            let outcome = execute(effect, &mut state, &tx);
+            assert_eq!(outcome, EffectOutcome::Continue);
+            assert!(
+                rx.try_recv().is_err(),
+                "unknown account_id must be a silent drop"
+            );
+            assert_eq!(
+                read_test_clipboard(),
+                "PRIOR",
+                "unknown account_id must not touch the clipboard"
+            );
+        });
+    }
+
+    /// Dropped receiver (run loop tearing down between effect emit and
+    /// dispatch) must not panic the executor. Mirrors
+    /// `execute_rename_with_dropped_receiver_does_not_panic`.
+    #[test]
+    fn execute_copy_code_with_dropped_receiver_does_not_panic() {
+        with_dryrun("1", || {
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            drop(rx);
+            let effect = Effect::CopyCode {
+                path: path.clone(),
+                account_id: id,
+            };
+            let outcome = execute(effect, &mut state, &tx);
+            assert_eq!(outcome, EffectOutcome::Continue);
+        });
+    }
+}

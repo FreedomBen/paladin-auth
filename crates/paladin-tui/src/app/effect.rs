@@ -150,24 +150,75 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             let _ = sender;
             EffectOutcome::Continue
         }
-        Effect::CopyCode {
-            path: _,
-            account_id: _,
-        } => {
-            // Placeholder: the `arboard` clipboard write and
-            // `ClipboardClearPolicy::schedule` wiring land with the
-            // clipboard adapter slice (see
-            // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear":
-            // *"Copy schedules a clear via
-            // `ClipboardClearPolicy::schedule`."*). The executor
-            // needs access to the live `(Vault, Store)` carried in
-            // `AppState::Unlocked` to compute the TOTP code or read
-            // the HOTP reveal value. Until that wiring lands the
-            // reducer emit is exercised by reducer-level tests
-            // (`pressing_enter_*_emits_copy_code_effect`, etc.) and
-            // the executor consumes the variant without emitting an
-            // `AppEvent`.
-            let _ = sender;
+        Effect::CopyCode { path, account_id } => {
+            // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` Keybindings:
+            // *"`Enter` — Copy selected code (TOTP: current; HOTP:
+            // visible only)."* The reducer's emit-side gating already
+            // enforces "visible only" for HOTP and "no modal /
+            // Focus::List / selection set" for both kinds; this
+            // executor resolves the code bytes against the live
+            // `(Vault, hotp_reveal)`, writes through the
+            // `crate::clipboard` adapter, and posts back
+            // `EffectResult::CopyCode` so the reducer can route the
+            // success path through
+            // `ClipboardClearPolicy::schedule` or surface
+            // `clipboard_write_failed` on `Err(())` per "Effect
+            // errors": *"Copy: show a status-line error if clipboard
+            // write fails; do not schedule auto-clear."*
+            //
+            // Non-`Unlocked` / path-mismatched effects are silently
+            // dropped following the `Effect::Remove` /
+            // `Effect::Rename` precedent — a stale effect aimed at a
+            // vault the live state no longer owns must not touch the
+            // clipboard. The defensive `account_not_found` /
+            // `hotp_reveal_missing` paths are also silent drops: the
+            // reducer's emit-side gating means we never reach them in
+            // normal flow, and surfacing `clipboard_write_failed` for
+            // a reducer-side bug would be misleading.
+            let AppState::Unlocked {
+                path: state_path,
+                vault,
+                hotp_reveal,
+                ..
+            } = state
+            else {
+                return EffectOutcome::Continue;
+            };
+            if *state_path != path {
+                return EffectOutcome::Continue;
+            }
+
+            let Some(account) = vault.iter().find(|a| a.id() == account_id) else {
+                return EffectOutcome::Continue;
+            };
+
+            let code_str: zeroize::Zeroizing<String> = match account.kind() {
+                paladin_core::AccountKindSummary::Totp => {
+                    let Ok(code) = vault.totp_code(account_id, SystemTime::now()) else {
+                        return EffectOutcome::Continue;
+                    };
+                    zeroize::Zeroizing::new(code.code)
+                }
+                paladin_core::AccountKindSummary::Hotp => match hotp_reveal {
+                    Some(reveal) if reveal.account_id == account_id => zeroize::Zeroizing::new(
+                        secrecy::ExposeSecret::expose_secret(&reveal.code).to_string(),
+                    ),
+                    _ => return EffectOutcome::Continue,
+                },
+            };
+
+            let write_result = crate::clipboard::write_text(code_str.as_str());
+            // Sample `completed_at` immediately after the write so
+            // the reducer's `ClipboardClearPolicy::schedule` rebases
+            // the auto-clear deadline off the actual copy time.
+            let completed_at = Instant::now();
+            let result =
+                write_result.map(|()| zeroize::Zeroizing::new(code_str.as_bytes().to_vec()));
+            let _ = sender.send(AppEvent::EffectResult(EffectResult::CopyCode {
+                account_id,
+                result,
+                completed_at,
+            }));
             EffectOutcome::Continue
         }
         Effect::Remove { path, account_id } => {
