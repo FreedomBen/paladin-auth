@@ -3631,7 +3631,7 @@ sign-off.
     parents the primary `+` button, search-toggle, and primary
     `gtk::MenuButton`. Pinned by
     `format_app_window_title_returns_paladin`,
-    `format_app_window_default_size_returns_640_by_480`, and
+    `format_app_window_default_size_returns_1280_by_960`, and
     the smoke-test `gtk_smoke.rs` end-to-end mount check.)
   - [x] Add the primary "Add account" `+` button at the start of the
     right side (icon `list-add-symbolic`, tooltip "Add account")

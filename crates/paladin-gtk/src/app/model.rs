@@ -4777,8 +4777,8 @@ pub fn startup_state_marker(state: &AppState) -> String {
 /// Initial `(width, height)` tuple the widget hands to the
 /// [`AppModel`]'s `adw::ApplicationWindow::set_default_size`.
 ///
-/// Returns the static `(640, 480)` pair — the libadwaita HIG's
-/// narrow-window initial size: wide enough for the
+/// Returns the static `(1280, 960)` pair — double the libadwaita
+/// HIG's narrow-window initial size: wide enough for the
 /// [`crate::account_list::AccountListComponent`]'s
 /// `<issuer>:<label>` lines without forcing an
 /// [`adw::Squeezer`], tall enough to expose the header bar and a
@@ -4798,7 +4798,7 @@ pub fn startup_state_marker(state: &AppState) -> String {
 /// source of truth.
 #[must_use]
 pub fn format_app_window_default_size() -> (i32, i32) {
-    (640, 480)
+    (1280, 960)
 }
 
 /// Freedesktop icon name the widget hands to the [`AppModel`]'s

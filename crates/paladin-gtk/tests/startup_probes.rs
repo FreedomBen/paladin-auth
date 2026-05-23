@@ -199,10 +199,10 @@ fn startup_state_marker_startup_error_renders_path_or_placeholder() {
 }
 
 #[test]
-fn format_app_window_default_size_returns_640_by_480() {
+fn format_app_window_default_size_returns_1280_by_960() {
     // The `AppModel`'s `adw::ApplicationWindow::set_default_size`
     // tuple is populated from this helper. The (width, height)
-    // pair `(640, 480)` matches the libadwaita HIG's narrow-
+    // pair `(1280, 960)` is double the libadwaita HIG's narrow-
     // window initial size — wide enough for the
     // `AccountListComponent`'s `<issuer>:<label>` lines without
     // forcing an `AdwSqueezer`, tall enough to expose the header
@@ -220,8 +220,8 @@ fn format_app_window_default_size_returns_640_by_480() {
 
     assert_eq!(
         format_app_window_default_size(),
-        (640, 480),
-        "ApplicationWindow default size matches the libadwaita HIG narrow-window pair",
+        (1280, 960),
+        "ApplicationWindow default size matches the doubled libadwaita HIG narrow-window pair",
     );
 }
 
@@ -6027,7 +6027,7 @@ fn format_app_about_dialog_program_name_is_segment_of_application_icon_name() {
 #[test]
 fn format_app_window_default_size_meets_gnome_hig_narrow_threshold() {
     // Defense-in-depth sibling of
-    // `format_app_window_default_size_returns_640_by_480` (exact
+    // `format_app_window_default_size_returns_1280_by_960` (exact
     // pinned value) and `format_app_window_default_size_pair_is_positive`
     // (defensive positivity floor). Those two assertions catch
     // a wholesale rewrite and a zero / negative-dimension
@@ -6044,7 +6044,7 @@ fn format_app_window_default_size_meets_gnome_hig_narrow_threshold() {
     // a modern adaptive `AdwApplicationWindow` must remain
     // usable at), with 294px tall as the matching narrow-height
     // floor for the chrome-plus-content layout libadwaita ships.
-    // The pinned (640, 480) default sits comfortably above both
+    // The pinned (1280, 960) default sits comfortably above both
     // floors; pinning the threshold here ensures a future
     // dimension regression that fell below either floor surfaces
     // as a failing test rather than as an initial window that
@@ -6071,8 +6071,8 @@ fn format_app_window_default_size_is_landscape_or_square_orientation() {
     // `format_app_window_default_size_meets_gnome_hig_narrow_threshold`:
     // the narrow-threshold test pins both dimensions sit above
     // the libadwaita HIG floors, but a regression that swapped
-    // the two slots — e.g. `(480, 640)` instead of the pinned
-    // `(640, 480)` — would still pass both the threshold and
+    // the two slots — e.g. `(960, 1280)` instead of the pinned
+    // `(1280, 960)` — would still pass both the threshold and
     // the positivity assertions while flipping the window into
     // a portrait orientation. The `AccountListComponent`'s
     // `<issuer>:<label>` rows render most cleanly when the
@@ -6141,18 +6141,18 @@ fn format_app_window_default_size_fits_typical_desktop_display() {
     // (which pins the orientation invariant). Those two
     // assertions catch dimensions that are too small or
     // portrait-flipped, but a regression that ballooned the
-    // default to e.g. `(6400, 4800)` — still positive,
+    // default to e.g. `(12800, 9600)` — still positive,
     // landscape, and above the narrow threshold — would still
     // pass all three companions while rendering an initial
     // window that overflows the user's screen before they have
     // any chance to resize. A common typo class is a trailing
-    // zero (`640` -> `6400`) or a duplicated literal; pinning a
+    // zero (`1280` -> `12800`) or a duplicated literal; pinning a
     // sane upper bound here catches that drift.
     //
     // The pinned ceiling is the typical 1920x1080 desktop
     // resolution (the FHD resolution that has been the most
     // common single-display layout across GNOME desktops for
-    // years). The current (640, 480) pinned default sits well
+    // years). The current (1280, 960) pinned default sits
     // below this ceiling; pinning the upper bound here ensures
     // a future dimension regression that exceeded the typical
     // FHD display fails the test rather than as an initial
@@ -6165,11 +6165,11 @@ fn format_app_window_default_size_fits_typical_desktop_display() {
     let (width, height) = format_app_window_default_size();
     assert!(
         width <= FHD_WIDTH_CEILING,
-        "ApplicationWindow default width {width} must fit within the typical 1920x1080 FHD desktop display (ceiling {FHD_WIDTH_CEILING}px) so the initial window does not overflow a standard 1080p screen before the user has a chance to resize; a regression that appended a trailing zero to the pinned 640px width would fail the test",
+        "ApplicationWindow default width {width} must fit within the typical 1920x1080 FHD desktop display (ceiling {FHD_WIDTH_CEILING}px) so the initial window does not overflow a standard 1080p screen before the user has a chance to resize; a regression that appended a trailing zero to the pinned 1280px width would fail the test",
     );
     assert!(
         height <= FHD_HEIGHT_CEILING,
-        "ApplicationWindow default height {height} must fit within the typical 1920x1080 FHD desktop display (ceiling {FHD_HEIGHT_CEILING}px) so the initial window does not overflow a standard 1080p screen before the user has a chance to resize; a regression that appended a trailing zero to the pinned 480px height would fail the test",
+        "ApplicationWindow default height {height} must fit within the typical 1920x1080 FHD desktop display (ceiling {FHD_HEIGHT_CEILING}px) so the initial window does not overflow a standard 1080p screen before the user has a chance to resize; a regression that appended a trailing zero to the pinned 960px height would fail the test",
     );
 }
 
