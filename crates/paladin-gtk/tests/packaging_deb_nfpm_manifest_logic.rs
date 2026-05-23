@@ -2,7 +2,7 @@
 
 //! `nfpm` `.deb` manifest contract tests for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Linux distribution and
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Linux distribution and
 //! signing" and the Milestone 7 packaging checklist entry "Add
 //! `packaging/deb/paladin-gtk.yaml` (`nfpm`)":
 //!
@@ -365,7 +365,7 @@ fn deb_manifest_declares_no_extra_depends_beyond_baseline_set() {
         extras.is_empty(),
         "deb nfpm manifest `depends:` must declare ONLY the Milestone 7 baselines \
          {REQUIRED_DEB_DEPENDS:?}; found unexpected entries: {extras:?}. If a new runtime \
-         dep is genuinely required, update IMPLEMENTATION_PLAN_04_GTK.md §11.3 first and \
+         dep is genuinely required, update docs/IMPLEMENTATION_PLAN_04_GTK.md §11.3 first and \
          add it to REQUIRED_DEB_DEPENDS in this test.",
     );
 }

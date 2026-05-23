@@ -2,7 +2,7 @@
 
 //! Input thread tests for `paladin-tui`.
 //!
-//! Tracks `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
+//! Tracks `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
 //! *"Input thread — `crossterm::event::read()` in a loop, maps to
 //! `AppEvent::Input(KeyEvent | ResizeEvent | …)`."* The producer is a
 //! long-lived thread; the reducer drives it off by dropping the
@@ -88,7 +88,7 @@ fn watchdog_join(handle: std::thread::JoinHandle<()>) -> Receiver<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Input thread (IMPLEMENTATION_PLAN_03_TUI.md > Event loop > Input thread)
+// Input thread (docs/IMPLEMENTATION_PLAN_03_TUI.md > Event loop > Input thread)
 // ---------------------------------------------------------------------------
 
 #[test]

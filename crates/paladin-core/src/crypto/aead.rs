@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// XChaCha20-Poly1305 AEAD wrapper (DESIGN.md §4.4).
+// XChaCha20-Poly1305 AEAD wrapper (docs/DESIGN.md §4.4).
 //
 // 32-byte key, 24-byte nonce, 16-byte Poly1305 tag. The encrypted
 // save/open paths bind every header byte after the magic

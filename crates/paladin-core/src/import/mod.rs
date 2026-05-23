@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Import facade (DESIGN.md §4.6 / §4.7).
+// Import facade (docs/DESIGN.md §4.6 / §4.7).
 //
 // This module owns the public import surface:
 //   - [`ImportFormat`] — discriminator returned by [`detect`] and
@@ -33,7 +33,7 @@ pub use qr::{qr_image, qr_image_bytes, read_qr_image, read_qr_image_bytes};
 use crate::storage::header::MAGIC as PALADIN_MAGIC;
 
 /// Discriminator returned by [`detect`] and accepted by the import
-/// facade as a forced format (DESIGN.md §4.6 / §4.7).
+/// facade as a forced format (docs/DESIGN.md §4.6 / §4.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImportFormat {
     /// Single `otpauth://` URI, line list of URIs, or JSON array of

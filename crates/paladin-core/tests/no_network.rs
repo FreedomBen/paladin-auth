@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Phase J.5 — source-level "no network, no telemetry" guard
-// (DESIGN.md §8 / IMPLEMENTATION_PLAN_01_CORE.md Phase J).
+// (docs/DESIGN.md §8 / docs/IMPLEMENTATION_PLAN_01_CORE.md Phase J).
 //
 // Defense-in-depth on top of `cargo deny`: scans the production
 // `paladin-core` manifest and `src/` tree for direct references to
@@ -20,10 +20,10 @@
 //
 // Subtree scoping: the lockfile check is rooted at `paladin-core`,
 // `paladin-cli`, and `paladin-tui` — the no-network surface per
-// DESIGN.md §8 and §13. `paladin-gtk` is intentionally excluded
+// docs/DESIGN.md §8 and §13. `paladin-gtk` is intentionally excluded
 // because its GUI framework (`relm4`) pulls `tokio` in transitively
 // as a structured-concurrency primitive, not as a network stack;
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"Dependencies" and §"GUI runtime
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Dependencies" and §"GUI runtime
 // carve-out" describe why this is safe (GTK's main loop is the
 // executor, and `gio::spawn_blocking` does the long work; no
 // network sockets are opened).

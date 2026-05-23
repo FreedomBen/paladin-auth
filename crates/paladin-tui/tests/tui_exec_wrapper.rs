@@ -12,7 +12,7 @@
 //! `exec_paladin_tui` failure mode is exercised by the CLI plan's
 //! tests.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Implementation checklist":
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Implementation checklist":
 //! *"Add a TUI-side smoke test that spawns `paladin tui` (CLI) and
 //! asserts it execs `paladin-tui` on shared-`PATH` installs; the
 //! Flatpak `exec_paladin_tui` failure mode is exercised by the CLI

@@ -2,7 +2,7 @@
 
 //! Widget-bearing `AppModel` for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree", `AppModel`
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree", `AppModel`
 //! is the relm4 root component that mounts the libadwaita
 //! application window and routes the active child view by
 //! [`crate::app::state::AppState`].
@@ -31,7 +31,7 @@
 //! via `apply_unlock_dispatch_inplace`, optional inline
 //! `UnlockDialogMsg` forwarded to the live `UnlockDialogComponent`,
 //! and the `drop_dialog` flag that detaches the dialog widget on
-//! replacement branches (per `IMPLEMENTATION_PLAN_04_GTK.md`
+//! replacement branches (per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 //! §"Vault interaction") — fan out from a single handler. The
 //! `gio::spawn_blocking paladin_core::open` worker that consumes the
 //! forwarded `VaultLock` and posts `AppMsg::UnlockWorkerCompleted` on
@@ -195,7 +195,7 @@ pub struct StartupOutcome {
 /// Owns the resolved vault path override plus the [`AppState`] that
 /// drives which child view is rendered. The live `(Vault, Store)`
 /// pair lives in [`AppModel::vault`] alongside the state machine
-/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree".
+/// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree".
 ///
 /// `struct_excessive_bools` is allowed because the per-dialog
 /// `last_*_busy` cache fields each shadow a distinct controller's
@@ -321,7 +321,7 @@ pub struct AppModel {
     /// `Missing`, or `StartupError`, and on `Quit`. The source ID
     /// is stored as an [`Option`] because `glib::SourceId::remove`
     /// takes the source by value (the consumed `SourceId` cannot
-    /// be re-removed). See `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// be re-removed). See `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     /// §"Milestone 7 checklist" > TOTP ticker.
     ticker_source: Option<glib::SourceId>,
     /// Open HOTP reveal windows keyed by [`paladin_core::AccountId`].
@@ -332,7 +332,7 @@ pub struct AppModel {
     /// visible digits in place. `AppModel::update` mutates the map
     /// via [`apply_advance_decision`] on `HotpAdvanceWorkerCompleted`
     /// and via [`expired_reveals`] on every `Tick`. See
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
     /// "HOTP reveal window behavior".
     reveal_windows: HashMap<paladin_core::AccountId, RevealWindow>,
     /// Reference-counted handle to the window's `adw::ToastOverlay`.
@@ -379,7 +379,7 @@ pub struct AppModel {
     /// from the per-tick wake (the captured bytes are zeroized via
     /// `Zeroizing<Vec<u8>>` on drop) and on `Locked` / `Quit`
     /// transitions for parity with [`Self::reveal_windows`]. See
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
     /// `AccountRowComponent` copy button.
     pending_clipboard: Option<PendingClipboardClear>,
     /// One-shot follow-up handle: when the user activates an
@@ -423,7 +423,7 @@ pub struct AppModel {
     /// `Unlocked → UnlockedBusy` transition that brackets the
     /// `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
     /// worker drives the dialog's Save-button gate per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership";
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership";
     /// the debounce avoids a redundant view tick on every
     /// steady-state dispatch (e.g. search-query changes while the
     /// Add dialog is not mounted). Initialized to `false` for the
@@ -499,7 +499,7 @@ pub struct AppModel {
     /// source ID is stored as an [`Option`] because
     /// [`glib::SourceId::remove`] consumes the ID — a consumed
     /// `SourceId` cannot be re-removed. See
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
     /// "Drive the auto-lock timer via `glib::timeout_add_local`".
     auto_lock_source: Option<glib::SourceId>,
     /// In-flight vault-effect ownership state machine.
@@ -513,7 +513,7 @@ pub struct AppModel {
     /// `StartupError` startups. Subsequent transitions (Locked →
     /// Unlocked after a successful unlock, Unlocked → Locked on
     /// auto-lock, etc.) install or drop the slot in lockstep with
-    /// [`Self::vault`]. See `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// [`Self::vault`]. See `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     /// §"In-flight effect ownership".
     #[allow(dead_code)]
     effects: Option<EffectOwnership>,
@@ -621,7 +621,7 @@ pub enum AppMsg {
     /// activates a row's kebab Rename… / Remove… action.
     ///
     /// `AppModel` is the owner of the dialog widget tree per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree", so the
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree", so the
     /// per-row actions bubble the row's [`paladin_core::AccountId`]
     /// up here for the dialog mount to consume.
     /// `OpenRenameDialog(id)` and `OpenRemoveDialog(id)` each mount
@@ -703,7 +703,7 @@ pub enum AppMsg {
     /// [`gtk::ShortcutsWindow`] built by
     /// [`crate::shortcuts_window::build_app_shortcuts_window`]
     /// parented at the active [`adw::ApplicationWindow`] so the
-    /// window overlays the main window per `DESIGN.md` §7.
+    /// window overlays the main window per `docs/DESIGN.md` §7.
     ///
     /// Keyboard Shortcuts is always enabled —
     /// `format_app_menu_keyboard_shortcuts_action`'s sensitivity
@@ -910,7 +910,7 @@ pub enum AppMsg {
     /// [`AppState::Unlocked`] (or routes the open failure inline
     /// for `decrypt_failed` / `invalid_passphrase` and to
     /// [`StartupErrorComponent`] for every other open failure per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors") lands in a
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors") lands in a
     /// follow-up commit alongside the `UnlockedBusy` worker
     /// infrastructure.
     UnlockDialogAction(UnlockDialogOutput),
@@ -942,7 +942,7 @@ pub enum AppMsg {
     /// leaves the slot byte-for-byte intact on every failure branch
     /// (both inline-passphrase rollback and startup-routed failures)
     /// so a stray completion can never clobber a live unlocked pair.
-    /// See `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" and
+    /// See `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" and
     /// §"Effect errors".
     ///
     /// The `gio::spawn_blocking paladin_core::open` worker that
@@ -958,7 +958,7 @@ pub enum AppMsg {
     /// [`crate::rename_dialog::RenameWorkerEffect`] bundled with the
     /// live `(Vault, Store)` pair returned by `mutate_and_save`
     /// regardless of typed outcome (the rename worker always returns
-    /// the pair per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+    /// the pair per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
     /// interaction").
     ///
     /// The handler bundles the worker effect over the cached
@@ -990,7 +990,7 @@ pub enum AppMsg {
     /// [`crate::remove_dialog::RemoveWorkerEffect`] bundled with the
     /// live `(Vault, Store)` pair returned by `mutate_and_save`
     /// regardless of typed outcome (the remove worker always returns
-    /// the pair per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+    /// the pair per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
     /// interaction").
     ///
     /// Mirrors the [`Self::RenameWorkerCompleted`] dispatch path
@@ -1011,7 +1011,7 @@ pub enum AppMsg {
     /// [`crate::add_account::AddWorkerEffect`] bundled with the live
     /// `(Vault, Store)` pair returned by `mutate_and_save`
     /// regardless of typed outcome (the add worker always returns
-    /// the pair per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+    /// the pair per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
     /// interaction").
     ///
     /// Mirrors the [`Self::RenameWorkerCompleted`] and
@@ -1044,7 +1044,7 @@ pub enum AppMsg {
     /// post-merge counts panel mounted (on `Success`) or the inline
     /// error / warning visible (on every failure branch) until the
     /// user clicks Dismiss or Cancel per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     /// `ImportDialog` ("keep the dialog on a post-success counts
     /// panel until the user dismisses it"). `dialog_msg` is always
     /// `Some(ImportDialogMsg::WorkerCompleted(outcome))` so the
@@ -1064,7 +1064,7 @@ pub enum AppMsg {
     /// [`crate::add_account::QrWorkerEffect`] bundled with the live
     /// `(Vault, Store)` pair returned by `mutate_and_save` regardless
     /// of typed outcome (the QR worker always returns the pair per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" >
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" >
     /// "Every worker returns `(Vault, Store, EffectOutcome)`").
     ///
     /// Mirrors the [`Self::AddWorkerCompleted`] dispatch path with
@@ -1154,7 +1154,7 @@ pub enum AppMsg {
     /// account. The widget side-effect (cache rebind via
     /// [`AccountListMsg::Tick`], optional `AdwToast` raised on the
     /// `AdwToastOverlay`) follows the [`RevealEffect`] returned by
-    /// the reducer. See `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// the reducer. See `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     /// §"Milestone 7 checklist" > "HOTP reveal window behavior".
     HotpAdvanceWorkerCompleted(HotpAdvanceWorkerCompletion),
     /// Forwarded from the live [`InitDialogComponent`] when the user
@@ -1248,7 +1248,7 @@ pub enum AppMsg {
     /// content tree byte-for-byte equivalent to a fresh
     /// process start.
     ///
-    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction"
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction"
     /// the handler is non-mutating: it does not create,
     /// overwrite, repair, chmod, or select a different vault
     /// path. The only side effects are the re-run probe (which
@@ -1270,7 +1270,7 @@ pub enum AppMsg {
     /// follow-up commit that wires the copy button and the
     /// `gdk::Clipboard` only-if-unchanged check.
     ///
-    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
     /// TOTP ticker. A stray tick that lands after `Vault` has
     /// been dropped (e.g. between a `Locked` transition and the
     /// matching `ticker_transition` teardown) is a benign no-op:
@@ -1341,7 +1341,7 @@ pub enum AppMsg {
     /// encrypted opted-in vaults push the deadline forward by exactly
     /// `auto_lock_timeout_secs`; plaintext and opted-out vaults stay
     /// disarmed. The follow-up timer + expiry sub-tasks (per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock
     /// parity") consume the refreshed deadline.
     ///
     /// A stray idle event that lands in `Missing` / `Locked` /
@@ -1383,7 +1383,7 @@ pub enum AppMsg {
     ///
     /// `AppModel` routes the surface to [`crate::startup_error::StartupErrorComponent`]
     /// without trying to reconstruct in-memory vault state per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership"
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership"
     /// > "Route workers that fail before returning the pair".
     WorkerPanic(EffectKind),
 }
@@ -1449,7 +1449,7 @@ impl SimpleComponent for AppModel {
                     },
 
                     // Header-bar busy spinner per
-                    // `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight
+                    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight
                     // effect ownership" ("surface the spinner / busy
                     // affordance on the current surface"). The
                     // initial visibility / spin state come from the
@@ -1491,7 +1491,7 @@ impl SimpleComponent for AppModel {
                     },
                 },
 
-                // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Window
+                // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Window
                 // shell and toast surface", every active screen
                 // (`InitDialog`, `UnlockComponent`,
                 // `StartupErrorComponent`, `AccountListComponent`)
@@ -1740,7 +1740,7 @@ impl SimpleComponent for AppModel {
                 // `Some(idle)`, the helper returns `QuitDecision::Now`
                 // and we fall through to the immediate teardown +
                 // `relm4::main_application().quit()` per
-                // `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+                // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
                 // ownership".
                 match handle_quit_request(self.effects.as_mut()) {
                     QuitDecision::Now => {
@@ -1829,7 +1829,7 @@ impl SimpleComponent for AppModel {
             AppMsg::WorkerPanic(kind) => {
                 // A `gio::spawn_blocking` worker panicked / failed
                 // before returning its `(Vault, Store)` pair. Per
-                // `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+                // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
                 // ownership": route the in-flight effect machinery
                 // to its `StartupError` state (clearing any deferred
                 // quit / lock flags — `StartupErrorComponent` owns
@@ -1849,7 +1849,7 @@ impl SimpleComponent for AppModel {
                 // `open`) against the cached `vault_path`
                 // override so an explicit `--vault` flag still
                 // wins on retry. The probe is non-mutating per
-                // `IMPLEMENTATION_PLAN_04_GTK.md`
+                // `docs/IMPLEMENTATION_PLAN_04_GTK.md`
                 // §"Vault interaction"; the retry path
                 // similarly never creates / overwrites /
                 // repairs / chmods / selects a different vault
@@ -1925,7 +1925,7 @@ impl SimpleComponent for AppModel {
             AppMsg::AccountListAction(AccountListOutput::AdvanceHotp(id)) => {
                 // HOTP row "next" button → `Vault::hotp_peek` +
                 // `Vault::hotp_advance` worker per
-                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7
+                // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7
                 // checklist" > "HOTP reveal window behavior". The
                 // worker takes the live `(Vault, Store)` pair by
                 // value, stages the pre-advance code via `hotp_peek`,
@@ -2012,7 +2012,7 @@ impl SimpleComponent for AppModel {
                 // user has opted in via
                 // `clipboard.clear_enabled`) arm the auto-clear
                 // policy through `schedule_copy` per
-                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+                // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
                 // `AccountRowComponent`. Hidden HOTP rows return
                 // `None` from `prepare_copy_bytes` so a stray click
                 // through the action group is a benign no-op even
@@ -2123,7 +2123,7 @@ impl SimpleComponent for AppModel {
                 // Save-button entry side of the `gio::spawn_blocking
                 // Vault::mutate_and_save(|v| v.rename(account_id,
                 // label, now))` worker. Four steps run in order per
-                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction":
+                // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction":
                 //
                 // 1. Take the live `(Vault, Store)` pair from
                 //    `self.vault` and bundle it with the dispatch
@@ -2379,7 +2379,7 @@ impl SimpleComponent for AppModel {
                 // The carried `(vault, store)` pair is reinstalled
                 // unconditionally — `Vault::mutate_and_save` is
                 // authoritative for the post-effect state across
-                // every branch per DESIGN.md §4.3.
+                // every branch per docs/DESIGN.md §4.3.
                 let SettingsWorkerCompletion {
                     effect,
                     vault,
@@ -2489,7 +2489,7 @@ impl SimpleComponent for AppModel {
                 //    or post-failure inline error / warning surfaces
                 //    inline (the dialog itself is the success
                 //    surface per
-                //    `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+                //    `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component
                 //    tree" > `ImportDialog`).
                 // 3. Spawn `run_import_worker` on
                 //    `gtk::gio::spawn_blocking` so the encrypted-
@@ -2554,7 +2554,7 @@ impl SimpleComponent for AppModel {
                 // `drop_dialog` is always `false` because the import
                 // dialog keeps the post-merge counts panel mounted
                 // until the user clicks Dismiss (per
-                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+                // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
                 // `ImportDialog`). The dispatch bundles the worker
                 // outcome over the cached `AppState` into an
                 // `ImportDispatch`:
@@ -2604,7 +2604,7 @@ impl SimpleComponent for AppModel {
                     if dispatch.drop_dialog {
                         // Defensive only — `should_drop_import_dialog_after`
                         // always returns `false`. Kept as a hook so a
-                        // future `IMPLEMENTATION_PLAN_04_GTK.md`
+                        // future `docs/IMPLEMENTATION_PLAN_04_GTK.md`
                         // policy change can attach to this arm
                         // without modifying every call site.
                         if let Some(controller) = self.import_dialog.take() {
@@ -3003,7 +3003,7 @@ impl SimpleComponent for AppModel {
                 //   mode once the §"Clipboard + auto-lock parity"
                 //   checklist wires the actual `glib::timeout_add_local`
                 //   plumbing — the hook from
-                //   `IMPLEMENTATION_PLAN_04_GTK.md` line 3403.
+                //   `docs/IMPLEMENTATION_PLAN_04_GTK.md` line 3403.
                 //
                 // The carried `(vault, store)` pair is reinstalled
                 // into `AppModel::vault` via
@@ -3055,7 +3055,7 @@ impl SimpleComponent for AppModel {
                     // `new_is_encrypted` gate ensures we only refresh
                     // on success (DESIGN §4.5 owns the rollback /
                     // replacement for every failure branch). Per
-                    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard +
+                    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard +
                     // auto-lock parity with TUI" — "Re-ask
                     // `IdlePolicy::should_arm` after every successful
                     // `PassphraseDialog` transition so arm/disarm
@@ -3223,7 +3223,7 @@ impl SimpleComponent for AppModel {
                 // pipeline keeps the manual / URI submit paths
                 // converging on a single
                 // `AddAccountOutput::Submit { account }` boundary
-                // per `IMPLEMENTATION_PLAN_04_GTK.md`
+                // per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
                 // §"Component tree" > `AddAccountComponent`
                 // shared shell L2161 — the `SubmitProceed` arm
                 // emitted by `save_click_outcome_to_msg` flows
@@ -3468,7 +3468,7 @@ impl SimpleComponent for AppModel {
             AppMsg::UnlockDialogAction(UnlockDialogOutput::SubmitLock(lock)) => {
                 // Entry side of the `gio::spawn_blocking
                 // paladin_core::open` worker. Three steps run in
-                // order per `IMPLEMENTATION_PLAN_04_GTK.md`
+                // order per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
                 // §"Vault interaction":
                 //
                 // 1. Capture `(path, VaultLock)` into an
@@ -3525,7 +3525,7 @@ impl SimpleComponent for AppModel {
                 // Worker-outcome dispatch. `compose_unlock_dispatch`
                 // bundles the typed `UnlockWorkerEffect` over the
                 // cached `AppState` into the three projections
-                // pinned in `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+                // pinned in `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
                 // interaction":
                 //
                 // * `app_state` — the state replacement
@@ -3624,7 +3624,7 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::InitWorkerCompleted(completion) => {
                 // Worker-outcome dispatch per
-                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction":
+                // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction":
                 //
                 // * `Success { vault, store }` — install the returned
                 //   pair into `AppModel::vault`, transition
@@ -3741,7 +3741,7 @@ impl SimpleComponent for AppModel {
                 // Worker-outcome dispatch. `compose_rename_dispatch`
                 // bundles the typed `RenameWorkerEffect` over the
                 // cached `AppState` into the three projections
-                // pinned in `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+                // pinned in `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
                 // interaction":
                 //
                 // * `app_state` — `UnlockedBusy → Unlocked` rollback
@@ -3808,7 +3808,7 @@ impl SimpleComponent for AppModel {
                 self.apply_effect_completion_outcome(post, &sender);
             }
             AppMsg::HotpAdvanceWorkerCompleted(completion) => {
-                // Worker-outcome dispatch per `IMPLEMENTATION_PLAN_04_GTK.md`
+                // Worker-outcome dispatch per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
                 // §"Milestone 7 checklist" > "HOTP reveal window
                 // behavior":
                 //
@@ -4041,7 +4041,7 @@ impl AppModel {
     /// [`Self::apply_ticker_transition`] /
     /// [`Self::prune_reveals_if_locked`]) so every state transition
     /// that flips `is_busy` propagates to the row factory's
-    /// `connect_bind` callback. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// `connect_bind` callback. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     /// §"In-flight effect ownership" / §"Component tree" >
     /// `AccountRowComponent` ("Disable mutating row controls (copy,
     /// 'next', kebab) while `AppModel` is `UnlockedBusy`"), each
@@ -4070,7 +4070,7 @@ impl AppModel {
     /// busy flag against the current [`AppState::is_busy()`] reading.
     ///
     /// Peer of [`Self::sync_account_list_busy`] on the Add dialog
-    /// side. Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// side. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
     /// ownership" the `Unlocked → UnlockedBusy` transition that
     /// brackets the `gio::spawn_blocking Vault::mutate_and_save(|v|
     /// v.add(...))` worker disables the dialog's submit (and
@@ -4101,7 +4101,7 @@ impl AppModel {
     /// against the current [`AppState::is_busy()`] reading. Peer of
     /// [`Self::sync_add_dialog_busy`] on the Rename dialog side.
     ///
-    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
     /// ownership", the dialog's Save button dims while the
     /// `gio::spawn_blocking Vault::mutate_and_save(|v|
     /// v.rename(...))` worker owns the live `(Vault, Store)` pair.
@@ -4122,7 +4122,7 @@ impl AppModel {
     /// against the current [`AppState::is_busy()`] reading. Peer of
     /// [`Self::sync_add_dialog_busy`] on the Remove dialog side.
     ///
-    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
     /// ownership", the dialog's Remove button dims while the
     /// `gio::spawn_blocking Vault::mutate_and_save(|v|
     /// v.remove(...))` worker owns the live `(Vault, Store)` pair.
@@ -4278,7 +4278,7 @@ impl AppModel {
     /// `AppMsg::Quit` on the idle path): tear down the ticker and
     /// auto-lock sources, wipe in-memory reveal / pending-clipboard
     /// buffers, and quit the GTK application. Per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
     fn apply_effect_completion_outcome(
         &mut self,
         outcome: CompleteOutcome,
@@ -4299,7 +4299,7 @@ impl AppModel {
     /// Route a `gio::spawn_blocking` worker panic / pair-loss
     /// failure to [`crate::startup_error::StartupErrorComponent`].
     ///
-    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
     /// ownership" > "Route workers that fail before returning the
     /// pair", this:
     ///
@@ -4364,7 +4364,7 @@ impl AppModel {
     /// that must not outlive the unlocked session — clearing here
     /// on the `Locked` / `Missing` / `StartupError` transitions
     /// ensures the secret bytes are wiped in lockstep with the
-    /// vault lock per DESIGN.md §4.5 / §"Memory hygiene". The
+    /// vault lock per docs/DESIGN.md §4.5 / §"Memory hygiene". The
     /// clipboard itself is NOT wiped here; the in-flight pending
     /// entry simply forgets its byte capture so a follow-up wake
     /// has nothing to match against (only-if-unchanged).
@@ -4520,7 +4520,7 @@ impl AppModel {
     /// [`crate::unlock_dialog::UnlockDialogComponent`] via
     /// [`Self::remount_for_state`].
     ///
-    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Auto-lock and clipboard
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Auto-lock and clipboard
     /// auto-clear (per §7)" *"On expiry, drop `Vault` and switch
     /// `AppModel` to `Locked`, re-presenting `UnlockComponent`.
     /// Locking discards open HOTP reveal windows, the search query,
@@ -4693,7 +4693,7 @@ impl AppModel {
 
         // HOTP reveal expiry: drop windows past their deadline and
         // emit hidden RowDisplays so the row reverts to the stored
-        // next counter per `IMPLEMENTATION_PLAN_04_GTK.md`
+        // next counter per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
         // §"Milestone 7 checklist" > "Hide the code and revert to
         // the stored next counter when the reveal deadline elapses."
         let expired = expired_reveals(&self.reveal_windows, monotonic);
@@ -4729,7 +4729,7 @@ impl AppModel {
     /// fires. On [`RevealEffect::Retained`] no cache mutation is
     /// needed; the row keeps its prior display and the generic
     /// HOTP-advance-failed toast surfaces so the user sees the
-    /// failure surface per `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// failure surface per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     /// §"Milestone 7 checklist" > "surface the inline / status
     /// error".
     fn publish_reveal_for(&self, account_id: paladin_core::AccountId, effect: RevealEffect) {
@@ -4760,7 +4760,7 @@ impl AppModel {
     /// Re-project rows off the live `(Vault, Store)` pair and emit
     /// [`AccountListMsg::Refresh`] so the visible row set matches
     /// the post-mutation vault state per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     /// `AccountListComponent` ("Refresh the store after every vault
     /// mutation … without reordering surviving rows"). Used by the
     /// rename / add / remove worker-completion handlers when the
@@ -4797,7 +4797,7 @@ impl AppModel {
     /// Called from the [`AppMsg::StartupErrorRetry`] handler after
     /// [`run_startup_probes`] has produced a fresh
     /// [`StartupOutcome`]; together they form the
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" retry
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" retry
     /// path: re-resolve the vault path, re-`inspect`, and remount
     /// the matching child controller without creating, overwriting,
     /// repairing, chmod'ing, or selecting a different vault path.
@@ -5057,7 +5057,7 @@ pub fn format_app_add_button_tooltip() -> &'static str {
 /// which would otherwise leak the live vault state into the
 /// window-list across application switches). Matches the GNOME
 /// app-id naming used by the `.desktop` / `AppStream` metadata
-/// referenced by `IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop
+/// referenced by `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop
 /// integration". No TUI parity: the TUI is a single-process
 /// terminal app and has no window-list entry to mirror. Pinning
 /// the title through a helper keeps the wording in one place
@@ -5301,7 +5301,7 @@ pub fn format_app_menu_passphrase_label() -> &'static str {
 /// horizontal-ellipsis) because the modern GNOME HIG drops the
 /// ellipsis from preferences entries: the dialog is live-apply
 /// (each toggle / spinner change drives a `Vault::mutate_and_save`
-/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage") rather
+/// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage") rather
 /// than collecting input behind an Apply / Cancel button, so the
 /// affordance is not a request for further input before
 /// committing. The dialog-opening entries (Import, Export,
@@ -5326,7 +5326,7 @@ pub fn format_app_menu_preferences_label() -> &'static str {
 /// for the menu entry that opens the `gtk::ShortcutsWindow`
 /// constructed by
 /// [`crate::shortcuts_window::build_app_shortcuts_window`] per
-/// `DESIGN.md` §7 and `IMPLEMENTATION_PLAN_04_GTK.md`
+/// `docs/DESIGN.md` §7 and `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Keyboard Shortcuts window". Sits between Preferences and
 /// About in the primary menu, matching the GNOME HIG sequence
 /// (Preferences → Keyboard Shortcuts → About → Quit) used by
@@ -5657,7 +5657,7 @@ pub fn format_app_menu_preferences_action_name() -> &'static str {
 }
 
 /// Keyboard accelerator the primary menu's "Preferences" entry
-/// is wired to per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita
+/// is wired to per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita
 /// usage" > "Primary menu" and the GNOME HIG keyboard
 /// conventions.
 ///
@@ -5717,7 +5717,7 @@ pub fn format_app_menu_keyboard_shortcuts_action_name() -> &'static str {
 }
 
 /// Keyboard accelerator the primary menu's "Keyboard Shortcuts"
-/// entry is wired to per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// entry is wired to per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Keyboard Shortcuts window" and the GNOME HIG keyboard
 /// conventions.
 ///
@@ -5803,7 +5803,7 @@ pub fn format_app_menu_quit_action_name() -> &'static str {
 }
 
 /// Keyboard accelerator the primary menu's "Quit" entry is wired
-/// to per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// to per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Primary menu".
 ///
 /// Returns the gtk-rs accelerator spelling `"<Control>q"` — the
@@ -5881,7 +5881,7 @@ pub fn format_app_add_button_action_name() -> &'static str {
 
 /// Keyboard accelerator the header-bar `+` button's
 /// `gio::SimpleAction` is wired to per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Header bar > Add".
 ///
 /// Returns the gtk-rs accelerator spelling `"<Control><Shift>n"` —
@@ -5922,7 +5922,7 @@ pub fn format_app_add_button_accelerator() -> &'static str {
 /// Ordered `(accelerator, fully-qualified action target)` pairs
 /// the application-window wiring hands to
 /// `gio::Application::set_accels_for_action(target, &[accel])`
-/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Primary menu" / "Header bar > Add".
 ///
 /// Returns the four pinned accelerator surfaces in pinned
@@ -5970,7 +5970,7 @@ pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str)
 }
 
 /// Register every pinned keyboard accelerator on `app` per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Primary menu" / "Header bar > Add".
 ///
 /// Iterates [`format_app_window_accelerator_bindings`] (the
@@ -6328,7 +6328,7 @@ pub fn format_app_add_button_visible(state: &AppState) -> bool {
 ///
 /// Returns `true` only on [`AppState::UnlockedBusy`] — the
 /// surface-level visual cue that a vault-touching worker is in
-/// flight per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+/// flight per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
 /// ownership". `Missing` / `Locked` / `Unlocked` / `StartupError`
 /// hide the spinner. The widget layer binds the header bar
 /// `gtk::Spinner`'s `set_visible` and `set_spinning` to this
@@ -6704,7 +6704,7 @@ pub fn wire_app_window_action_group(
 /// [`wire_app_window_accelerators`] and the search-bar's own key
 /// controller) still receive the press unchanged.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock
 /// parity" sub-task *"Wire `gtk::EventControllerKey` and pointer
 /// motion controllers at the `AppModel` root so idle events feed
 /// `paladin_core::policy::auto_lock::IdlePolicy`."*
@@ -6975,7 +6975,7 @@ pub fn dispatch_app_window_action(name: &str) -> Option<AppMsg> {
 /// [`crate::startup_error::StartupErrorComponent`] to the matching
 /// [`AppMsg`] dispatch variant.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" the
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" the
 /// [`crate::startup_error::StartupErrorComponent`] is display-only:
 /// Retry and Quit are the only actions. The two arms of this
 /// match lock that contract on the dispatch side:
@@ -7298,7 +7298,7 @@ pub fn format_app_about_dialog_developer_name() -> &'static str {
 /// The attribution string is the same one returned by
 /// [`format_app_about_dialog_developer_name`] so the dialog
 /// header attribution row and footer copyright row reference a
-/// single source of truth. Per DESIGN.md §14 the project ships
+/// single source of truth. Per docs/DESIGN.md §14 the project ships
 /// under AGPL-3.0-or-later; the matching license-type spelling
 /// is provided as a companion helper.
 ///
@@ -7315,7 +7315,7 @@ pub fn format_app_about_dialog_copyright() -> &'static str {
 /// generic boilerplate shipped with the GTK toolkit.
 ///
 /// Returns [`gtk::License::Custom`] per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" →
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" →
 /// "About dialog" — "Ship the AGPL-3.0-or-later license text in
 /// the gresource bundle and surface it through
 /// `AdwAboutDialog::license-type` set to `Custom` with the
@@ -7367,7 +7367,7 @@ pub fn format_app_about_dialog_license_type() -> gtk::License {
 /// simplicity, while the gresource entry covers bundle
 /// inspectors that walk the resource pool by path.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
 /// → "About dialog" — "Ship the AGPL-3.0-or-later license text
 /// in the gresource bundle and surface it through
 /// `AdwAboutDialog::license-type` set to `Custom` with the
@@ -7621,7 +7621,7 @@ pub fn format_app_about_dialog_artists() -> [&'static str; 0] {
 ///
 /// Returns the empty array for the v0.2 release. Paladin does
 /// not yet have a separately-credited documenter — the project
-/// `README.md`, `DESIGN.md`, and inline rustdoc are written by
+/// `README.md`, `docs/DESIGN.md`, and inline rustdoc are written by
 /// the founding contributor in
 /// [`format_app_about_dialog_developers`] — so the documenters
 /// slot stays empty until a credited documenter joins.
@@ -7934,7 +7934,7 @@ pub fn register_app_gresource_bundle() {
 /// `display` at
 /// `gtk::STYLE_PROVIDER_PRIORITY_APPLICATION` so the application-
 /// specific tweaks override generic theme rules without re-skinning
-/// the Adwaita palette per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// the Adwaita palette per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Window shell and toast surface".
 ///
 /// [`register_app_gresource_bundle`] must run before this helper so

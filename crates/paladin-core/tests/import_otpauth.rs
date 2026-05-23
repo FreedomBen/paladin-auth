@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Phase I.2 — `import::otpauth` wrapper covering single URI / line list /
-// JSON array variants (DESIGN.md §4.6 / §4.7).
+// JSON array variants (docs/DESIGN.md §4.6 / §4.7).
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

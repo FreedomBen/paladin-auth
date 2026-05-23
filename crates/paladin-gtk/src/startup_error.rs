@@ -2,7 +2,7 @@
 
 //! Startup-error pure-logic glue for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" and
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" and
 //! §"Vault interaction", `AppModel` runs `paladin_core::default_vault_path()`
 //! and `paladin_core::inspect(path)` at startup, then opens the vault
 //! through `paladin_core::open(path, lock)`. Three categories of
@@ -61,7 +61,7 @@ pub enum StartupErrorSource {
     /// to return its `(Vault, Store)` pair to the dispatch site.
     /// `AppModel` routes the surface to `StartupErrorComponent`
     /// rather than reconstructing in-memory vault state per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
     /// Carries the [`EffectKind`] of the failed worker for
     /// instrumentation and rendered-body wording.
     WorkerPanic(EffectKind),
@@ -362,14 +362,14 @@ pub enum StartupErrorMsg {
 
 /// Outputs emitted by [`StartupErrorComponent`].
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction"
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction"
 /// the `StartupErrorComponent` is display-only: Retry and Quit
 /// are the only actions, and the component never creates,
 /// overwrites, repairs, chmods, or selects a different vault
 /// path in v0.2. The two variants here lock that contract on
 /// the Output surface — adding a mutating variant (e.g. a
 /// "create vault here" affordance) would require an explicit
-/// design revisit in `DESIGN.md` and `IMPLEMENTATION_PLAN_04_GTK.md`.
+/// design revisit in `docs/DESIGN.md` and `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
 ///
 /// `AppModel` consumes both variants by forwarding them through
 /// `crate::app::model::dispatch_startup_error_output`:

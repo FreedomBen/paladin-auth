@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! `paladin peek <query>` — print the current code without advancing
-//! HOTP. See DESIGN.md §5 and `IMPLEMENTATION_PLAN_02_CLI.md` "Vault
+//! HOTP. See docs/DESIGN.md §5 and `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Vault
 //! interaction pattern" / "Query resolution".
 //!
 //! Order of operations (locked by the plan):

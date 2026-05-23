@@ -2,8 +2,8 @@
 
 //! Unlock screen renderer.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes" #5
-//! and `DESIGN.md` §6: when `inspect(path)` returns
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes" #5
+//! and `docs/DESIGN.md` §6: when `inspect(path)` returns
 //! [`paladin_core::VaultStatus::Encrypted`], the TUI shows the
 //! unlock screen and prompts for the passphrase inside the terminal;
 //! wrong passphrases (`decrypt_failed`) keep the user on this screen

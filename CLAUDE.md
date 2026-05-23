@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Agent Instructions
 
-- `DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update DESIGN.md so it stays in sync.
+- `docs/DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update docs/DESIGN.md so it stays in sync.
 - When changing the CLI, TUI, or GTK, update the relevant `IMPLEMENTATION_PLAN_0X_*.md` with the new behavior and API details before implementing it.  This keeps design and implementation aligned.
 - Write exhaustive tests that cover base functionality and any edge cases, particularly for the core shared library.
 - Use a Test Driven Development (TDD) approach: write failing tests before implementing features, then implement the code to make the tests pass.
@@ -21,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Implementation in progress.** The design was approved 2026-05-04. The workspace is live with four members (`crates/paladin-core`, `crates/paladin-cli`, `crates/paladin-tui`, `crates/paladin-gtk`). `IMPLEMENTATION_PLAN_01_CORE.md` and `IMPLEMENTATION_PLAN_02_CLI.md` are complete; `IMPLEMENTATION_PLAN_03_TUI.md` (v0.1) and `IMPLEMENTATION_PLAN_04_GTK.md` (v0.2 Milestone 7) are both active workstreams. The GTK release target remains v0.2 per `DESIGN.md` §13, but pure-logic scaffolding for it lands incrementally so the workspace shape and `paladin-core` API contract stay aligned. `DESIGN.md` remains the source of truth for behavior and APIs; do not invent file paths, types, or APIs that aren't grounded in it.
+**Implementation in progress.** The design was approved 2026-05-04. The workspace is live with four members (`crates/paladin-core`, `crates/paladin-cli`, `crates/paladin-tui`, `crates/paladin-gtk`). `docs/IMPLEMENTATION_PLAN_01_CORE.md` and `docs/IMPLEMENTATION_PLAN_02_CLI.md` are complete; `docs/IMPLEMENTATION_PLAN_03_TUI.md` (v0.1) and `docs/IMPLEMENTATION_PLAN_04_GTK.md` (v0.2 Milestone 7) are both active workstreams. The GTK release target remains v0.2 per `docs/DESIGN.md` §13, but pure-logic scaffolding for it lands incrementally so the workspace shape and `paladin-core` API contract stay aligned. `docs/DESIGN.md` remains the source of truth for behavior and APIs; do not invent file paths, types, or APIs that aren't grounded in it.
 
 ## What this is
 
@@ -44,11 +44,11 @@ AGPL-3.0-or-later. New source files carry `// SPDX-License-Identifier: AGPL-3.0-
 
 ## Commands
 
-CI gates per `DESIGN.md` §10 and `.github/workflows/ci.yml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`, `cargo deny check`, `cargo audit`. CI also runs a `cargo public-api` snapshot diff against `crates/paladin-core/public-api.txt`. Tests must cover RFC 6238 / RFC 4226 vectors, both-mode vault round-trip, AAD tamper detection (flip any header byte → fail), file-permission enforcement, passphrase transition rollback, and zeroize-on-drop. Use `assert_cmd` for CLI integration and `insta` golden snapshots for TUI.
+CI gates per `docs/DESIGN.md` §10 and `.github/workflows/ci.yml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`, `cargo deny check`, `cargo audit`. CI also runs a `cargo public-api` snapshot diff against `crates/paladin-core/public-api.txt`. Tests must cover RFC 6238 / RFC 4226 vectors, both-mode vault round-trip, AAD tamper detection (flip any header byte → fail), file-permission enforcement, passphrase transition rollback, and zeroize-on-drop. Use `assert_cmd` for CLI integration and `insta` golden snapshots for TUI.
 
 ## When in doubt
 
-Re-read the relevant `DESIGN.md` section. The "Approved 2026-05-04" callout in §8 means §4.3, §4.4, §4.5, §4.6, and §8 are locked for v0.1 — flag any deviation to the user before implementing it.
+Re-read the relevant `docs/DESIGN.md` section. The "Approved 2026-05-04" callout in §8 means §4.3, §4.4, §4.5, §4.6, and §8 are locked for v0.1 — flag any deviation to the user before implementing it.
 
 # context-mode — MANDATORY routing rules
 

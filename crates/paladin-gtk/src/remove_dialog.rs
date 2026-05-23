@@ -2,7 +2,7 @@
 
 //! Remove-dialog pure-logic state machine for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `RemoveDialog` and §"Effect errors" > "Add / remove / rename /
 //! settings saves", `RemoveDialog` is the confirmation gate before
 //! calling `Vault::remove` inside `Vault::mutate_and_save`. The
@@ -253,7 +253,7 @@ pub fn format_remove_dialog_cancel_label() -> &'static str {
 /// [`adw::AlertDialog::connect_response`] for the destructive Remove
 /// button.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `RemoveDialog` the destructive button is styled
 /// [`adw::ResponseAppearance::Destructive`] so libadwaita paints it in
 /// the platform's destructive red. The response id is the stable
@@ -330,7 +330,7 @@ pub fn format_remove_dialog_subtitle(display_label: &str) -> String {
 /// kick off a second remove worker before the first returns. The
 /// widget layer drives `adw::AlertDialog::set_response_enabled` for
 /// the destructive response id through this projector per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
 ///
 /// Pure — inspects only the busy latch. Sibling of
 /// [`crate::rename_dialog::format_rename_dialog_save_button_sensitive`]
@@ -345,7 +345,7 @@ pub fn format_remove_dialog_destructive_response_enabled(state: &RemoveDialogSta
 /// Body text for the `AdwToast` raised on the
 /// [`RemoveWorkerEffect::Success`] branch.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 /// `RemoveDialog` confirmation flow ("On success, refresh
 /// `AccountListComponent` from the returned vault, close the dialog,
 /// and surface a status / toast confirmation."). The widget layer
@@ -549,7 +549,7 @@ pub enum RemoveWorkerEffect {
 /// outcome — `Vault::mutate_and_save` already restores the snapshot
 /// on `save_not_committed`, so the returned vault is the
 /// authoritative post-effect state regardless of the
-/// [`RemoveWorkerEffect`] variant. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// [`RemoveWorkerEffect`] variant. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Vault interaction" > "Every worker returns `(Vault, Store,
 /// EffectOutcome)`".
 ///
@@ -584,7 +584,7 @@ pub struct RemoveWorkerCompletion {
 /// [`classify_remove_error`]. The live `(Vault, Store)` pair is
 /// always returned so `AppModel` reinstalls it regardless of the
 /// typed effect — `mutate_and_save` is authoritative for the
-/// rollback / durability-unconfirmed semantics per DESIGN.md §4.3.
+/// rollback / durability-unconfirmed semantics per docs/DESIGN.md §4.3.
 ///
 /// The closure inside `mutate_and_save` maps `Vault::remove`'s
 /// `Option<Account>` `None` (the targeted account was removed
@@ -697,7 +697,7 @@ pub struct RemoveDialogState {
     /// `true`, [`format_remove_dialog_destructive_response_enabled`]
     /// returns `false` so the `AlertDialog`'s destructive Remove
     /// response dims, mirroring the rename / add submit dimming per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
     /// ownership".
     busy: bool,
 }

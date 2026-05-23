@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! Error envelope rendering. Maps the CLI-level [`CliError`] onto the
-//! DESIGN.md §5 `error_kind` taxonomy. Behind `--json` every error
+//! docs/DESIGN.md §5 `error_kind` taxonomy. Behind `--json` every error
 //! exits with one JSON document on stderr; in text mode the renderer
 //! delegates to whichever upstream wrote the message (clap for syntax
 //! errors, `Display` on `PaladinError` for runtime errors).
@@ -26,7 +26,7 @@ use super::Mode;
 ///
 /// JSON shape: the [`AccountSummary`] fields are flattened into the
 /// candidate object, with `disambiguator` appended — matching the
-/// stable §5 wire format called out in `IMPLEMENTATION_PLAN_02_CLI.md`.
+/// stable §5 wire format called out in `docs/IMPLEMENTATION_PLAN_02_CLI.md`.
 #[derive(Debug, Clone, Serialize)]
 pub struct Candidate {
     /// Public account summary fields per §5 (`id`, `issuer`, `label`,
@@ -57,7 +57,7 @@ pub enum CliError {
         text_message: String,
     },
     /// Query matched zero accounts. Presentation-only `error_kind`
-    /// per DESIGN.md §5 — `paladin-core` exposes the matching primitives
+    /// per docs/DESIGN.md §5 — `paladin-core` exposes the matching primitives
     /// but never returns this kind; the CLI is responsible for
     /// rejecting empty match sets.
     NoMatch {
@@ -68,7 +68,7 @@ pub enum CliError {
     },
     /// Query matched more than one account when the command requires
     /// a single target (or for `show` when any HOTP account is in the
-    /// match set). Presentation-only `error_kind` per DESIGN.md §5.
+    /// match set). Presentation-only `error_kind` per docs/DESIGN.md §5.
     MultipleMatches {
         /// Original query text the user supplied. Reflected in the
         /// text-mode message; the JSON envelope carries `error_kind`
@@ -79,7 +79,7 @@ pub enum CliError {
     },
     /// `add` collided with an existing `(secret, issuer, label)` entry
     /// and `--allow-duplicate` was not supplied. Presentation-only
-    /// `error_kind` per DESIGN.md §5 — `paladin-core` exposes
+    /// `error_kind` per docs/DESIGN.md §5 — `paladin-core` exposes
     /// [`paladin_core::Vault::find_duplicate`] for the comparison but
     /// never returns this kind.
     DuplicateAccount {
@@ -89,7 +89,7 @@ pub enum CliError {
     },
     /// `paladin copy` clipboard write failed *after* any HOTP advance
     /// has already committed to disk. Presentation-only `error_kind`
-    /// per DESIGN.md §5 — the CLI does not roll the counter back
+    /// per docs/DESIGN.md §5 — the CLI does not roll the counter back
     /// because the code may already have been exposed to the clipboard
     /// provider. The carried `account` reflects the persisted
     /// post-advance state and `counter_used` is the pre-advance counter

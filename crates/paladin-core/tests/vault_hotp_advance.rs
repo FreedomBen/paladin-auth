@@ -2,7 +2,7 @@
 //
 // Phase G.5: `Vault::hotp_advance` core semantics — happy path,
 // `updated_at` advance, `time_range` validation, and persistence to
-// disk (DESIGN.md §4.7 `impl Vault` block / §5 error taxonomy).
+// disk (docs/DESIGN.md §4.7 `impl Vault` block / §5 error taxonomy).
 // Fault-injection rollback / durability-unconfirmed coverage lives in
 // `tests/fault_injection.rs` so every test that touches the
 // process-wide `PALADIN_FAULT_INJECT` env var serializes on the

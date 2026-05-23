@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// In-memory `Vault` (DESIGN.md §4.7).
+// In-memory `Vault` (docs/DESIGN.md §4.7).
 //
 // Phase E ships the minimum needed for the plaintext save/open
 // round-trip: a `Vault` holds an ordered `Vec<Account>` plus
@@ -32,7 +32,7 @@ use crate::otp::{hotp, totp};
 use crate::storage::payload::VaultPayload;
 use crate::storage::{Store, VaultSettings};
 
-/// Cached AEAD key bytes (DESIGN.md §4.4 / Phase H).
+/// Cached AEAD key bytes (docs/DESIGN.md §4.4 / Phase H).
 ///
 /// Inline 32-byte buffer wrapped so that `Drop` runs an in-place
 /// zeroize *and* fires the `EncryptedCacheKeyDrop` witness before the
@@ -73,7 +73,7 @@ impl Drop for CachedAeadKey {
 }
 
 /// Cached passphrase bytes (UTF-8) for an encrypted vault
-/// (DESIGN.md §4.4 / Phase H).
+/// (docs/DESIGN.md §4.4 / Phase H).
 ///
 /// Heap-owned `Box<[u8]>` so the bytes live at a stable allocation
 /// across passphrase transitions. `Drop` runs an in-place zeroize and
@@ -117,7 +117,7 @@ impl Drop for CachedPassphrase {
     }
 }
 
-/// Cached crypto material for an encrypted vault (DESIGN.md §4.4).
+/// Cached crypto material for an encrypted vault (docs/DESIGN.md §4.4).
 ///
 /// `passphrase` is retained so passphrase transitions / front-end
 /// confirm-old-passphrase flows can re-derive or compare without
@@ -155,7 +155,7 @@ impl EncryptedCache {
 /// Construct via [`Store::open`] or [`Store::create`]; persist via
 /// [`Vault::save`]. Accounts are kept in insertion order — iteration
 /// via [`Vault::accounts`] is stable across saves and reopens
-/// (DESIGN.md §4.3 wire-format guarantee on the bincode `Vec<Account>`).
+/// (docs/DESIGN.md §4.3 wire-format guarantee on the bincode `Vec<Account>`).
 pub struct Vault {
     accounts: Vec<Account>,
     settings: VaultSettings,
@@ -163,7 +163,7 @@ pub struct Vault {
 }
 
 /// Internal rollback snapshot for [`Vault::mutate_and_save`]
-/// (DESIGN.md §4.7).
+/// (docs/DESIGN.md §4.7).
 ///
 /// Captures the two non-cache fields whose mutations the helper
 /// rolls back (accounts and settings); the encrypted-cache material
@@ -269,7 +269,7 @@ impl Vault {
         &self.accounts
     }
 
-    /// Iterate accounts in insertion order (DESIGN.md §4.7).
+    /// Iterate accounts in insertion order (docs/DESIGN.md §4.7).
     pub fn iter(&self) -> impl Iterator<Item = &Account> {
         self.accounts.iter()
     }
@@ -287,7 +287,7 @@ impl Vault {
         self.accounts.iter().find(|a| a.id() == id)
     }
 
-    /// Filter accounts by the shared selector grammar (DESIGN.md §4.7).
+    /// Filter accounts by the shared selector grammar (docs/DESIGN.md §4.7).
     ///
     /// `Search` queries delegate to the case-insensitive substring
     /// predicate; `IdPrefix` queries match accounts whose canonical
@@ -300,7 +300,7 @@ impl Vault {
     }
 
     /// Compute the shortest `id:` hex disambiguator that uniquely
-    /// identifies `id` among the current vault accounts (DESIGN.md
+    /// identifies `id` among the current vault accounts (docs/DESIGN.md
     /// §4.7).
     ///
     /// The returned string is the lowercase hex prefix only — callers
@@ -385,7 +385,7 @@ impl Vault {
     /// Append an account; returns its stable [`AccountId`].
     ///
     /// Phase E shipped a `()` return; Phase G.1 widens this to the ID
-    /// per DESIGN.md §4.7 so callers can immediately reference the
+    /// per docs/DESIGN.md §4.7 so callers can immediately reference the
     /// freshly-inserted account without scanning `iter`.
     /// `(secret, issuer, label)` collision detection lives on
     /// [`Vault::find_duplicate`] (Phase G.3).
@@ -424,7 +424,7 @@ impl Vault {
     }
 
     /// Apply a batch of pre-validated rows to the in-memory vault using
-    /// the §5 `--on-conflict` merge policy (DESIGN.md §4.7).
+    /// the §5 `--on-conflict` merge policy (docs/DESIGN.md §4.7).
     ///
     /// Collisions are determined by the exact `(secret, issuer, label)`
     /// triple — the same predicate as [`Vault::find_duplicate`]. The
@@ -535,7 +535,7 @@ impl Vault {
     /// `now` against the §4.1 timestamp range, and bumps
     /// `updated_at` on success. Missing IDs return
     /// `invalid_state { operation: "rename", state: "account_not_found" }`
-    /// per DESIGN.md §4.7. Inputs are validated before the account
+    /// per docs/DESIGN.md §4.7. Inputs are validated before the account
     /// lookup so invalid label / timestamp surfaces consistently
     /// even when the ID is unknown.
     pub fn rename(&mut self, id: AccountId, label: &str, now: SystemTime) -> Result<()> {
@@ -565,7 +565,7 @@ impl Vault {
     }
 
     /// Encrypt a previously-plaintext vault under `options`
-    /// (DESIGN.md §4.5 / Phase H).
+    /// (docs/DESIGN.md §4.5 / Phase H).
     ///
     /// Wrong-state guard runs before any crypto: a vault that is
     /// already encrypted returns
@@ -622,7 +622,7 @@ impl Vault {
     }
 
     /// Re-encrypt an encrypted vault under a new passphrase
-    /// (DESIGN.md §4.5 / Phase H).
+    /// (docs/DESIGN.md §4.5 / Phase H).
     ///
     /// Wrong-state guard: a plaintext vault returns
     /// `invalid_state { operation: "change_passphrase", state: "not_encrypted" }`.
@@ -666,7 +666,7 @@ impl Vault {
         }
     }
 
-    /// Drop encryption from an encrypted vault (DESIGN.md §4.5 /
+    /// Drop encryption from an encrypted vault (docs/DESIGN.md §4.5 /
     /// Phase H).
     ///
     /// Wrong-state guard: a plaintext vault returns
@@ -700,7 +700,7 @@ impl Vault {
     }
 
     /// Run `mutator` against this vault and persist the result through
-    /// `store`, with snapshot-based rollback (DESIGN.md §4.7).
+    /// `store`, with snapshot-based rollback (docs/DESIGN.md §4.7).
     ///
     /// The internal snapshot captures the account list and every
     /// `VaultSettings` field before `mutator` runs, so a closure that
@@ -763,7 +763,7 @@ impl Vault {
 
     /// Compute the TOTP code for an account at the supplied wall-clock
     /// time. Read-only — never mutates the vault and never touches the
-    /// `Store` (DESIGN.md §4.2 / §4.7).
+    /// `Store` (docs/DESIGN.md §4.2 / §4.7).
     ///
     /// Missing IDs return
     /// `invalid_state { operation: "totp_code", state: "account_not_found" }`;
@@ -800,7 +800,7 @@ impl Vault {
 
     /// Compute the HOTP code at the current stored counter without
     /// advancing it. Read-only — never mutates the vault and never
-    /// touches the `Store` (DESIGN.md §4.2 / §4.7).
+    /// touches the `Store` (docs/DESIGN.md §4.2 / §4.7).
     ///
     /// A `hotp_peek` immediately following a successful `hotp_advance`
     /// observes the post-advance counter (`prev + 1`), so successive
@@ -840,7 +840,7 @@ impl Vault {
 
     /// Compute the HOTP code at the current counter, advance the
     /// stored counter, bump `updated_at`, and persist the vault
-    /// atomically through `store` (DESIGN.md §4.7).
+    /// atomically through `store` (docs/DESIGN.md §4.7).
     ///
     /// Validation order is locked so the §5 error taxonomy stays
     /// stable: invalid timestamps return `time_range` before any
@@ -947,7 +947,7 @@ mod tests {
 
     fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
 
-    // Phase B audit (DESIGN.md §8 / IMPLEMENTATION_PLAN_01_CORE.md
+    // Phase B audit (docs/DESIGN.md §8 / docs/IMPLEMENTATION_PLAN_01_CORE.md
     // Phase B): the rollback snapshot owns secret-bearing
     // `Vec<Account>` data and must never gain a `Debug` derive.
     // `VaultSnapshot` is `pub(super)`, so the equivalent trybuild
@@ -956,7 +956,7 @@ mod tests {
     assert_not_impl_all!(VaultSnapshot: std::fmt::Debug);
 
     /// Containment witness for `VaultSnapshot`'s secret-bearing field
-    /// (DESIGN.md §4.7 / Phase G.9): the snapshot owns a
+    /// (docs/DESIGN.md §4.7 / Phase G.9): the snapshot owns a
     /// `Vec<Account>`, whose drop runs each `Account`'s drop, which
     /// runs the `Secret` field's `ZeroizeOnDrop` impl and wipes the
     /// secret bytes before deallocation. If a future refactor swaps

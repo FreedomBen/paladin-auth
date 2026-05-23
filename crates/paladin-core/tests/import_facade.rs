@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Phase I.6 — `import::from_file` / `import::from_bytes` facade
-// (DESIGN.md §4.6 / §4.7).
+// (docs/DESIGN.md §4.6 / §4.7).
 
 #![cfg(unix)]
 

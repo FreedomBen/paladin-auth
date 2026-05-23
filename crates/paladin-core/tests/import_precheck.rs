@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase I.7 — `classify_paladin_import_precheck` (DESIGN.md §4.6 / §4.7).
+// Phase I.7 — `classify_paladin_import_precheck` (docs/DESIGN.md §4.6 / §4.7).
 
 #![cfg(unix)]
 

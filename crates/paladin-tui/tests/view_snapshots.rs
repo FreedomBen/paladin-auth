@@ -10,7 +10,7 @@
 //! regression shows up as a `git diff`-readable text change.
 //!
 //! Tracks the "Tests > Insta snapshots" checklist in
-//! `IMPLEMENTATION_PLAN_03_TUI.md`. Two parallel serializers cover
+//! `docs/IMPLEMENTATION_PLAN_03_TUI.md`. Two parallel serializers cover
 //! the rendered grid:
 //!
 //!   * [`buffer_to_text`] / [`render_to_text`] emit a symbol-only
@@ -59,7 +59,7 @@ use common::secure_test_tempdir;
 /// TOTP code / gauge / `seconds_remaining` cells stay deterministic across
 /// hosts. `1_500_000_012 mod 30 == 12`, so for a 30-second TOTP window
 /// the cursor sits 12 s in and 18 s remain — matching the
-/// `DESIGN.md` §6 mock's `18s` and yielding a 6-of-10-cell gauge.
+/// `docs/DESIGN.md` §6 mock's `18s` and yielding a 6-of-10-cell gauge.
 const SNAPSHOT_NOW_SECS: u64 = 1_500_000_012;
 
 fn snapshot_now() -> SystemTime {
@@ -504,7 +504,7 @@ fn snapshot_list_view_empty() {
     // the renderer exercises the no-accounts branch (an empty rows
     // pane) while still drawing the surrounding chrome — title bar,
     // search line, separators, bottom keybinding hint — per
-    // `DESIGN.md` §6's list-view layout.
+    // `docs/DESIGN.md` §6's list-view layout.
     //
     // The vault path itself does not appear in the list view (per the
     // §6 mock), so the tempdir-backed path stays out of the rendered
@@ -571,7 +571,7 @@ fn snapshot_list_view_single_totp() {
     // (`GitHub (ben@example.com)`) so the renderer exercises the
     // populated-row branch: the selection marker, the issuer/label
     // pair, the formatted TOTP code, the period-progress gauge, and
-    // the remaining-seconds suffix per `DESIGN.md` §6's list-view
+    // the remaining-seconds suffix per `docs/DESIGN.md` §6's list-view
     // mock.
     //
     // `snapshot_now()` is 12 s into a 30-s TOTP window so 18 s remain
@@ -846,7 +846,7 @@ fn snapshot_list_view_status_line_error_after_rejected_copy() {
     //
     // The vault holds a single TOTP account so the rows pane still
     // renders a populated list — pinning that the status-line text
-    // takes over the keybinding-hint slot (per `DESIGN.md` §6
+    // takes over the keybinding-hint slot (per `docs/DESIGN.md` §6
     // "errors surface inline in the active modal or in the status
     // line") rather than appending a new row, and that the chrome
     // around it is unchanged from `snapshot_list_view_single_totp`.
@@ -1542,9 +1542,9 @@ fn snapshot_add_modal_default() {
     // the snapshot pins the freshly-opened (Manual-mode, no inline
     // error, no pending duplicate-add, no counts panel) baseline of
     // the Add modal overlay rendered on top of the list view per
-    // `DESIGN.md` §6's "modal dialogs for add / remove / rename /
+    // `docs/DESIGN.md` §6's "modal dialogs for add / remove / rename /
     // import / export / passphrase / settings" call-out and the
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add"
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add"
     // contract.
     //
     // The background vault is empty so the underlying list view
@@ -1587,8 +1587,8 @@ fn snapshot_add_modal_save_not_committed() {
     // `Modal::Add(AddModal { error: Some(render_error_message(
     // &PaladinError::SaveNotCommitted { .. })), .. })` so the snapshot
     // pins the inline-error row populated from a pre-commit save
-    // failure per `DESIGN.md` §5's `save_not_committed` discriminator
-    // and the `IMPLEMENTATION_PLAN_03_TUI.md` "Pre-commit effect
+    // failure per `docs/DESIGN.md` §5's `save_not_committed` discriminator
+    // and the `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Pre-commit effect
     // failures leave visible state unchanged and surface the typed
     // error through `render_error_message`" contract. Routing the
     // wording through the shared helper means the inline text matches
@@ -1643,7 +1643,7 @@ fn snapshot_add_modal_save_durability_unconfirmed() {
     // Plan L2122: "Add modal `save_durability_unconfirmed`." Same
     // rendering path as the `save_not_committed` snapshot above; the
     // typed error here is `PaladinError::SaveDurabilityUnconfirmed`,
-    // which per `IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
+    // which per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
     // failures follow the committed-state path" surfaces in the
     // modal's inline error slot identically to the pre-commit
     // failure — both paths run through `render_error_message`.
@@ -1691,13 +1691,13 @@ fn snapshot_add_modal_qr_no_clipboard_image() {
     // .. })` so the snapshot pins the inline-error row populated
     // when `arboard::Clipboard::get_image()` reports the clipboard
     // does not hold an image — the no-image clipboard branch per
-    // `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+    // `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
     // §6) > Add": *"Scan a QR code from clipboard image bytes;
     // imported via the shared QR-decode path"*. The reducer's Err
     // arm (`reduce_qr_import_result` in `src/app/reducer.rs`) routes
     // the failure through `format_qr_import_failure` and parks the
     // wording on `AddModal::error` per the matching contract in
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Add modal": *"QR-
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Add modal": *"QR-
     // import inline errors (no clipboard image, image decode
     // failure, zero decoded QRs, oversized RGBA buffer, invalid QR
     // payload) surface inline and the modal stays open in
@@ -1849,7 +1849,7 @@ fn snapshot_add_modal_qr_no_qrs_decoded() {
     // pins the inline-error row populated when
     // `paladin_core::import::qr_image_bytes` decodes the clipboard
     // raster but finds zero QR payloads in it — the
-    // `no_entries_to_import` discriminator per `DESIGN.md` §4.6 / §5.
+    // `no_entries_to_import` discriminator per `docs/DESIGN.md` §4.6 / §5.
     // The reducer's Err arm (`reduce_qr_import_result` in
     // `src/app/reducer.rs`) routes the failure through
     // `format_qr_import_failure`, whose `Import(err)` arm delegates
@@ -1925,7 +1925,7 @@ fn snapshot_add_modal_qr_oversized_rgba_buffer() {
     // buffers (dimensions whose `width * height * 4` exceeds
     // `paladin_core::QR_RGBA_MAX_BYTES`) with `validation_error
     // { field: "qr_image", reason: "image_too_large" }` per
-    // `DESIGN.md` §4.6. Routing through the real `qr_image_bytes`
+    // `docs/DESIGN.md` §4.6. Routing through the real `qr_image_bytes`
     // call rather than constructing the error directly binds the
     // snapshot to the public API contract — the reducer-side
     // fixture
@@ -1996,7 +1996,7 @@ fn snapshot_add_modal_qr_invalid_qr_payload() {
     // so the snapshot pins the inline-error row populated when
     // `paladin_core::import::qr_image_bytes` decodes a QR whose
     // payload is not an `otpauth://` URI — the `non_otpauth_payload`
-    // discriminator emitted by `payloads_to_accounts` per `DESIGN.md`
+    // discriminator emitted by `payloads_to_accounts` per `docs/DESIGN.md`
     // §4.6 / §5 (see `crates/paladin-core/src/import/qr.rs:87`).
     // The reducer's Err arm (`reduce_qr_import_result` in
     // `src/app/reducer.rs`) routes the failure through
@@ -2017,7 +2017,7 @@ fn snapshot_add_modal_qr_invalid_qr_payload() {
     // `ValidationError` variant directly (rather than driving a real
     // non-otpauth QR through `qr_image_bytes`) keeps the snapshot
     // self-contained — the field / reason codes are stable per
-    // `DESIGN.md` §5, and `crates/paladin-core/tests/import_qr.rs`'s
+    // `docs/DESIGN.md` §5, and `crates/paladin-core/tests/import_qr.rs`'s
     // `qr_image_bytes_with_non_otpauth_payload_rejects_with_source_index`
     // already binds the real-API path. The 47-char core wording fits
     // the ~60-col inline-error slot without truncation.
@@ -2082,11 +2082,11 @@ fn snapshot_add_modal_qr_counts_panel() {
     // Some(CountsPanel { imported, skipped, replaced: 0, appended: 0,
     // warnings: vec![] }), .. })` so the snapshot pins the post-success
     // summary panel — the four `ImportReport` merge totals the reducer
-    // seeds from `paladin_core::ImportReport` per `DESIGN.md` §6's
+    // seeds from `paladin_core::ImportReport` per `docs/DESIGN.md` §6's
     // "The modal reports imported/skipped/replaced/appended/warning
     // counts plus validation-warning messages rendered through
     // `paladin_core::format_validation_warning()` in a post-success
-    // counts panel" contract and the `IMPLEMENTATION_PLAN_03_TUI.md`
+    // counts panel" contract and the `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     // "Modals (per §6) > Add" checklist row: *"Clipboard QR import
     // uses `ImportConflict::Skip` and reports imported / skipped
     // counts."*
@@ -2177,7 +2177,7 @@ fn snapshot_add_modal_qr_counts_panel_with_validation_warnings() {
     // Some(CountsPanel { ..., warnings: vec![...] }), .. })` so the
     // snapshot pins the post-success summary panel rendering each
     // `paladin_core::ImportWarning` through
-    // `paladin_core::format_validation_warning()` per `DESIGN.md` §6's
+    // `paladin_core::format_validation_warning()` per `docs/DESIGN.md` §6's
     // "The modal reports imported/skipped/replaced/appended/warning
     // counts plus validation-warning messages rendered through
     // `paladin_core::format_validation_warning()` in a post-success
@@ -2289,7 +2289,7 @@ fn snapshot_add_modal_duplicate_account() {
     // &existing_summary)), .. })` so the snapshot pins the inline-error
     // row populated when `paladin_core::Vault::find_duplicate` matches
     // an existing entry on the `(secret, issuer, label)` triple. Per
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add":
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add":
     // *"manual and URI duplicate collisions call
     // `Vault::find_duplicate(&validated)` before mutation. A collision
     // initially rejects with the existing account in the modal and
@@ -2385,7 +2385,7 @@ fn snapshot_add_modal_add_anyway_confirmation() {
     // `enter_with_pending_duplicate_add_in_manual_mode_emits_add_anyway_effect`
     // / `enter_with_pending_duplicate_add_in_uri_mode_emits_add_anyway_effect`.
     //
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add":
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add":
     // *"A collision initially rejects with the existing account in
     // the modal and offers an 'add anyway' confirmation."* The
     // initial rejection is locked by
@@ -2487,10 +2487,10 @@ fn snapshot_remove_modal_default() {
     // `Modal::Remove(RemoveModal { account_id, error: None })` open
     // so the snapshot pins the freshly-opened (no inline save-error,
     // populated `account_id`) baseline of the Remove confirmation
-    // modal overlay rendered on top of the list view per `DESIGN.md`
+    // modal overlay rendered on top of the list view per `docs/DESIGN.md`
     // §6's "modal dialogs for add / remove / rename / import /
     // export / passphrase / settings" call-out and the
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Remove"
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Remove"
     // contract — *"confirmation modal. On confirm, wraps
     // `Vault::remove` in `Vault::mutate_and_save`."*
     //
@@ -2539,9 +2539,9 @@ fn snapshot_remove_modal_save_not_committed() {
     // `Modal::Remove(RemoveModal { account_id, error: Some(
     // render_error_message(&PaladinError::SaveNotCommitted { .. })) })`
     // so the snapshot pins the inline-error row populated from a
-    // pre-commit save failure per `DESIGN.md` §5's
+    // pre-commit save failure per `docs/DESIGN.md` §5's
     // `save_not_committed` discriminator and the
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Pre-commit save rollback >
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Pre-commit save rollback >
     // Remove modal: same coverage as Add, asserted on `Vault::iter()`"
     // contract. Routing the wording through the shared
     // `render_error_message` helper means the inline text matches
@@ -2596,7 +2596,7 @@ fn snapshot_remove_modal_save_durability_unconfirmed() {
     // Plan L2141: "Remove modal `save_durability_unconfirmed`." Same
     // rendering path as the `save_not_committed` snapshot above; the
     // typed error here is `PaladinError::SaveDurabilityUnconfirmed`,
-    // which per `IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
+    // which per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
     // failures follow the committed-state path" surfaces in the
     // modal's inline error slot identically to the pre-commit
     // failure — both paths run through `render_error_message`.
@@ -2643,9 +2643,9 @@ fn snapshot_rename_modal_default() {
     // open so the snapshot pins the freshly-opened (draft pre-populated
     // with the selected account's current label, no inline save / validation
     // error) baseline of the Rename modal overlay rendered on top of the
-    // list view per `DESIGN.md` §6's "modal dialogs for add / remove /
+    // list view per `docs/DESIGN.md` §6's "modal dialogs for add / remove /
     // rename / import / export / passphrase / settings" call-out and the
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Rename"
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Rename"
     // contract — *"single text field pre-populated with the selected
     // account's current label."*
     //
@@ -2696,7 +2696,7 @@ fn snapshot_rename_modal_save_not_committed() {
     // `Modal::Rename(RenameModal { account_id, draft, error: Some(
     // render_error_message(&PaladinError::SaveNotCommitted { .. })) })`
     // so the snapshot pins the inline-error row populated from a
-    // pre-commit save failure per `DESIGN.md` §5's
+    // pre-commit save failure per `docs/DESIGN.md` §5's
     // `save_not_committed` discriminator. Routing the wording
     // through the shared `render_error_message` helper means the
     // inline text matches the rest of the TUI's error surface — the
@@ -2754,7 +2754,7 @@ fn snapshot_rename_modal_save_durability_unconfirmed() {
     // Plan L2160: "Rename modal `save_durability_unconfirmed`." Same
     // rendering path as the `save_not_committed` snapshot above; the
     // typed error here is `PaladinError::SaveDurabilityUnconfirmed`,
-    // which per `IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
+    // which per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
     // failures follow the committed-state path" surfaces in the
     // modal's inline error slot identically to the pre-commit
     // failure — both paths run through `render_error_message`.
@@ -2802,11 +2802,11 @@ fn snapshot_import_modal_default() {
     // `path_text`, `Auto` format selector, `Skip` on-conflict policy,
     // no inline error, no encrypted-Paladin passphrase sub-phase, no
     // post-success counts panel) baseline of the Import modal overlay
-    // rendered on top of the list view per `DESIGN.md` §6's "Import
+    // rendered on top of the list view per `docs/DESIGN.md` §6's "Import
     // takes a file path and optional explicit format … applies a
     // user-selected on-conflict policy (skip / replace / append), and
     // reports imported/skipped/replaced/appended/warning counts"
-    // contract and the `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+    // contract and the `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
     // §6) > Import" checklist row.
     //
     // The background vault is empty so the underlying list view
@@ -2857,7 +2857,7 @@ fn snapshot_import_modal_save_not_committed() {
     // `Modal::Import(ImportModal { error: Some(render_error_message(
     // &PaladinError::SaveNotCommitted { .. })), .. })` so the
     // snapshot pins the inline-error row populated from a pre-commit
-    // save failure per `DESIGN.md` §5's `save_not_committed`
+    // save failure per `docs/DESIGN.md` §5's `save_not_committed`
     // discriminator. Routing the wording through the shared
     // `render_error_message` helper means the inline text matches
     // the rest of the TUI's error surface — the unlock screen's
@@ -2910,7 +2910,7 @@ fn snapshot_import_modal_save_durability_unconfirmed() {
     // Plan L2162: "Import modal `save_durability_unconfirmed`." Same
     // rendering path as the `save_not_committed` snapshot above; the
     // typed error here is `PaladinError::SaveDurabilityUnconfirmed`,
-    // which per `IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
+    // which per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
     // failures follow the committed-state path" surfaces in the
     // modal's inline error slot identically to the pre-commit
     // failure — both paths run through `render_error_message`.
@@ -2997,7 +2997,7 @@ fn render_import_modal_with_inline_error(err: &PaladinError, expected_substring:
 
 // ---------------------------------------------------------------------------
 // Import modal — per-importer-error-kind inline rendering
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Insta snapshots:
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Insta snapshots:
 //  *"Import modal with each importer error kind."*)
 //
 // One snapshot per `PaladinError` variant the reducer's
@@ -3147,11 +3147,11 @@ fn snapshot_import_modal_counts_panel() {
     // so the snapshot pins the post-success summary panel — the four
     // `ImportReport` merge totals (`imported`/`skipped`/`replaced`/
     // `appended`) the reducer seeds from
-    // `paladin_core::ImportReport` per `DESIGN.md` §6's "The modal
+    // `paladin_core::ImportReport` per `docs/DESIGN.md` §6's "The modal
     // reports imported/skipped/replaced/appended/warning counts plus
     // validation-warning messages rendered through
     // `paladin_core::format_validation_warning()` in a post-success
-    // counts panel" contract and the `IMPLEMENTATION_PLAN_03_TUI.md`
+    // counts panel" contract and the `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     // "Modals (per §6) > Import" checklist row.
     //
     // Every other ImportModal field stays at its default (empty
@@ -3225,7 +3225,7 @@ fn snapshot_import_modal_counts_panel_with_validation_warnings() {
     // ..., warnings: vec![...] }), .. })` so the snapshot pins the
     // post-success counts panel rendering each
     // `paladin_core::ImportWarning` through
-    // `paladin_core::format_validation_warning()` per `DESIGN.md` §6's
+    // `paladin_core::format_validation_warning()` per `docs/DESIGN.md` §6's
     // "The modal reports imported/skipped/replaced/appended/warning
     // counts plus validation-warning messages rendered through
     // `paladin_core::format_validation_warning()` in a post-success
@@ -3307,12 +3307,12 @@ fn snapshot_export_modal_default() {
     // `path_text`, `ExportFormat::Plaintext` format selector, empty
     // twice-confirm passphrase buffers, `plaintext_confirmed: false`
     // acknowledgement gate, no inline error) baseline of the Export
-    // modal overlay rendered on top of the list view per `DESIGN.md`
+    // modal overlay rendered on top of the list view per `docs/DESIGN.md`
     // §6's "Export writes either the plaintext `otpauth://` JSON list
     // (with an explicit unencrypted-secrets warning before the write)
     // or an encrypted Paladin bundle (passphrase prompted twice and
     // matched), refuses overwrite without explicit confirmation"
-    // contract and the `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+    // contract and the `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
     // §6) > Export" checklist row.
     //
     // The background vault is empty so the underlying list view
@@ -3364,7 +3364,7 @@ fn snapshot_export_modal_refused_overwrite_gate() {
     // &PaladinError::ValidationError { field: "path",
     // reason: "output_exists".to_string(), .. })), .. })` open so the
     // snapshot pins the inline-error row populated from the
-    // refused-overwrite gate per `IMPLEMENTATION_PLAN_03_TUI.md`
+    // refused-overwrite gate per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     // "Modals (per §6) > Export": *"Overwriting an existing file is
     // rejected unless the user confirms an inline overwrite gate
     // (parity with CLI `--force`)."* Routing the wording through
@@ -3444,10 +3444,10 @@ fn snapshot_export_modal_confirmation_mismatch() {
     // { reason: "confirmation_mismatch" })), .. })` open so the
     // snapshot pins the inline-error row populated from the encrypted
     // twice-confirm passphrase mismatch gate per
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Export":
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Export":
     // *"Encrypted exports prompt twice for the bundle passphrase ..."*
     // Mismatch surfaces a rendered `PaladinError::InvalidPassphrase`
-    // with `reason: "confirmation_mismatch"` per DESIGN.md §5,
+    // with `reason: "confirmation_mismatch"` per docs/DESIGN.md §5,
     // matching the CLI's `prompt_new_passphrase` and the GTK
     // `SubmitRejection::ConfirmationMismatch` wire code. Routing the
     // wording through `render_error_message` binds the snapshot to the
@@ -3510,7 +3510,7 @@ fn snapshot_export_modal_zero_length() {
     // error: Some(render_error_message(&PaladinError::InvalidPassphrase
     // { reason: "zero_length" })), .. })` open so the snapshot pins the
     // inline-error row populated from the encrypted twice-confirm
-    // empty-passphrase gate per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals
+    // empty-passphrase gate per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals
     // (per §6) > Export": *"Encrypted exports prompt twice for the
     // bundle passphrase and reject mismatch with inline
     // `invalid_passphrase` (`reason: "confirmation_mismatch"`) or
@@ -3518,7 +3518,7 @@ fn snapshot_export_modal_zero_length() {
     // path is selected and both prompts are blank (so the mismatch
     // gate passes by both buffers being equal), the reducer surfaces
     // a rendered `PaladinError::InvalidPassphrase` with
-    // `reason: "zero_length"` per DESIGN.md §5, matching the CLI's
+    // `reason: "zero_length"` per docs/DESIGN.md §5, matching the CLI's
     // `prompt_new_passphrase` (mismatch first, then `zero_length`) and
     // the GTK `SubmitRejection::ZeroLength` wire code so the
     // user-facing reason stays stable across all three front-ends.
@@ -3583,14 +3583,14 @@ fn snapshot_export_modal_plaintext_export_warning() {
     // error: Some(format_plaintext_export_warning()),
     // plaintext_confirmed: false, .. })` open so the snapshot pins the
     // inline-error row populated from the plaintext unencrypted-secrets
-    // acknowledgement gate per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals
+    // acknowledgement gate per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals
     // (per §6) > Export": *"Plaintext exports render
     // `paladin_core::format_plaintext_export_warning()` verbatim and
     // the user must confirm before the write proceeds."*. Routing the
     // wording through `paladin_core::format_plaintext_export_warning`
     // binds the snapshot to the core helper rather than a hand-typed
     // string so wording stays in lockstep with the CLI's stderr
-    // advisory (`paladin-cli/src/commands/export.rs`, DESIGN.md §4.6 /
+    // advisory (`paladin-cli/src/commands/export.rs`, docs/DESIGN.md §4.6 /
     // §6) and the GTK `ExportDialog`'s `plaintext_warning_body()`
     // checkbox label — any future wording change in core surfaces here
     // as a diff.
@@ -3656,7 +3656,7 @@ fn snapshot_export_modal_io_error() {
     // the staging / rename / parent-dir-fsync chain. The reducer's Err
     // arm (`reduce_export_result` in `src/app/reducer.rs`) routes the
     // error through `render_error_message` and parks the wording on
-    // `ExportModal::error` per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests
+    // `ExportModal::error` per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests
     // > Export modal": *"Writer `io_error`, `save_not_committed`, and
     // `save_durability_unconfirmed` surface inline and the modal stays
     // open."* The view-snapshot pins the post-reduce rendering 1:1
@@ -3730,10 +3730,10 @@ fn snapshot_export_modal_save_not_committed() {
     // open so the snapshot pins the inline-error row populated when
     // `paladin_core::write_secret_file_atomic` fails before the
     // primary rename — the staging-file fsync / rename failure mode
-    // per `DESIGN.md` §4.3 / §5 `save_not_committed`. The reducer's
+    // per `docs/DESIGN.md` §4.3 / §5 `save_not_committed`. The reducer's
     // Err arm (`reduce_export_result` in `src/app/reducer.rs`) routes
     // the error through `render_error_message` and parks the wording
-    // on `ExportModal::error` per `IMPLEMENTATION_PLAN_03_TUI.md`
+    // on `ExportModal::error` per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     // "Tests > Export modal": *"Writer `io_error`,
     // `save_not_committed`, and `save_durability_unconfirmed` surface
     // inline and the modal stays open."* The view-snapshot pins the
@@ -3808,11 +3808,11 @@ fn snapshot_export_modal_save_durability_unconfirmed() {
     // open so the snapshot pins the inline-error row populated when
     // `paladin_core::write_secret_file_atomic`'s primary rename
     // succeeded but the parent-directory `fsync` failed — the
-    // durability-unconfirmed failure mode per `DESIGN.md` §4.3 / §5
+    // durability-unconfirmed failure mode per `docs/DESIGN.md` §4.3 / §5
     // `save_durability_unconfirmed`. The reducer's Err arm
     // (`reduce_export_result` in `src/app/reducer.rs`) routes the
     // error through `render_error_message` and parks the wording on
-    // `ExportModal::error` per `IMPLEMENTATION_PLAN_03_TUI.md`
+    // `ExportModal::error` per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     // "Tests > Export modal": *"Writer `io_error`,
     // `save_not_committed`, and `save_durability_unconfirmed`
     // surface inline and the modal stays open."* The view-snapshot
@@ -3887,9 +3887,9 @@ fn snapshot_passphrase_modal_set_default() {
     // empty `new_passphrase` / `confirm_passphrase` buffers, no
     // inline error) baseline of the Passphrase modal's `set`
     // sub-flow overlay rendered on top of the list view per
-    // `DESIGN.md` §6's "modal dialogs for add / remove / rename /
+    // `docs/DESIGN.md` §6's "modal dialogs for add / remove / rename /
     // import / export / passphrase / settings" call-out and the
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) >
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) >
     // Passphrase" contract — *"three sub-flows mirroring CLI's
     // `passphrase set / change / remove`. … New passphrases (`set`,
     // `change`) are prompted twice and confirmed; mismatch returns
@@ -3947,9 +3947,9 @@ fn snapshot_passphrase_modal_change_default() {
     // / `confirm_passphrase` buffers, no inline error) baseline of
     // the Passphrase modal's `change` sub-flow overlay. The `change`
     // sub-flow is the encrypted → encrypted re-key transition per
-    // `DESIGN.md` §6's "modal dialogs for add / remove / rename /
+    // `docs/DESIGN.md` §6's "modal dialogs for add / remove / rename /
     // import / export / passphrase / settings" call-out and the
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Passphrase"
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Passphrase"
     // contract — *"three sub-flows mirroring CLI's `passphrase set /
     // change / remove`. … New passphrases (`set`, `change`) are
     // prompted twice and confirmed; mismatch returns to the modal
@@ -4011,7 +4011,7 @@ fn snapshot_passphrase_modal_remove_default() {
     // unused `new_passphrase` / `confirm_passphrase` buffers)
     // baseline of the Passphrase modal's `remove` sub-flow overlay.
     // The `remove` sub-flow is the encrypted → plaintext transition
-    // per `DESIGN.md` §6 and the `IMPLEMENTATION_PLAN_03_TUI.md`
+    // per `docs/DESIGN.md` §6 and the `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     // "Modals (per §6) > Passphrase" contract — *"`remove` shows the
     // plaintext-storage warning and requires explicit confirmation
     // before mutation. Source the `passphrase remove` warning from
@@ -4073,7 +4073,7 @@ fn snapshot_passphrase_modal_confirmation_mismatch() {
     // Some(render_error_message(&PaladinError::InvalidPassphrase
     // { reason: "confirmation_mismatch" })), .. })` open so the
     // snapshot pins the inline-error row populated from the twice-confirm
-    // mismatch gate per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)
+    // mismatch gate per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)
     // > Passphrase": *"New passphrases (`set`, `change`) are prompted
     // twice and confirmed; mismatch returns to the modal with an inline
     // `invalid_passphrase` (`reason: "confirmation_mismatch"`) error."*
@@ -4146,14 +4146,14 @@ fn snapshot_passphrase_modal_zero_length() {
     // Some(render_error_message(&PaladinError::InvalidPassphrase
     // { reason: "zero_length" })), .. })` open so the snapshot pins
     // the inline-error row populated from the twice-confirm
-    // empty-passphrase gate per `IMPLEMENTATION_PLAN_03_TUI.md`
+    // empty-passphrase gate per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     // "Modals (per §6) > Passphrase": *"Empty passphrase entries are
     // rejected with an inline `invalid_passphrase` (`reason:
     // "zero_length"`) error."*. When both `new_passphrase` and
     // `confirm_passphrase` are empty (so the mismatch gate passes by
     // both buffers being equal), the reducer surfaces a rendered
     // `PaladinError::InvalidPassphrase` with `reason: "zero_length"`
-    // per DESIGN.md §5, matching the CLI's `prompt_new_passphrase`
+    // per docs/DESIGN.md §5, matching the CLI's `prompt_new_passphrase`
     // (mismatch first, then `zero_length`) and the GTK
     // `SubmitRejection::ZeroLength` wire code so the user-facing
     // reason stays stable across all three front-ends. Routing the
@@ -4218,7 +4218,7 @@ fn snapshot_passphrase_modal_set_save_not_committed() {
     // Some(render_error_message(&PaladinError::SaveNotCommitted {
     // committed: false, backup_path: None })), .. })` so the
     // snapshot pins the inline-error row populated from a pre-commit
-    // save failure per `DESIGN.md` §5's `save_not_committed`
+    // save failure per `docs/DESIGN.md` §5's `save_not_committed`
     // discriminator. Routing the wording through the shared
     // `render_error_message` helper means the inline text matches
     // the rest of the TUI's error surface — the unlock screen's
@@ -4272,7 +4272,7 @@ fn snapshot_passphrase_modal_set_save_durability_unconfirmed() {
     // Plan L2199: "Passphrase set `save_durability_unconfirmed`." Same
     // rendering path as the `save_not_committed` snapshot above; the
     // typed error here is `PaladinError::SaveDurabilityUnconfirmed`,
-    // which per `IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
+    // which per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
     // failures follow the committed-state path" surfaces in the
     // modal's inline error slot identically to the pre-commit
     // failure — both paths run through `render_error_message`.
@@ -4496,8 +4496,8 @@ fn snapshot_settings_modal_default() {
     // `Unlocked` state with `Modal::Settings(SettingsModal { .. })`
     // open so the snapshot pins the freshly-opened (no inline error)
     // baseline of the Settings modal overlay rendered on top of the
-    // list view per `DESIGN.md` §6 and the
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Settings"
+    // list view per `docs/DESIGN.md` §6 and the
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Settings"
     // contract — *"toggles for `auto_lock.enabled` and
     // `clipboard.clear_enabled`, spinners for `auto_lock.timeout_secs`
     // and `clipboard.clear_secs`. … The modal accumulates pending
@@ -4563,7 +4563,7 @@ fn snapshot_settings_modal_save_not_committed() {
     // `Modal::Settings(SettingsModal { error: Some(render_error_message(
     // &PaladinError::SaveNotCommitted { committed: false, backup_path:
     // None })), .. })` so the snapshot pins the inline-error row
-    // populated from a pre-commit save failure per `DESIGN.md` §5's
+    // populated from a pre-commit save failure per `docs/DESIGN.md` §5's
     // `save_not_committed` discriminator. Routing the wording through
     // the shared `render_error_message` helper means the inline text
     // matches the rest of the TUI's error surface — the unlock
@@ -4620,7 +4620,7 @@ fn snapshot_settings_modal_save_durability_unconfirmed() {
     // Plan L2256: "Settings modal `save_durability_unconfirmed`." Same
     // rendering path as the `save_not_committed` snapshot above; the
     // typed error here is `PaladinError::SaveDurabilityUnconfirmed`,
-    // which per `IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
+    // which per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
     // failures follow the committed-state path" surfaces in the
     // modal's inline error slot identically to the pre-commit
     // failure — both paths run through `render_error_message`.
@@ -4667,7 +4667,7 @@ fn snapshot_help_overlay() {
     // Plan L2071: "Help overlay." Drive `view::render` against an
     // `Unlocked` state with `help_open: true` so the snapshot pins
     // the read-only Help overlay rendered on top of the list view
-    // per `DESIGN.md` §6 and the `IMPLEMENTATION_PLAN_03_TUI.md`
+    // per `docs/DESIGN.md` §6 and the `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     // "Help overlay" contract — *"`?` from list focus opens a
     // read-only Help overlay listing every keybinding from the
     // table below; `Esc` closes the overlay and restores list

@@ -2,12 +2,12 @@
 
 //! Incremental search filter for the `paladin-gtk` account list.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Crate layout" (`search.rs`)
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Crate layout" (`search.rs`)
 //! and the §"Pure-logic unit tests > `tests/search_logic.rs`"
 //! checklist, the GUI delegates issuer / label matching to
 //! [`paladin_core::account_matches_search`] so the search-bar
 //! predicate stays byte-for-byte identical to the CLI query
-//! resolution path in `DESIGN.md` §5 and the parallel
+//! resolution path in `docs/DESIGN.md` §5 and the parallel
 //! `paladin_tui::search` module. Insertion order is preserved because
 //! [`Vault::iter`] already walks accounts in insertion order.
 
@@ -37,7 +37,7 @@ pub fn filtered_account_ids(vault: &Vault, query: &str) -> Vec<AccountId> {
 ///
 /// Composes [`filtered_account_ids`] with
 /// [`paladin_core::select_after_filter`] so the GUI's list-view
-/// selection follows the `DESIGN.md` §6 / §7 search-selection
+/// selection follows the `docs/DESIGN.md` §6 / §7 search-selection
 /// preservation rule:
 ///
 /// * if `prev` is `Some` and still appears in the new filtered set,

@@ -3,7 +3,7 @@
 //! Pure-logic export-dialog tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/export_dialog_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Overwrite gate resets when the destination or format changes.
 //! * Plaintext-warning gate resets when the destination or format
@@ -426,7 +426,7 @@ fn gates_treat_paths_by_raw_equality_no_canonicalize() {
 // ExportDialogComponent scaffold (Milestone 7 component-tree wiring)
 // ---------------------------------------------------------------------------
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
 // "Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
 // Rename / Import / Export / Passphrase / Settings / StartupError)",
 // `ExportDialogComponent` joins the nine already-mounted controllers
@@ -483,7 +483,7 @@ fn export_dialog_component_input_and_output_match_dispatch_edges() {
 // Format selector — labels, index <-> ExportFormatChoice round-trip, default
 // ---------------------------------------------------------------------------
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 // `ExportDialogComponent` > "Add a format selector (plaintext
 // `otpauth://` JSON list or encrypted Paladin bundle) and pick the
 // destination via `gtk::FileDialog`." The widget binds an
@@ -870,7 +870,7 @@ fn export_dialog_output_cancel_is_distinct_from_close() {
 // Overwrite gate — reject overwriting an existing file unless ack'd
 // ---------------------------------------------------------------------------
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 // `ExportDialogComponent` > "Reject overwriting an existing file
 // unless the user confirms an inline overwrite gate (parity with CLI
 // `--force`); resolve the overwrite gate before accepting any
@@ -1147,7 +1147,7 @@ fn format_export_dialog_overwrite_gate_subtitle_is_non_empty() {
 // Plaintext-warning gate — verbatim warning + ack required before write
 // ---------------------------------------------------------------------------
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 // `ExportDialogComponent` > "Render
 // `paladin_core::format_plaintext_export_warning()` verbatim on the
 // plaintext path and require explicit confirmation before the write
@@ -1441,7 +1441,7 @@ fn format_export_dialog_plaintext_warning_ack_subtitle_is_non_empty() {
 // destination / format change
 // ---------------------------------------------------------------------------
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 // `ExportDialogComponent` > "Reset overwrite and plaintext-warning
 // confirmations when the destination or format changes; clear the
 // passphrase rows and re-prompt when the destination or format
@@ -2596,7 +2596,7 @@ mod worker_integration {
         // (the tmpfile create / fsync failed) or `SaveNotCommitted`
         // (the staging rename did not commit) depending on which
         // step inside the staged-clobber pipeline fails first. Both
-        // are valid Inline outcomes per `IMPLEMENTATION_PLAN_04_GTK.md`
+        // are valid Inline outcomes per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
         // §"Effect errors" > Export.
         assert!(
             matches!(err.kind, ErrorKind::IoError | ErrorKind::SaveNotCommitted),

@@ -2,7 +2,7 @@
 
 //! `paladin-tui` library surface.
 //!
-//! See `IMPLEMENTATION_PLAN_03_TUI.md` and `DESIGN.md` §6. The binary
+//! See `docs/IMPLEMENTATION_PLAN_03_TUI.md` and `docs/DESIGN.md` §6. The binary
 //! at `src/main.rs` is a thin shim that hands off to [`run`]; everything
 //! else lives in submodules so the reducer / state-machine and helpers
 //! can be exercised by integration tests in `tests/` without going
@@ -64,7 +64,7 @@ pub fn run() -> ExitCode {
     // Compute the `--no-color` policy once at the binary boundary —
     // `should_disable_color` honors either the explicit `--no-color`
     // flag or the presence of the `NO_COLOR` environment variable
-    // (per <https://no-color.org/> and `IMPLEMENTATION_PLAN_03_TUI.md`
+    // (per <https://no-color.org/> and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     // "Global flags"). The resulting bool is captured by the render
     // closure so per-frame work never re-reads the env.
     let no_color =
@@ -91,7 +91,7 @@ pub fn run() -> ExitCode {
 /// `no_color` is computed by the caller (production [`run`] derives
 /// it via [`cli::should_disable_color`] from `args.no_color` plus
 /// the `NO_COLOR` environment variable, per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Global flags"). Tests pass an
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Global flags"). Tests pass an
 /// explicit bool so the styled vs. no-color paths are exercised
 /// without manipulating process-level state.
 ///

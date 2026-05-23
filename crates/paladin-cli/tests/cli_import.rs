@@ -13,7 +13,7 @@
 //! the precheck rejects before any bundle-passphrase prompt); and
 //! `vault_missing` on a missing destination vault. Encrypted-bundle
 //! happy paths require a scripted `/dev/tty` and live in the
-//! dedicated PTY harness called out in `IMPLEMENTATION_PLAN_02_CLI.md`.
+//! dedicated PTY harness called out in `docs/IMPLEMENTATION_PLAN_02_CLI.md`.
 
 mod common;
 

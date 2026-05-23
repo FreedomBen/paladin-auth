@@ -2,8 +2,8 @@
 
 //! Source-level no-`tokio` guard for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"GUI runtime carve-out" /
-//! DESIGN.md §8 bullet 10, `paladin-gtk` may carry `tokio` in its
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"GUI runtime carve-out" /
+//! docs/DESIGN.md §8 bullet 10, `paladin-gtk` may carry `tokio` in its
 //! transitive lockfile through `relm4`, but the crate's own source
 //! files must not reach for `tokio` directly. GTK's main loop is
 //! the executor and `gio::spawn_blocking` runs long-running work;
@@ -149,7 +149,7 @@ fn paladin_gtk_source_tree_has_no_tokio_or_network_symbols() {
     assert!(
         hits.is_empty(),
         "paladin-gtk src/ contains forbidden tokio / network references — \
-         GTK's main loop is the executor (IMPLEMENTATION_PLAN_04_GTK.md \
+         GTK's main loop is the executor (docs/IMPLEMENTATION_PLAN_04_GTK.md \
          §\"GUI runtime carve-out\"); move long work behind \
          `gio::spawn_blocking` instead:\n  {}",
         hits.join("\n  "),

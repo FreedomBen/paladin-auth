@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Source-level "thinness contract" guard for `paladin-cli`
-// (IMPLEMENTATION_PLAN_02_CLI.md "Thinness contract" / DESIGN.md §3).
+// (docs/IMPLEMENTATION_PLAN_02_CLI.md "Thinness contract" / docs/DESIGN.md §3).
 //
 // The `paladin` binary is a presentation layer. Crypto, storage,
 // import/export, and OTP primitives must never be re-implemented or
@@ -13,7 +13,7 @@
 //
 // This mirrors the defense-in-depth pattern used by
 // `paladin-core/tests/no_network.rs`. Update the pattern lists below
-// in lockstep with the IMPLEMENTATION_PLAN_02_CLI.md "Thinness
+// in lockstep with the docs/IMPLEMENTATION_PLAN_02_CLI.md "Thinness
 // contract" denylist.
 
 use std::fs;
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 /// Crate names the CLI must never reference directly. Production
 /// behavior for crypto, storage, OTP, and import/export lives in
 /// `paladin-core`; the CLI consumes its public API instead. Update
-/// alongside `IMPLEMENTATION_PLAN_02_CLI.md` "Thinness contract".
+/// alongside `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Thinness contract".
 const FORBIDDEN_CRATES: &[&str] = &[
     "argon2",
     "chacha20poly1305",
@@ -112,7 +112,7 @@ fn paladin_cli_manifest_does_not_declare_forbidden_dependency() {
     // are allowed to pull paladin-core test features, and
     // `[features]`, `[package]`, and other tables don't introduce
     // build-time linkage. This matches the "direct [dependencies]
-    // entry" wording in IMPLEMENTATION_PLAN_02_CLI.md.
+    // entry" wording in docs/IMPLEMENTATION_PLAN_02_CLI.md.
     let mut hits = Vec::new();
     let mut in_dependencies = false;
     for line in manifest.lines() {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Vault file header (DESIGN.md §4.3).
+// Vault file header (docs/DESIGN.md §4.3).
 //
 // The plaintext header is **10 bytes**:
 //

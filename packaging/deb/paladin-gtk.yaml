@@ -2,7 +2,7 @@
 #
 # nfpm manifest for the paladin-gtk Debian (.deb) package.
 #
-# Per IMPLEMENTATION_PLAN_04_GTK.md §"Linux distribution and signing"
+# Per docs/IMPLEMENTATION_PLAN_04_GTK.md §"Linux distribution and signing"
 # and the Milestone 7 packaging checklist, this manifest installs the
 # release binary, the freedesktop desktop entry, the AppStream
 # metainfo, and the hicolor icon set on the canonical FHS paths the
@@ -24,7 +24,7 @@ arch: amd64
 platform: linux
 
 # Inherits from `${PALADIN_VERSION}` injected by the release pipeline
-# (see IMPLEMENTATION_PLAN_04_GTK.md §"Reproducible builds"). The
+# (see docs/IMPLEMENTATION_PLAN_04_GTK.md §"Reproducible builds"). The
 # release tag drives the value so the .deb version, the workspace
 # `[workspace.package].version`, and the AppStream <release> tag all
 # stay in lockstep.
@@ -107,4 +107,4 @@ contents:
 # postinst, prerm, or postrm hooks. Vault files live under
 # $XDG_DATA_HOME/paladin/ and are only created by `paladin init` or
 # the GUI's InitDialog — package state and user state are kept
-# strictly separate per IMPLEMENTATION_PLAN_04_GTK.md §11.3.
+# strictly separate per docs/IMPLEMENTATION_PLAN_04_GTK.md §11.3.

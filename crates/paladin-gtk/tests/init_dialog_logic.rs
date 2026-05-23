@@ -3,7 +3,7 @@
 //! Pure-logic init-dialog tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/init_dialog_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Plaintext vs encrypted routing: both passphrase fields empty
 //!   selects plaintext; non-empty selects encrypted.
@@ -1404,7 +1404,7 @@ fn inline_error_from_rejection_plaintext_warning_required_returns_none() {
 
 #[test]
 fn submit_confirmation_mismatch_inline_error_does_not_echo_passphrase_or_confirm() {
-    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" →
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" →
     // "Secret-entry ownership and zeroization guardrails": validation
     // messages can name fields / reasons but must never echo
     // secret-bearing input values. Type a distinctive passphrase and

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase G.9 / G.10: `Vault::mutate_and_save` (DESIGN.md §4.7
+// Phase G.9 / G.10: `Vault::mutate_and_save` (docs/DESIGN.md §4.7
 // `impl Vault` block). Front-end crates (CLI, TUI, GUI) drive
 // add / remove / settings flows through this single helper so
 // rollback machinery does not duplicate across crates.

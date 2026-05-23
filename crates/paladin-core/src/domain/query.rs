@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// `domain::query` — shared account-selector grammar (DESIGN.md §4.7, §5).
+// `domain::query` — shared account-selector grammar (docs/DESIGN.md §4.7, §5).
 //
 // `parse_account_query` owns the `id:` prefix validation so the CLI's
 // query grammar and the TUI / GUI search bars share one source of
@@ -19,7 +19,7 @@ const HEX_MIN: usize = 8;
 const HEX_MAX: usize = 32;
 
 /// Account selector parsed from a CLI / TUI / GUI query string
-/// (DESIGN.md §4.7).
+/// (docs/DESIGN.md §4.7).
 ///
 /// `Search` carries the raw substring query (no normalization beyond
 /// what `account_matches_search` applies at compare time). `IdPrefix`
@@ -36,7 +36,7 @@ pub enum AccountQuery {
     },
 }
 
-/// Parse the shared account-selector grammar (DESIGN.md §5).
+/// Parse the shared account-selector grammar (docs/DESIGN.md §5).
 ///
 /// A query starting with the lowercase ASCII discriminator `id:` is
 /// validated as an 8..=32 hex prefix; ASCII uppercase A–F is accepted
@@ -124,7 +124,7 @@ pub(crate) fn shortest_unique_id_prefix(accounts: &[Account], id: AccountId) -> 
 }
 
 /// Pick the surviving selection after a search filter rebuild
-/// (DESIGN.md §6 / §7 search-selection preservation rule).
+/// (docs/DESIGN.md §6 / §7 search-selection preservation rule).
 ///
 /// Returns `prev` when `prev` is `Some` and that id appears in
 /// `filtered`. Otherwise — `prev` is `None`, or `prev` was filtered

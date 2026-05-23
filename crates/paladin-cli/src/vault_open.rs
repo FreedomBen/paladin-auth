@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! Shared vault-open pipeline used by every read / mutate command except
-//! `init`. Implements the `IMPLEMENTATION_PLAN_02_CLI.md` "Vault
+//! `init`. Implements the `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Vault
 //! interaction pattern" steps 1-4: resolve path → `inspect` → optional
 //! passphrase prompt → `Store::open`.
 //!

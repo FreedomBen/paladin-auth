@@ -2,7 +2,7 @@
 
 //! End-to-end tests for the global flags + output renderers
 //! (`--vault`, `--no-color`, `--json`, plus `--help` / `--version`
-//! interception). See DESIGN.md §5 and `IMPLEMENTATION_PLAN_02_CLI.md`.
+//! interception). See docs/DESIGN.md §5 and `docs/IMPLEMENTATION_PLAN_02_CLI.md`.
 
 mod common;
 

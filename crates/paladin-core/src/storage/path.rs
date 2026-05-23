@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Default vault path resolver (DESIGN.md §4.3).
+// Default vault path resolver (docs/DESIGN.md §4.3).
 //
 // Presentation crates ask `paladin_core::default_vault_path()` for the
 // canonical `vault.bin` location so they don't duplicate `ProjectDirs`

@@ -4,7 +4,7 @@
 //! startup-decision functions that map `inspect` / `open` outcomes
 //! onto initial states.
 //!
-//! See `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md`
+//! See `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Startup / vault modes" + "Auto-lock (per §6)".
 
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ use crate::prompt::PassphraseBuffer;
 ///
 /// Held on [`AppState::Unlocked`] while the user is active and on
 /// [`AppState::Locked`] when an idle-expiry transition arrives before
-/// the wake fires — per `IMPLEMENTATION_PLAN_03_TUI.md`
+/// the wake fires — per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 /// "Auto-lock (per §6)": *"A clipboard auto-clear timer scheduled
 /// before lock survives lock and still fires only-if-unchanged."*
 ///
@@ -67,7 +67,7 @@ pub struct PendingClipboardClear {
 ///
 /// Held on [`AppState::Unlocked`] only. Dropped on the
 /// `Unlocked → Locked` auto-lock transition alongside the
-/// `Vault` / `Store` per `IMPLEMENTATION_PLAN_03_TUI.md`
+/// `Vault` / `Store` per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 /// "Auto-lock (per §6)": *"Locking discards the Vault / Store, open
 /// HOTP reveal windows, the search query, and any modal while
 /// retaining the resolved vault path for the next unlock attempt."*
@@ -97,7 +97,7 @@ pub struct HotpReveal {
 ///
 /// Set by actions that need to surface a short, non-modal message —
 /// e.g. pressing `n` / `r` / `R` (and later `Enter`) with no account
-/// selected per `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model" — and
+/// selected per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Focus model" — and
 /// cleared on the `Unlocked → Locked` auto-lock transition alongside
 /// the `Vault` / `Store` (by variant change). Replacement is
 /// last-write-wins: a fresh status-line update overwrites any
@@ -115,7 +115,7 @@ pub enum StatusLine {
     /// status bar.
     Error(String),
     /// A modal action succeeded and the reducer closed the modal.
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
     /// "Successful modal outcomes": *"manual Add, URI Add, Remove,
     /// Rename, Export, Passphrase, and Settings close the modal and
     /// publish a status-line confirmation."* The string is
@@ -127,14 +127,14 @@ pub enum StatusLine {
 
 /// Status-line error string surfaced when `n`, `r`, `R`, or (when
 /// bound) `Enter` is pressed on Unlocked with `selected = None`. Per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": *"With no
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": *"With no
 /// selection, `Enter`, `n`, `r`, and `R` produce a status-line 'no
 /// account selected' error and no effect."*
 pub const NO_ACCOUNT_SELECTED: &str = "no account selected";
 
 /// Status-line error string surfaced when an
 /// [`crate::app::event::Effect::CopyCode`] effect fails its clipboard
-/// write. Per `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors":
+/// write. Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors":
 /// *"Copy: show a status-line error if clipboard write fails; do not
 /// schedule auto-clear."* The wording mirrors the §5
 /// `clipboard_write_failed` envelope key the CLI uses on its failure
@@ -149,7 +149,7 @@ pub const CLIPBOARD_WRITE_FAILED: &str = "clipboard write failed";
 /// any non-matching key, by a focus change, by a modal open, by `Esc`,
 /// or by the `Unlocked → Locked` auto-lock transition (which drops
 /// the field alongside the `Vault` / `Store`). Per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Layout (per §6)" the chord uses
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Layout (per §6)" the chord uses
 /// vim's `nottimeout` semantics: there is no time-based clear; only
 /// the next keypress can commit or break it.
 ///
@@ -170,7 +170,7 @@ pub enum ChordLeader {
 
 /// Which area of the main list view currently captures input.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": focus
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": focus
 /// alternates between the search bar and the account list. On
 /// list-view entry the focus starts on the account list so
 /// navigation keys engage without a focus-toggle press; `/` focuses
@@ -201,7 +201,7 @@ pub enum Focus {
 
 /// State for the Remove modal.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Remove: a
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Remove: a
 /// confirmation gate for removing the selected account. The
 /// `account_id` is snapshotted when the modal opens so a subsequent
 /// selection / search-filter change does not redirect the remove
@@ -229,7 +229,7 @@ pub struct RemoveModal {
 
 /// State for the Rename modal.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Rename:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Rename:
 /// *"single text field pre-populated with the selected account's
 /// current label."* The `account_id` is snapshotted when the modal
 /// opens so a subsequent selection / search-filter change does not
@@ -266,7 +266,7 @@ pub struct RenameModal {
 
 /// Which Settings field currently holds modal-local focus.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
 /// `Ctrl-N` move to the next control, `Shift-Tab` and `Ctrl-P` move
 /// to the previous control."* The Settings modal cycles through its
 /// four pending fields in reading order: the `auto_lock.enabled`
@@ -317,7 +317,7 @@ impl SettingsFocus {
 
 /// State for the Settings modal.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Settings:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Settings:
 /// *"toggles for `auto_lock.enabled` and `clipboard.clear_enabled`,
 /// spinners for `auto_lock.timeout_secs` and `clipboard.clear_secs`.
 /// … The modal accumulates pending edits in modal-local state and
@@ -378,7 +378,7 @@ pub struct SettingsModal {
 
 /// Which input mode the Add modal is currently presenting.
 ///
-/// Per `DESIGN.md` §6 / `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+/// Per `docs/DESIGN.md` §6 / `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
 /// §6)" > Add: *"Add supports manual entry, paste of an `otpauth://`
 /// URI …, and QR scan from clipboard image bytes."* The three modes
 /// share the modal frame but feed different fields and submit paths;
@@ -408,7 +408,7 @@ impl AddMode {
     /// Advance the segmented selector to the next mode, wrapping
     /// after the final mode so `→` cycles indefinitely.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
     /// *"`←` / `→` change segmented selectors"*. The Add modal's
     /// three modes (Manual / URI / QR per DESIGN §6) form one
     /// segmented selector; `next` produces the forward cycle
@@ -438,7 +438,7 @@ impl AddMode {
 /// Which Manual-mode field currently holds modal-local focus inside
 /// the Add modal.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
 /// `Ctrl-N` move to the next control, `Shift-Tab` and `Ctrl-P` move
 /// to the previous control."* The Add modal's Manual mode collects
 /// eight controls in DESIGN §6 reading order — label, issuer, secret
@@ -523,7 +523,7 @@ impl AddManualFocus {
 
 /// State for the Add modal.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: the
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: the
 /// modal hosts three input modes (manual / URI / QR), each with its
 /// own field set. This slice carries the segmented
 /// [`mode`](AddModal::mode) selector, the Manual-mode non-secret
@@ -535,7 +535,7 @@ impl AddManualFocus {
 /// subsequent slices alongside their effect-wiring.
 ///
 /// [`Default`] yields a clean Manual-mode modal with no inline error
-/// and the CLI manual-add defaults per `DESIGN.md` §5 (TOTP, SHA1,
+/// and the CLI manual-add defaults per `docs/DESIGN.md` §5 (TOTP, SHA1,
 /// 6 digits, 30 s period, HOTP counter 0, icon-hint defaulted from
 /// the issuer) so reducer tests that match on the modal discriminant
 /// can construct a placeholder, and so the reducer's `'a'` opener
@@ -564,7 +564,7 @@ pub struct AddModal {
     /// is allowed — `validate_manual` accepts `None`).
     pub issuer: String,
     /// Manual-mode HMAC algorithm. Seeded to
-    /// [`Algorithm::Sha1`] per `DESIGN.md` §5 (RFC 6238 default);
+    /// [`Algorithm::Sha1`] per `docs/DESIGN.md` §5 (RFC 6238 default);
     /// cycled by `↑` / `↓` when the algorithm field has focus in a
     /// subsequent slice.
     pub algorithm: Algorithm,
@@ -573,14 +573,14 @@ pub struct AddModal {
     /// `6..=8` per the core bounds.
     pub digits: u8,
     /// Manual-mode account kind (TOTP / HOTP). Seeded to
-    /// [`AccountKindInput::Totp`] per `DESIGN.md` §5.
+    /// [`AccountKindInput::Totp`] per `docs/DESIGN.md` §5.
     pub kind: AccountKindInput,
     /// Manual-mode TOTP period in seconds. Seeded to
     /// [`paladin_core::TOTP_PERIOD_DEFAULT`] (30); only consulted
     /// when [`kind`](AddModal::kind) is [`AccountKindInput::Totp`].
     pub period_secs: u32,
     /// Manual-mode HOTP starting counter. Seeded to `0` per
-    /// `DESIGN.md` §5; only consulted when [`kind`](AddModal::kind)
+    /// `docs/DESIGN.md` §5; only consulted when [`kind`](AddModal::kind)
     /// is [`AccountKindInput::Hotp`].
     pub counter: u64,
     /// Manual-mode icon-hint free-form text token. Parsed by
@@ -590,7 +590,7 @@ pub struct AddModal {
     pub icon_hint_text: String,
     /// Manual-mode Base32 secret buffer.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
     /// *"All passphrase-entry fields ... and the Add modal's
     /// secret-bearing fields (manual-secret field and the URI-mode
     /// entry) keep typed bytes in zeroizing buffers, convert to
@@ -607,7 +607,7 @@ pub struct AddModal {
     pub manual_secret: PassphraseBuffer,
     /// Uri-mode `otpauth://` text buffer.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     /// *"URI mode is a single text field; on submit the entered
     /// string is passed to [`paladin_core::parse_otpauth`] … The URI
     /// text field is treated as a secret-bearing buffer and
@@ -620,7 +620,7 @@ pub struct AddModal {
     pub uri_text: PassphraseBuffer,
     /// Which Manual-mode field currently holds modal-local focus.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     /// *"`Tab` and `Ctrl-N` move to the next control, `Shift-Tab` and
     /// `Ctrl-P` move to the previous control."* The Add modal's
     /// Manual mode has eight focusable controls in DESIGN §6 reading
@@ -648,7 +648,7 @@ pub struct AddModal {
     /// `duplicate_account` rejection and the user's follow-up "add
     /// anyway" confirmation.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     /// *"manual and URI duplicate collisions call
     /// `Vault::find_duplicate(&validated)` before mutation. A
     /// collision initially rejects with the existing account in the
@@ -669,7 +669,7 @@ pub struct AddModal {
     /// [`Effect::AddFromClipboardQr`](crate::app::event::Effect::AddFromClipboardQr)
     /// outcome.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     /// *"Clipboard QR import uses `ImportConflict::Skip` and reports
     /// imported / skipped counts."* and *"QR-add validation warnings
     /// are rendered through `paladin_core::format_validation_warning()`
@@ -736,7 +736,7 @@ pub struct CountsPanel {
 /// holds the validated `Account` (with its `SecretString`) so the
 /// follow-up confirmation can insert without re-running validation;
 /// dropping this struct zeroizes the secret in place per the
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)"
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)"
 /// secret-handling rule.
 #[derive(Debug)]
 pub struct PendingDuplicateAdd {
@@ -754,7 +754,7 @@ impl AddModal {
     /// Switch the segmented input mode, wiping the secret-bearing
     /// buffers belonging to the mode being left.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     /// *"Switching modes clears the hidden secret-bearing fields for
     /// the modes being left: the manual Base32 secret, the URI text,
     /// and any pending duplicate/add-anyway state."* The contract is
@@ -805,7 +805,7 @@ impl Default for AddModal {
 
 /// Source-format selector for the Import modal.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
 /// *"a format selector (auto-detect or explicit `otpauth` / `aegis` /
 /// `paladin` / `qr`)"*. [`Auto`](Self::Auto) defers to
 /// [`paladin_core::detect`] on the loaded bytes — the resulting
@@ -852,7 +852,7 @@ impl ImportFormatSelector {
 
 /// State for the Import modal.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
 /// *"text field for the source path, a format selector (auto-detect or
 /// explicit `otpauth` / `aegis` / `paladin` / `qr`), and an on-conflict
 /// selector (`skip` / `replace` / `append`)."* The submit path threads
@@ -909,7 +909,7 @@ pub struct ImportModal {
     /// Held in a [`PassphraseBuffer`] so typed bytes zeroize on
     /// drop — covering modal close, auto-lock discard, and the
     /// [`PassphraseBuffer::take`] call on submit. Per
-    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"All
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"All
     /// passphrase-entry fields … keep typed bytes in zeroizing
     /// buffers, convert to `secrecy::SecretString` only for core
     /// calls, and zeroize on submit, cancel, modal close, and
@@ -917,7 +917,7 @@ pub struct ImportModal {
     pub paladin_passphrase: Option<PassphraseBuffer>,
     /// Post-success counts panel for the Import-modal flow.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
     /// *"The modal reports imported/skipped/replaced/appended/warning
     /// counts plus validation-warning messages rendered through
     /// `paladin_core::format_validation_warning()` in a post-success
@@ -947,7 +947,7 @@ impl Default for ImportModal {
 
 /// Output-format selector for the Export modal.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
 /// *"format selector (plaintext `otpauth://` JSON list or encrypted
 /// Paladin bundle)"*. [`Plaintext`](Self::Plaintext) routes the submit
 /// path through [`paladin_core::export::otpauth_list`] (a JSON array of
@@ -974,7 +974,7 @@ pub enum ExportFormat {
 
 /// State for the Export modal.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
 /// *"format selector (plaintext `otpauth://` JSON list or encrypted
 /// Paladin bundle) and a destination path field. Overwriting an
 /// existing file is rejected unless the user confirms an inline
@@ -1010,7 +1010,7 @@ pub struct ExportModal {
     /// for plaintext exports. Held in a [`PassphraseBuffer`] so typed
     /// bytes zeroize on drop — covering modal close, auto-lock
     /// discard, and the [`PassphraseBuffer::take`] call on submit.
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"All
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"All
     /// passphrase-entry fields … keep typed bytes in zeroizing
     /// buffers, convert to `secrecy::SecretString` only for core
     /// calls, and zeroize on submit, cancel, modal close, and
@@ -1022,7 +1022,7 @@ pub struct ExportModal {
     /// against [`Self::new_passphrase`] on submit; any divergence
     /// surfaces as
     /// [`PaladinError::InvalidPassphrase`](paladin_core::PaladinError::InvalidPassphrase)
-    /// with `reason: "confirmation_mismatch"` per DESIGN.md §5,
+    /// with `reason: "confirmation_mismatch"` per docs/DESIGN.md §5,
     /// matching the CLI's twice-confirm prompt and the GTK
     /// `SubmitRejection::ConfirmationMismatch` wire code.
     pub confirm_passphrase: PassphraseBuffer,
@@ -1030,7 +1030,7 @@ pub struct ExportModal {
     /// reducer's submit handler refuses [`Effect::Export`] emission
     /// on the [`ExportFormat::Plaintext`] path until the user
     /// explicitly toggles this flag (per
-    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
     /// *"Plaintext exports render
     /// `paladin_core::format_plaintext_export_warning()` verbatim and
     /// the user must confirm before the write proceeds."*). Mirrors
@@ -1054,7 +1054,7 @@ pub struct ExportModal {
 
 /// Sub-flow selector for the Passphrase modal.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
 /// *"three sub-flows mirroring CLI's `passphrase set / change /
 /// remove`. The available sub-flow is gated by
 /// [`Vault::is_encrypted()`](paladin_core::Vault::is_encrypted): `set`
@@ -1089,7 +1089,7 @@ pub enum PassphraseSubFlow {
 
 /// State for the Passphrase modal.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
 /// *"three sub-flows mirroring CLI's `passphrase set / change /
 /// remove`. ... New passphrases (`set`, `change`) are prompted twice
 /// and confirmed; mismatch returns to the modal with an inline
@@ -1123,7 +1123,7 @@ pub struct PassphraseModal {
     pub sub_flow: PassphraseSubFlow,
     /// First of the two new-passphrase prompts (`set` / `change`
     /// only — unused for `remove`). Held in a [`PassphraseBuffer`] so
-    /// typed bytes zeroize on drop. Per `IMPLEMENTATION_PLAN_03_TUI.md`
+    /// typed bytes zeroize on drop. Per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     /// "Modals (per §6)": *"All passphrase-entry fields … keep typed
     /// bytes in zeroizing buffers, convert to `secrecy::SecretString`
     /// only for core calls, and zeroize on submit, cancel, modal close,
@@ -1151,7 +1151,7 @@ pub struct PassphraseModal {
 ///
 /// Discarded on the `Unlocked → Locked` auto-lock transition
 /// alongside the `Vault` / `Store`, search query, and HOTP reveal
-/// window per `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+/// window per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
 /// *"Locking discards the Vault / Store, open HOTP reveal windows,
 /// the search query, and any modal while retaining the resolved
 /// vault path for the next unlock attempt."*
@@ -1160,7 +1160,7 @@ pub struct PassphraseModal {
 /// passphrase buffers for the `Passphrase` / `Import` / `Export`
 /// flows, post-success counts panels) land alongside each modal's
 /// effect-wiring slice. The seven variants mirror the modals
-/// enumerated in `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)".
+/// enumerated in `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)".
 #[derive(Debug)]
 pub enum Modal {
     /// Add an account — manual / `otpauth://` URI / clipboard-QR.
@@ -1181,8 +1181,8 @@ pub enum Modal {
     Settings(SettingsModal),
 }
 
-/// Step within the in-app create-vault wizard (`DESIGN.md` §6 /
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes").
+/// Step within the in-app create-vault wizard (`docs/DESIGN.md` §6 /
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes").
 ///
 /// The state machine is:
 ///
@@ -1261,7 +1261,7 @@ pub enum PassphraseFieldFocus {
 pub enum AppState {
     /// Vault file does not exist; the TUI walks the user through
     /// creating one via the in-app create-vault wizard described in
-    /// `DESIGN.md` §6.
+    /// `docs/DESIGN.md` §6.
     ///
     /// The state carries the resolved vault `path`, the current
     /// wizard `step` (defaults to
@@ -1296,7 +1296,7 @@ pub enum AppState {
     /// for inline display; every other `open` error replaces this
     /// state with [`AppState::StartupError`]. Typed passphrase bytes
     /// live in `passphrase`, a zeroizing buffer cleared on submit per
-    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers".
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers".
     Unlock {
         /// The vault path being unlocked.
         path: PathBuf,
@@ -1320,7 +1320,7 @@ pub enum AppState {
         /// was still unlocked. Carried across the
         /// `Unlocked → Locked` transition so the timer thread's
         /// `AppEvent::ClipboardClear` wake still finds a target
-        /// pending state. Per `IMPLEMENTATION_PLAN_03_TUI.md`
+        /// pending state. Per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
         /// "Auto-lock (per §6)": *"A clipboard auto-clear timer
         /// scheduled before lock survives lock and still fires
         /// only-if-unchanged."*
@@ -1341,7 +1341,7 @@ pub enum AppState {
         /// Active search-bar text used to filter the visible
         /// account list. Empty when no filter is set. Discarded on
         /// auto-lock alongside the `Vault` / `Store` per
-        /// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+        /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
         /// "the search query is cleared". Held in plain `String`
         /// because issuer / label text is non-secret (DESIGN §5);
         /// only secrets live in zeroizing storage.
@@ -1357,27 +1357,27 @@ pub enum AppState {
         ///
         /// Re-set on every `AppEvent::Input` and checked against
         /// monotonic `Tick` instants for the `Locked` transition.
-        /// See `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)".
+        /// See `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)".
         idle_deadline: Option<Instant>,
         /// Clipboard auto-clear that was scheduled by an earlier
         /// copy effect and is still waiting for its wake-deadline.
         /// On the `Unlocked → Locked` transition this field moves
         /// onto [`AppState::Locked`] verbatim so the timer thread's
         /// wake event can still find pending state to act on. See
-        /// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)".
+        /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)".
         pending_clipboard_clear: Option<PendingClipboardClear>,
         /// Open HOTP reveal window, if the user pressed `n` recently
         /// enough that the deadline returned by
         /// [`paladin_core::hotp_reveal_deadline`] has not yet
         /// elapsed. Discarded on the `Unlocked → Locked` transition
         /// alongside the `Vault` / `Store` per
-        /// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+        /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
         /// "Locking discards the Vault / Store, open HOTP reveal
         /// windows, the search query, and any modal …".
         hotp_reveal: Option<HotpReveal>,
         /// Open modal dialog, if any. Discarded on the
         /// `Unlocked → Locked` transition alongside the
-        /// `Vault` / `Store` per `IMPLEMENTATION_PLAN_03_TUI.md`
+        /// `Vault` / `Store` per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
         /// "Auto-lock (per §6)" — modal-local zeroizing buffers
         /// (e.g. the Passphrase modal's typed bytes) zeroize on drop
         /// as their payloads land in later slices.
@@ -1439,7 +1439,7 @@ pub enum AppState {
         /// Which area of the main list view captures keystrokes.
         ///
         /// Seeded to [`Focus::List`] on every Unlocked-entry path
-        /// per the `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model"
+        /// per the `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Focus model"
         /// rule *"On list-view entry, focus starts on the account
         /// list"*. The keybindings that move focus to the search
         /// bar (`/`), cycle focus (`Tab` / `Shift-Tab`), and return
@@ -1452,7 +1452,7 @@ pub enum AppState {
         /// Bottom-bar status message, if any. `None` on Unlocked
         /// entry; set by selection-gated action keys (`n` / `r` /
         /// `R`) when `selected` is `None` per the
-        /// `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model" rule, and
+        /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Focus model" rule, and
         /// (in later slices) by modal-success confirmations and
         /// other rejected actions. Replacement is last-write-wins.
         /// Dropped on the `Unlocked → Locked` auto-lock transition
@@ -1460,7 +1460,7 @@ pub enum AppState {
         status_line: Option<StatusLine>,
         /// Whether the read-only Help overlay is currently visible.
         ///
-        /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay":
+        /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay":
         /// *"`?` from list focus opens a read-only Help overlay
         /// listing every keybinding from the table below; `Esc`
         /// closes the overlay and restores list focus. The overlay
@@ -1660,7 +1660,7 @@ pub fn format_account_display_label(summary: &AccountSummary) -> String {
 /// matches an existing account on the
 /// `(secret, issuer, label)` triple.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"A
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"A
 /// collision initially rejects with the existing account in the
 /// modal and offers an 'add anyway' confirmation."* The wording
 /// mirrors the CLI's `duplicate_account` rendering and names the
@@ -1681,7 +1681,7 @@ pub fn format_duplicate_account_message(existing: &AccountSummary) -> String {
 /// not be decoded), or when the importer / save layer rejects the
 /// decoded payload.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal": *"No-image,
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Add modal": *"No-image,
 /// no-QR, and invalid-QR cases reject inline."* The TUI-side
 /// `arboard` failures ("no image" / "image decode") have no
 /// equivalent in the core's `PaladinError` vocabulary because they
@@ -1710,7 +1710,7 @@ pub fn format_qr_import_failure(failure: &crate::app::event::QrImportFailure) ->
 /// Build the TUI's initial state from the optional `--vault`
 /// command-line override.
 ///
-/// Mirrors `IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes":
+/// Mirrors `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes":
 ///
 /// 1. Resolve the vault path (`--vault` overrides `default_vault_path`).
 /// 2. Call [`paladin_core::inspect`].

@@ -2,7 +2,7 @@
 
 //! List-view renderer.
 //!
-//! Per `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md`
+//! Per `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Insta snapshots > Layout / list views": once the vault is open
 //! the TUI shows a single-screen list view — a bordered `Paladin`
 //! block containing a search bar, a separator, the account-row pane,
@@ -24,7 +24,7 @@
 //! `HotpAdvance` opens a [`HotpReveal`] for the row, the title
 //! switches to the pre-advance counter (`Code.counter_used`) and the
 //! visible code from the reveal replaces the prompt until the
-//! reveal's deadline fires (per `DESIGN.md` §6).
+//! reveal's deadline fires (per `docs/DESIGN.md` §6).
 //!
 //! Search-active filtering: when `state.search_query` is non-empty,
 //! `render_rows` walks the [`crate::search::filtered_account_ids`]
@@ -146,7 +146,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color
 
     if vault.iter().next().is_none() {
         // Empty-state guidance: the centered single-line prompt
-        // mirrors the §6 / DESIGN.md add-flow keybinding (`a`) so a
+        // mirrors the §6 / docs/DESIGN.md add-flow keybinding (`a`) so a
         // user who lands on an empty vault sees what to press next.
         // The check is against the unfiltered vault — a populated
         // vault whose search-bar filter happens to yield zero rows
@@ -189,9 +189,9 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color
 /// When `status_line` is `None`, returns the default keybinding hint
 /// that documents the §6 mock's bottom bar. When `status_line` is
 /// `Some`, the published prose takes over the slot — per
-/// `DESIGN.md` §6's *"errors surface inline in the active modal or
+/// `docs/DESIGN.md` §6's *"errors surface inline in the active modal or
 /// in the status line"* and the
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Status-line states" snapshot
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Status-line states" snapshot
 /// fan-out, the carried text from `StatusLine::Error` /
 /// `StatusLine::Confirmation` replaces the hint until the next event
 /// either clears it (a follow-up successful effect re-publishes
@@ -200,7 +200,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color
 /// live terminal distinguishes them; `no_color = true` drops the
 /// foreground attribute via [`fg_unless_no_color`] so the cells
 /// render with the terminal's default color (matching the
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Global flags" wording that
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Global flags" wording that
 /// `--no-color` disables ratatui styling).
 fn bottom_line(status_line: Option<&StatusLine>, no_color: bool) -> Line<'_> {
     match status_line {
@@ -449,7 +449,7 @@ fn list_title_line(vault: &Vault, no_color: bool) -> Line<'static> {
 /// When `counter` is `Some(n)`, a ` (#n)` suffix is appended to the
 /// title before truncation so HOTP rows carry either the stored next
 /// counter (hidden) or `Code.counter_used` (revealed) per
-/// `DESIGN.md` §6.
+/// `docs/DESIGN.md` §6.
 fn format_row_prefix(summary: &AccountSummary, is_selected: bool, counter: Option<u64>) -> String {
     let marker = if is_selected { '▶' } else { ' ' };
     let title = title_for(summary, counter);
@@ -460,7 +460,7 @@ fn format_row_prefix(summary: &AccountSummary, is_selected: bool, counter: Optio
 
 /// Render the visible label for an account row.
 ///
-/// Per `DESIGN.md` §6's mock, an account with an issuer renders as
+/// Per `docs/DESIGN.md` §6's mock, an account with an issuer renders as
 /// `{issuer} ({label})`; a label-only account renders bare. HOTP
 /// rows append a ` (#N)` counter suffix (`counter` is `Some`) so the
 /// row carries the stored next counter (hidden) or

@@ -170,7 +170,7 @@ fn json_kdf_validation_wins_over_vault_exists_precedence() {
     // Existing vault + invalid KDF integer: the KDF parse fires first,
     // before `inspect` runs the existence pre-check, so the user sees
     // `validation_error` rather than `vault_exists`. Locked by the
-    // §5 ordering rule in IMPLEMENTATION_PLAN_02_CLI.md.
+    // §5 ordering rule in docs/IMPLEMENTATION_PLAN_02_CLI.md.
     let (_dir, path) = fresh_vault_path();
     write_existing_plaintext_vault(&path);
     let assert = paladin()
@@ -285,7 +285,7 @@ fn json_init_propagate_io_error_does_not_rewrite_as_vault_exists() {
     // mode-000 file: `inspect` fails to read it and surfaces an
     // `io_error`. `classify_init_precheck` maps that to
     // `Propagate(...)`, which the CLI must forward verbatim — never
-    // rewrite as `vault_exists`. Locked by IMPLEMENTATION_PLAN_02_CLI.md
+    // rewrite as `vault_exists`. Locked by docs/IMPLEMENTATION_PLAN_02_CLI.md
     // "Vault interaction pattern".
     let (_dir, path) = fresh_vault_path();
     write_unreadable_vault(&path);
@@ -464,7 +464,7 @@ fn pty_force_rotates_non_paladin_existing_into_bak() {
 #[test]
 fn pty_force_clobber_warning_suppressed_on_clear() {
     // No existing file → `Clear` → no force warning, even with
-    // `--force`. Locked by IMPLEMENTATION_PLAN_02_CLI.md "init force
+    // `--force`. Locked by docs/IMPLEMENTATION_PLAN_02_CLI.md "init force
     // checked".
     let (_dir, path) = fresh_vault_path();
     let mut pty = Pty::spawn(["--vault", path.to_str().unwrap(), "init", "--force"], &[]);
@@ -531,7 +531,7 @@ fn pty_init_unsafe_parent_dir_surfaces_unsafe_permissions_with_chmod_hint() {
     // is asserted on `--json` paths in `cli_errors_json.rs`.
     exit.assert_transcript_contains("vault directory");
     exit.assert_transcript_contains("0750");
-    // §4.3 / IMPLEMENTATION_PLAN_02_CLI.md "format_unsafe_permissions":
+    // §4.3 / docs/IMPLEMENTATION_PLAN_02_CLI.md "format_unsafe_permissions":
     // the chmod repair hint is rendered for text mode so users get a
     // copy-pasteable fix.
     let dir_str = dir.path().to_string_lossy();

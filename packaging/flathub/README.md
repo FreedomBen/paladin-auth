@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 # `paladin-gtk` Flathub submission
 
 This directory carries the artifacts that make up the Flathub
-submission for `paladin-gtk` (DESIGN.md §11.4, IMPLEMENTATION_PLAN_04_GTK.md
+submission for `paladin-gtk` (docs/DESIGN.md §11.4, docs/IMPLEMENTATION_PLAN_04_GTK.md
 §"Milestone 7 checklist" → "File the Flathub submission and inherit
 Flatpak signing from Flathub").
 
@@ -44,7 +44,7 @@ Cargo deps.
    contract test exists to keep reviewer-requested sandbox changes
    from landing without a corresponding plan update — if a reviewer
    asks for a portal the test would reject, update
-   `IMPLEMENTATION_PLAN_04_GTK.md` §11.4 first.
+   `docs/IMPLEMENTATION_PLAN_04_GTK.md` §11.4 first.
 7. Once the PR merges, Flathub creates
    `flathub/org.tamx.Paladin.Gui` automatically. Subsequent
    releases ship as PRs against that new repo instead of
@@ -78,7 +78,7 @@ fresh `cargo-sources.json`.
 
 ## Signing inheritance
 
-Per DESIGN.md §11.4 / §11.6 ("Flatpak releases inherit Flathub's
+Per docs/DESIGN.md §11.4 / §11.6 ("Flatpak releases inherit Flathub's
 signing"), every build Flathub publishes is signed with Flathub's
 own key — so the release pipeline's
 `packaging/sign/sign-artifact.sh` is **not** invoked for the

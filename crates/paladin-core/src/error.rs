@@ -17,7 +17,7 @@ use crate::domain::AccountSummary;
 pub type Result<T> = std::result::Result<T, PaladinError>;
 
 /// Stable §5 `error_kind` discriminator. Each variant maps 1:1 to a
-/// JSON `error_kind` string. See DESIGN.md §5.
+/// JSON `error_kind` string. See docs/DESIGN.md §5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "error-serde", serde(rename_all = "snake_case"))]
@@ -105,7 +105,7 @@ impl fmt::Display for ErrorKind {
     }
 }
 
-/// Vault-mode discriminator surfaced in `wrong_vault_lock` errors. See DESIGN.md §4.3.
+/// Vault-mode discriminator surfaced in `wrong_vault_lock` errors. See docs/DESIGN.md §4.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "error-serde", serde(rename_all = "lowercase"))]
@@ -136,10 +136,10 @@ impl fmt::Display for VaultMode {
 /// Core-returnable §5 errors. The variants intentionally carry their
 /// extra fields so the JSON serializer (`error-serde` cargo feature)
 /// can lift them into the `error_kind` payload without an extra mapping
-/// layer. See DESIGN.md §5.
+/// layer. See docs/DESIGN.md §5.
 #[derive(Debug, Error)]
 pub enum PaladinError {
-    /// Input failed §4.1 / §4.6 validation. See DESIGN.md §5 `validation_error`.
+    /// Input failed §4.1 / §4.6 validation. See docs/DESIGN.md §5 `validation_error`.
     #[error("validation error: {field}: {reason}")]
     ValidationError {
         /// Stable §5 field name (e.g. `"digits"`, `"secret"`, `"label"`).
@@ -160,14 +160,14 @@ pub enum PaladinError {
         entry_type: Option<String>,
     },
 
-    /// Passphrase rejected pre-KDF. See DESIGN.md §5 `invalid_passphrase`.
+    /// Passphrase rejected pre-KDF. See docs/DESIGN.md §5 `invalid_passphrase`.
     #[error("invalid passphrase: {reason}")]
     InvalidPassphrase {
         /// Stable §5 reason code (currently `"zero_length"`).
         reason: &'static str,
     },
 
-    /// Operation not allowed in the current vault state. See DESIGN.md §4.7 / §5 `invalid_state`.
+    /// Operation not allowed in the current vault state. See docs/DESIGN.md §4.7 / §5 `invalid_state`.
     #[error("invalid state: {operation}: {state}")]
     InvalidState {
         /// Stable §4.7 operation name (e.g. `"set_passphrase"`, `"hotp_advance"`).
@@ -176,15 +176,15 @@ pub enum PaladinError {
         state: &'static str,
     },
 
-    /// Primary vault file does not exist on `open`. See DESIGN.md §4.3 / §5 `vault_missing`.
+    /// Primary vault file does not exist on `open`. See docs/DESIGN.md §4.3 / §5 `vault_missing`.
     #[error("vault file is missing")]
     VaultMissing,
 
-    /// Primary vault file already present on `create`. See DESIGN.md §4.3 / §5 `vault_exists`.
+    /// Primary vault file already present on `create`. See docs/DESIGN.md §4.3 / §5 `vault_exists`.
     #[error("vault file already exists")]
     VaultExists,
 
-    /// File or directory mode does not match the §4.3 contract. See DESIGN.md §5 `unsafe_permissions`.
+    /// File or directory mode does not match the §4.3 contract. See docs/DESIGN.md §5 `unsafe_permissions`.
     #[error(
         "unsafe permissions on {path}: {subject} mode {actual_mode}, expected {expected_mode}"
     )]
@@ -200,7 +200,7 @@ pub enum PaladinError {
     },
 
     /// Supplied [`VaultLock`](crate::VaultLock) did not match the on-disk vault mode.
-    /// See DESIGN.md §4.3 / §5 `wrong_vault_lock`.
+    /// See docs/DESIGN.md §4.3 / §5 `wrong_vault_lock`.
     #[error("wrong vault lock: expected {expected}, supplied {actual}")]
     WrongVaultLock {
         /// Mode actually present on disk.
@@ -209,29 +209,29 @@ pub enum PaladinError {
         actual: VaultMode,
     },
 
-    /// AEAD authentication failed. See DESIGN.md §4.4 / §5 `decrypt_failed`.
+    /// AEAD authentication failed. See docs/DESIGN.md §4.4 / §5 `decrypt_failed`.
     #[error("decryption failed")]
     DecryptFailed,
 
-    /// Vault header magic / mode / KDF / AEAD id was unrecognized. See DESIGN.md §4.4 / §5 `invalid_header`.
+    /// Vault header magic / mode / KDF / AEAD id was unrecognized. See docs/DESIGN.md §4.4 / §5 `invalid_header`.
     #[error("invalid vault header")]
     InvalidHeader,
 
-    /// Bincode payload failed shape or size validation. See DESIGN.md §4.4 / §5 `invalid_payload`.
+    /// Bincode payload failed shape or size validation. See docs/DESIGN.md §4.4 / §5 `invalid_payload`.
     #[error("invalid vault payload: {reason}")]
     InvalidPayload {
         /// Stable §5 reason code (`"too_large"`, `"trailing_bytes"`, `"decode_failed"`, `"ciphertext_too_short"`).
         reason: &'static str,
     },
 
-    /// Header `format_ver` is newer than this build supports. See DESIGN.md §4.4 / §5 `unsupported_format_version`.
+    /// Header `format_ver` is newer than this build supports. See docs/DESIGN.md §4.4 / §5 `unsupported_format_version`.
     #[error("unsupported vault format version: {format_ver}")]
     UnsupportedFormatVersion {
         /// On-disk header format-version byte that was rejected.
         format_ver: u8,
     },
 
-    /// Argon2 `(m_kib, t, p)` outside the §4.4 accepted range. See DESIGN.md §5 `kdf_params_out_of_bounds`.
+    /// Argon2 `(m_kib, t, p)` outside the §4.4 accepted range. See docs/DESIGN.md §5 `kdf_params_out_of_bounds`.
     #[error("Argon2 KDF parameters out of bounds: m_kib={m_kib} t={t} p={p}")]
     KdfParamsOutOfBounds {
         /// Memory cost in KiB (out-of-range value as supplied).
@@ -242,7 +242,7 @@ pub enum PaladinError {
         p: u32,
     },
 
-    /// Auto-detect failed or forced format is unknown. See DESIGN.md §4.6 / §5 `unsupported_import_format`.
+    /// Auto-detect failed or forced format is unknown. See docs/DESIGN.md §4.6 / §5 `unsupported_import_format`.
     #[error("unsupported import format: {format}")]
     UnsupportedImportFormat {
         /// Format token (`"unknown"` for auto-detect failure, or the requested format string).
@@ -250,16 +250,16 @@ pub enum PaladinError {
     },
 
     /// Paladin import bundle is plaintext, which v0.1 imports do not accept.
-    /// See DESIGN.md §4.6 / §5 `unsupported_plaintext_vault`.
+    /// See docs/DESIGN.md §4.6 / §5 `unsupported_plaintext_vault`.
     #[error("Paladin import bundle is plaintext; v0.1 imports require encrypted bundles")]
     UnsupportedPlaintextVault,
 
     /// Aegis backup is encrypted, which v0.1 imports do not accept.
-    /// See DESIGN.md §4.6 / §5 `unsupported_encrypted_aegis`.
+    /// See docs/DESIGN.md §4.6 / §5 `unsupported_encrypted_aegis`.
     #[error("Aegis encrypted backups are not supported in v0.1")]
     UnsupportedEncryptedAegis,
 
-    /// Aegis entry was neither `totp` nor `hotp`. See DESIGN.md §4.6 / §5 `unsupported_aegis_entry_type`.
+    /// Aegis entry was neither `totp` nor `hotp`. See docs/DESIGN.md §4.6 / §5 `unsupported_aegis_entry_type`.
     #[error("Aegis entry type {entry_type:?} is not supported (only totp/hotp)")]
     UnsupportedAegisEntryType {
         /// 0-based index of the offending entry in the Aegis batch.
@@ -268,11 +268,11 @@ pub enum PaladinError {
         entry_type: String,
     },
 
-    /// Import resolved to zero accounts. See DESIGN.md §4.6 / §5 `no_entries_to_import`.
+    /// Import resolved to zero accounts. See docs/DESIGN.md §4.6 / §5 `no_entries_to_import`.
     #[error("no entries to import")]
     NoEntriesToImport,
 
-    /// HOTP advance from `u64::MAX`. See DESIGN.md §4.7 / §5 `counter_overflow`.
+    /// HOTP advance from `u64::MAX`. See docs/DESIGN.md §4.7 / §5 `counter_overflow`.
     #[error("HOTP counter overflow")]
     CounterOverflow {
         /// Non-secret §5 `account` summary for the entry whose
@@ -281,7 +281,7 @@ pub enum PaladinError {
         account: AccountSummary,
     },
 
-    /// Supplied or system timestamp out of range. See DESIGN.md §4.7 / §5 `time_range`.
+    /// Supplied or system timestamp out of range. See docs/DESIGN.md §4.7 / §5 `time_range`.
     #[error("time out of range: {operation}: {kind}")]
     TimeRange {
         /// Stable §4.7 operation name (`"totp_code"`, `"hotp_advance"`, `"rename"`).
@@ -290,7 +290,7 @@ pub enum PaladinError {
         kind: TimeRangeKind,
     },
 
-    /// Atomic save failed before the primary rename. See DESIGN.md §4.3 / §5 `save_not_committed`.
+    /// Atomic save failed before the primary rename. See docs/DESIGN.md §4.3 / §5 `save_not_committed`.
     #[error("save not committed (committed={committed})")]
     SaveNotCommitted {
         /// `true` if the staging file reached `fsync` before the rename failed; `false` otherwise.
@@ -300,12 +300,12 @@ pub enum PaladinError {
     },
 
     /// Primary rename succeeded but the parent-directory `fsync` failed.
-    /// See DESIGN.md §4.3 / §5 `save_durability_unconfirmed`.
+    /// See docs/DESIGN.md §4.3 / §5 `save_durability_unconfirmed`.
     #[error("save durability unconfirmed")]
     SaveDurabilityUnconfirmed,
 
     /// Underlying [`std::io::Error`] surfaced with a stable §5 operation tag.
-    /// See DESIGN.md §5 `io_error`.
+    /// See docs/DESIGN.md §5 `io_error`.
     #[error("I/O error during {operation}: {source}")]
     IoError {
         /// Stable, core-owned operation string from §5.
@@ -482,7 +482,7 @@ impl serde::Serialize for PaladinError {
     }
 }
 
-/// Discriminator naming which path a §5 `unsafe_permissions` error refers to. See DESIGN.md §4.3.
+/// Discriminator naming which path a §5 `unsafe_permissions` error refers to. See docs/DESIGN.md §4.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "error-serde", serde(rename_all = "snake_case"))]
@@ -513,7 +513,7 @@ impl fmt::Display for PermissionSubject {
     }
 }
 
-/// Discriminator for `time_range` errors. See DESIGN.md §4.7 / §5.
+/// Discriminator for `time_range` errors. See docs/DESIGN.md §4.7 / §5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "error-serde", serde(rename_all = "snake_case"))]

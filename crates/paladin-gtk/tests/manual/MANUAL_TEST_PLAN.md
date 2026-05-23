@@ -10,7 +10,7 @@ automated suites cannot cover — real display servers, real clipboards,
 real file dialogs, real icon themes, and real user interaction.
 
 Authoritative source for the required-item list:
-[`IMPLEMENTATION_PLAN_04_GTK.md`](../../../../IMPLEMENTATION_PLAN_04_GTK.md)
+[`docs/IMPLEMENTATION_PLAN_04_GTK.md`](../../../../docs/IMPLEMENTATION_PLAN_04_GTK.md)
 §"Tests > Manual test plan (`tests/manual/MANUAL_TEST_PLAN.md`)" and
 the Milestone 7 checklist entry "Manual test plan documented".
 `crates/paladin-gtk/tests/manual_test_plan_doc.rs` guards drift between
@@ -39,7 +39,7 @@ Before running the plan:
 3. Note which session type you are on:
    `echo "$XDG_SESSION_TYPE" "$WAYLAND_DISPLAY"`.
 4. For the §10 fault-injection items, build with the fault-injection
-   feature flag exposed by `paladin-core` (see `DESIGN.md` §10) and
+   feature flag exposed by `paladin-core` (see `docs/DESIGN.md` §10) and
    note the toggle environment variable on each affected test result.
 5. For the clipboard-image items, prepare both a valid `otpauth://` QR
    image and an intentionally oversized image (above
@@ -51,7 +51,7 @@ Conventions in this file:
 * "Expected" describes the user-visible outcome. If reality diverges,
   do not tick the box — file a bug instead.
 * "Tied to" cross-references the relevant pure-logic test or
-  `DESIGN.md` clause so a fix can be located quickly.
+  `docs/DESIGN.md` clause so a fix can be located quickly.
 
 ## 1. Vault initialization (`InitDialog`)
 
@@ -63,7 +63,7 @@ Conventions in this file:
     resulting vault file lands at the configured path with
     `0600` permissions.
   * Tied to: `tests/init_dialog_logic.rs` plaintext routing,
-    `DESIGN.md` §4.5.
+    `docs/DESIGN.md` §4.5.
 - [ ] Init encrypted vault with twice-confirm.
   * Expected: both passphrase rows accept input, the second row
     rejects mismatches inline, and a successful pair encrypts the

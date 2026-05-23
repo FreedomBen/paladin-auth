@@ -2,7 +2,7 @@
 #
 # CI and local snapshots install the cargo subcommands listed here at the
 # pinned version so behavior does not float across releases. `xtask` is
-# the orchestrator that consumes this file (see DESIGN.md §11.2).
+# the orchestrator that consumes this file (see docs/DESIGN.md §11.2).
 #
 # Install all pinned tools:
 #   cargo install --locked cargo-public-api@<pinned-version>

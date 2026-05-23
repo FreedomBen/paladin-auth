@@ -3,7 +3,7 @@
 //! Pure-logic rename-dialog tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/rename_dialog_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Label validation (non-empty, §4.1 length limits) blocks submit
 //!   inline.
@@ -25,7 +25,7 @@
 //! The widget layer also routes the `Cancel` button click through
 //! [`apply_msg`] so the dialog dismissal contract — Cancel resets
 //! the entry buffer's shadow state (`L1789` in
-//! `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `RenameDialog`) and emits [`RenameDialogOutput::Cancel`] — lives
 //! in pure logic alongside the validation / error-routing helpers
 //! and stays unit-testable here.
@@ -1582,7 +1582,7 @@ fn format_rename_dialog_save_button_sensitive_dimmed_when_validation_fails() {
 #[test]
 fn format_rename_dialog_success_toast_returns_renamed() {
     // `AppMsg::RenameWorkerCompleted` raises an `AdwToast` on the
-    // success branch per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone
+    // success branch per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone
     // 7 checklist" > "In-app account rename" ("On success, refresh
     // `AccountListComponent` from the returned vault, close the
     // dialog, and surface a status / toast confirmation."). The body
@@ -1600,7 +1600,7 @@ fn format_rename_dialog_success_toast_returns_renamed() {
 }
 
 // ---------------------------------------------------------------------------
-// Busy gating — `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership":
+// Busy gating — `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership":
 // while the AppModel is in `UnlockedBusy`, every mutating control surface
 // disables. The rename dialog's Save button is one such surface; while a
 // `Vault::mutate_and_save` worker is in flight, the dialog dims its Save

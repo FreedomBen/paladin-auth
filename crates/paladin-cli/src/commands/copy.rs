@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! `paladin copy <query>` — copy the current code to the clipboard via
-//! `arboard`. See DESIGN.md §5 "Clipboard copy side effects" and
-//! `IMPLEMENTATION_PLAN_02_CLI.md` "Clipboard copy side effects".
+//! `arboard`. See docs/DESIGN.md §5 "Clipboard copy side effects" and
+//! `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Clipboard copy side effects".
 //!
 //! Order of operations (locked by the plan):
 //!
@@ -23,7 +23,7 @@
 //!    to the clipboard provider. Surface
 //!    [`CliError::ClipboardWriteFailed`] with the post-advance summary
 //!    and the pre-advance counter so the §5 envelope is intact.
-//! 5. CLI is stateless per DESIGN.md §8 — never schedule an auto-clear,
+//! 5. CLI is stateless per docs/DESIGN.md §8 — never schedule an auto-clear,
 //!    regardless of the vault's `clipboard.clear_enabled` setting.
 //! 6. Render `{ "copied": true, "account": ..., "counter_used": ... }`
 //!    under `--json`, "Copied … code to clipboard." in text mode.

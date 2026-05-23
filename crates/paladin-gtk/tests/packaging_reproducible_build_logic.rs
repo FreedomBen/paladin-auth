@@ -2,8 +2,8 @@
 
 //! Reproducible-build contract tests for the workspace.
 //!
-//! Per `DESIGN.md` §11.6 ("Reproducible builds") and
-//! `IMPLEMENTATION_PLAN_04_GTK.md` Milestone 7 checklist entry
+//! Per `docs/DESIGN.md` §11.6 ("Reproducible builds") and
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md` Milestone 7 checklist entry
 //! "Make the build reproducible: vendored deps, `cargo build
 //! --locked`, `SOURCE_DATE_EPOCH` from the release tag, with the
 //! gresource bundle and `linuxdeploy` step both deterministic":
@@ -147,7 +147,7 @@ fn rust_toolchain_file_exists_at_workspace_root() {
     let path = rust_toolchain_path();
     assert!(
         path.is_file(),
-        "expected `rust-toolchain.toml` at {} — DESIGN.md §11.6 requires the workspace \
+        "expected `rust-toolchain.toml` at {} — docs/DESIGN.md §11.6 requires the workspace \
          toolchain to be pinned for reproducible release builds",
         path.display(),
     );

@@ -3,7 +3,7 @@
 //! Pure-logic auto-lock tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/auto_lock_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Idle-event source feeds
 //!   `paladin_core::policy::auto_lock::IdlePolicy::should_arm` /
@@ -264,7 +264,7 @@ fn re_arm_after_setting_passphrase_on_plaintext_arms_the_timer() {
 // refresh_idle_source_after_passphrase — wire-up helper for the
 // `PassphraseWorkerCompleted` handler in `app::model`.
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock parity
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock parity
 // with TUI" — "Re-ask `IdlePolicy::should_arm` after every successful
 // `PassphraseDialog` transition so arm/disarm tracks the on-disk vault
 // mode without re-inspecting the file." The gating `Option<bool>`

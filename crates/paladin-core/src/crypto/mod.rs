@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Crypto primitives (DESIGN.md §4.4).
+// Crypto primitives (docs/DESIGN.md §4.4).
 //
 // Phase F.1 lands the Argon2id wrapper plus `Argon2Params` and
 // `EncryptionOptions`. Phase F.2 added the XChaCha20-Poly1305 AEAD
@@ -13,7 +13,7 @@
 pub(crate) mod aead;
 pub(crate) mod buffer;
 pub(crate) mod kdf;
-/// Test-only zeroization witness instrumentation (`test-zeroize-witness` feature, DESIGN.md §4.4 / Phase F.14).
+/// Test-only zeroization witness instrumentation (`test-zeroize-witness` feature, docs/DESIGN.md §4.4 / Phase F.14).
 pub mod zeroize_witness;
 
 pub use kdf::{Argon2Params, EncryptionOptions};

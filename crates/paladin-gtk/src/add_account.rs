@@ -3,7 +3,7 @@
 //! Manual-path pure-logic state machine for `paladin-gtk`'s
 //! `AddAccountComponent`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `AddAccountComponent`, the dialog presents three input sub-paths
 //! (manual fields, `otpauth://` URI paste, "scan from clipboard
 //! image"). The URI sub-path lives in [`crate::otpauth_uri_paste`],
@@ -765,7 +765,7 @@ pub enum AddWorkerEffect {
 /// outcome — `Vault::mutate_and_save` already restores the snapshot
 /// on `save_not_committed`, so the returned vault is the
 /// authoritative post-effect state regardless of the
-/// [`AddWorkerEffect`] variant. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// [`AddWorkerEffect`] variant. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Vault interaction" > "Every worker returns `(Vault, Store,
 /// EffectOutcome)`".
 ///
@@ -801,7 +801,7 @@ pub struct AddWorkerCompletion {
 /// The live `(Vault, Store)` pair is always returned so `AppModel`
 /// reinstalls it regardless of the typed effect — `mutate_and_save`
 /// is authoritative for the rollback / durability-unconfirmed
-/// semantics per DESIGN.md §4.3.
+/// semantics per docs/DESIGN.md §4.3.
 ///
 /// The duplicate-detection pre-flight ([`classify_duplicate`]) runs
 /// at the dialog layer before this worker is dispatched; an "add
@@ -927,7 +927,7 @@ pub enum QrWorkerEffect {
 /// outcome — `Vault::mutate_and_save` already restores the snapshot
 /// on `save_not_committed`, so the returned vault is the
 /// authoritative post-effect state regardless of the
-/// [`QrWorkerEffect`] variant. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// [`QrWorkerEffect`] variant. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Vault interaction" > "Every worker returns `(Vault, Store,
 /// EffectOutcome)`".
 ///
@@ -966,7 +966,7 @@ pub struct QrWorkerCompletion {
 /// pair is always returned so `AppModel` reinstalls it regardless
 /// of the typed effect — `mutate_and_save` is authoritative for
 /// the rollback / durability-unconfirmed semantics per
-/// DESIGN.md §4.3.
+/// docs/DESIGN.md §4.3.
 ///
 /// The clipboard-image-read pre-flight
 /// ([`crate::qr_clipboard::decode_clipboard_qr`]) runs at the
@@ -1048,7 +1048,7 @@ impl InlineError {
     /// render, prefixed by the preflight category where the wrapper
     /// adds context).
     ///
-    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent`
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent`
     /// QR clipboard image path" L2836, the four user-visible
     /// categories (no image, image-decode failure, zero decoded
     /// QRs, invalid payload) surface inline through this converter
@@ -1115,7 +1115,7 @@ pub enum QrClipboardLoadedDispatch {
 /// dispatch can run [`crate::app::state::compose_qr_worker_input`]
 /// against the live `(Vault, Store)` pair.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
 /// clipboard image path", the four user-visible failure categories
 /// (no clipboard image, oversized layout, decoder failure, invalid
 /// payload) surface inline through this helper without mutating
@@ -1507,7 +1507,7 @@ pub enum AddAccountMsg {
     /// `controller.emit(...)`. The shared pipeline keeps both
     /// sub-paths converging on a single
     /// [`AddAccountOutput::Submit`] boundary per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     /// `AddAccountComponent` shared shell L2161.
     ///
     /// Dialog-local side effects are deliberately minimal — the
@@ -1556,7 +1556,7 @@ pub enum AddAccountMsg {
     /// [`AddDialogState::qr_success_counts`] and render the post-
     /// success counts panel.
     ///
-    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     /// `AddAccountComponent` shared shell L2230: successful QR adds
     /// keep the dialog open on the counts panel (imported /
     /// skipped / warnings) until the user dismisses it, distinct
@@ -2134,7 +2134,7 @@ pub fn compose_post_effect_inline_error_body(state: &AddDialogState) -> Option<&
 
 /// Heading rendered atop the clipboard-QR post-success counts panel.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `AddAccountComponent` shared shell L2230, the counts panel keeps
 /// imported / skipped / warning counts visible until the user
 /// dismisses it. The heading is a fixed string so the wording stays
@@ -2147,7 +2147,7 @@ pub fn format_qr_counts_panel_heading() -> &'static str {
 /// Label rendered on the Dismiss button of the clipboard-QR post-
 /// success counts panel.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `AddAccountComponent` shared shell L2230, the user dismisses the
 /// panel via an explicit click that routes through
 /// [`AddAccountMsg::DismissQrCountsPanel`]; the button label is
@@ -3040,7 +3040,7 @@ pub fn compose_save_button_sensitive(state: &AddDialogState) -> bool {
     // Save click regardless of the per-path intrinsic gate so the
     // user cannot kick off a second `Vault::mutate_and_save` while
     // the prior one still owns the live `(Vault, Store)` pair per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
     // `AppModel` flips this via `AddAccountMsg::SetBusy(bool)`
     // around the `gio::spawn_blocking` worker, the same way
     // `sync_account_list_busy` drives `AccountListMsg::SetBusy`.
@@ -3091,7 +3091,7 @@ pub fn format_scan_clipboard_button_label() -> &'static str {
 ///
 /// * An in-flight save / open / passphrase / import / export
 ///   worker owns the live `(Vault, Store)` pair (per
-///   `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership")
+///   `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership")
 ///   and short-circuits the button to insensitive even on the QR
 ///   sub-path — mirror of [`compose_save_button_sensitive`]'s
 ///   busy gate.
@@ -3389,7 +3389,7 @@ pub fn format_add_dialog_cancel_label() -> &'static str {
 /// clicks to commit a new account via `Vault::mutate_and_save`,
 /// gated by [`compose_save_button_sensitive`] so totally-empty
 /// forms cannot reach the validation pipeline through a click.
-/// Wording matches the `IMPLEMENTATION_PLAN_04_GTK.md` Add /
+/// Wording matches the `docs/IMPLEMENTATION_PLAN_04_GTK.md` Add /
 /// Rename `Save / Cancel buttons` convention; the function name
 /// keeps the `save` role abstractly (mirroring
 /// [`compose_save_button_sensitive`] and
@@ -3481,7 +3481,7 @@ pub fn compose_uri_text_value(state: &AddDialogState) -> &str {
 /// Body text for the `AdwToast` raised on the
 /// [`AddWorkerEffect::Success`] branch.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 /// `AddAccountComponent` shared shell ("Keep successful manual and
 /// URI additions consistent with §7: refresh the list from the
 /// returned vault, close the dialog, and surface a status / toast
@@ -3650,7 +3650,7 @@ pub struct AddDialogState {
     /// import worker completion, or `None` if no QR success is
     /// currently surfaced.
     ///
-    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     /// `AddAccountComponent` shared shell L2230: a successful
     /// clipboard-QR add keeps the dialog open on a counts panel
     /// (imported / skipped / warnings) until the user dismisses
@@ -3813,7 +3813,7 @@ impl AddDialogState {
     /// Counts surfaced by the most recent successful clipboard-QR
     /// add, or `None` if no QR success is currently parked.
     ///
-    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     /// `AddAccountComponent` shared shell L2230 (post-success counts
     /// panel). The widget binds a `#[watch]` over this through
     /// [`compose_qr_counts_panel_visible`] /
@@ -3966,7 +3966,7 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             //   warning renders via `post_effect_warning_label`
             //   against the still-mounted dialog body — that surface
             //   is the "counts panel" the spec
-            //   (IMPLEMENTATION_PLAN_04_GTK.md §"`AddAccountComponent`
+            //   (docs/IMPLEMENTATION_PLAN_04_GTK.md §"`AddAccountComponent`
             //   QR clipboard image path") routes the warning to.
             //
             // Mirror of the `QrSuccess` arm's `worker_outcome = None`
@@ -4319,7 +4319,7 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
 /// `AppModel` can dismiss the dialog. The editable manual / URI /
 /// QR sub-paths, the Save button, and the `Vault::mutate_and_save(
 /// |v| v.add(...))` worker land in follow-up commits alongside the
-/// header-bar wiring per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// header-bar wiring per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Component tree" > `AddAccountComponent`.
 ///
 /// Symmetric partner of [`crate::rename_dialog::RenameDialogComponent`]
@@ -4658,7 +4658,7 @@ impl SimpleComponent for AddAccountComponent {
                     set_spacing: 12,
 
                     // URI sub-path: single `adw::EntryRow` for the
-                    // `otpauth://` string. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+                    // `otpauth://` string. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
                     // §"Component tree" > `AddAccountComponent` and
                     // §"Secret entry handling", every keystroke
                     // shadows into
@@ -4898,7 +4898,7 @@ impl SimpleComponent for AddAccountComponent {
                 // composes against the live `(Vault, Store)` pair
                 // and dispatches the routed `AddAccountMsg` back
                 // via `controller.emit(save_click_outcome_to_msg(
-                // outcome))`. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+                // outcome))`. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
                 // §"Component tree" > `AddAccountComponent`
                 // shared shell L2161.
                 #[name = "save_button"]

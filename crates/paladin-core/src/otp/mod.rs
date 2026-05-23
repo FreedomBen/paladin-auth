@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Pure OTP primitives (DESIGN.md §4.2).
+// Pure OTP primitives (docs/DESIGN.md §4.2).
 //
 // `compute_hotp` is the shared HMAC-based dynamic-truncation that
 // underlies both RFC 4226 (HOTP) and RFC 6238 (TOTP). The Vault-level

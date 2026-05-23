@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Shared timer math and decision protocols (DESIGN.md §6 / §7).
+//! Shared timer math and decision protocols (docs/DESIGN.md §6 / §7).
 //!
 //! Front ends (TUI and GTK GUI) own raw input handling, OS clipboard
 //! adapters, and timer plumbing. The `policy` module owns the
@@ -16,11 +16,11 @@
 //!
 //! Each submodule's public symbols are re-exported at the crate root.
 
-/// Idle auto-lock policy (encrypted-only). See DESIGN.md §6.
+/// Idle auto-lock policy (encrypted-only). See docs/DESIGN.md §6.
 pub mod auto_lock;
-/// Clipboard-clear scheduling and token issuance. See DESIGN.md §7.
+/// Clipboard-clear scheduling and token issuance. See docs/DESIGN.md §7.
 pub mod clipboard_clear;
-/// HOTP reveal countdown deadline. See DESIGN.md §4.5.
+/// HOTP reveal countdown deadline. See docs/DESIGN.md §4.5.
 pub mod hotp_reveal;
 
 pub use auto_lock::IdlePolicy;

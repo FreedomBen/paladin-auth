@@ -3,7 +3,7 @@
 //! HOTP reveal-window lifecycle tests for `paladin-tui`.
 //!
 //! Tracks the "Tests > HOTP reveal window (`tests/hotp_reveal_tests.rs`)"
-//! checklist in `IMPLEMENTATION_PLAN_03_TUI.md`. The reveal panel opens
+//! checklist in `docs/IMPLEMENTATION_PLAN_03_TUI.md`. The reveal panel opens
 //! when `Effect::HotpAdvance` returns a generated `Code`; it closes
 //! when the `paladin_core::policy::hotp_reveal::deadline(now)` deadline
 //! is crossed by a `Tick`, when `n` is pressed again (which advances
@@ -181,7 +181,7 @@ fn unlocked_with_reveal(
 
 // ---------------------------------------------------------------------------
 // Reveal-expiry on Tick
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > HOTP reveal window — bullet 1)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > HOTP reveal window — bullet 1)
 //
 // "Reveal closes after the deadline returned by
 // `paladin_core::policy::hotp_reveal::deadline(now)`
@@ -422,7 +422,7 @@ fn auto_lock_takes_precedence_over_reveal_expiry_when_both_fire() {
 
 // ---------------------------------------------------------------------------
 // `n` during an open reveal advances again
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > HOTP reveal window — bullet 2)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > HOTP reveal window — bullet 2)
 //
 // "`n` during an open reveal advances again (does not no-op)."
 //
@@ -476,7 +476,7 @@ fn pressing_n_with_open_reveal_still_emits_hotp_advance_effect() {
 
 // ---------------------------------------------------------------------------
 // EffectResult::HotpAdvance opens / replaces the reveal window
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer)
 //
 // "AppEvent::EffectResult(...) is the only path by which effect outcomes
 // change non-core UI state (status text, reveal windows, modal
@@ -771,7 +771,7 @@ fn hotp_reveal_debug_redacts_displayed_code_bytes() {
 // ---------------------------------------------------------------------------
 // EffectResult::HotpAdvance Err — status-line surfacing.
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer:
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer:
 //   "Pre-commit effect failures leave visible state unchanged and surface
 //    inline / status-line errors."
 //
@@ -940,7 +940,7 @@ fn effect_result_hotp_advance_ok_clears_prior_status_line() {
 // EffectResult::HotpAdvance Err(SaveDurabilityUnconfirmed) with a staged
 // code — the durability-unconfirmed reveal-on-failure path.
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer:
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer:
 //   "Durability-unconfirmed failures follow the committed-state behavior
 //    in 'Effect errors'."
 //
@@ -1147,7 +1147,7 @@ fn effect_result_hotp_advance_err_save_durability_unconfirmed_with_staged_code_o
 
 // ---------------------------------------------------------------------------
 // Sensitive UI buffers — `HotpReveal::code`
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
 //  "HOTP reveal state zeroizes on expiry, replacement, drop, and
 //  auto-lock.")
 //
@@ -1408,7 +1408,7 @@ fn tick_past_idle_deadline_with_open_hotp_reveal_typed_code_locks_and_drops_reve
 
 // ---------------------------------------------------------------------------
 // View-level rendering of HOTP rows
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > HOTP reveal window —
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > HOTP reveal window —
 //  view-level bullets: hidden rows show the stored next counter;
 //  revealed rows show `Code.counter_used` until expiry.)
 //
@@ -1422,7 +1422,7 @@ fn tick_past_idle_deadline_with_open_hotp_reveal_typed_code_locks_and_drops_reve
 
 #[test]
 fn list_view_renders_hidden_hotp_row_with_stored_next_counter_and_press_n_prompt() {
-    // Hidden axis (DESIGN.md §6: "Hidden HOTP rows show the stored
+    // Hidden axis (docs/DESIGN.md §6: "Hidden HOTP rows show the stored
     // next counter in the row label."). With no open reveal the row
     // label must show `(#42)` — the *stored* next counter that
     // `hotp_advance` would consume on the next press of `n` — and the
@@ -1462,7 +1462,7 @@ fn list_view_renders_hidden_hotp_row_with_stored_next_counter_and_press_n_prompt
 
 #[test]
 fn list_view_renders_revealed_hotp_row_with_counter_used_and_visible_code_until_expiry() {
-    // Reveal axis (DESIGN.md §6: "Revealed rows show the counter
+    // Reveal axis (docs/DESIGN.md §6: "Revealed rows show the counter
     // that produced the visible code (`Code.counter_used`, the
     // pre-advance counter) until the reveal expires"). With an open
     // reveal the row label must show `(#counter_used)` — NOT the

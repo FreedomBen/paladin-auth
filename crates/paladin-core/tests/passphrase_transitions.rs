@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Passphrase transitions (DESIGN.md §4.5 / Phase H).
+// Passphrase transitions (docs/DESIGN.md §4.5 / Phase H).
 //
 // Pins the §4.7 surface for `Vault::set_passphrase`,
 // `Vault::change_passphrase`, and `Vault::remove_passphrase`:
@@ -336,7 +336,7 @@ fn change_passphrase_picks_up_custom_argon2_params() {
     let new_opts = EncryptionOptions::with_params(pp("hunter3"), new_params).unwrap();
     vault.change_passphrase(&store, new_opts).unwrap();
 
-    // Header layout (DESIGN.md §4.4 / `storage::header`):
+    // Header layout (docs/DESIGN.md §4.4 / `storage::header`):
     //   bytes 0..8   "PALADIN\0"
     //   byte  8      format_ver = 1
     //   byte  9      mode = 1 (encrypted)

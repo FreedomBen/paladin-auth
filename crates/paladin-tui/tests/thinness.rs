@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Source-level "thinness contract" guard for `paladin-tui`
-// (IMPLEMENTATION_PLAN_03_TUI.md "Thinness contract" / DESIGN.md §3).
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md "Thinness contract" / docs/DESIGN.md §3).
 //
 // `paladin-tui` is a presentation layer. Crypto, storage, import/export,
 // and OTP primitives must never be re-implemented or imported directly
@@ -14,7 +14,7 @@
 // This mirrors the defense-in-depth pattern used by
 // `paladin-core/tests/no_network.rs` and `paladin-cli/tests/thinness.rs`.
 // Update the pattern lists below in lockstep with
-// `IMPLEMENTATION_PLAN_03_TUI.md` "Thinness contract".
+// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Thinness contract".
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 /// Crate names the TUI must never reference directly. Production
 /// behavior for crypto, storage, OTP, and import/export lives in
 /// `paladin-core`; the TUI consumes its public API instead. Update
-/// alongside `IMPLEMENTATION_PLAN_03_TUI.md` "Thinness contract".
+/// alongside `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Thinness contract".
 const FORBIDDEN_CRATES: &[&str] = &[
     "argon2",
     "chacha20poly1305",
@@ -112,7 +112,7 @@ fn paladin_tui_manifest_does_not_declare_forbidden_dependency() {
     // are allowed to pull paladin-core test features, and
     // `[features]`, `[package]`, and other tables don't introduce
     // build-time linkage. This matches the "direct [dependencies]
-    // entry" wording in IMPLEMENTATION_PLAN_03_TUI.md.
+    // entry" wording in docs/IMPLEMENTATION_PLAN_03_TUI.md.
     let mut hits = Vec::new();
     let mut in_dependencies = false;
     for line in manifest.lines() {

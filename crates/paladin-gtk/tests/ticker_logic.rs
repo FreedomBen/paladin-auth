@@ -2,7 +2,7 @@
 
 //! Pure-logic `ticker` tests for `paladin-gtk`.
 //!
-//! Tracks `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
+//! Tracks `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
 //! TOTP ticker section:
 //!
 //! * `tick_interval()` mirrors `paladin_core::TICK_INTERVAL_MS`.

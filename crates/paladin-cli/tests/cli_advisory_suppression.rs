@@ -3,7 +3,7 @@
 //! Centralized cross-command sweep for the §5 strict-mode advisory
 //! suppression rule under `--json`.
 //!
-//! Per `IMPLEMENTATION_PLAN_02_CLI.md` "Output", every text-mode
+//! Per `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Output", every text-mode
 //! advisory must be suppressed when the caller has opted in via
 //! `--force` (`init --force` clobber warning), an empty `init`
 //! passphrase (plaintext-storage advisory), `--yes` (`passphrase

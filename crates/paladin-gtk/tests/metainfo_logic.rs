@@ -2,7 +2,7 @@
 
 //! `AppStream` metainfo contract tests for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop integration" /
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop integration" /
 //! §"Packaging (per §11)" and the Milestone 7 checklist entry "Write
 //! `data/metainfo/org.tamx.Paladin.Gui.metainfo.xml`":
 //!

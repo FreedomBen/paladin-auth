@@ -2,7 +2,7 @@
 
 //! Settings-modal renderer.
 //!
-//! Per `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md`
+//! Per `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Modals (per §6) > Settings": *"toggles for `auto_lock.enabled`
 //! and `clipboard.clear_enabled`, spinners for
 //! `auto_lock.timeout_secs` and `clipboard.clear_secs`. The spinners

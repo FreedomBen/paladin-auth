@@ -3,7 +3,7 @@
 //! Auto-lock idle-deadline and lock-transition tests for `paladin-tui`.
 //!
 //! Tracks the "Tests > Auto-lock (`tests/auto_lock_tests.rs`)" checklist
-//! in `IMPLEMENTATION_PLAN_03_TUI.md`.
+//! in `docs/IMPLEMENTATION_PLAN_03_TUI.md`.
 
 mod common;
 
@@ -82,7 +82,7 @@ fn tick_at(monotonic: Instant) -> AppEvent {
 
 // ---------------------------------------------------------------------------
 // `idle_deadline` resets on any `AppEvent::Input`
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 2)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 2)
 //
 // Slice covered: every `AppEvent::Input` that lands while the state is
 // `Unlocked` refreshes the auto-lock idle deadline via
@@ -259,7 +259,7 @@ fn non_key_input_in_encrypted_unlocked_also_rebases_idle_deadline() {
 
 // ---------------------------------------------------------------------------
 // Tick-driven `Unlocked → Locked` transition
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 3)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 3)
 //
 // Slice covered: on each `paladin_core::TICK_INTERVAL_MS` `Tick` the
 // reducer asks `IdlePolicy::is_expired(deadline, monotonic)` and, if
@@ -317,7 +317,7 @@ fn tick_after_deadline_locks_unlocked_state() {
 
 #[test]
 fn tick_after_deadline_lock_discards_unlocked_search_query() {
-    // IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 6:
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 6:
     // "Locking discards the Vault / Store, open HOTP reveal windows,
     // the search query, and any modal while retaining the resolved
     // vault path for the next unlock attempt." This test covers the
@@ -363,7 +363,7 @@ fn tick_after_deadline_lock_discards_unlocked_search_query() {
 
 #[test]
 fn tick_after_deadline_lock_discards_unlocked_hotp_reveal() {
-    // IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 6:
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 6:
     // "Locking discards the Vault / Store, open HOTP reveal windows,
     // the search query, and any modal while retaining the resolved
     // vault path for the next unlock attempt." This test covers the
@@ -425,7 +425,7 @@ fn tick_after_deadline_lock_discards_unlocked_hotp_reveal() {
 
 #[test]
 fn tick_after_deadline_lock_discards_unlocked_modal() {
-    // IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 6:
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 6:
     // "Locking discards the Vault / Store, open HOTP reveal windows,
     // the search query, and any modal while retaining the resolved
     // vault path for the next unlock attempt." This test covers the
@@ -481,7 +481,7 @@ fn tick_after_deadline_lock_discards_unlocked_modal() {
 
 #[test]
 fn tick_after_deadline_lock_discards_unlocked_pending_chord_leader() {
-    // IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation
     // bullet: "Pending-leader chord state is held by the reducer,
     // committed on the matching second press, and cleared by any
     // non-matching key, focus change, modal open, `Esc`, or
@@ -540,7 +540,7 @@ fn tick_after_deadline_lock_discards_unlocked_pending_chord_leader() {
 
 // ---------------------------------------------------------------------------
 // Clipboard auto-clear survives lock
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 7)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 7)
 //
 // State-carry-across-lock slice: a `PendingClipboardClear` present on
 // `Unlocked` at the moment of the idle-expiry tick is carried
@@ -673,7 +673,7 @@ fn tick_after_deadline_lock_with_no_pending_clipboard_clear_yields_none() {
 
 // ---------------------------------------------------------------------------
 // `AppEvent::ClipboardClear` wake handler on `Locked`
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 7, second half)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 7, second half)
 //
 // Slice covered: when the clipboard auto-clear timer that survived the
 // `Unlocked → Locked` lock fires its delayed
@@ -1025,7 +1025,7 @@ fn tick_on_unlock_screen_is_passthrough() {
 
 // ---------------------------------------------------------------------------
 // Setting persists across saves
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 5)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 5)
 //
 // Slice covered: `auto_lock_enabled` and `auto_lock_timeout_secs`
 // survive a `Vault::save` + `Store::open` round-trip on both vault
@@ -1099,7 +1099,7 @@ fn auto_lock_setting_persists_across_save_reopen_plaintext() {
 // ---------------------------------------------------------------------------
 // Clipboard auto-clear timer scheduled before lock survives lock and still
 // fires only-if-unchanged
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — last bullet)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — last bullet)
 //
 // End-to-end shape: schedule a clipboard clear on `Unlocked` via
 // `ClipboardClearPolicy::schedule`, then let a `Tick` past the idle

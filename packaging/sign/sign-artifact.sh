@@ -3,7 +3,7 @@
 #
 # minisign artifact-signing wrapper for the paladin release pipeline.
 #
-# Per DESIGN.md §11.6 ("Signatures") and IMPLEMENTATION_PLAN_04_GTK.md
+# Per docs/DESIGN.md §11.6 ("Signatures") and docs/IMPLEMENTATION_PLAN_04_GTK.md
 # Milestone 7 checklist entry "Sign .deb, .rpm, and AppImage with
 # minisign per §11.6", this script wraps `minisign -S` with the
 # release-pipeline conventions:

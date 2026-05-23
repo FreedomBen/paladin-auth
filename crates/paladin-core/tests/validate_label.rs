@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Phase K coverage — `validate_label` at the public surface
-// (DESIGN.md §4.1 / §4.7).
+// (docs/DESIGN.md §4.1 / §4.7).
 //
 // `validate_label` is re-exported from `paladin_core` so the TUI /
 // GUI Rename modal can pre-validate user input before emitting a

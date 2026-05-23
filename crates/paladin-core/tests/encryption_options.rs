@@ -2,7 +2,7 @@
 //
 // Phase K coverage — `EncryptionOptions::with_params` rejects
 // out-of-§4.4-bounds `Argon2Params` at construction time
-// (DESIGN.md §4.4 / §4.7).
+// (docs/DESIGN.md §4.4 / §4.7).
 //
 // Existing tests cover the empty-passphrase reject path. They also
 // cover header-tamper out-of-bounds paths (where the bad params come

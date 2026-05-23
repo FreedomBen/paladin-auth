@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// `import::paladin` — encrypted Paladin bundle (DESIGN.md §4.6 / §4.7).
+// `import::paladin` — encrypted Paladin bundle (docs/DESIGN.md §4.6 / §4.7).
 //
 // A Paladin bundle is byte-identical to the on-disk encrypted vault
 // format (magic + 64-byte AAD-bound header + AEAD ciphertext over a

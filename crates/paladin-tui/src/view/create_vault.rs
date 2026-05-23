@@ -2,7 +2,7 @@
 
 //! Create-vault wizard renderer.
 //!
-//! Per `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md`
+//! Per `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Startup / vault modes": when [`paladin_core::inspect`] returns
 //! [`paladin_core::VaultStatus::Missing`], the TUI walks the user
 //! through creating a new vault in-app via the two-step wizard

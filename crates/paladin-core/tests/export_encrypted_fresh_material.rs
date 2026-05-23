@@ -78,7 +78,7 @@ fn n_exports_use_pairwise_distinct_salts_and_nonces_and_all_round_trip() {
     for _ in 0..N {
         let bundle = export::encrypted(&vault, cheap_options("hunter2")).unwrap();
 
-        // Bundle layout (DESIGN.md §4.3 encrypted header):
+        // Bundle layout (docs/DESIGN.md §4.3 encrypted header):
         //   [0..8]   "PALADIN\0"
         //   [8]      format_ver = 1
         //   [9]      mode       = 1 (encrypted)

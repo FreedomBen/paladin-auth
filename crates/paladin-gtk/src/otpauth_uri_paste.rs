@@ -2,7 +2,7 @@
 
 //! `otpauth://`-paste pure-logic state machine for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `AddAccountComponent` and §"Tests > Pure-logic unit tests >
 //! `tests/otpauth_uri_paste_logic.rs`", the URI sub-path of the Add
 //! dialog parses a typed `otpauth://` URI through

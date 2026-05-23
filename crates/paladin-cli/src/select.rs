@@ -4,8 +4,8 @@
 //! `Vault::matching_accounts`, and `Vault::shortest_unique_id_prefix`. The
 //! CLI owns only command-specific cardinality decisions and error rendering;
 //! parsing, matching, and shortest-unique-prefix computation stay in
-//! `paladin-core` (see `IMPLEMENTATION_PLAN_02_CLI.md` "Query resolution"
-//! and DESIGN.md §5).
+//! `paladin-core` (see `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Query resolution"
+//! and docs/DESIGN.md §5).
 //!
 //! Public surface:
 //!

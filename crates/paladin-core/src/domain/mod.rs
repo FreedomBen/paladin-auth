@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Domain model for Paladin (DESIGN.md §4.1, §4.7).
+// Domain model for Paladin (docs/DESIGN.md §4.1, §4.7).
 //
 // `Account` and friends are intentionally constructed only through the
 // validation entry points (`validate_manual`, `parse_otpauth`, the
@@ -34,7 +34,7 @@ use bincode::{BorrowDecode, Decode, Encode};
 use uuid::Uuid;
 
 /// HMAC algorithm used for OTP code generation. `Sha1` is the default
-/// per DESIGN.md §4.1 / RFC 6238.
+/// per docs/DESIGN.md §4.1 / RFC 6238.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Encode, Decode)]
 #[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "error-serde", serde(rename_all = "lowercase"))]
@@ -93,7 +93,7 @@ pub enum AccountKindSummary {
 /// Manual-input kind selector.
 ///
 /// [`Default`] is [`AccountKindInput::Totp`] to match the CLI
-/// manual-add default per `DESIGN.md` §5 (TOTP unless `--hotp`);
+/// manual-add default per `docs/DESIGN.md` §5 (TOTP unless `--hotp`);
 /// front-end modals snapshot this default at modal-open time.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum AccountKindInput {
@@ -249,7 +249,7 @@ impl<'de, C> BorrowDecode<'de, C> for AccountId {
 /// validation entry points; raw secret bytes are not exposed.
 ///
 /// `Account` does **not** implement `serde::Serialize`. The vault
-/// payload (DESIGN.md §4.3) is encoded via the bincode-driven
+/// payload (docs/DESIGN.md §4.3) is encoded via the bincode-driven
 /// `storage::payload` codec, which has explicit, audited access to
 /// the private fields.
 #[derive(Clone, PartialEq, Eq, Encode, Decode)]
@@ -402,7 +402,7 @@ impl fmt::Debug for Account {
 
 /// Public, non-secret projection of an `Account`. Used by all
 /// presentation crates for list rows, JSON output, duplicate-account
-/// errors, and import reports. See DESIGN.md §4.1 / §5.
+/// errors, and import reports. See docs/DESIGN.md §4.1 / §5.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
 pub struct AccountSummary {

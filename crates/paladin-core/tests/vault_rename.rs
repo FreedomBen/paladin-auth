@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase G.2: `Vault::rename` (DESIGN.md §4.7 `impl Vault` block).
+// Phase G.2: `Vault::rename` (docs/DESIGN.md §4.7 `impl Vault` block).
 // Covers label re-validation (trim, empty rejection, 128-byte cap),
 // timestamp validation, `updated_at` advance, and the
 // `invalid_state.account_not_found` error contract from §5 / §4.7

@@ -3,7 +3,7 @@
 //! Pure-logic clipboard auto-clear tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/clipboard_clear_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Copy capture routes through
 //!   `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`.

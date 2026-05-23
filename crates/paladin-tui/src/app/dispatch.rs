@@ -3,7 +3,7 @@
 //! Pure event-loop glue between the reducer, the effect executor, and
 //! the renderer.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
 //!
 //! > Single thread runs the reducer. ... The reducer is a pure
 //! > function over `(state, event) → (state, Vec<Effect>)` so it is
@@ -50,7 +50,7 @@ use crate::app::state::AppState;
 /// `initial_wall_clock` seeds the wall-clock the renderer sees on
 /// its first call (no `Tick` has arrived yet). Subsequent renders
 /// use the most recent `Tick`'s `wall_clock`. Per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)" and
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)" and
 /// `crate::view::render`: *"The event loop feeds it the `wall_clock`
 /// from the latest `Tick`."* The renderer ignores the value for
 /// states that do not surface TOTP codes.

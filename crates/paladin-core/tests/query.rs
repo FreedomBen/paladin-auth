@@ -2,7 +2,7 @@
 //
 // Phase G.14 / G.15 / G.21 — `parse_account_query`, `Vault::matching_accounts`,
 // `Vault::shortest_unique_id_prefix`, and `select_after_filter`
-// (DESIGN.md §4.7, §5, §6, §7).
+// (docs/DESIGN.md §4.7, §5, §6, §7).
 //
 // `parse_account_query`:
 //   * Non-`id:` input maps to `AccountQuery::Search(query.to_string())`,

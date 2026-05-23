@@ -3,7 +3,7 @@
 //! Clipboard auto-clear reducer tests for `paladin-tui`.
 //!
 //! Tracks the "Tests > Clipboard auto-clear (`tests/clipboard_tests.rs`)"
-//! checklist in `IMPLEMENTATION_PLAN_03_TUI.md`. This slice covers the
+//! checklist in `docs/IMPLEMENTATION_PLAN_03_TUI.md`. This slice covers the
 //! reducer-level scheduling decision: when an
 //! `EffectResult::CopyCode` lands on `Unlocked` with
 //! `clipboard.clear_enabled = true`, the reducer routes through
@@ -147,7 +147,7 @@ fn copy_bytes() -> Vec<u8> {
 
 // ---------------------------------------------------------------------------
 // Copy schedules a clear via `ClipboardClearPolicy::schedule`
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear — bullet 1)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear — bullet 1)
 //
 // The reducer side of "at copy time it stores the latest
 // ClipboardClearToken plus the captured bytes in UI state". On
@@ -368,7 +368,7 @@ fn effect_result_copy_code_ok_clears_prior_status_line() {
 
 // ---------------------------------------------------------------------------
 // Copy failure: status-line error, no schedule
-// (IMPLEMENTATION_PLAN_03_TUI.md > Effect errors)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Effect errors)
 //
 // "Copy: show a status-line error if clipboard write fails; do not
 // schedule auto-clear."
@@ -558,9 +558,9 @@ fn effect_result_copy_code_ok_schedules_on_encrypted_vault_when_enabled() {
 
 // ---------------------------------------------------------------------------
 // Stale tokens are ignored on wake
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear — bullet 2)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear — bullet 2)
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per §6)":
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per §6)":
 // *"on wake, it ignores stale tokens, …"*. The reducer-side guard
 // short-circuits the wake on `AppState::Locked` when the event token
 // does not match the pending token (a fresher copy has issued a new
@@ -670,7 +670,7 @@ fn clipboard_clear_wake_with_no_pending_on_locked_is_noop() {
 
 // ---------------------------------------------------------------------------
 // Pending copied values are zeroized
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear — bullet 4)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear — bullet 4)
 //
 // Captured clipboard bytes flow through four lifetime points:
 //   * the reducer's `pending_clipboard_clear.value` slot,
@@ -837,7 +837,7 @@ fn zeroizing_vec_zeroize_empties_buffer() {
 // Pending clipboard-clear buffer: survives lock; zeroizes on
 // scheduled clear attempt, stale-token drop, replacement, and app
 // shutdown
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI buffers —
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI buffers —
 //  bullet "Pending clipboard-clear buffers survive lock until the
 //  scheduled clear attempt, stale-token drop, replacement, or app
 //  shutdown, then zeroize.")
@@ -857,7 +857,7 @@ fn zeroizing_vec_zeroize_empties_buffer() {
 fn auto_lock_carries_pending_clipboard_clear_into_locked_preserving_zeroizing_bytes() {
     // Lock-survival axis. A `Tick` past `idle_deadline` transitions
     // `Unlocked → Locked` via `maybe_auto_lock`; per
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
     // *"A clipboard auto-clear timer scheduled before lock survives
     // lock and still fires only-if-unchanged."* The bytes must
     // arrive on `Locked` byte-equal to the captured value, the token
@@ -1182,7 +1182,7 @@ fn pending_clipboard_clear_drop_chain_zeroizes_value_via_zeroizing_drop() {
 
 // ---------------------------------------------------------------------------
 // Executor (`paladin_tui::app::effect::execute`) — only-if-unchanged
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear)
 //
 //   * Bullet 4: *"\"Only-if-unchanged\" honored when an external copy
 //     mutates the clipboard between copy and wake."*
@@ -1383,7 +1383,7 @@ mod executor_only_if_unchanged {
 }
 
 // ---------------------------------------------------------------------------
-// Clipboard image adapter — `read_image` (IMPLEMENTATION_PLAN_03_TUI.md >
+// Clipboard image adapter — `read_image` (docs/IMPLEMENTATION_PLAN_03_TUI.md >
 // Implementation checklist: "Implement clipboard wrapper (arboard
 // reads/writes), QR image import from clipboard bytes, ...").
 //
@@ -1394,7 +1394,7 @@ mod executor_only_if_unchanged {
 // `paladin-tui`'s public surface. Errors collapse to two variants the
 // executor maps onto `QrImportFailure::{NoClipboardImage,
 // ImageDecodeFailure}` — distinct user-facing wording per
-// `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal" QR-import bullets:
+// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Add modal" QR-import bullets:
 // *"No-image, no-QR, and invalid-QR cases reject inline."*
 //
 // Under `paladin-tui/test-hooks` the same env-var protocol used for

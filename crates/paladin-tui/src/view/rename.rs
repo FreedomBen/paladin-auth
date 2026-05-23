@@ -2,7 +2,7 @@
 
 //! Rename-modal renderer.
 //!
-//! Per `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md`
+//! Per `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Modals (per §6) > Rename": *"single text field pre-populated
 //! with the selected account's current label."* This slice paints
 //! the freshly-opened baseline — the targeted account's display

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // `import::otpauth` — single URI / line list / JSON array of URIs
-// (DESIGN.md §4.6 / §4.7).
+// (docs/DESIGN.md §4.6 / §4.7).
 //
 // Behavior:
 //   - Bytes must be valid UTF-8; otherwise `validation_error`

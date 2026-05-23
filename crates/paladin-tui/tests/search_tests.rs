@@ -3,7 +3,7 @@
 //! Search filter tests for `paladin-tui`.
 //!
 //! Tracks the "Tests > Search (`tests/search_tests.rs`)" checklist in
-//! `IMPLEMENTATION_PLAN_03_TUI.md`.
+//! `docs/IMPLEMENTATION_PLAN_03_TUI.md`.
 
 mod common;
 
@@ -63,7 +63,7 @@ fn add_account(vault: &mut Vault, store: &Store, issuer: Option<&str>, label: &s
 
 // ---------------------------------------------------------------------------
 // Case-insensitive substring match through `paladin_core::account_matches_search`
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet 1)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet 1)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -158,7 +158,7 @@ fn no_unicode_normalization_in_search_predicate() {
 
 // ---------------------------------------------------------------------------
 // Insertion order is preserved among matches
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet 2)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet 2)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -166,7 +166,7 @@ fn matches_returned_in_vault_insertion_order() {
     // Three accounts share the substring "x"; the helper must return
     // them in the order they were added, not in any other order
     // (alphabetical, ID, etc.) since the TUI list view renders in
-    // insertion order per DESIGN.md §4.7.
+    // insertion order per docs/DESIGN.md §4.7.
     let tmp = secure_tempdir();
     let path = tmp.path().join("plain.bin");
     let (mut vault, store) = open_plaintext_pair(&path);
@@ -186,7 +186,7 @@ fn matches_returned_in_vault_insertion_order() {
 
 // ---------------------------------------------------------------------------
 // Filter changes route through `paladin_core::select_after_filter`
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet 3)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet 3)
 //
 // `select_after_search` composes `filtered_account_ids` with
 // `paladin_core::select_after_filter`: the previous selection is
@@ -315,11 +315,11 @@ fn select_after_search_empty_query_empty_vault_returns_none() {
 
 // ---------------------------------------------------------------------------
 // The `id:` prefix form is CLI-only and is NOT honored by the TUI search
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet 5)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet 5)
 //
 // `paladin_core::parse_account_query` recognizes `id:<hex>` as an
 // `AccountQuery::IdPrefix` selector for CLI single-account resolution
-// (DESIGN.md §5). The TUI search bar deliberately does NOT call that
+// (docs/DESIGN.md §5). The TUI search bar deliberately does NOT call that
 // parser — it delegates to `account_matches_search`, which treats the
 // query as a plain case-insensitive substring needle. So `id:<hex>`
 // typed into the search bar must look for the literal four-byte

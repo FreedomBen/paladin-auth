@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase G.3: `Vault::find_duplicate` (DESIGN.md §4.7 `impl Vault`).
+// Phase G.3: `Vault::find_duplicate` (docs/DESIGN.md §4.7 `impl Vault`).
 //
 // Front ends call this to render the §5 `duplicate_account` error
 // without re-implementing the secret/issuer/label comparison. Core

@@ -31,7 +31,7 @@ use tempfile::TempDir;
 
 use common::Pty;
 
-/// `PALADIN\0` magic prefix on every vault file (DESIGN.md §4.6).
+/// `PALADIN\0` magic prefix on every vault file (docs/DESIGN.md §4.6).
 const PALADIN_MAGIC: &[u8; 8] = b"PALADIN\0";
 
 /// Stable §5 prompt label for the first new-passphrase entry. Used by
@@ -268,7 +268,7 @@ fn pty_set_on_open_plaintext_vault_succeeds_and_writes_encrypted_with_requested_
     exit.assert_transcript_contains("Encrypted vault.");
 
     // Post-state on disk: the vault is now encrypted under the
-    // requested KDF parameters. Header layout per DESIGN.md §4.6 —
+    // requested KDF parameters. Header layout per docs/DESIGN.md §4.6 —
     // magic (8) + format_ver (1) + mode (1) + kdf_id (1) +
     // m_kib LE u32 (4) + t LE u32 (4) + p LE u32 (4) + salt (16) +
     // aead_id (1) + nonce (24).
@@ -541,7 +541,7 @@ fn pty_change_on_open_encrypted_vault_succeeds_and_rotates_salt_under_requested_
     // passphrase + a matching confirmation, all via `/dev/tty`.
     // After re-encrypting, the on-disk vault stays in encrypted mode
     // under the requested Argon2id parameters and the salt has
-    // rotated (DESIGN.md §4.4 — every save rolls fresh salt + nonce).
+    // rotated (docs/DESIGN.md §4.4 — every save rolls fresh salt + nonce).
     // The test fixture is created with the §4.4 minimum KDF params
     // so both the unlock derivation and the post-change derivation
     // stay fast in CI.
@@ -597,7 +597,7 @@ fn pty_change_on_open_encrypted_vault_succeeds_and_rotates_salt_under_requested_
     let salt_after: [u8; 16] = after[23..39].try_into().unwrap();
     assert_ne!(
         salt_before, salt_after,
-        "salt must rotate on every save (DESIGN.md §4.4)",
+        "salt must rotate on every save (docs/DESIGN.md §4.4)",
     );
 
     // File mode preserved at `0o600` across the rotation.

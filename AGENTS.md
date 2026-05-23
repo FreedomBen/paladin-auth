@@ -2,7 +2,7 @@
 
 ## Agent Instructions
 
-- `DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update DESIGN.md so it stays in sync.
+- `docs/DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update docs/DESIGN.md so it stays in sync.
 - When changing the CLI, TUI, or GTK, update the relevant `IMPLEMENTATION_PLAN_0X_*.md` with the new behavior and API details before implementing it.  This keeps design and implementation aligned.
 - Write exhaustive tests that cover base functionality and any edge cases, particularly for the core shared library.
 - Use a Test Driven Development (TDD) approach: write failing tests before implementing features, then implement the code to make the tests pass.
@@ -18,10 +18,10 @@
 
 ## Project Structure & Module Organization
 
-The approved design lives in `DESIGN.md`, with staged plans in
-`IMPLEMENTATION_PLAN_01_CORE.md`, `IMPLEMENTATION_PLAN_02_CLI.md`,
-`IMPLEMENTATION_PLAN_03_TUI.md`, and `IMPLEMENTATION_PLAN_04_GTK.md`.
-Follow `DESIGN.md` as the source of truth. The Cargo workspace currently
+The approved design lives in `docs/DESIGN.md`, with staged plans in
+`docs/IMPLEMENTATION_PLAN_01_CORE.md`, `docs/IMPLEMENTATION_PLAN_02_CLI.md`,
+`docs/IMPLEMENTATION_PLAN_03_TUI.md`, and `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
+Follow `docs/DESIGN.md` as the source of truth. The Cargo workspace currently
 contains three members; `paladin-gtk` is deferred to v0.2:
 
 ```text
@@ -79,5 +79,5 @@ TUI, or GTK changes.
 
 Do not read `TODO.md` or any TODO files. Update documentation whenever behavior
 or commands change, and add tests for code changes when test infrastructure
-exists. If a request conflicts with `DESIGN.md`, update the design document so
+exists. If a request conflicts with `docs/DESIGN.md`, update the design document so
 the repository remains consistent.

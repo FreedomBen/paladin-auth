@@ -2,7 +2,7 @@
 
 //! `AccountRowComponent` pure-logic projection for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `AccountRowComponent`, each row in `AccountListComponent`'s
 //! `gtk::ListView` shows the `<issuer>:<label>` display string, the
 //! current code (or a hidden placeholder for HOTP rows that have
@@ -93,7 +93,7 @@ pub fn progress_visible(kind: AccountKindSummary) -> bool {
 /// Whether the row exposes its kebab `MenuButton`.
 ///
 /// Every row exposes the kebab (Rename… / Remove…) unconditionally
-/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `AccountRowComponent`. The kind argument is taken so the helper
 /// reads symmetrically alongside [`next_button_visible`] /
 /// [`progress_visible`]; the projection itself does not depend on it.
@@ -108,7 +108,7 @@ pub fn kebab_visible(_kind: AccountKindSummary) -> bool {
 /// no "next" affordance), exposed as a distinct projection so the
 /// per-component busy mask in [`apply_busy_mask`] can dim the
 /// button while `AppModel` is `UnlockedBusy` per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership"
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership"
 /// without flipping the row's visibility.
 #[must_use]
 pub fn next_button_enabled(kind: AccountKindSummary) -> bool {
@@ -129,7 +129,7 @@ pub fn kebab_enabled() -> bool {
 /// TOTP rows: always enabled.
 /// HOTP rows: enabled only while a visible reveal [`Code`] is in
 /// hand. Copying a hidden HOTP row is explicitly disabled per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `AccountRowComponent`.
 #[must_use]
 pub fn copy_enabled(kind: AccountKindSummary, has_visible_code: bool) -> bool {
@@ -142,7 +142,7 @@ pub fn copy_enabled(kind: AccountKindSummary, has_visible_code: bool) -> bool {
 /// Clamp the three mutating-row affordances in a [`RowDisplay`] when
 /// the parent `AppModel` is in `AppState::UnlockedBusy`.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership"
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership"
 /// / §"Component tree" > `AccountRowComponent` ("Disable mutating row
 /// controls (copy, 'next', kebab) while `AppModel` is `UnlockedBusy`"),
 /// the row factory routes every binding through this mask so the
@@ -440,7 +440,7 @@ pub struct RowDisplay {
 /// The returned [`RowDisplay`] carries the *intrinsic* enabled state
 /// for the three mutating-row controls; the widget layer routes it
 /// through [`apply_busy_mask`] before binding so the
-/// `UnlockedBusy` gating contract from `IMPLEMENTATION_PLAN_04_GTK.md`
+/// `UnlockedBusy` gating contract from `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"In-flight effect ownership" stays a single hook.
 #[must_use]
 pub fn project_row(summary: &AccountSummary, visible_code: Option<&Code>) -> RowDisplay {
@@ -539,7 +539,7 @@ pub enum AccountRowMsg {
     /// `AccountListComponent` via
     /// [`relm4::factory::FactoryVecDeque::broadcast`] on parent
     /// `UnlockedBusy` entry / exit per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
     /// ownership". The intrinsic display is preserved so the row
     /// keeps rendering its visible code while the worker is in
     /// flight; only copy / "next" / kebab sensitivity dims.
@@ -709,7 +709,7 @@ impl FactoryComponent for AccountRowComponent {
 // ---------------------------------------------------------------------------
 // Row body widget construction.
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 // `AccountListComponent`, the `gtk::ListBox` mounted by
 // `AccountListComponent` is driven by a
 // `relm4::factory::FactoryVecDeque<AccountRowComponent>`. The
@@ -774,7 +774,7 @@ fn format_counter_label(counter: CounterText) -> String {
 /// the `.flat` style class for the row-trailing affordance look, and
 /// a `gio::Menu` model built by [`build_kebab_menu_model`] with the
 /// Rename… / Remove… entries described in
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `AccountRowComponent`.
 ///
 /// The trailing "next" button is bound to the per-row
@@ -899,7 +899,7 @@ pub fn install_row_action_group(
 /// * The copy button's sensitive state mirrors
 ///   [`RowDisplay::copy_enabled`]: TOTP rows are always sensitive;
 ///   HOTP rows are sensitive only while a visible reveal code is in
-///   hand, matching the `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+///   hand, matching the `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component
 ///   tree" > `AccountRowComponent` rule that copying a hidden HOTP
 ///   row is disabled. While `AppModel` is `UnlockedBusy`,
 ///   [`AccountRowComponent::update_view`] feeds the projection

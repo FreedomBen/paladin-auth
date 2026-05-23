@@ -2,7 +2,7 @@
 
 //! Tests for `paladin_gtk::cli::GlobalArgs`.
 //!
-//! Covers the contract from `IMPLEMENTATION_PLAN_04_GTK.md` "Global
+//! Covers the contract from `docs/IMPLEMENTATION_PLAN_04_GTK.md` "Global
 //! flags": `--vault <path>` and `--no-color` are accepted (parity with
 //! siblings), `--no-color` is a parser-level no-op, `--json` is
 //! rejected at parse time with clap's text diagnostic (never a JSON

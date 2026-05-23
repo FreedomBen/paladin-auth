@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Pre-/post-AEAD plaintext zeroization (DESIGN.md §4.4 / Phase F.14).
+// Pre-/post-AEAD plaintext zeroization (docs/DESIGN.md §4.4 / Phase F.14).
 //
 // Pins the §4.4 invariant that the bincode-serialized `VaultPayload`
 // fed into `crypto::aead::aead_encrypt`, and the plaintext returned

@@ -3,7 +3,7 @@
 //! Pure-logic coverage for `app::model::run_startup_probes` and the
 //! shared `startup_state_marker` helper.
 //!
-//! `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" pins the
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" pins the
 //! startup sequence: resolve vault path (`--vault` override or
 //! `paladin_core::default_vault_path()`), call `paladin_core::inspect`,
 //! and — for `VaultStatus::Plaintext` — `paladin_core::Store::open`
@@ -356,7 +356,7 @@ fn format_app_window_title_returns_paladin() {
     // which would otherwise leak the live vault state into the
     // window-list across application switches). Matches the GNOME
     // app-id naming used by the `.desktop` / AppStream metadata
-    // referenced by `IMPLEMENTATION_PLAN_04_GTK.md`
+    // referenced by `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"Linux desktop integration". Pinning the title through a
     // helper keeps the wording in one place shared by the widget
     // binding and the pure-logic tests in `tests/startup_probes.rs`.
@@ -470,7 +470,7 @@ fn format_app_search_button_tooltip_is_non_empty() {
 
 #[test]
 fn format_app_search_button_visible_returns_true_when_a_vault_is_open() {
-    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `AccountListComponent`: the search-toggle header-bar
     // affordance toggles the `gtk::SearchBar` inside
     // `AccountListComponent`, which is only mounted while the
@@ -948,7 +948,7 @@ fn format_app_menu_preferences_label_returns_preferences_without_ellipsis() {
     // the modern GNOME HIG drops the ellipsis from preferences
     // entries: the dialog is live-apply (each toggle / spinner
     // change drives a `Vault::mutate_and_save` per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage") rather
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage") rather
     // than collecting input behind an Apply / Cancel button, so
     // the affordance is not a request for further input before
     // committing. The dialog-opening entries (Import, Export,
@@ -1691,7 +1691,7 @@ fn format_app_menu_preferences_action_name_round_trips_with_group_and_target() {
 fn format_app_menu_preferences_accelerator_returns_control_comma() {
     // The primary menu's "Preferences" `gio::SimpleAction` is wired
     // to the `<Control>comma` keyboard accelerator per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
     // "Primary menu" — the canonical Preferences shortcut GNOME
     // applications register via
     // `gio::Application::set_accels_for_action("app.preferences",
@@ -1878,7 +1878,7 @@ fn format_app_menu_quit_action_name_round_trips_with_group_and_target() {
 fn format_app_menu_quit_accelerator_returns_control_q() {
     // The primary menu's "Quit" `gio::SimpleAction` is wired to
     // the `<Control>q` keyboard accelerator per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
     // "Primary menu" — the canonical Quit shortcut GNOME
     // applications register via
     // `gio::Application::set_accels_for_action("app.quit",
@@ -2289,7 +2289,7 @@ fn format_app_add_button_action_name_round_trips_with_group_and_target() {
 fn format_app_add_button_accelerator_returns_control_shift_n() {
     // The header-bar `+` button's `gio::SimpleAction` is wired
     // to the `<Control><Shift>n` keyboard accelerator per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
     // "Header bar > Add" — the GNOME-HIG "New X" pattern (e.g.
     // Files' "New Folder"). The single-modifier slot `<Control>n`
     // is reserved for the account-list "move one row down" mirror
@@ -3090,7 +3090,7 @@ fn dispatch_app_window_action_routes_about_to_open_about_dialog() {
 
 #[test]
 fn dispatch_app_window_action_routes_keyboard_shortcuts_to_open_keyboard_shortcuts() {
-    // Per `DESIGN.md` §7 and `IMPLEMENTATION_PLAN_04_GTK.md`
+    // Per `docs/DESIGN.md` §7 and `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"Keyboard Shortcuts window": the application menu's
     // "Keyboard Shortcuts" entry and the `<Control>question`
     // accelerator both activate the bare action name
@@ -4642,7 +4642,7 @@ fn format_app_about_dialog_developer_name_is_non_empty_and_distinct_from_program
 fn format_app_about_dialog_copyright_returns_paladin_copyright_line() {
     // Per §"libadwaita usage" and §"About / help": the
     // `AdwAboutDialog` copyright slot displays the project's
-    // copyright notice. Paladin is AGPL-3.0-or-later (DESIGN.md
+    // copyright notice. Paladin is AGPL-3.0-or-later (docs/DESIGN.md
     // §14) with an open contributor pool — the canonical notice
     // attributes the same collective spelled by
     // `format_app_about_dialog_developer_name` and carries the
@@ -4695,7 +4695,7 @@ fn format_app_about_dialog_copyright_starts_with_copyright_glyph_and_contains_de
 
 #[test]
 fn format_app_about_dialog_license_type_returns_custom() {
-    // Per IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7 checklist"
+    // Per docs/IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7 checklist"
     // → "About dialog": the AGPL-3.0-or-later license text is
     // shipped in the gresource bundle and surfaced through
     // `AdwAboutDialog::license-type` set to `Custom` with the
@@ -4724,7 +4724,7 @@ fn format_app_about_dialog_license_type_is_not_one_of_the_toolkit_shipped_gpl_fa
     // `Lgpl30Only`). Each of those tells `AdwAboutDialog` to
     // render the boilerplate text shipped with the toolkit
     // rather than the bundled `format_app_about_dialog_license_text`
-    // body. The IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7" /
+    // body. The docs/IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7" /
     // "About dialog" contract specifically calls for the
     // bundled LICENSE text — anything other than `Custom` would
     // bypass the gresource-bundled license body.
@@ -4750,7 +4750,7 @@ fn format_app_about_dialog_license_type_is_not_one_of_the_toolkit_shipped_gpl_fa
 
 #[test]
 fn format_app_about_dialog_license_text_matches_repository_license_file() {
-    // Per IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7 checklist"
+    // Per docs/IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7 checklist"
     // → "About dialog" — "Ship the AGPL-3.0-or-later license
     // text in the gresource bundle and surface it through
     // `AdwAboutDialog::license-type` set to `Custom` with the
@@ -4916,7 +4916,7 @@ fn format_app_about_dialog_license_markup_escapes_the_fsf_url_angle_brackets() {
 
 #[test]
 fn format_app_about_dialog_license_resource_path_returns_paladin_gui_license_path() {
-    // Per IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7 checklist"
+    // Per docs/IMPLEMENTATION_PLAN_04_GTK.md §"Milestone 7 checklist"
     // → "About dialog" — the AGPL-3.0-or-later license text is
     // shipped in the gresource bundle under the
     // `/org/tamx/Paladin/Gui` prefix (matching the
@@ -5258,7 +5258,7 @@ fn format_app_about_dialog_documenters_is_empty_until_a_documenter_joins() {
     // `AdwAboutDialog` documenters slot populates the dialog's
     // credits-page "Documentation" section. Paladin does not
     // yet have a separately-credited documenter — the project
-    // `README.md`, `DESIGN.md`, and inline rustdoc are written
+    // `README.md`, `docs/DESIGN.md`, and inline rustdoc are written
     // by the founding contributor in
     // `format_app_about_dialog_developers` — so the documenters
     // slot stays empty until a credited documenter joins. The
@@ -10833,7 +10833,7 @@ fn format_app_about_dialog_debug_info_filename_does_not_contain_path_separators(
     // mirrors the safer-default contract Paladin already
     // enforces for vault-file paths (where `0700` parent dir
     // and `0600` file permissions, plus atomic
-    // `vault.bin.bak` rotation, are pinned per DESIGN.md §6).
+    // `vault.bin.bak` rotation, are pinned per docs/DESIGN.md §6).
     //
     // The current `format_app_about_dialog_debug_info_filename`
     // returns the bare filename `"paladin-debug-info.txt"`
@@ -31004,7 +31004,7 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_start_of_heading_byte() 
     }
 }
 
-// ---- Window shell & toast surface (Milestone 7 — IMPLEMENTATION_PLAN_04_GTK.md
+// ---- Window shell & toast surface (Milestone 7 — docs/IMPLEMENTATION_PLAN_04_GTK.md
 // §"Window shell and toast surface") ------------------------------------------
 //
 // These tests pin the gresource paths, the bundled `data/style.css`
@@ -31017,7 +31017,7 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_start_of_heading_byte() 
 
 #[test]
 fn format_app_style_css_resource_path_returns_org_tamx_paladin_gui_style_css() {
-    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Window shell and toast
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Window shell and toast
     // surface", Paladin-specific CSS layers on Adwaita defaults via
     // a `gtk::CssProvider` that loads `data/style.css` from the
     // bundled gresource. The path must match the gresource XML's
@@ -31086,7 +31086,7 @@ fn data_style_css_file_is_shipped_in_the_crate() {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/style.css");
     assert!(
         path.is_file(),
-        "expected the bundled CSS payload at {}; ensure `crates/paladin-gtk/data/style.css` is committed alongside the gresource XML per IMPLEMENTATION_PLAN_04_GTK.md §\"Crate layout\"",
+        "expected the bundled CSS payload at {}; ensure `crates/paladin-gtk/data/style.css` is committed alongside the gresource XML per docs/IMPLEMENTATION_PLAN_04_GTK.md §\"Crate layout\"",
         path.display(),
     );
 }
@@ -31101,7 +31101,7 @@ fn data_gresource_xml_is_shipped_in_the_crate() {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/paladin-gtk.gresource.xml");
     assert!(
         path.is_file(),
-        "expected the gresource manifest at {}; ensure `crates/paladin-gtk/data/paladin-gtk.gresource.xml` is committed per IMPLEMENTATION_PLAN_04_GTK.md §\"Crate layout\"",
+        "expected the gresource manifest at {}; ensure `crates/paladin-gtk/data/paladin-gtk.gresource.xml` is committed per docs/IMPLEMENTATION_PLAN_04_GTK.md §\"Crate layout\"",
         path.display(),
     );
 }
@@ -31143,7 +31143,7 @@ fn register_app_gresource_bundle_signature_is_zero_argument_unit() {
 
 #[test]
 fn wire_app_css_provider_signature_takes_display_reference() {
-    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Window shell and toast
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Window shell and toast
     // surface", `wire_app_css_provider` attaches the Paladin-
     // specific `gtk::CssProvider` (loading `data/style.css` from
     // the gresource bundle) to the supplied display, layered on
@@ -31155,7 +31155,7 @@ fn wire_app_css_provider_signature_takes_display_reference() {
     let _: fn(&relm4::gtk::gdk::Display) = paladin_gtk::app::model::wire_app_css_provider;
 }
 
-// ---- Bundled placeholder icon (Milestone 7 — IMPLEMENTATION_PLAN_04_GTK.md
+// ---- Bundled placeholder icon (Milestone 7 — docs/IMPLEMENTATION_PLAN_04_GTK.md
 // §"Icon resolution") ---------------------------------------------------------
 //
 // The placeholder `dialog-password-symbolic` icon must ride inside the
@@ -31275,7 +31275,7 @@ fn data_placeholder_icon_file_is_shipped_in_the_crate() {
         .join("data/icons/scalable/actions/dialog-password-symbolic.svg");
     assert!(
         path.is_file(),
-        "expected the bundled placeholder icon at {}; ensure the SVG is committed alongside the gresource XML per IMPLEMENTATION_PLAN_04_GTK.md §\"Crate layout\"",
+        "expected the bundled placeholder icon at {}; ensure the SVG is committed alongside the gresource XML per docs/IMPLEMENTATION_PLAN_04_GTK.md §\"Crate layout\"",
         path.display(),
     );
 }
@@ -31306,7 +31306,7 @@ fn data_gresource_xml_references_placeholder_icon_under_scalable_actions() {
 
 #[test]
 fn wire_app_icon_theme_resource_path_signature_takes_display_reference() {
-    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Icon resolution",
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Icon resolution",
     // `wire_app_icon_theme_resource_path` adds the gresource icon
     // root to `gtk::IconTheme::for_display(display)` so the bundled
     // placeholder is discoverable. The compile-only signature check
@@ -31318,7 +31318,7 @@ fn wire_app_icon_theme_resource_path_signature_takes_display_reference() {
 
 #[test]
 fn format_app_toast_overlay_widget_name_returns_toast_overlay() {
-    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Window shell and toast
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Window shell and toast
     // surface", every active screen (`InitDialog`,
     // `UnlockComponent`, `StartupErrorComponent`,
     // `AccountListComponent`) is appended into the

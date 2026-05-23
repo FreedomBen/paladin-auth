@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Phase G.16 — `parse_setting_key`, `parse_setting_patch`, and
-// `Vault::apply_setting_patch` (DESIGN.md §4.7, §5).
+// `Vault::apply_setting_patch` (docs/DESIGN.md §4.7, §5).
 //
 // `parse_setting_key` accepts exactly the four §5 dotted keys
 // (`auto_lock.enabled`, `auto_lock.timeout_secs`,

@@ -3,7 +3,7 @@
 //! Pure-logic startup-error tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/startup_error_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * `default_vault_path` failure routes to `StartupErrorComponent`
 //!   without mutating disk.
@@ -846,7 +846,7 @@ fn dispatch_startup_error_output_is_exhaustive_retry_and_quit_only() {
 
 // ---------------------------------------------------------------------------
 // StartupError::from_worker_panic — `gio::spawn_blocking` worker-panic
-// routing per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+// routing per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
 // ownership" > "Route workers that fail before returning the pair".
 //
 // A worker panic interrupts the durability contract of the in-flight

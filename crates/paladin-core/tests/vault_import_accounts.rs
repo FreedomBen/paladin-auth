@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase G: `Vault::import_accounts` (DESIGN.md §4.7 `impl Vault`).
+// Phase G: `Vault::import_accounts` (docs/DESIGN.md §4.7 `impl Vault`).
 //
 // Phase G owns the merge-flow types (`ImportConflict`,
 // `ImportWarning`, `ImportReport`) and the `Vault` method that
@@ -115,7 +115,7 @@ fn import_accounts_non_collision_inserts_with_fresh_id_and_increments_imported()
     assert_eq!(report.appended, 0);
     assert_eq!(report.accounts.len(), 1);
     let stored_id = report.accounts[0];
-    // Per DESIGN.md §4.6, non-colliding rows receive fresh UUIDv4 IDs
+    // Per docs/DESIGN.md §4.6, non-colliding rows receive fresh UUIDv4 IDs
     // at merge time so a Paladin bundle's source IDs cannot leak.
     assert_ne!(
         stored_id, source_id,

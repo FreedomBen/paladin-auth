@@ -4,7 +4,7 @@
 //! `#[test]` here drives one named code path through real `paladin`
 //! process invocations and locks the resulting envelope shape via
 //! `insta::assert_json_snapshot!`. Three groupings, mirroring the
-//! `IMPLEMENTATION_PLAN_02_CLI.md` Tests checklist:
+//! `docs/IMPLEMENTATION_PLAN_02_CLI.md` Tests checklist:
 //!
 //! 1. Per-command success envelopes (`list`, `add`, `show`, `peek`,
 //!    `remove`, `rename`, `settings`, `export --plaintext`).

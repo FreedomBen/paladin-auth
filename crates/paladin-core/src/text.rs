@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Shared front-end text helpers (DESIGN.md §4.7).
+// Shared front-end text helpers (docs/DESIGN.md §4.7).
 //
 // CLI, TUI, and GUI all render the messages below through these
 // helpers so wording never drifts between front ends. Strings are

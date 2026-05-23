@@ -3,7 +3,7 @@
 //! Pure-logic secret-field tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/secret_fields_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Secret-field clearing / redaction invariants for passphrase,
 //!   manual-secret, and `otpauth://` URI entry buffers (submit,

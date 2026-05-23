@@ -4,7 +4,7 @@
 //!
 //! Tracks the §"Tests > Pure-logic unit tests >
 //! `tests/otpauth_uri_paste_logic.rs`" checklist in
-//! `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Successful URI parse routes through
 //!   [`paladin_core::parse_otpauth`] and shares the manual path's

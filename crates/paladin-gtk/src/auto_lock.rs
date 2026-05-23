@@ -2,7 +2,7 @@
 
 //! Auto-lock pure-logic glue for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md`
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 //! §"Auto-lock and clipboard auto-clear (per §7)" and the §"Tests >
 //! Pure-logic unit tests > `tests/auto_lock_logic.rs`" checklist, the
 //! GUI owns the idle-event sourcing (`gtk::EventControllerKey`, motion
@@ -53,7 +53,7 @@ pub fn idle_should_arm(vault: &Vault) -> bool {
 /// Refresh the auto-lock [`IdleSource`] against a post-`PassphraseDialog`
 /// vault state, gated on a successful transition.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock parity
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Clipboard + auto-lock parity
 /// with TUI" — "Re-ask `IdlePolicy::should_arm` after every successful
 /// `PassphraseDialog` transition so arm/disarm tracks the on-disk vault
 /// mode without re-inspecting the file." The arm/disarm decision is
@@ -132,7 +132,7 @@ pub struct UnlockedDiscards<Reveal, Modal> {
 /// by [`lock_on_expiry`] via move semantics. A pending clipboard
 /// auto-clear scheduled before the lock survives so its timer still
 /// fires only-if-unchanged on the post-lock clipboard — per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Tests > `tests/clipboard_clear_logic.rs`"
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Tests > `tests/clipboard_clear_logic.rs`"
 /// *"A clipboard auto-clear timer scheduled before lock survives lock
 /// and still fires only-if-unchanged."*
 pub struct LockedTransition {

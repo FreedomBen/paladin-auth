@@ -2,7 +2,7 @@
 
 //! Secret-bearing widget state for `paladin-gtk`.
 //!
-//! Per `DESIGN.md` §8 and `IMPLEMENTATION_PLAN_04_GTK.md`
+//! Per `docs/DESIGN.md` §8 and `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 //! §"Secret entry handling", passphrase fields, manual-secret fields,
 //! and the `AddAccountComponent`'s `otpauth://` URI entry are kept
 //! out of `AppModel`, `AppMsg`, and `AppOutput`. The GTK

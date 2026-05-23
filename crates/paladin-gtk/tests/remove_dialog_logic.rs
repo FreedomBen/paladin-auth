@@ -4,7 +4,7 @@
 //!
 //! Tracks the §"Tests > Pure-logic unit tests >
 //! `tests/remove_dialog_logic.rs`" checklist in
-//! `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * `summary_display_label` matches the CLI / TUI body shape
 //!   (`issuer:label` when the issuer is set and non-empty, otherwise
@@ -966,7 +966,7 @@ fn format_remove_dialog_title_returns_remove_account() {
 // `format_remove_dialog_destructive_response_id` /
 // `format_remove_dialog_cancel_response_id`
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" > `RemoveDialog`
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" > `RemoveDialog`
 // and §"Milestone 7 checklist" > "Open `RemoveDialog` as an `AdwAlertDialog`
 // with `destructive-action` styling on the destructive button", the dialog
 // is rendered as an `adw::AlertDialog`. The two response IDs identify the
@@ -1274,7 +1274,7 @@ fn format_remove_dialog_inline_error_and_warning_are_mutually_exclusive() {
 // ---------------------------------------------------------------------------
 // `format_remove_dialog_success_toast` — body text for the `AdwToast` raised
 // after a successful remove worker outcome per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" > `RemoveDialog`
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" > `RemoveDialog`
 // confirmation flow ("On success, refresh `AccountListComponent` from the
 // returned vault, close the dialog, and surface a status / toast
 // confirmation."). Mirrors the rename equivalent
@@ -1311,7 +1311,7 @@ fn format_remove_dialog_success_toast_is_non_empty_single_sentence() {
 }
 
 // ---------------------------------------------------------------------------
-// Busy gating — `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership":
+// Busy gating — `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership":
 // the dialog's destructive Remove response dims while the
 // `Vault::mutate_and_save` worker owns the live `(Vault, Store)` pair,
 // matching the rename / add submit dimming pattern.

@@ -5,7 +5,7 @@
 //! `UnlockComponent` is the passphrase-entry view that `AppModel`
 //! presents whenever `paladin_core::inspect` reports
 //! [`paladin_core::VaultStatus::Encrypted`]. Per
-//! `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `UnlockComponent` and §"Vault interaction", the view is
 //! conditional on the vault being encrypted (plaintext vaults skip
 //! it entirely), the submit handler builds a

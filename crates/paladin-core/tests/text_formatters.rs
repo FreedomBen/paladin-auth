@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Phase K coverage — public-surface stability of the `text::format_*`
-// helpers (DESIGN.md §4.7 / §6 / §7).
+// helpers (docs/DESIGN.md §4.7 / §6 / §7).
 //
 // CLI, TUI, and GTK render these strings byte-identically. Internal
 // unit tests cover the render logic; these tests pin the wording at

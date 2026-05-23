@@ -3,9 +3,9 @@
 //! Encrypted-write KDF flag parser. Converts the raw `--kdf-memory-mib`,
 //! `--kdf-time`, and `--kdf-parallelism` strings captured by clap into
 //! validated `paladin_core::Argon2Params` / `paladin_core::EncryptionOptions`
-//! per `IMPLEMENTATION_PLAN_02_CLI.md` "Encrypted-write KDF flags".
+//! per `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Encrypted-write KDF flags".
 //!
-//! Error contract (DESIGN.md §5):
+//! Error contract (docs/DESIGN.md §5):
 //!
 //! - Integer parse failure → `validation_error` with `field` set to the
 //!   hyphenated flag name (`"kdf-memory-mib"`, `"kdf-time"`,

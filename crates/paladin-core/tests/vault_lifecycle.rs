@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Integration tests for `default_vault_path`, `inspect`, and the
-// `classify_init_precheck` truth table (DESIGN.md §4.3 / §4.7 / §5).
+// `classify_init_precheck` truth table (docs/DESIGN.md §4.3 / §4.7 / §5).
 //
 // Subsequent Phase E commits will extend this file with `Store::open`,
 // `Store::create`, `create_force`, and `mutate_and_save` coverage.
@@ -1029,7 +1029,7 @@ fn write_secret_file_atomic_does_not_enforce_directory_perms_on_caller_dir() {
 }
 
 // -----------------------------------------------------------------------------
-// §4.3 parent-dir auto-creation (DESIGN.md §4.3: "Parent directories that
+// §4.3 parent-dir auto-creation (docs/DESIGN.md §4.3: "Parent directories that
 // `create` creates itself are made `0700`; existing parent directories are
 // not silently tightened.")
 // -----------------------------------------------------------------------------
@@ -1074,7 +1074,7 @@ fn create_plaintext_mkdir_p_missing_multi_level_parent_at_0700() {
 
 #[test]
 fn create_plaintext_existing_parent_perms_are_not_silently_tightened() {
-    // DESIGN.md §4.3: "existing parent directories are not silently
+    // docs/DESIGN.md §4.3: "existing parent directories are not silently
     // tightened." A 0700 parent stays 0700; a 0750 parent is rejected
     // outright (the existing-loose-dir behavior is unchanged).
     let tmp = vault_test_dir();

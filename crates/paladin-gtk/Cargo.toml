@@ -16,7 +16,7 @@ workspace = true
 # Both a library and a binary so integration tests in `tests/` can
 # reach internal modules (search, pure-logic helpers, components) while
 # the binary entry stays in `src/main.rs`. Mirrors the §"Crate layout"
-# requirement in IMPLEMENTATION_PLAN_04_GTK.md.
+# requirement in docs/IMPLEMENTATION_PLAN_04_GTK.md.
 [lib]
 name = "paladin_gtk"
 path = "src/lib.rs"
@@ -25,7 +25,7 @@ path = "src/lib.rs"
 name = "paladin-gtk"
 path = "src/main.rs"
 
-# Per §"Dependencies (per §9)" of IMPLEMENTATION_PLAN_04_GTK.md, the
+# Per §"Dependencies (per §9)" of docs/IMPLEMENTATION_PLAN_04_GTK.md, the
 # v0.2 GUI binds `relm4`, `gtk4` (>=4.16), `libadwaita` (>=1.6),
 # `glib`, `gio`, `gdk4`, plus `paladin-core` and `clap`. The widget-
 # stack deps land alongside the first relm4 wiring so the dep
@@ -65,7 +65,7 @@ relm4 = "0.11"
 
 # `glib-build-tools` packs `data/paladin-gtk.gresource.xml` into
 # `OUT_DIR/paladin-gtk.gresource` so `build.rs` can compile the
-# bundle deterministically per IMPLEMENTATION_PLAN_04_GTK.md
+# bundle deterministically per docs/IMPLEMENTATION_PLAN_04_GTK.md
 # §"Crate layout" / §"Window shell and toast surface". Pinned at the
 # same major as the runtime `glib` (0.22) the workspace resolves
 # through `gtk4` 0.11. Build-only dep — never enters the runtime

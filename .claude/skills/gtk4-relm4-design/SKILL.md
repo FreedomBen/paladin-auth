@@ -22,7 +22,7 @@ When in doubt, defer to the HIG and to the libadwaita widget gallery
    patterns; reuse Adw widgets that already encode the rules.
 2. **Check what already exists** in the project — existing
    components, the app's window structure, naming conventions, and
-   any design notes (`DESIGN.md`, `docs/ui/*`). Don't fork the
+   any design notes (`docs/DESIGN.md`, `docs/ui/*`). Don't fork the
    visual language inside one app.
 3. **State the user task in one sentence** before touching widgets.
    "User adds a new TOTP entry by scanning a QR code or pasting an

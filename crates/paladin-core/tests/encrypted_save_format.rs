@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Regular-save format invariants for encrypted vaults
-// (DESIGN.md §4.3 + §4.4).
+// (docs/DESIGN.md §4.3 + §4.4).
 //
 // Pin the on-disk encrypted-vault format properties that survive a
 // regular `Vault::save`:
@@ -35,7 +35,7 @@ use paladin_core::{
 use secrecy::SecretString;
 use tempfile::TempDir;
 
-// On-disk header offsets (DESIGN.md §4.3). Mirrored from the tamper
+// On-disk header offsets (docs/DESIGN.md §4.3). Mirrored from the tamper
 // matrix so a refactor of one keeps the other honest.
 const ENCRYPTED_HEADER_LEN: usize = 64;
 const M_KIB_RANGE: std::ops::Range<usize> = 11..15;

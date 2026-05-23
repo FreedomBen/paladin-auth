@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // `policy::auto_lock::IdlePolicy` — auto-lock idle-deadline math
-// shared by the TUI and the GTK GUI (DESIGN.md §6 / §7).
+// shared by the TUI and the GTK GUI (docs/DESIGN.md §6 / §7).
 //
 // Encrypted-only gating: a plaintext vault never arms the auto-lock
 // timer regardless of the user's `auto_lock.enabled` setting, since
@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::storage::VaultSettings;
 
-/// Auto-lock idle-deadline policy (DESIGN.md §4.7 / §6 / §7).
+/// Auto-lock idle-deadline policy (docs/DESIGN.md §4.7 / §6 / §7).
 ///
 /// Stateless: every method takes the inputs it needs, so the same
 /// policy serves both presentation crates without sharing mutable

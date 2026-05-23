@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `paladin export` — write the vault to a file (DESIGN.md §5).
+//! `paladin export` — write the vault to a file (docs/DESIGN.md §5).
 //!
 //! Two modes selected via the (clap-required) mutually-exclusive flags
 //! `--plaintext <path>` (JSON `otpauth://` array) and `--encrypted
@@ -10,7 +10,7 @@
 //! `0600`, and both render the §5 stable success envelope (`{ "written":
 //! ..., "format": "otpauth"|"paladin" }`) on completion.
 //!
-//! Order of operations (locked by `IMPLEMENTATION_PLAN_02_CLI.md`
+//! Order of operations (locked by `docs/IMPLEMENTATION_PLAN_02_CLI.md`
 //! "Vault interaction pattern" / "Encrypted-write KDF flags"):
 //!
 //! 1. Resolve the output mode and source vault path.

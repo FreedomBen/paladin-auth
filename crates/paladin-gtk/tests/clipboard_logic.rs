@@ -11,7 +11,7 @@
 //! here.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/clipboard_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * [`payload_text`] returns the OTP-code bytes unchanged for the
 //!   ASCII-only case and falls back to UTF-8 lossy substitution for

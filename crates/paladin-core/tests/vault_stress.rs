@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase K stress coverage — DESIGN.md §4.7 / §6.
+// Phase K stress coverage — docs/DESIGN.md §4.7 / §6.
 //
 // `vault_lifecycle.rs` covers small-vault save/reopen round-trips and
 // the over-the-16-MiB-cap rejection path. This file pins the

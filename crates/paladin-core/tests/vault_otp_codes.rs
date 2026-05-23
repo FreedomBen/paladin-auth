@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Phase G.7: read-only OTP code projections on `Vault`
-// (DESIGN.md §4.2 / §4.7).
+// (docs/DESIGN.md §4.2 / §4.7).
 //
 // Covers the happy-path semantics of `Vault::hotp_peek` and
 // `Vault::totp_code`: both are `&self`, neither mutates the in-memory

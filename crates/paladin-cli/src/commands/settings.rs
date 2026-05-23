@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! `paladin settings {get,set}` — read or modify vault settings. See
-//! DESIGN.md §5 and `IMPLEMENTATION_PLAN_02_CLI.md` "Settings keys" /
+//! docs/DESIGN.md §5 and `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Settings keys" /
 //! "Vault interaction pattern".
 //!
 //! Order of operations:

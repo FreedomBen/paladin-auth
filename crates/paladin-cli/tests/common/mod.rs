@@ -13,7 +13,7 @@
 //!   centralized here so the PTY tests don't need to copy them again.
 //! * `Pty` — a thin wrapper around `rexpect::PtySession` tailored to
 //!   the §5 prompt strings. Every `[PTY]`-tagged bullet in
-//!   `IMPLEMENTATION_PLAN_02_CLI.md` runs through this harness.
+//!   `docs/IMPLEMENTATION_PLAN_02_CLI.md` runs through this harness.
 //! * `paladin_command_without_tty()` — the no-controlling-tty
 //!   companion to `paladin_command()`. Used by the `[PTY]` bullets
 //!   that assert the `io_error` `operation: "..._prompt"` envelope

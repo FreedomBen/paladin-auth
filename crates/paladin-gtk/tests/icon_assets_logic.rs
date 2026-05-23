@@ -2,7 +2,7 @@
 
 //! Hicolor app-icon install-layout contract tests for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop integration" and
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop integration" and
 //! the Milestone 7 checklist entries:
 //!
 //! * `data/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg`

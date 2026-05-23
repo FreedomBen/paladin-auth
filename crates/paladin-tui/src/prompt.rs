@@ -3,7 +3,7 @@
 //! Shared zeroizing passphrase-input buffer.
 //!
 //! Holds typed characters in a `zeroize::Zeroizing<String>` so the
-//! bytes are wiped on drop. Per `IMPLEMENTATION_PLAN_03_TUI.md`
+//! bytes are wiped on drop. Per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Modals (per §6)": "All passphrase-entry fields (unlock, encrypted
 //! Paladin import, encrypted export, passphrase set/change) ... keep
 //! typed bytes in zeroizing buffers, convert to `secrecy::SecretString`

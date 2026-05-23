@@ -2,7 +2,7 @@
 
 //! Import-modal renderer.
 //!
-//! Per `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md`
+//! Per `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Modals (per §6) > Import": *"Import takes a file path and
 //! optional explicit format, calls `classify_paladin_import_precheck`
 //! before any Paladin bundle passphrase prompt, prompts only for
@@ -32,7 +32,7 @@
 //! On conflict / footer hint) are replaced with the four
 //! `paladin_core::ImportReport` merge totals
 //! (`imported`/`skipped`/`replaced`/`appended`) plus an `Enter or Esc
-//! to close` hint. Per `DESIGN.md` §6's "The modal reports
+//! to close` hint. Per `docs/DESIGN.md` §6's "The modal reports
 //! imported/skipped/replaced/appended/warning counts plus
 //! validation-warning messages rendered through
 //! `paladin_core::format_validation_warning()` in a post-success
@@ -151,7 +151,7 @@ pub fn render(frame: &mut Frame<'_>, modal: &ImportModal, no_color: bool) {
 
 /// Paint the post-success summary view inside the modal's inner area.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Import":
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Import":
 /// *"The modal reports imported/skipped/replaced/appended/warning
 /// counts plus validation-warning messages rendered through
 /// `paladin_core::format_validation_warning()` in a post-success

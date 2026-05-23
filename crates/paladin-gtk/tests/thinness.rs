@@ -2,7 +2,7 @@
 
 //! Thinness contract test for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Thinness contract", crypto,
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Thinness contract", crypto,
 //! storage, import/export, and OTP primitives must never be re-
 //! implemented or imported directly here — they belong in
 //! `paladin-core` (DESIGN §3). This test enforces that contract by
@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 /// Forbidden direct dependencies / source references for `paladin-gtk`.
 ///
-/// See `IMPLEMENTATION_PLAN_04_GTK.md` §"Thinness contract".
+/// See `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Thinness contract".
 const FORBIDDEN: &[&str] = &[
     "argon2",
     "chacha20poly1305",
@@ -68,7 +68,7 @@ fn source_files_have_no_forbidden_crate_references() {
         offenses.is_empty(),
         "paladin-gtk must not reach into crypto / storage / import / \
          OTP primitives directly — move offending logic into paladin-core \
-         per IMPLEMENTATION_PLAN_04_GTK.md §\"Thinness contract\":\n{}",
+         per docs/IMPLEMENTATION_PLAN_04_GTK.md §\"Thinness contract\":\n{}",
         offenses.join("\n"),
     );
 }

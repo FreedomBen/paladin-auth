@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// `domain::settings` — shared dotted settings grammar (DESIGN.md §4.7,
+// `domain::settings` — shared dotted settings grammar (docs/DESIGN.md §4.7,
 // §5).
 //
 // Owns the stable §5 dotted key list, the lowercase ASCII bool /

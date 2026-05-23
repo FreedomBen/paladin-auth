@@ -4,7 +4,7 @@
 //!
 //! Tracks the §"Tests > Pure-logic unit tests >
 //! `tests/effect_ownership_logic.rs`" checklist in
-//! `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Only one vault-touching worker is in flight at a time.
 //! * Mutating controls (row `next`, dialog submit buttons,

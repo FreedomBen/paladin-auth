@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `paladin import` — import accounts from a file (DESIGN.md §5).
+//! `paladin import` — import accounts from a file (docs/DESIGN.md §5).
 //! Auto-detects format when `--format` is omitted; conflict policies
 //! are `skip` (default), `replace`, `append`.
 //!
-//! Order of operations (locked by `IMPLEMENTATION_PLAN_02_CLI.md`):
+//! Order of operations (locked by `docs/IMPLEMENTATION_PLAN_02_CLI.md`):
 //!
 //! 1. Resolve output mode and vault path.
 //! 2. Open the vault via the shared open pipeline (prompts once for an

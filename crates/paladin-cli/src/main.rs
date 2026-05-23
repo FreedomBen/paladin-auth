@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! `paladin` binary entry point: argv pre-scan, parse, dispatch, and
-//! exit-code mapping per `IMPLEMENTATION_PLAN_02_CLI.md` and DESIGN.md
+//! exit-code mapping per `docs/IMPLEMENTATION_PLAN_02_CLI.md` and docs/DESIGN.md
 //! §5.
 //!
 //! Syntax errors and `--help` / `--version` requests are intercepted

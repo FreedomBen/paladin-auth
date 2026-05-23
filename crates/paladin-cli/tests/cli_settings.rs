@@ -3,7 +3,7 @@
 //! End-to-end tests for `paladin settings get|set`. Exercises every §5
 //! dotted key against a plaintext vault — encrypted-vault coverage
 //! requires a scripted `/dev/tty` and lands with the PTY harness called
-//! out in `IMPLEMENTATION_PLAN_02_CLI.md`.
+//! out in `docs/IMPLEMENTATION_PLAN_02_CLI.md`.
 //!
 //! Invariants under test:
 //! * `get` defaults — fresh vault returns the §5 default values.

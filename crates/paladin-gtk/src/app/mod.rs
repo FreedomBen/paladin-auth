@@ -2,7 +2,7 @@
 
 //! `AppModel`-level glue for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" and
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" and
 //! §"Vault interaction", `AppModel` owns the resolved vault path
 //! plus one of the `Missing`, `Locked`, `Unlocked`, `UnlockedBusy`,
 //! or `StartupError` states, and routes startup outcomes from

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Flathub submission contract tests for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
 //! "File the Flathub submission and inherit Flatpak signing from
-//! Flathub" and `DESIGN.md` §11.4 ("Publication. Flathub. Each
+//! Flathub" and `docs/DESIGN.md` §11.4 ("Publication. Flathub. Each
 //! front-end is its own Flathub submission..."), the in-tree
 //! `packaging/flathub/` tree carries the artifacts that get PR'd to
 //! <https://github.com/flathub/flathub> to register the
@@ -22,13 +22,13 @@
 //!   companion, declaring `only-arches: ["x86_64"]` so the initial
 //!   submission scopes the build matrix to the architecture the
 //!   `.deb` / `.rpm` / `AppImage` pipeline already covers
-//!   (DESIGN.md §11.3 / §11.5). Additional arches land in follow-
+//!   (docs/DESIGN.md §11.3 / §11.5). Additional arches land in follow-
 //!   up commits once the corresponding native artifacts ship.
 //! * `packaging/flathub/README.md` — the submission instructions:
 //!   how the PR against `flathub/flathub` is filed, how the
 //!   per-release source pointer + `cargo-sources.json` get stamped
 //!   each release, and how Flatpak signing is inherited from
-//!   Flathub's published key (DESIGN.md §11.4 / §11.6: "Flatpak
+//!   Flathub's published key (docs/DESIGN.md §11.4 / §11.6: "Flatpak
 //!   releases inherit Flathub's signing").
 //!
 //! Tests read every file as plain text — no `serde_yaml` /
@@ -82,7 +82,7 @@ const REQUIRED_FINISH_ARGS: &[&str] = &[
 ];
 
 /// `finish-args:` permissions that MUST NOT appear. `--share=network`
-/// would breach DESIGN.md §3 / §5 "No network, no telemetry"; broad
+/// would breach docs/DESIGN.md §3 / §5 "No network, no telemetry"; broad
 /// `--filesystem=host*` portals would weaken the XDG-scoped vault-
 /// only filesystem posture.
 const FORBIDDEN_FINISH_ARGS: &[&str] = &[
@@ -425,7 +425,7 @@ fn flathub_manifest_does_not_declare_any_forbidden_finish_arg() {
     assert!(
         found.is_empty(),
         "Flathub `finish-args:` must NOT declare any of {FORBIDDEN_FINISH_ARGS:?} \
-         — DESIGN.md §3 / §5 forbid network access and the §11.4 baseline scopes \
+         — docs/DESIGN.md §3 / §5 forbid network access and the §11.4 baseline scopes \
          the filesystem surface strictly to the paladin XDG namespace; \
          found: {found:?}",
     );
@@ -445,7 +445,7 @@ fn flathub_manifest_finish_args_are_exactly_the_milestone_7_baseline_set() {
         "Flathub `finish-args:` must declare ONLY the §11.4 baseline set \
          {REQUIRED_FINISH_ARGS:?}; found unexpected entries: {extras:?}. If a \
          new sandbox permission is genuinely required, update \
-         IMPLEMENTATION_PLAN_04_GTK.md §11.4 + REQUIRED_FINISH_ARGS in this \
+         docs/IMPLEMENTATION_PLAN_04_GTK.md §11.4 + REQUIRED_FINISH_ARGS in this \
          test first.",
     );
 }
@@ -664,7 +664,7 @@ fn flathub_submission_readme_documents_signing_inheritance() {
         lowered.contains("sign"),
         "`packaging/flathub/README.md` must mention signing so the release \
          manager knows that Flatpak signing is inherited from Flathub's \
-         published key (DESIGN.md §11.4 / §11.6) and that \
+         published key (docs/DESIGN.md §11.4 / §11.6) and that \
          `packaging/sign/sign-artifact.sh` is NOT invoked for the Flatpak \
          output; got: {readme:?}",
     );

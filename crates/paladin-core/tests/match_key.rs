@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase G.12 — `account_match_key(&Account)` (DESIGN.md §4.7, §5).
-// Phase G.13 — `account_matches_search(&Account, query)` (DESIGN.md §4.7, §5).
+// Phase G.12 — `account_match_key(&Account)` (docs/DESIGN.md §4.7, §5).
+// Phase G.13 — `account_matches_search(&Account, query)` (docs/DESIGN.md §4.7, §5).
 //
 // Pin the canonical `"{issuer}:{label}"` projection used by all front
 // ends to match accounts. The colon is always present so callers can

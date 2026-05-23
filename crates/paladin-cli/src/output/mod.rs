@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Output mode resolution and renderer entry points. See DESIGN.md §5 and
-//! `IMPLEMENTATION_PLAN_02_CLI.md` "Output".
+//! Output mode resolution and renderer entry points. See docs/DESIGN.md §5 and
+//! `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Output".
 //!
 //! - `Mode::Text { color }` honors `--no-color`, `NO_COLOR`, and TTY
 //!   detection on `stdout`.

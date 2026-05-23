@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase I.9 — `export::encrypted` (DESIGN.md §4.6 / §4.7).
+// Phase I.9 — `export::encrypted` (docs/DESIGN.md §4.6 / §4.7).
 //
 // Pinning:
 //   - Round-trip with `import::paladin` recovers the same accounts.

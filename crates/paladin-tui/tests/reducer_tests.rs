@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! Reducer / state-machine + global-arg tests for `paladin-tui`.
-//! Tracks the "Tests" checklist in `IMPLEMENTATION_PLAN_03_TUI.md`.
+//! Tracks the "Tests" checklist in `docs/IMPLEMENTATION_PLAN_03_TUI.md`.
 
 mod common;
 
@@ -98,7 +98,7 @@ fn locked(path: &str) -> AppState {
 }
 
 // ---------------------------------------------------------------------------
-// Global args (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Global args)
+// Global args (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Global args)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -146,7 +146,7 @@ fn global_args_json_flag_is_rejected_at_parse_time() {
 }
 
 // ---------------------------------------------------------------------------
-// NO_COLOR env resolution (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Global args)
+// NO_COLOR env resolution (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Global args)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -175,7 +175,7 @@ fn no_color_unset_with_no_flag_keeps_color_enabled() {
 
 // ---------------------------------------------------------------------------
 // Vault modes and startup
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vault modes and startup)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vault modes and startup)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -508,8 +508,8 @@ fn build_initial_state_resolver_skipped_when_vault_override_supplied() {
 
 // ---------------------------------------------------------------------------
 // Reducer quit-key behavior
-// (IMPLEMENTATION_PLAN_03_TUI.md > Keybindings (initial v0.1) +
-//  IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Keybindings (initial v0.1) +
+//  docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer)
 //
 // Keybinding rules covered here:
 //   * Ctrl-C quits on any screen.
@@ -665,9 +665,9 @@ fn non_key_input_event_yields_no_effect() {
 
 // ---------------------------------------------------------------------------
 // Unlock passphrase buffer
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI buffers +
-//  IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer +
-//  IMPLEMENTATION_PLAN_03_TUI.md > Focus model "The unlock screen
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI buffers +
+//  docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer +
+//  docs/IMPLEMENTATION_PLAN_03_TUI.md > Focus model "The unlock screen
 //  accepts character input (passphrase) and Enter (submit), and quits
 //  on Esc or Ctrl-C")
 //
@@ -816,7 +816,7 @@ fn enter_with_non_empty_passphrase_emits_unlock_effect_and_clears_buffer() {
 
 #[test]
 fn esc_on_unlock_with_typed_passphrase_zeroizes_buffer_before_quit() {
-    // Bullet (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI
+    // Bullet (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI
     // buffers): "Unlock passphrase buffer zeroizes on submit, cancel,
     // and auto-lock." `Esc` on the Unlock screen is a cancel path —
     // per Keybindings it emits `Effect::Quit`, and the typed bytes
@@ -858,7 +858,7 @@ fn ctrl_c_on_unlock_with_typed_passphrase_zeroizes_buffer_before_quit() {
 #[test]
 fn tick_on_unlock_with_typed_passphrase_preserves_buffer() {
     // Auto-lock fires only from `Unlocked` (per
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)"); the
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)"); the
     // Unlock screen has no idle deadline. A `Tick` on `Unlock`
     // therefore passes through unchanged — the buffer is *not*
     // zeroized by Tick, only by submit / cancel. This nails down
@@ -884,7 +884,7 @@ fn tick_on_unlock_with_typed_passphrase_preserves_buffer() {
 
 // ---------------------------------------------------------------------------
 // Sensitive UI buffers — PassphraseBuffer
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI buffers)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI buffers)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -941,9 +941,9 @@ fn passphrase_buffer_pop_returns_last_char_and_shortens() {
 
 // ---------------------------------------------------------------------------
 // EffectResult::Unlock — outcome of an Effect::Unlock submission
-// (IMPLEMENTATION_PLAN_03_TUI.md > Startup / vault modes +
-//  IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vault modes and startup +
-//  IMPLEMENTATION_PLAN_03_TUI.md > Event loop (per §6) — "Save-bearing
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Startup / vault modes +
+//  docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vault modes and startup +
+//  docs/IMPLEMENTATION_PLAN_03_TUI.md > Event loop (per §6) — "Save-bearing
 //  effects ... send an AppEvent::EffectResult(...) back through the same
 //  mpsc channel.")
 //
@@ -1123,8 +1123,8 @@ fn effect_result_unlock_decrypt_failed_off_unlock_screen_is_discarded() {
 
 // ---------------------------------------------------------------------------
 // Auto-lock — idle_deadline seeded on Unlocked entry
-// (IMPLEMENTATION_PLAN_03_TUI.md > Auto-lock (per §6) +
-//  IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock —
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Auto-lock (per §6) +
+//  docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock —
 //  "idle_deadline is set via paladin_core::policy::auto_lock::
 //   IdlePolicy::next_deadline(now, vault.is_encrypted(), settings)
 //   on Unlocked + enabled + encrypted")
@@ -1400,7 +1400,7 @@ fn decide_state_from_open_plaintext_seeds_no_idle_deadline() {
 
 // ---------------------------------------------------------------------------
 // Initial selection seeding
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — `select_after_filter`
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — `select_after_filter`
 //  preserves selection by `AccountId`; on Unlocked entry the previous
 //  selection is `None`, so the seed equals the first match in the
 //  filtered set. With no search query the filtered set is `Vault::iter()`
@@ -1502,7 +1502,7 @@ fn effect_result_unlock_ok_empty_vault_seeds_no_selection() {
 
 // ---------------------------------------------------------------------------
 // Initial focus seeding
-// (IMPLEMENTATION_PLAN_03_TUI.md > Focus model: "On list-view entry,
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Focus model: "On list-view entry,
 //  focus starts on the account list".)
 // ---------------------------------------------------------------------------
 
@@ -1562,7 +1562,7 @@ fn effect_result_unlock_ok_seeds_focus_on_the_list() {
 
 // ---------------------------------------------------------------------------
 // Modals — open transitions
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — bullet 4)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — bullet 4)
 //
 // Slice covered: pressing `a` on `AppState::Unlocked` while no modal is
 // open sets `modal = Some(Modal::Add)` and emits no effects. When a modal
@@ -1643,7 +1643,7 @@ fn add_modal_default_has_no_inline_error() {
 // ---------------------------------------------------------------------------
 // Add modal — Manual-mode field defaults (non-secret + secret).
 //
-// Per DESIGN §5 manual-add defaults / `IMPLEMENTATION_PLAN_03_TUI.md`
+// Per DESIGN §5 manual-add defaults / `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 // "Modals (per §6)" > Add: *"defaults follow the CLI manual-add
 // defaults in DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP
 // counter 0, icon-hint defaulted from the issuer per §4.1)"*. The
@@ -1727,7 +1727,7 @@ fn add_modal_default_manual_counter_is_zero() {
 
 #[test]
 fn add_modal_default_manual_secret_is_empty() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     // the manual-secret field carries Base32 secret material in a
     // zeroizing buffer. A freshly opened modal starts with an empty
     // buffer so the user begins with a clean slate — mirroring the
@@ -1760,7 +1760,7 @@ fn add_modal_manual_secret_debug_redacts_typed_bytes() {
 
 #[test]
 fn add_modal_default_uri_text_is_empty() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     // *"The URI text field is treated as a secret-bearing buffer …
     // because the URI embeds the Base32 secret."* A freshly opened
     // modal starts with an empty buffer just like the manual-secret
@@ -1819,7 +1819,7 @@ fn opening_add_modal_with_a_seeds_manual_defaults() {
 // ---------------------------------------------------------------------------
 // Add modal — segmented mode selector (`←` / `→`).
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`←` / `→`
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`←` / `→`
 // change segmented selectors"*. The Add modal's three input modes
 // (Manual / URI / QR per DESIGN §6) form one segmented selector;
 // `→` advances Manual → Uri → Qr → Manual and `←` retreats
@@ -1971,7 +1971,7 @@ fn arrows_in_add_modal_do_not_mutate_other_state() {
 // ---------------------------------------------------------------------------
 // Add modal — mode-switch zeroization of secret-bearing buffers.
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
 // *"Switching modes clears the hidden secret-bearing fields for the
 // modes being left: the manual Base32 secret, the URI text, and any
 // pending duplicate/add-anyway state."* This block locks in the
@@ -2264,7 +2264,7 @@ fn add_mode_prev_cycles_manual_to_qr_to_uri_to_manual() {
 
 // ---------------------------------------------------------------------------
 // Add modal — Manual-mode field focus + Tab/Shift-Tab/Ctrl-N/Ctrl-P cycling
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Modal-local
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Modal-local
 //  navigation covers Tab / Shift-Tab, the Ctrl-N / Ctrl-P aliases …"
 //  and "Modals (per §6)": *"`Tab` and `Ctrl-N` move to the next
 //  control, `Shift-Tab` and `Ctrl-P` move to the previous control."*)
@@ -2283,7 +2283,7 @@ fn add_mode_prev_cycles_manual_to_qr_to_uri_to_manual() {
 
 #[test]
 fn add_manual_focus_default_is_label() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": focus
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": focus
     // starts on the first field so the visual top-down reading order
     // matches the keyboard entry point. `AddManualFocus::default()`
     // is `Label` — the first field in DESIGN §6's order.
@@ -2589,7 +2589,7 @@ fn manual_focus_survives_round_trip_through_uri_mode() {
 
 #[test]
 fn char_in_add_modal_uri_mode_appends_to_uri_text() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     // Uri mode collects an `otpauth://` URI in a single text buffer.
     // A printable character (no Ctrl/Alt modifier) typed while in
     // Uri mode appends to the modal-local `uri_text` buffer.
@@ -2683,7 +2683,7 @@ fn ctrl_modified_char_in_add_modal_uri_mode_does_not_append() {
 
 #[test]
 fn char_in_add_modal_manual_mode_label_focus_appends_to_label() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     // Manual mode collects a label as the first focused field. A
     // printable character (no Ctrl/Alt modifier) typed while the
     // label is focused appends to the modal-local `label` buffer.
@@ -2776,7 +2776,7 @@ fn ctrl_modified_char_in_add_modal_manual_mode_label_focus_does_not_append() {
 
 #[test]
 fn char_in_add_modal_manual_mode_issuer_focus_appends_to_issuer() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     // Manual mode collects an issuer as the second focused field. A
     // printable character (no Ctrl/Alt modifier) typed while the
     // issuer is focused appends to the modal-local `issuer` buffer
@@ -2887,7 +2887,7 @@ fn ctrl_modified_char_in_add_modal_manual_mode_issuer_focus_does_not_append() {
 
 #[test]
 fn char_in_add_modal_manual_mode_secret_focus_appends_to_manual_secret() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     // Manual mode collects the Base32 secret as the third focused
     // field. A printable character (no Ctrl/Alt modifier) typed while
     // the secret is focused appends to the modal-local
@@ -3016,7 +3016,7 @@ fn ctrl_modified_char_in_add_modal_manual_mode_secret_focus_does_not_append() {
 
 #[test]
 fn char_in_add_modal_manual_mode_icon_hint_focus_appends_to_icon_hint_text() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     // Manual mode collects an optional icon-hint free-form token as
     // the eighth (final) focused field. A printable character (no
     // Ctrl/Alt modifier) typed while the icon-hint is focused appends
@@ -3203,7 +3203,7 @@ fn add_modal_focused_on_algorithm(tmp: &tempfile::TempDir) -> AppState {
 
 #[test]
 fn right_in_add_modal_manual_mode_algorithm_focus_cycles_forward_with_wrap() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
     // *"selectors and spinners cycled by `←` / `→` / `↑` / `↓`"*.
     // Algorithm is a three-valued segmented selector (Sha1 / Sha256 /
     // Sha512); `→` advances forward and wraps after Sha512 so the
@@ -3370,7 +3370,7 @@ fn add_modal_focused_on_digits(tmp: &tempfile::TempDir) -> AppState {
 
 #[test]
 fn right_in_add_modal_manual_mode_digits_focus_cycles_forward_with_wrap() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
     // *"selectors and spinners cycled by `←` / `→` / `↑` / `↓`"*.
     // Digits is a three-valued segmented selector (6 / 7 / 8 per
     // `DIGITS_MIN`..=`DIGITS_MAX`); `→` advances forward and wraps
@@ -3497,7 +3497,7 @@ fn add_modal_focused_on_kind(tmp: &tempfile::TempDir) -> AppState {
 
 #[test]
 fn right_in_add_modal_manual_mode_kind_focus_toggles_totp_hotp_totp_with_wrap() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
     // *"selectors and spinners cycled by `←` / `→` / `↑` / `↓`"*.
     // Kind is a two-valued segmented selector (Totp / Hotp); `→`
     // toggles between them, wrapping after each press. The mode
@@ -3663,7 +3663,7 @@ fn add_modal_focused_on_period_or_counter_hotp(tmp: &tempfile::TempDir) -> AppSt
 
 #[test]
 fn up_on_period_focus_with_totp_increments_period_secs_by_one() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
     // *"↑ / ↓ adjust spinners"*. PeriodOrCounter is the Manual-mode
     // numeric spinner; when kind == Totp it binds to `period_secs`.
     // `↑` increments by 1 (the validation granule per
@@ -3883,7 +3883,7 @@ fn arrows_on_digits_focus_do_not_leak_into_other_fields() {
 
 // ---------------------------------------------------------------------------
 // Add modal Manual-mode Enter submit
-// (IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6) > Add: "Manual
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6) > Add: "Manual
 //  entries route through `paladin_core::validate_manual(input,
 //  submit_time)`." The reducer slice emits `Effect::Add` carrying the
 //  form fields; the executor handles `validate_manual` +
@@ -4002,7 +4002,7 @@ fn enter_in_add_modal_manual_mode_emits_effect_add_with_typed_fields() {
 
 #[test]
 fn enter_in_add_modal_manual_mode_consumes_manual_secret_buffer() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
     // *"All passphrase-entry fields ... and the Add modal's
     // secret-bearing fields ... keep typed bytes in zeroizing
     // buffers, convert to `secrecy::SecretString` only for core
@@ -4123,7 +4123,7 @@ fn enter_in_add_modal_qr_mode_emits_add_from_clipboard_qr_effect() {
     // the executor can read the live clipboard image, validate
     // `width * height * 4` against `paladin_core::QR_RGBA_MAX_BYTES`,
     // and call `paladin_core::import::qr_image_bytes` per
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add. The
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add. The
     // path snapshot mirrors `Effect::AddFromUri` so a stale effect
     // emitted before an auto-lock or vault switch is dropped by the
     // executor.
@@ -4311,7 +4311,7 @@ fn assert_key_opens_modal(event: AppEvent, expected: &Modal) {
 /// Like [`assert_key_opens_modal`] but seeds an account into the vault
 /// first so the resulting `selected` is `Some(_)`. Used by the
 /// selection-gated openers (`r` / `R`) per the
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model" rule: with no
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Focus model" rule: with no
 /// selection those keys surface the "no account selected"
 /// status-line error instead of opening the modal.
 fn assert_selection_gated_key_opens_modal(event: AppEvent, expected: &Modal) {
@@ -4388,7 +4388,7 @@ fn pressing_lowercase_r_on_unlocked_with_no_modal_open_opens_remove_modal() {
 
 #[test]
 fn pressing_r_opens_remove_modal_prepopulated_with_selected_account_id() {
-    // Per IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Remove:
+    // Per docs/IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Remove:
     // a confirmation gate for removing the selected account. The
     // reducer snapshots the selected account id at modal-open time so
     // a subsequent selection / search change does not redirect the
@@ -4468,7 +4468,7 @@ fn pressing_shift_r_without_modifier_byte_still_opens_rename_modal() {
 
 #[test]
 fn pressing_shift_r_opens_rename_modal_prepopulated_with_selected_label() {
-    // Per IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Rename:
+    // Per docs/IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Rename:
     // "single text field pre-populated with the selected account's
     // current label." The reducer snapshots the selected account's
     // id and label at modal-open time so a subsequent selection /
@@ -4527,7 +4527,7 @@ fn pressing_shift_r_opens_rename_modal_prepopulated_with_selected_label() {
 
 // ---------------------------------------------------------------------------
 // Rename modal — text editing, Enter submit, validation
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Rename modal)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Rename modal)
 //
 // Slice covered: while `Modal::Rename` is open, bare-letter Char keys
 // append to `draft`; Backspace pops; Enter validates via
@@ -4689,7 +4689,7 @@ fn rename_modal_enter_with_valid_draft_emits_rename_effect() {
 
 #[test]
 fn rename_modal_enter_with_same_label_still_emits_rename_effect() {
-    // Per IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Rename:
+    // Per docs/IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Rename:
     // "Same-label renames still call `Vault::rename`, save, and bump
     // `updated_at`, matching the CLI." The reducer must not short-
     // circuit when the trimmed draft equals the current label —
@@ -4843,7 +4843,7 @@ fn rename_modal_space_appends_to_draft() {
 
 // ---------------------------------------------------------------------------
 // Remove modal — Enter submit
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Remove modal; Modals (per
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Remove modal; Modals (per
 //  §6) > Remove: *"confirmation modal. On confirm, wraps
 //  `Vault::remove` in `Vault::mutate_and_save`."*)
 //
@@ -5021,7 +5021,7 @@ fn remove_modal_right_arrow_is_silent_noop() {
 
 // ---------------------------------------------------------------------------
 // Remove modal — EffectResult::Remove handling
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Remove modal — save-error
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Remove modal — save-error
 //  rollback and durability-unconfirmed bullets; "Effect errors" >
 //  "Add / remove / rename / settings saves" rule.)
 //
@@ -5333,7 +5333,7 @@ fn effect_result_remove_with_mismatched_account_id_is_discarded() {
 
 // ---------------------------------------------------------------------------
 // Rename modal — EffectResult::Rename handling
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Rename modal — save-error
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Rename modal — save-error
 //  rollback and durability-unconfirmed bullets; "Effect errors" >
 //  "Add / remove / rename / settings saves" rule.)
 //
@@ -5654,7 +5654,7 @@ fn pressing_s_on_unlocked_with_no_modal_open_opens_settings_modal() {
 
 #[test]
 fn pressing_s_opens_settings_modal_prepopulated_with_vault_config() {
-    // Per IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Settings:
+    // Per docs/IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Settings:
     // *"toggles for `auto_lock.enabled` and `clipboard.clear_enabled`,
     // spinners for `auto_lock.timeout_secs` and `clipboard.clear_secs`.
     // ... The modal accumulates pending edits in modal-local state and
@@ -5730,7 +5730,7 @@ fn pressing_s_opens_settings_modal_prepopulated_with_vault_config() {
 
 // ---------------------------------------------------------------------------
 // Settings modal — field focus + Tab/Shift-Tab/Ctrl-N/Ctrl-P cycling
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Modal-local
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Modal-local
 //  navigation covers Tab / Shift-Tab, the Ctrl-N / Ctrl-P aliases …")
 //
 // The Settings modal traps Tab / Shift-Tab and their modal-LOCAL
@@ -5769,7 +5769,7 @@ fn settings_modal_ref(state: &AppState) -> &SettingsModal {
 
 #[test]
 fn settings_modal_opens_with_default_focus_on_auto_lock_enabled() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": focus
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": focus
     // starts on the first field so the visual top-down reading order
     // matches the keyboard entry point. `SettingsFocus::default()`
     // is `AutoLockEnabled`.
@@ -5945,7 +5945,7 @@ fn ctrl_n_in_settings_modal_does_not_flip_top_level_focus() {
 
 // ---------------------------------------------------------------------------
 // Settings modal — Space toggles the focused boolean field
-// (IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6): *"`Space` toggles
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6): *"`Space` toggles
 //  the focused checkbox / toggle."* The two boolean fields are
 //  `auto_lock.enabled` and `clipboard.clear_enabled`; on the two
 //  spinner fields, Space is a silent no-op so the modal-trap contract
@@ -6144,7 +6144,7 @@ fn space_on_settings_round_trips_boolean_on_repeated_presses() {
 
 // ---------------------------------------------------------------------------
 // Settings modal — ↑/↓ adjusts the focused spinner
-// (IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6): *"`↑` / `↓`
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6): *"`↑` / `↓`
 //  adjust spinners … The spinners clamp to the shared core bounds."*
 //  Step size matches the field's MIN granule:
 //  `auto_lock.timeout_secs` steps by `AUTO_LOCK_SECS_MIN = 30`;
@@ -6457,7 +6457,7 @@ fn arrow_on_settings_modal_does_not_mutate_vault_settings() {
 
 // ---------------------------------------------------------------------------
 // Settings modal — Ctrl-N / Ctrl-P from a spinner-focused field
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Vim-style
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Vim-style
 //  navigation": *"`Ctrl-N` / `Ctrl-P` inside modals do not override
 //  `↑` / `↓` spinner adjustments — lands alongside the spinner
 //  payload (Settings)."*
@@ -6639,7 +6639,7 @@ fn ctrl_p_on_clipboard_clear_secs_spinner_focus_retreats_focus_without_changing_
 
 // ---------------------------------------------------------------------------
 // Settings modal — Confirm / Esc / pending-edit buffering + save outcomes
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Settings modal":
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Settings modal":
 //  pending edits buffered, Esc discards, Confirm runs every changed
 //  setter inside one Vault::mutate_and_save, save-error rollback,
 //  durability-unconfirmed surfacing, no-change Confirm closes without
@@ -6753,7 +6753,7 @@ fn settings_snapshot(state: &AppState) -> (bool, u32, bool, u32) {
 
 #[test]
 fn settings_modal_space_and_arrow_edits_buffer_pending_until_confirm() {
-    // Per IMPLEMENTATION_PLAN_03_TUI.md > Settings modal:
+    // Per docs/IMPLEMENTATION_PLAN_03_TUI.md > Settings modal:
     // "Pending edits are buffered until Confirm." Multiple
     // interleaved Tab / Space / ↑ presses must update the modal's
     // pending fields but never call any `Vault::set_*` setter — the
@@ -6801,7 +6801,7 @@ fn settings_modal_space_and_arrow_edits_buffer_pending_until_confirm() {
 
 #[test]
 fn settings_modal_esc_discards_pending_edits_without_invoking_save() {
-    // Per IMPLEMENTATION_PLAN_03_TUI.md > Settings modal:
+    // Per docs/IMPLEMENTATION_PLAN_03_TUI.md > Settings modal:
     // "`Esc` discards pending edits without invoking setters or save."
     // The reducer's Esc handler clears the modal slot; pending values
     // drop with the discarded `SettingsModal` and no effect is
@@ -6835,7 +6835,7 @@ fn settings_modal_esc_discards_pending_edits_without_invoking_save() {
 
 #[test]
 fn settings_modal_enter_with_no_changes_closes_modal_without_emitting_effect() {
-    // Per IMPLEMENTATION_PLAN_03_TUI.md > Settings modal:
+    // Per docs/IMPLEMENTATION_PLAN_03_TUI.md > Settings modal:
     // "Confirm with no changes closes the modal without invoking
     // save." The reducer diffs pending vs live and skips the effect
     // when the diff is empty.
@@ -6863,7 +6863,7 @@ fn settings_modal_enter_with_no_changes_closes_modal_without_emitting_effect() {
 
 #[test]
 fn settings_modal_enter_with_changes_emits_apply_settings_effect_with_diff_patches() {
-    // Per IMPLEMENTATION_PLAN_03_TUI.md > Settings modal: "Confirm
+    // Per docs/IMPLEMENTATION_PLAN_03_TUI.md > Settings modal: "Confirm
     // runs every changed setter inside one `Vault::mutate_and_save`
     // transaction." The reducer diffs the modal's pending fields
     // against the live `VaultSettings` at Confirm time and emits
@@ -7243,7 +7243,7 @@ fn effect_result_settings_on_non_settings_modal_is_discarded() {
 
 // ---------------------------------------------------------------------------
 // Modals — close transitions
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — bullet 4,
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — bullet 4,
 //  Keybindings table: "Esc — Close modal / clear search …")
 //
 // Slice covered: pressing `Esc` on `AppState::Unlocked` with an open
@@ -7351,7 +7351,7 @@ fn pressing_esc_on_unlocked_with_no_modal_open_is_passthrough_no_op() {
 
 // ---------------------------------------------------------------------------
 // `q` quits Unlocked when no modal is open
-// (IMPLEMENTATION_PLAN_03_TUI.md > Keybindings: "q — Quit from list,
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Keybindings: "q — Quit from list,
 //  create-vault, and startup-error screens; text input in text fields")
 //
 // Slice covered: pressing `q` on `AppState::Unlocked` with no open modal
@@ -7430,7 +7430,7 @@ fn pressing_ctrl_q_on_unlocked_does_not_quit() {
 
 // ---------------------------------------------------------------------------
 // List selection navigation — `↑` / `↓` and the vim `j` / `k` mirrors
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer:
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer:
 //   "Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
 //    `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and
 //    `Home` / `End`."
@@ -7909,7 +7909,7 @@ fn pressing_k_with_empty_vault_is_silent_no_op() {
 // ---------------------------------------------------------------------------
 // `Home` / `End` — jump-to-first / jump-to-last list selection (Unlocked).
 //
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer:
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer:
 //   "Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
 //    `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and
 //    `Home` / `End`.")
@@ -8201,7 +8201,7 @@ fn pressing_ctrl_end_does_not_move_selection() {
 // ---------------------------------------------------------------------------
 // Vim `G` — mirror of `End` (jump-to-last list selection on Unlocked).
 //
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation:
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation:
 //   "`G` mirrors `End`.")
 //
 // Slice covered: bare upper-case `G` (Shift+g — crossterm reports the
@@ -8424,7 +8424,7 @@ fn pressing_lowercase_g_on_unlocked_does_not_move_selection() {
 // ---------------------------------------------------------------------------
 // `gg` two-press chord — vim mirror of `Home` (jump-to-first).
 //
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation:
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation:
 //   "`gg` two-press chord jumps to the first row of the filtered set."
 //  + "Pending-leader chord state is held by the reducer, committed on
 //    the matching second press, and cleared by any non-matching key,
@@ -8819,7 +8819,7 @@ fn tick_between_g_presses_preserves_pending_chord_leader() {
 // ---------------------------------------------------------------------------
 // `PgUp` / `PgDn` — page-up / page-down list selection by `viewport_height`.
 //
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer:
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer:
 //   "Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
 //    `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and
 //    `Home` / `End`."
@@ -9227,7 +9227,7 @@ fn pressing_page_down_clears_pending_chord_leader() {
 
 // ---------------------------------------------------------------------------
 // Vim-style navigation: Ctrl-F / Ctrl-B mirror PgDn / PgUp
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -9608,7 +9608,7 @@ fn pressing_ctrl_b_clears_pending_chord_leader() {
 
 // ---------------------------------------------------------------------------
 // Vim-style navigation: Ctrl-U / Ctrl-D half-page up / down
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation; per
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation; per
 // Layout §6, half-page = viewport_height / 2 rows, clamped at head/tail)
 // ---------------------------------------------------------------------------
 
@@ -10125,7 +10125,7 @@ fn pressing_ctrl_u_clears_pending_chord_leader() {
 // `zz` two-press chord — vim recenter (place selected row in the
 // middle of the viewport).
 //
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation:
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation:
 //   "`zz` two-press chord recenters the viewport on the selected row."
 //  + "Pending-leader chord state is held by the reducer, committed on
 //    the matching second press, and cleared by any non-matching key,
@@ -10658,7 +10658,7 @@ fn tick_between_z_presses_preserves_pending_chord_leader() {
 // ---------------------------------------------------------------------------
 // `/` — focus the search bar.
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": `/` from list focus
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": `/` from list focus
 // transitions `focus` from `Focus::List` to `Focus::Search`. Selection,
 // search_query, viewport, and modal state are untouched. A modal traps
 // focus, so `/` with a modal open is a no-op. `/` also clears any
@@ -10849,7 +10849,7 @@ fn pressing_slash_after_z_clears_chord_and_focuses_search() {
 // ---------------------------------------------------------------------------
 // `Esc` from search focus — clear query and return focus to the list.
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model":
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Focus model":
 //   "`Esc` clears the search query and returns focus to the list; on the
 //    list, `Esc` only clears pending vim chord state and is otherwise a
 //    no-op."
@@ -10993,14 +10993,14 @@ fn pressing_esc_on_unlocked_with_search_focus_and_modal_open_closes_modal_only()
 // ---------------------------------------------------------------------------
 // Typing character input while Focus::Search.
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model":
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Focus model":
 //   "Other keys, including the action keys ... and the bare-letter vim
 //    navigation keys `j` / `k` / `g` / `G` / `z`, the search-focus key
 //    `/`, and the quit key `q`, are routed to the search field as
 //    character input while it has focus".
 //
 // On every search-query change, the list selection is recomputed via
-// `paladin_core::select_after_filter` (DESIGN.md §6 / §7): preserve
+// `paladin_core::select_after_filter` (docs/DESIGN.md §6 / §7): preserve
 // `prev` if still in the filtered set, otherwise pick the first match,
 // or `None` if the filtered set is empty.
 //
@@ -11192,7 +11192,7 @@ fn typing_capital_char_while_focus_search_appends_uppercase() {
 // ---------------------------------------------------------------------------
 // Bare-letter vim keys (`j`, `k`, `g`, `G`, `z`) are consumed by the
 // search field as text input and never trigger chord state from the
-// search field. Per `IMPLEMENTATION_PLAN_03_TUI.md` > Tests > Vim-style
+// search field. Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` > Tests > Vim-style
 // navigation. The `g` and `G` cases are covered above by the generic
 // bare-letter tests; the `j`, `k`, `z` cases below close the explicit
 // regression guards. `z` is the regression-critical one because it is
@@ -11498,7 +11498,7 @@ fn typing_ctrl_modified_char_while_focus_search_does_not_append_to_query() {
 
 // ---------------------------------------------------------------------------
 // Search-focus pass-through routes navigation keys to the list (per
-// `IMPLEMENTATION_PLAN_03_TUI.md` > Tests > Vim-style navigation:
+// `docs/IMPLEMENTATION_PLAN_03_TUI.md` > Tests > Vim-style navigation:
 // "Search-focus pass-through routes `PgUp` / `PgDn` / `Home` / `End`
 //  / `Ctrl-B` / `Ctrl-F` / `Ctrl-D` / `Ctrl-U` to the list before
 //  `tui-input` sees them.")
@@ -11860,7 +11860,7 @@ fn pressing_esc_on_unlocked_with_list_focus_does_not_clear_search_query() {
 
 // ---------------------------------------------------------------------------
 // Search filter narrows the visible list in place (per
-// `IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer > "Search filter narrows
+// `docs/IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer > "Search filter narrows
 // the visible list in place"). With a non-empty `search_query`, list
 // navigation must walk the filtered insertion-order set, not `Vault::iter()`.
 // ---------------------------------------------------------------------------
@@ -12194,7 +12194,7 @@ fn pressing_gg_jumps_to_first_of_filtered_list() {
 
 // ---------------------------------------------------------------------------
 // HOTP `n` triggers a `HotpAdvance` effect (per
-// `IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer > "HOTP `n` triggers a
+// `docs/IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer > "HOTP `n` triggers a
 // `HotpAdvance` effect"). Pressing `n` on Unlocked with an HOTP account
 // selected emits `Effect::HotpAdvance { path, account_id }`. The reducer
 // does not mutate `hotp_reveal` — only `EffectResult::HotpAdvance` may do
@@ -12283,7 +12283,7 @@ fn pressing_n_with_totp_account_selected_emits_no_effect() {
 #[test]
 fn pressing_n_with_no_selection_emits_no_effect() {
     // Empty vault / empty filtered set: `n` emits no effect and (per
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model") surfaces the
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Focus model") surfaces the
     // "no account selected" status-line error. The status-line side
     // of the contract is asserted separately in
     // `pressing_n_with_no_selection_sets_no_account_selected_status_line`.
@@ -12346,7 +12346,7 @@ fn pressing_n_with_modal_open_emits_no_effect() {
 
 // ---------------------------------------------------------------------------
 // Selection-gated action keys with `selected = None`
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet
 //  *"Empty result sets have no selection; action keys that require a
 //  selected row surface the 'no account selected' status-line
 //  error."*; cross-references the "Focus model" rule
@@ -12624,7 +12624,7 @@ fn pressing_page_down_clamps_within_filtered_list() {
 
 // ---------------------------------------------------------------------------
 // Empty filtered set: every list-navigation key including the chords
-// is a silent no-op. Per `IMPLEMENTATION_PLAN_03_TUI.md` > Tests >
+// is a silent no-op. Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` > Tests >
 // Vim-style navigation > "Empty filtered set: every list-navigation
 // key including the chords is a silent no-op."
 //
@@ -12854,7 +12854,7 @@ fn pressing_zz_chord_on_empty_filtered_set_is_silent_no_op() {
 // `Tab` / `Shift-Tab` — cycle focus between the search bar and the
 // account list (Unlocked).
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
 //   "`Tab` `Shift-Tab` — Cycle focus between search bar and list
 //    (preserves active query when leaving search)".
 //
@@ -13186,7 +13186,7 @@ fn pressing_tab_on_unlock_screen_is_silent_no_op() {
 // ---------------------------------------------------------------------------
 // Ctrl-N / Ctrl-P modal-local Tab / Shift-Tab aliases
 //
-// `IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation": *"`Ctrl-N` /
+// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation": *"`Ctrl-N` /
 // `Ctrl-P` inside modals advance / retreat focus the same as `Tab` /
 // `Shift-Tab`, have no effect on a post-success counts panel, and do
 // not override `↑` / `↓` spinner adjustments."*
@@ -13822,7 +13822,7 @@ fn pressing_ctrl_p_at_top_level_search_focus_does_not_flip_focus() {
 // ---------------------------------------------------------------------------
 // Enter on Unlocked copies the selected code
 //
-// `IMPLEMENTATION_PLAN_03_TUI.md` Keybindings table: *"`Enter` — Copy
+// `docs/IMPLEMENTATION_PLAN_03_TUI.md` Keybindings table: *"`Enter` — Copy
 // selected code (TOTP: current; HOTP: visible only)."* The reducer
 // emits `Effect::CopyCode { path, account_id }` when:
 //
@@ -14202,7 +14202,7 @@ fn pressing_enter_on_unlocked_with_focus_search_emits_no_effect() {
 // ---------------------------------------------------------------------------
 // EffectResult is the only path for non-core UI state mutation.
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer:
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer:
 //   "AppEvent::EffectResult(...) is the only path by which effect
 //    outcomes change non-core UI state (status text, reveal windows,
 //    modal close / counts panels, inline errors)."
@@ -14516,7 +14516,7 @@ fn emit_copy_code_effect_for_hotp_preserves_status_line_and_reveal() {
 
 // ---------------------------------------------------------------------------
 // Add modal — EffectResult::Add duplicate detection
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > Manual
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > Manual
 //  duplicate collision is detected through
 //  `Vault::find_duplicate(&validated)` and rejects with the existing
 //  account.)
@@ -14766,7 +14766,7 @@ fn effect_result_add_duplicate_on_non_add_modal_is_discarded() {
 
 // ---------------------------------------------------------------------------
 // Add modal — URI-mode Enter emits Effect::AddFromUri
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > URI
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > URI
 //  duplicate collision is detected through
 //  `Vault::find_duplicate(&validated)` and rejects with the existing
 //  account.)
@@ -14878,7 +14878,7 @@ fn enter_in_uri_mode_with_empty_buffer_still_emits_effect_to_surface_parse_error
 
 // ---------------------------------------------------------------------------
 // Add modal — "add anyway" follow-up confirmation
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > "The follow-up
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > "The follow-up
 //  'add anyway' confirmation inserts the pending validated account on
 //  the duplicate-allowed path with a fresh ID.")
 //
@@ -15111,7 +15111,7 @@ fn effect_result_add_ok_closes_modal() {
 
 #[test]
 fn effect_result_add_ok_sets_status_line_confirmation_with_display_label() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"manual
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"manual
     // Add, URI Add, Remove, Rename, Export, Passphrase, and Settings
     // close the modal and publish a status-line confirmation."* The
     // wording matches the CLI's `Added Acme:alice.` idiom — built
@@ -15175,7 +15175,7 @@ fn effect_result_add_ok_sets_status_line_confirmation_with_display_label() {
 
 #[test]
 fn effect_result_add_ok_includes_validation_warning_text_in_confirmation() {
-    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     // *"Validation warnings are rendered with
     // `paladin_core::format_validation_warning()` and do not block
     // creation: manual / URI additions include them in the status-line
@@ -15312,7 +15312,7 @@ fn effect_result_add_ok_joins_multiple_validation_warnings_with_separator() {
 
 // ---------------------------------------------------------------------------
 // Add modal — pre-commit save rollback
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Pre-commit save rollback":
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Pre-commit save rollback":
 //  *"Add modal `save_not_committed` leaves `Vault::iter()` matching
 //  its pre-attempt snapshot and the modal stays open with the typed
 //  inline error; `save_durability_unconfirmed` leaves the new state
@@ -16010,7 +16010,7 @@ fn format_qr_import_failure_import_variant_delegates_to_render_error_message() {
 
 // ---------------------------------------------------------------------------
 // Add modal — Ctrl-N / Ctrl-P are silent no-ops once the post-success
-// counts panel is showing (IMPLEMENTATION_PLAN_03_TUI.md > Tests >
+// counts panel is showing (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests >
 // Reducer — "Vim-style navigation": *"`Ctrl-N` / `Ctrl-P` inside
 // modals have no effect on a post-success counts panel — lands
 // alongside the counts panel payload (Add / Import / Export)."*
@@ -16194,7 +16194,7 @@ fn ctrl_p_with_counts_panel_set_in_uri_mode_does_not_append_to_uri_text() {
 
 // ---------------------------------------------------------------------------
 // Sensitive UI buffers — `AddModal::manual_secret`
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
 //  "Add modal manual-secret field zeroizes on submit, cancel, modal
 //  close, mode switch, and auto-lock.")
 //
@@ -16403,7 +16403,7 @@ fn tick_past_idle_deadline_with_open_add_modal_typed_manual_secret_locks_and_dro
 
 // ---------------------------------------------------------------------------
 // Sensitive UI buffers — `AddModal::uri_text`
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
 //  "Add URI-mode entry zeroizes on submit, cancel, modal close, mode
 //  switch, and auto-lock.")
 //
@@ -16665,7 +16665,7 @@ fn tick_past_idle_deadline_with_open_add_modal_typed_uri_text_locks_and_drops_bu
 
 // ---------------------------------------------------------------------------
 // Sensitive UI buffers — `AddModal::pending_duplicate_add`
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
 //  "Pending duplicate-add validated accounts zeroize on add-anyway,
 //  cancel, modal close, and auto-lock.")
 //
@@ -16937,7 +16937,7 @@ fn tick_past_idle_deadline_with_open_add_modal_pending_duplicate_add_locks_and_d
 
 // ---------------------------------------------------------------------------
 // Import modal — submit emits Effect::Import via auto-detect routing
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" >
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" >
 //  "Format auto-detect routes through `paladin_core::import::from_file`.")
 //
 // Slice covered: the reducer's Enter handler in `route_import_modal_input`
@@ -17148,7 +17148,7 @@ fn ctrl_modified_char_in_import_modal_does_not_append_to_path_text() {
 // `paladin_core::import::from_file` with the matching forced
 // `ImportFormat`.
 //
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" > "Explicit
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" > "Explicit
 //  format overrides (`otpauth` / `aegis` / `paladin` / `qr`) route
 //  through `paladin_core::import::from_file`.")
 //
@@ -17232,7 +17232,7 @@ fn enter_in_import_modal_with_qr_selector_emits_import_effect_with_some_qr_image
 // ---------------------------------------------------------------------------
 // Import modal — on-conflict policy threads through `Effect::Import.conflict`.
 //
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" > "On-conflict
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" > "On-conflict
 //  policy (`skip` / `replace` / `append`) is forwarded to
 //  `Vault::import_accounts` and reflected in the report counts.")
 //
@@ -17342,7 +17342,7 @@ fn enter_in_import_modal_with_paladin_selector_on_missing_file_emits_import_with
 
 // ---------------------------------------------------------------------------
 // Import modal — `paladin_core::classify_paladin_import_precheck` routing.
-// Covers `IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" bullets:
+// Covers `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" bullets:
 //
 //   - "Pre-prompt Paladin decision routes through
 //     `paladin_core::classify_paladin_import_precheck`, prompting only
@@ -17950,7 +17950,7 @@ fn typed_path_edit_after_reject_clears_error_so_user_sees_retry() {
 // ---------------------------------------------------------------------------
 // Import modal — `EffectResult::Import` Ok / Err handling.
 //
-// Covers `IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" bullets:
+// Covers `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" bullets:
 //
 //   - "Validation warnings are rendered through
 //     `paladin_core::format_validation_warning()`."
@@ -18371,7 +18371,7 @@ fn effect_result_import_err_io_error_renders_inline() {
 
 // ---------------------------------------------------------------------------
 // Import modal — pre-commit save rollback / durability-unconfirmed
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Pre-commit save rollback":
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Pre-commit save rollback":
 //  *"Import modal: same coverage as Add, asserted on `Vault::iter()`."*)
 //
 // Slice covered: the reducer's response to
@@ -18629,7 +18629,7 @@ fn effect_result_import_ok_is_dropped_when_a_different_modal_is_open() {
 // Import modal — `paladin_passphrase` zeroize axes (submit, cancel, modal
 // close, auto-lock).
 //
-// Covers `IMPLEMENTATION_PLAN_03_TUI.md` "Sensitive UI buffers":
+// Covers `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Sensitive UI buffers":
 //
 //   - "Encrypted Paladin import passphrase buffer zeroizes on submit,
 //     cancel, modal close, and auto-lock."
@@ -18876,7 +18876,7 @@ fn tick_past_idle_deadline_with_open_import_modal_typed_paladin_passphrase_locks
 
 // ---------------------------------------------------------------------------
 // Export modal — refused overwrite gate
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Export modal":
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Export modal":
 //  *"Refused overwrite gate rejects without writing."*)
 //
 // Slice covered: the reducer's Enter handler on `Modal::Export`. When
@@ -18885,7 +18885,7 @@ fn tick_past_idle_deadline_with_open_import_modal_typed_paladin_passphrase_locks
 // and the rendered `ValidationError { field: "path", reason:
 // "output_exists" }` lands inline in `ExportModal::error`. Wire
 // parity with the CLI's `refuse_existing_overwrite` gate
-// (`paladin-cli/src/commands/export.rs`, DESIGN.md §5) and the GTK
+// (`paladin-cli/src/commands/export.rs`, docs/DESIGN.md §5) and the GTK
 // `overwrite_gate_needs_reset` flow keeps the user-facing reason
 // stable across all three front-ends — the typed PaladinError flows
 // through `render_error_message` so the wording matches the rest of
@@ -18989,7 +18989,7 @@ fn enter_in_export_modal_with_existing_destination_refuses_without_emitting_expo
 
 // ---------------------------------------------------------------------------
 // Export modal — encrypted twice-confirm passphrase mismatch
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Export modal":
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Export modal":
 //  *"Encrypted export prompts twice and rejects mismatch with
 //  `confirmation_mismatch`."*)
 //
@@ -18999,7 +18999,7 @@ fn enter_in_export_modal_with_existing_destination_refuses_without_emitting_expo
 // refused — no `Effect::Export` is emitted, the modal stays open, and
 // the rendered `InvalidPassphrase { reason: "confirmation_mismatch" }`
 // lands inline in `ExportModal::error`. Wire parity with the CLI's
-// `prompt_new_passphrase` (`paladin-cli/src/prompt.rs`, DESIGN.md §5)
+// `prompt_new_passphrase` (`paladin-cli/src/prompt.rs`, docs/DESIGN.md §5)
 // and the GTK `SubmitRejection::ConfirmationMismatch` keeps the
 // user-facing reason stable across all three front-ends — the typed
 // PaladinError flows through `render_error_message` so the wording
@@ -19111,7 +19111,7 @@ fn enter_in_encrypted_export_modal_with_mismatched_passphrases_refuses_with_conf
 
 // ---------------------------------------------------------------------------
 // Export modal — encrypted twice-confirm zero-length passphrase rejection
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Export modal":
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Export modal":
 //  *"Encrypted export rejects empty new passphrase with `zero_length`."*)
 //
 // Slice covered: the reducer's Enter handler on `Modal::Export` when
@@ -19122,7 +19122,7 @@ fn enter_in_encrypted_export_modal_with_mismatched_passphrases_refuses_with_conf
 // stays open, and the rendered
 // `InvalidPassphrase { reason: "zero_length" }` lands inline on
 // `ExportModal::error`. Wire parity with the CLI's
-// `prompt_new_passphrase` (`paladin-cli/src/prompt.rs`, DESIGN.md §5)
+// `prompt_new_passphrase` (`paladin-cli/src/prompt.rs`, docs/DESIGN.md §5)
 // and the GTK `SubmitRejection::ZeroLength` keeps the user-facing
 // reason stable across all three front-ends. Gate ordering matches
 // the CLI / GTK: mismatch first, then zero_length, so an empty-vs-
@@ -19229,7 +19229,7 @@ fn enter_in_encrypted_export_modal_with_empty_new_passphrase_refuses_with_zero_l
 
 // ---------------------------------------------------------------------------
 // Export modal — plaintext unencrypted-secrets confirmation gate
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Export modal":
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Export modal":
 //  *"Plaintext export requires the unencrypted-secrets confirmation
 //  before writing."*)
 //
@@ -19240,7 +19240,7 @@ fn enter_in_encrypted_export_modal_with_empty_new_passphrase_refuses_with_zero_l
 // modal stays open, and `paladin_core::format_plaintext_export_warning()`
 // lands verbatim on `ExportModal::error` so the wording matches the
 // CLI's stderr advisory (`paladin-cli/src/commands/export.rs`,
-// DESIGN.md §4.6 / §6) and the GTK `ExportDialog`'s
+// docs/DESIGN.md §4.6 / §6) and the GTK `ExportDialog`'s
 // `plaintext_warning_body()` checkbox label.
 //
 // Toggling `plaintext_confirmed` (Space on the warning row) lands in
@@ -19348,7 +19348,7 @@ fn enter_in_plaintext_export_modal_without_confirmation_refuses_with_plaintext_w
 // ---------------------------------------------------------------------------
 // Export reducer EffectResult Err arms — writer / save errors surface inline
 // on `ExportModal::error` and the modal stays open with the vault untouched.
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Export modal > "Writer io_error,
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Export modal > "Writer io_error,
 //  save_not_committed, and save_durability_unconfirmed surface inline and the
 //  modal stays open." + "Export performs no Vault::save and leaves vault
 //  state unchanged across success and failure.")
@@ -19567,7 +19567,7 @@ fn effect_result_export_err_save_durability_unconfirmed_surfaces_inline_and_keep
 fn effect_result_export_ok_leaves_vault_iter_unchanged() {
     // Export-success path: even when `Effect::Export` returns `Ok(())`
     // the reducer must leave `Vault::iter()` untouched. Per
-    // IMPLEMENTATION_PLAN_03_TUI.md "Effect errors" > Export:
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md "Effect errors" > Export:
     // *"Export does not mutate the vault, so save-error rollback does
     // not apply."* The non-mutation invariant applies symmetrically on
     // Ok — the success arm carries no writeback into the live vault.
@@ -19592,7 +19592,7 @@ fn effect_result_export_ok_leaves_vault_iter_unchanged() {
 // Sensitive UI buffers — Encrypted export passphrase buffer zeroizes on
 // submit, cancel, modal close, and auto-lock.
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers":
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers":
 // *"Encrypted export passphrase buffer zeroizes on submit, cancel,
 // modal close, and auto-lock."* The buffers (`new_passphrase`,
 // `confirm_passphrase`) are `PassphraseBuffer`s wrapping
@@ -19604,7 +19604,7 @@ fn effect_result_export_ok_leaves_vault_iter_unchanged() {
 #[test]
 fn enter_in_encrypted_export_modal_with_matching_passphrases_emits_effect_and_zeroizes_passphrase_buffers(
 ) {
-    // Submit axis. Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // Submit axis. Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
     // *"All passphrase-entry fields ... keep typed bytes in zeroizing
     // buffers, convert to `secrecy::SecretString` only for core calls,
     // and zeroize on submit, cancel, modal close, and auto-lock."*
@@ -19904,7 +19904,7 @@ fn effect_result_export_ok_closes_modal_and_publishes_status_line_confirmation()
     // and wiped `confirm_passphrase` via `PassphraseBuffer::clear` (see
     // `enter_in_encrypted_export_modal_..._zeroizes_passphrase_buffers`),
     // so the in-memory buffers are empty. Per
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"On success
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"On success
     // the modal closes with a status-line confirmation showing the
     // written path."* The Ok arm must drop the `Modal::Export` slot
     // (so the now-empty buffers' `Drop` runs) and publish a
@@ -20048,7 +20048,7 @@ fn tick_past_idle_deadline_with_open_export_modal_typed_passphrases_locks_and_dr
 }
 
 // ---------------------------------------------------------------------------
-// Passphrase modal pre-commit save rollback (IMPLEMENTATION_PLAN_03_TUI.md
+// Passphrase modal pre-commit save rollback (docs/IMPLEMENTATION_PLAN_03_TUI.md
 // L1450).
 //
 // The transition methods (`Vault::set_passphrase` / `change_passphrase` /
@@ -20122,7 +20122,7 @@ fn unlocked_with_encrypted_vault_and_open_passphrase_modal(
 #[test]
 fn effect_result_passphrase_save_not_committed_keeps_modal_open_with_inline_error_and_preserves_is_encrypted(
 ) {
-    // Per DESIGN §4.5 / IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)"
+    // Per DESIGN §4.5 / docs/IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)"
     // > Passphrase: on `save_not_committed`, core's transition method
     // has already rolled back the in-memory mode/key to the
     // pre-attempt state. The TUI surfaces the typed error inline,
@@ -20179,7 +20179,7 @@ fn effect_result_passphrase_save_not_committed_keeps_modal_open_with_inline_erro
 #[test]
 fn effect_result_passphrase_save_durability_unconfirmed_keeps_modal_open_with_inline_error_and_reflects_committed_is_encrypted(
 ) {
-    // Per DESIGN §4.5 / IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)"
+    // Per DESIGN §4.5 / docs/IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)"
     // > Passphrase: on `save_durability_unconfirmed`, core left the
     // new mode/key committed in memory + on disk but parent fsync was
     // uncertain. The TUI surfaces the warning inline, leaves the modal
@@ -20233,7 +20233,7 @@ fn effect_result_passphrase_save_durability_unconfirmed_keeps_modal_open_with_in
 
 // ---------------------------------------------------------------------------
 // Passphrase modal — buffer zeroize: cancel and auto-lock axes
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers" >
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers" >
 //  "Passphrase set / change buffers zeroize on submit, cancel, modal
 //  close, and auto-lock.")
 //
@@ -20428,12 +20428,12 @@ fn tick_past_idle_deadline_with_open_passphrase_modal_typed_buffers_locks_and_dr
 // zero_length validation gates, plus the modal-close-on-success axis
 // for EffectResult::Passphrase Ok.
 //
-// IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers" >
+// docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers" >
 // "Passphrase set / change buffers zeroize on submit, cancel, modal
 // close, and auto-lock." (the cancel + auto-lock axes are above; the
 // submit + modal-close axes are below).
 //
-// IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6) > Passphrase:
+// docs/IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6) > Passphrase:
 // *"three sub-flows mirroring CLI's `passphrase set / change /
 // remove`. ... New passphrases (`set`, `change`) are prompted twice
 // and confirmed; mismatch returns to the modal with an inline

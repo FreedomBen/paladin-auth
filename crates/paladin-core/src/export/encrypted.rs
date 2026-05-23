@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// `export::encrypted` (DESIGN.md §4.6 / §4.7).
+// `export::encrypted` (docs/DESIGN.md §4.6 / §4.7).
 //
 // Produces an encrypted Paladin bundle that is byte-compatible with
 // the on-disk encrypted vault format (so `import::paladin` and

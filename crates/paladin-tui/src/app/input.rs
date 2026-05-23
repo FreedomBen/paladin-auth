@@ -2,7 +2,7 @@
 
 //! Terminal input producer thread.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
 //!
 //! > **Input thread** — `crossterm::event::read()` in a loop, maps to
 //! > `AppEvent::Input(KeyEvent | ResizeEvent | …)`.

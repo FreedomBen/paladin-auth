@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Argon2id key-derivation wrapper (DESIGN.md §4.4).
+// Argon2id key-derivation wrapper (docs/DESIGN.md §4.4).
 //
 // The KDF derives a 32-byte AEAD key from `(passphrase, salt, params)`
 // using Argon2id v1.3 at the cost defined by [`Argon2Params`].
@@ -142,7 +142,7 @@ impl fmt::Debug for EncryptionOptions {
     }
 }
 
-// Test-only Argon2id derivation counter (DESIGN.md §10 / Phase F.13).
+// Test-only Argon2id derivation counter (docs/DESIGN.md §10 / Phase F.13).
 // Every call to `argon2id_derive_key` increments this counter when the
 // `test-fault-injection` cargo feature is enabled, so integration tests
 // can assert the AEAD key cache is hit by saves: a run of `Vault::save`
@@ -163,7 +163,7 @@ mod test_counter {
     }
 }
 
-/// Read the test-only Argon2id derivation counter (DESIGN.md §10 /
+/// Read the test-only Argon2id derivation counter (docs/DESIGN.md §10 /
 /// Phase F.13). Every call to `argon2id_derive_key` since process start
 /// has incremented this counter. Tests should use the *delta* between
 /// reads — never the absolute value — because parallel tests within the

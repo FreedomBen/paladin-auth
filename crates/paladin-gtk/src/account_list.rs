@@ -2,7 +2,7 @@
 
 //! `AccountListComponent` for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `AccountListComponent`, the unlocked view is a `gtk::ListBox`
 //! driven by a `relm4::factory::FactoryVecDeque<AccountRowComponent>`,
 //! built from `paladin_core::AccountSummary` projections (no secret
@@ -144,7 +144,7 @@ pub enum AccountListOutput {
     /// User activated the HOTP row's "next" button. `AppModel`
     /// transitions to `UnlockedBusy { HotpAdvance, .. }` and spawns
     /// the `Vault::hotp_peek` + `Vault::hotp_advance` worker per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     /// `AccountRowComponent`. The reveal-window publication routes
     /// through [`crate::hotp_reveal::apply_advance_outcome`] once
     /// the worker returns.
@@ -155,7 +155,7 @@ pub enum AccountListOutput {
     /// bytes through `gdk::Clipboard::set_text`, and (when the user
     /// has opted in via `clipboard.clear_enabled`) seeds the
     /// pending wipe through [`crate::clipboard_clear::schedule_copy`]
-    /// per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     /// `AccountRowComponent`. Hidden HOTP rows ship a desensitized
     /// button via [`crate::account_row::copy_enabled`], so this
     /// variant never fires before a reveal opens.
@@ -289,7 +289,7 @@ pub struct AccountRowModel {
     /// live `gtk::IconTheme` to pick the row's icon, falling back to
     /// [`crate::icon_resolution::PLACEHOLDER_ICON_NAME`] on `None`,
     /// empty, or unresolved slugs. CLI / TUI ignore this field per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Icons".
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Icons".
     pub icon_hint: Option<String>,
 }
 
@@ -739,7 +739,7 @@ pub struct AccountListComponent {
     /// [`AccountListMsg::SetBusy`]. The component fans the value out
     /// to every row through [`FactoryVecDeque::broadcast`] so each
     /// `AccountRowComponent` applies the busy mask locally per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
     /// ownership". Kept on `self` so subsequent
     /// [`AccountListMsg::Refresh`] can seed new rows' `initial_busy`
     /// without re-asking `AppModel`.
@@ -822,7 +822,7 @@ pub enum AccountListMsg {
     /// Latch the parent `AppModel`'s `AppState::is_busy()` state and
     /// broadcast it to every row so `AccountRowComponent::SetBusy`
     /// dims copy / "next" / kebab while a vault-touching worker is
-    /// in flight per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight
+    /// in flight per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight
     /// effect ownership".
     ///
     /// `AppModel` sends `SetBusy(true)` on entry into

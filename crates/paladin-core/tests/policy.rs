@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// `policy` module behavior (DESIGN.md §6 / §7,
-// IMPLEMENTATION_PLAN_01_CORE.md Phase G.18 / G.19 / G.20).
+// `policy` module behavior (docs/DESIGN.md §6 / §7,
+// docs/IMPLEMENTATION_PLAN_01_CORE.md Phase G.18 / G.19 / G.20).
 //
 // The `policy` module owns the timer math and decision protocols
 // shared by the TUI and the GTK GUI:

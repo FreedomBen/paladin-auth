@@ -2,7 +2,7 @@
 //
 // `import::qr_image` / `import::qr_image_bytes` and the lower-level
 // raw-payload helpers `read_qr_image` / `read_qr_image_bytes`
-// (DESIGN.md §4.6 / §4.7).
+// (docs/DESIGN.md §4.6 / §4.7).
 //
 // The raw helpers return one decoded payload string per detected QR
 // (or an empty `Vec` when the image contains no QRs). The wrapping

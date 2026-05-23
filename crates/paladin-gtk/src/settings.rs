@@ -2,7 +2,7 @@
 
 //! Settings-dialog pure-logic state machine for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `SettingsComponent` and §"Tests > Pure-logic unit tests >
 //! `tests/settings_logic.rs`", the `AdwPreferencesDialog` exposes
 //! the §4.7 [`paladin_core::VaultSettings`] fields as toggles and
@@ -348,7 +348,7 @@ pub fn format_settings_dialog_title() -> &'static str {
 }
 
 /// Title rendered on the `AdwPreferencesGroup` that hosts the
-/// auto-lock toggle + spinner per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// auto-lock toggle + spinner per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"libadwaita usage" > "Preferences".
 ///
 /// The `SettingsComponent` organizes the
@@ -373,7 +373,7 @@ pub fn format_settings_dialog_auto_lock_group_title() -> &'static str {
 
 /// Title rendered on the `AdwPreferencesGroup` that hosts the
 /// clipboard-clear toggle + spinner per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences".
 ///
 /// Sibling of [`format_settings_dialog_auto_lock_group_title`]
@@ -399,7 +399,7 @@ pub fn format_settings_dialog_clipboard_clear_group_title() -> &'static str {
 }
 
 /// Title rendered on the auto-lock `AdwSwitchRow` per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences". The `SettingsComponent` uses idiomatic
 /// libadwaita rows — `AdwSwitchRow` for the toggle controlling
 /// [`paladin_core::VaultSettings::auto_lock_enabled`] and
@@ -420,7 +420,7 @@ pub fn format_settings_dialog_auto_lock_enabled_row_title() -> &'static str {
 }
 
 /// Title rendered on the auto-lock `AdwSpinRow` per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Component tree" > `SettingsComponent`.
 /// The spinner controls
 /// [`paladin_core::VaultSettings::auto_lock_secs`], clamps to
@@ -447,7 +447,7 @@ pub fn format_settings_dialog_auto_lock_secs_row_title() -> &'static str {
 }
 
 /// Title rendered on the clipboard-clear `AdwSwitchRow` per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences". Sibling of
 /// [`format_settings_dialog_auto_lock_enabled_row_title`] on
 /// the clipboard side; together they pin both `AdwSwitchRow`
@@ -469,7 +469,7 @@ pub fn format_settings_dialog_clipboard_clear_enabled_row_title() -> &'static st
 }
 
 /// Title rendered on the clipboard-clear `AdwSpinRow` per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Component tree" > `SettingsComponent`.
 /// The spinner controls
 /// [`paladin_core::VaultSettings::clipboard_clear_secs`], clamps
@@ -498,7 +498,7 @@ pub fn format_settings_dialog_clipboard_clear_secs_row_title() -> &'static str {
 
 /// Fixed `(lower, upper, step_increment)` tuple the widget hands
 /// to `gtk::Adjustment::new` for the auto-lock seconds
-/// `AdwSpinRow` per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// `AdwSpinRow` per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"libadwaita usage" > "Preferences" and §"Component tree" >
 /// `SettingsComponent`.
 ///
@@ -531,7 +531,7 @@ pub fn format_settings_dialog_auto_lock_secs_adjustment() -> (f64, f64, f64) {
 
 /// Fixed `(lower, upper, step_increment)` tuple the widget hands
 /// to `gtk::Adjustment::new` for the clipboard-clear seconds
-/// `AdwSpinRow` per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// `AdwSpinRow` per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"libadwaita usage" > "Preferences" and §"Component tree" >
 /// `SettingsComponent`.
 ///
@@ -561,7 +561,7 @@ pub fn format_settings_dialog_clipboard_clear_secs_adjustment() -> (f64, f64, f6
 
 /// State-driven projection of the auto-lock seconds `AdwSpinRow`'s
 /// visible value, surfaced as the `f64` that `AdwSpinRow::set_value`
-/// expects, per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// expects, per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `SettingsComponent` and §"Tests > Pure-logic unit tests >
 /// `tests/settings_logic.rs`".
 ///
@@ -588,7 +588,7 @@ pub fn compose_settings_dialog_auto_lock_secs_value(state: &SettingsState) -> f6
 /// State-driven projection of the clipboard-clear seconds
 /// `AdwSpinRow`'s visible value, surfaced as the `f64` that
 /// `AdwSpinRow::set_value` expects, per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `SettingsComponent`.
 ///
 /// Returns [`SettingsState::visible_clipboard_clear_secs`] cast
@@ -608,7 +608,7 @@ pub fn compose_settings_dialog_clipboard_clear_secs_value(state: &SettingsState)
 
 /// State-driven projection of the auto-lock `AdwSwitchRow`'s
 /// active state, surfaced as the `bool` that `AdwSwitchRow::set_active`
-/// expects, per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree"
+/// expects, per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree"
 /// > `SettingsComponent`.
 ///
 /// Returns `state.committed().auto_lock_enabled()` — toggle
@@ -632,7 +632,7 @@ pub fn compose_settings_dialog_auto_lock_enabled_active(state: &SettingsState) -
 /// State-driven projection of the clipboard-clear
 /// `AdwSwitchRow`'s active state, surfaced as the `bool` that
 /// `AdwSwitchRow::set_active` expects, per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `SettingsComponent`.
 ///
 /// Returns `state.committed().clipboard_clear_enabled()` —
@@ -655,7 +655,7 @@ pub fn compose_settings_dialog_clipboard_clear_enabled_active(state: &SettingsSt
 /// State-driven projection of the auto-lock seconds
 /// `AdwSpinRow`'s sensitivity, surfaced as the `bool` that
 /// `AdwSpinRow::set_sensitive` expects, per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `SettingsComponent`.
 ///
 /// Returns `state.committed().auto_lock_enabled()` — the seconds
@@ -696,7 +696,7 @@ pub fn compose_settings_dialog_auto_lock_enabled_sensitive(state: &SettingsState
 /// State-driven projection of the clipboard-clear seconds
 /// `AdwSpinRow`'s sensitivity, surfaced as the `bool` that
 /// `AdwSpinRow::set_sensitive` expects, per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `SettingsComponent`.
 ///
 /// Returns `state.committed().clipboard_clear_enabled()` — the
@@ -730,7 +730,7 @@ pub fn compose_settings_dialog_clipboard_clear_enabled_sensitive(state: &Setting
 }
 
 /// Toast body rendered by `SettingsComponent` on an accepted
-/// change per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage"
+/// change per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage"
 /// > "Toast surface".
 ///
 /// On a `SaveOutcome::Success` from [`SettingsState::apply_save_result`]
@@ -762,7 +762,7 @@ pub fn format_settings_dialog_saved_toast() -> &'static str {
 /// State-driven projection of the inline subtitle text the
 /// `SettingsComponent` renders beneath the `AdwSwitchRow` /
 /// `AdwSpinRow` identified by `field` per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Tests > Pure-logic unit tests >
 /// `tests/settings_logic.rs`".
 ///
@@ -785,7 +785,7 @@ pub fn format_settings_dialog_saved_toast() -> &'static str {
 ///   affirmative outcome surfaces through
 ///   [`format_settings_dialog_saved_toast`] on the
 ///   `AdwToastOverlay` instead, per
-///   `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+///   `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 ///   "Toast surface".
 /// * `None` (no save attempted yet) → no subtitle for any row.
 ///
@@ -823,7 +823,7 @@ pub fn compose_settings_dialog_inline_subtitle_for_field(
 /// State-driven projection of whether the inline-subtitle
 /// `gtk::Label` beneath the `AdwSwitchRow` / `AdwSpinRow`
 /// identified by `field` is currently revealed per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Tests > Pure-logic unit tests >
 /// `tests/settings_logic.rs`".
 ///
@@ -852,7 +852,7 @@ pub fn compose_settings_dialog_inline_subtitle_revealed_for_field(
 /// State-driven projection of the CSS class the inline-subtitle
 /// `gtk::Label` beneath the `AdwSwitchRow` / `AdwSpinRow`
 /// identified by `field` carries per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Tests > Pure-logic unit tests >
 /// `tests/settings_logic.rs`".
 ///
@@ -942,7 +942,7 @@ pub fn accepted_change_from_setting_patch(patch: &SettingPatch) -> AcceptedChang
 
 /// Fixed `page_increment` value the widget hands to
 /// [`gtk::Adjustment::new`] for both `AdwSpinRow` adjustments per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Component tree" > `SettingsComponent`.
 ///
 /// Returns `10.0` — the conventional 10× step factor relative to
@@ -979,7 +979,7 @@ pub fn format_settings_dialog_spinner_page_increment() -> f64 {
 
 /// Fixed `page_size` value the widget hands to
 /// [`gtk::Adjustment::new`] for both `AdwSpinRow` adjustments per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Component tree" > `SettingsComponent`.
 ///
 /// Returns `0.0` because `AdwSpinRow` surfaces a
@@ -1010,7 +1010,7 @@ pub fn format_settings_dialog_spinner_page_size() -> f64 {
 
 /// Fixed `climb_rate` value the widget hands to
 /// [`adw::SpinRow::new`] for both `AdwSpinRow` constructors per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Component tree" > `SettingsComponent`.
 ///
 /// Returns `1.0` — a flat (non-accelerated) climb rate suited to
@@ -1038,7 +1038,7 @@ pub fn format_settings_dialog_spinner_climb_rate() -> f64 {
 
 /// Fixed `digits` value the widget hands to
 /// [`adw::SpinRow::new`] for both `AdwSpinRow` constructors per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Component tree" > `SettingsComponent`.
 ///
 /// Returns `0` because the §4.7 spinner-edited settings
@@ -1069,7 +1069,7 @@ pub fn format_settings_dialog_spinner_digits() -> u32 {
 
 /// Fixed `bool` the widget passes to
 /// `AdwPreferencesDialog::set_search_enabled` per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Component tree" > `SettingsComponent`.
 ///
 /// Returns `false` — libadwaita defaults this property to `TRUE`
@@ -1103,7 +1103,7 @@ pub fn format_settings_dialog_search_enabled() -> bool {
 
 /// Fixed `bool` the widget passes to `AdwToast::set_use_markup` for
 /// the [`format_settings_dialog_saved_toast`] body per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Toast surface" and §"Component tree" > `SettingsComponent`.
 ///
 /// Returns `false` — `AdwToast::use-markup` defaults to `TRUE`
@@ -1139,7 +1139,7 @@ pub fn format_settings_dialog_saved_toast_use_markup() -> bool {
 
 /// Fixed `u32` count of seconds the
 /// [`format_settings_dialog_saved_toast`] body stays visible on the
-/// `AdwToastOverlay` per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// `AdwToastOverlay` per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"libadwaita usage" > "Toast surface" and §"Component tree" >
 /// `SettingsComponent`.
 ///
@@ -1176,7 +1176,7 @@ pub fn format_settings_dialog_saved_toast_timeout() -> u32 {
 /// Fixed `bool` the widget passes to
 /// [`gtk::prelude::SpinButtonExt::set_wrap`] (via
 /// `adw::SpinRow::set_wrap`) for both `SettingsComponent` spinners
-/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Component tree" > `SettingsComponent`.
 ///
 /// Returns `false` — `gtk::SpinButton::wrap` (surfaced through
@@ -1222,7 +1222,7 @@ pub fn format_settings_dialog_spinner_wrap() -> bool {
 /// Fixed `bool` the widget passes to
 /// [`gtk::prelude::SpinButtonExt::set_numeric`] (via
 /// `adw::SpinRow::set_numeric`) for both `SettingsComponent`
-/// spinners per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// spinners per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"libadwaita usage" > "Preferences" and §"Component tree" >
 /// `SettingsComponent`.
 ///
@@ -1270,7 +1270,7 @@ pub fn format_settings_dialog_spinner_numeric() -> bool {
 /// Fixed `bool` the widget passes to
 /// [`adw::prelude::SpinRowExt::set_snap_to_ticks`] for both
 /// `SettingsComponent` spinners per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Component tree" > `SettingsComponent`.
 ///
 /// Returns `true` — `adw::SpinRow::snap-to-ticks` defaults to
@@ -1315,7 +1315,7 @@ pub fn format_settings_dialog_spinner_snap_to_ticks() -> bool {
 
 /// Fixed [`std::time::Duration`] the widget hands to
 /// [`glib::timeout_add_local`] for the spinner debounce timer per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Preferences" and §"Component tree" > `SettingsComponent`.
 ///
 /// Returns `Duration::from_millis(500)` — the §"Component tree"
@@ -1353,7 +1353,7 @@ pub fn format_settings_dialog_spinner_debounce() -> std::time::Duration {
 /// path used in pure-logic tests) and [`run_settings_worker`] (the
 /// `gio::spawn_blocking` path used by `AppModel`). Keeping the
 /// `kind()`-based routing in one place per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors" ensures the dialog
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors" ensures the dialog
 /// and the worker stay in lock-step on which typed error maps to
 /// `Rollback` vs `DurabilityWarning` vs `Inline`.
 #[must_use]
@@ -1388,7 +1388,7 @@ pub fn classify_settings_save_result(
 /// [`SettingsWorkerCompletion`] on every branch (success and typed
 /// failure) so `AppModel::update` can reinstall it before applying
 /// the UI outcome — `Vault::mutate_and_save` is authoritative for the
-/// rollback / durability-unconfirmed semantics per DESIGN.md §4.3.
+/// rollback / durability-unconfirmed semantics per docs/DESIGN.md §4.3.
 ///
 /// `Clone` / `PartialEq` are deliberately not derived because
 /// [`Vault`] and [`Store`] are non-`Clone`.
@@ -1441,7 +1441,7 @@ pub struct SettingsWorkerEffect {
 /// on `save_not_committed`, so the returned vault is the
 /// authoritative post-effect state regardless of
 /// [`SettingsWorkerEffect::outcome`]. Per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" > "Every
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" > "Every
 /// worker returns `(Vault, Store, EffectOutcome)`".
 ///
 /// `Clone` / `PartialEq` are deliberately not derived for the same
@@ -1472,7 +1472,7 @@ pub struct SettingsWorkerCompletion {
 /// [`classify_settings_save_result`]. The live `(Vault, Store)` pair
 /// is always returned so `AppModel` reinstalls it regardless of the
 /// typed effect — `mutate_and_save` is authoritative for the
-/// rollback / durability-unconfirmed semantics per DESIGN.md §4.3.
+/// rollback / durability-unconfirmed semantics per docs/DESIGN.md §4.3.
 ///
 /// Extracting the worker body as a pure function lets
 /// `AppModel::update`'s closure stay a thin
@@ -1526,7 +1526,7 @@ pub struct SettingsState {
     /// toggle and spinner sensitivity helpers all return `false`
     /// so the user cannot kick off a second settings worker before
     /// the first returns the `(Vault, Store)` pair per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
     /// Independent of [`Self::pending`] (the staged spinner value)
     /// — `busy` is the pre-return latch.
     busy: bool,
@@ -1565,7 +1565,7 @@ impl SettingsState {
     /// Used by [`dispatch_settings_dialog_msg`] on the
     /// `SetBusy(true → false)` edge so the dispatch can decide whether
     /// to re-arm the 500 ms debounce timer after a sibling vault
-    /// effect returns. Per `IMPLEMENTATION_PLAN_04_GTK.md` line 4030
+    /// effect returns. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` line 4030
     /// ("Coalesce settings spinner debounce to the latest pre-save
     /// value when an effect is in flight"), the spinner draft must
     /// survive a busy window and eventually save — the post-busy
@@ -1858,7 +1858,7 @@ pub fn dispatch_settings_dialog_msg(
     match msg {
         SettingsDialogMsg::AutoLockToggled(enabled) => {
             // Refuse toggle changes that would overlap an active
-            // vault effect (`IMPLEMENTATION_PLAN_04_GTK.md` line 4030
+            // vault effect (`docs/IMPLEMENTATION_PLAN_04_GTK.md` line 4030
             // and §"In-flight effect ownership"). The widget layer
             // dims the `AdwSwitchRow` via `set_sensitive: false` so
             // the user cannot reach this path under normal
@@ -1932,7 +1932,7 @@ pub fn dispatch_settings_dialog_msg(
             // pending value pre-dated the save), re-arm the 500 ms
             // debounce so the latest pre-save value eventually fires
             // a save — that is the coalescing path per
-            // `IMPLEMENTATION_PLAN_04_GTK.md` line 4030.
+            // `docs/IMPLEMENTATION_PLAN_04_GTK.md` line 4030.
             let was_busy = state.is_busy();
             state.set_busy(busy);
             if was_busy && !busy && state.has_pending_save_due() {
@@ -1970,8 +1970,8 @@ pub enum SettingsDialogOutput {
 
 /// Widget-bearing `AdwPreferencesDialog` for the Preferences menu entry.
 ///
-/// Mounts the libadwaita preferences surface described in DESIGN.md §7
-/// (`SettingsComponent`) and `IMPLEMENTATION_PLAN_04_GTK.md`
+/// Mounts the libadwaita preferences surface described in docs/DESIGN.md §7
+/// (`SettingsComponent`) and `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Component tree" > `SettingsComponent`. Two `AdwPreferencesGroup`
 /// sections host an `AdwSwitchRow` toggle and an `AdwSpinRow` spinner
 /// each (auto-lock + clipboard-clear); the values are driven by the
@@ -1991,7 +1991,7 @@ pub enum SettingsDialogOutput {
 /// [`SettingsState::stage_clipboard_clear_secs`] and arm the 500 ms
 /// debounce timer via [`format_settings_dialog_spinner_debounce`].
 /// Holding +/- coalesces to a single save with the most recent
-/// buffered value per `IMPLEMENTATION_PLAN_04_GTK.md` line 3456. A
+/// buffered value per `docs/IMPLEMENTATION_PLAN_04_GTK.md` line 3456. A
 /// `DebounceTick` that fires while a sibling vault effect is in
 /// flight is absorbed by [`dispatch_settings_dialog_msg`] without
 /// dropping the buffered draft, and the `SetBusy(true → false)` edge
@@ -2011,7 +2011,7 @@ pub struct SettingsComponent {
     /// fresh spinner change can drop the prior pending tick (via
     /// `SourceId::remove`) before scheduling a new one — keeping
     /// only the latest buffered value per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` line 3458.
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` line 3458.
     debounce_source: Option<glib::SourceId>,
 }
 

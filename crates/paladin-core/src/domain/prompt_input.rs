@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Shared icon-hint prompt grammar (DESIGN.md §4.7 / Phase B).
+// Shared icon-hint prompt grammar (docs/DESIGN.md §4.7 / Phase B).
 //
 // CLI add prompts and TUI / GUI add modals route their text input
 // through this helper so all three front ends agree on the empty /

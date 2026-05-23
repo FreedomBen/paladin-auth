@@ -2,7 +2,7 @@
 
 //! Workspace-metadata inheritance contract tests for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` Milestone 7 packaging section,
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` Milestone 7 packaging section,
 //! `crates/paladin-gtk/Cargo.toml` must inherit `description`,
 //! `repository`, `homepage`, `license`, `edition`, and `rust-version`
 //! from the workspace `[workspace.package]` table (so a single bump in

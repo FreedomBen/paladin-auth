@@ -2,7 +2,7 @@
 
 //! Desktop-entry contract tests for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop integration" and
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop integration" and
 //! the Milestone 7 checklist entry "Write
 //! `data/org.tamx.Paladin.Gui.desktop`":
 //!

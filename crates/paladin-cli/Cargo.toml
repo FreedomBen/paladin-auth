@@ -27,7 +27,7 @@ default = []
 #   process-level tests can drive `save_not_committed` /
 #   `save_durability_unconfirmed` via `PALADIN_FAULT_INJECT`.
 #
-# See `IMPLEMENTATION_PLAN_02_CLI.md` "Implementation checklist".
+# See `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Implementation checklist".
 test-hooks = ["paladin-core/test-fault-injection"]
 
 [[bin]]

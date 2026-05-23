@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// `otpauth://` URI parser and emitter (DESIGN.md §4.4).
+// `otpauth://` URI parser and emitter (docs/DESIGN.md §4.4).
 //
 // `parse_otpauth` is the single canonical entry point that turns an
 // `otpauth://` URI into a `ValidatedAccount`. It re-uses the

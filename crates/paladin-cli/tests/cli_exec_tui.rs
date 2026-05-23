@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! End-to-end tests for `paladin tui`, the `execvp` wrapper around
-//! `paladin-tui`. See `IMPLEMENTATION_PLAN_02_CLI.md` "`paladin tui`
+//! `paladin-tui`. See `docs/IMPLEMENTATION_PLAN_02_CLI.md` "`paladin tui`
 //! exec wrapper". These tests place a stub `paladin-tui` script on
 //! `PATH` whose only job is to record its argv to a file so the
 //! wrapper's flag forwarding can be asserted from the parent test

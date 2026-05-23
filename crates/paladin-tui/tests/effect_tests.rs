@@ -2,7 +2,7 @@
 
 //! Effect-executor tests for `paladin-tui`.
 //!
-//! Tracks `IMPLEMENTATION_PLAN_03_TUI.md` > "Implementation checklist":
+//! Tracks `docs/IMPLEMENTATION_PLAN_03_TUI.md` > "Implementation checklist":
 //! "Implement reducer, event producers, effect execution, ...".
 //!
 //! The executor is the only impure boundary between the pure reducer
@@ -370,7 +370,7 @@ fn execute_rename_with_valid_label_renames_account_and_sends_ok() {
     );
 }
 
-/// Per `DESIGN.md` §6 (Rename) the trimmed draft is passed through to
+/// Per `docs/DESIGN.md` §6 (Rename) the trimmed draft is passed through to
 /// `Vault::rename` even when it equals the current label so
 /// `updated_at` advances and matches CLI behavior.
 #[test]
@@ -825,7 +825,7 @@ fn execute_remove_carries_issuer_joined_display_label() {
 
 // ---------------------------------------------------------------------------
 // Effect::ApplySettings
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Settings modal: "Confirm
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Settings modal: "Confirm
 //  runs every changed setter inside one Vault::mutate_and_save
 //  transaction.")
 // ---------------------------------------------------------------------------
@@ -877,7 +877,7 @@ fn execute_apply_settings_with_single_patch_applies_and_sends_ok() {
 
 #[test]
 fn execute_apply_settings_with_multiple_patches_applies_atomically_and_sends_ok() {
-    // Per IMPLEMENTATION_PLAN_03_TUI.md > Settings modal: "Confirm
+    // Per docs/IMPLEMENTATION_PLAN_03_TUI.md > Settings modal: "Confirm
     // runs every changed setter inside one `Vault::mutate_and_save`
     // transaction." A four-patch list lands as one commit and every
     // field reflects the new value in the live vault and on disk.
@@ -1060,7 +1060,7 @@ fn execute_apply_settings_with_dropped_receiver_does_not_panic() {
 /// 4. Leave the on-disk vault unchanged (the duplicate gate runs
 ///    before `Vault::mutate_and_save`).
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
 /// *"manual and URI duplicate collisions call
 /// `Vault::find_duplicate(&validated)` before mutation. A collision
 /// initially rejects with the existing account in the modal and
@@ -1169,7 +1169,7 @@ fn execute_add_with_duplicate_emits_duplicate_failure_and_does_not_mutate_vault(
 /// 4. Leave the on-disk vault unchanged (the duplicate gate runs
 ///    before `Vault::mutate_and_save`).
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
 /// *"URI mode is a single text field; on submit the entered string is
 /// passed to `paladin_core::parse_otpauth(uri, submit_time)`, and on
 /// success the resulting `ValidatedAccount` shares the manual path's
@@ -1254,7 +1254,7 @@ fn execute_add_from_uri_with_duplicate_emits_duplicate_failure_and_does_not_muta
 /// An `Effect::AddFromUri` whose carried bytes do not parse as a
 /// valid `otpauth://` URI must emit
 /// `EffectResult::Add { Err(AddFailure::Validation(...)) }` carrying
-/// the `parse_otpauth` error verbatim — per `IMPLEMENTATION_PLAN_03_TUI.md`
+/// the `parse_otpauth` error verbatim — per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 /// "Modals (per §6)" > Add: *"Parser errors
 /// (`unsupported_import_format`, `validation_error`) stay in the
 /// modal as inline errors and never mutate the vault."*
@@ -1301,7 +1301,7 @@ fn execute_add_from_uri_with_invalid_uri_emits_validation_failure() {
 
 // ---------------------------------------------------------------------------
 // Effect::AddAnyway — duplicate-allowed insertion path
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > "The follow-up
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > "The follow-up
 //  'add anyway' confirmation inserts the pending validated account on
 //  the duplicate-allowed path with a fresh ID.")
 // ---------------------------------------------------------------------------
@@ -1314,7 +1314,7 @@ fn execute_add_from_uri_with_invalid_uri_emits_validation_failure() {
 /// the on-disk primary, and surfaced through
 /// `EffectResult::Add { Ok(AddSuccess { summary, warnings }) }`.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"A
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"A
 /// collision initially rejects with the existing account in the modal
 /// and offers an 'add anyway' confirmation that inserts the pending
 /// validated account on the duplicate-allowed path (CLI parity with
@@ -1468,7 +1468,7 @@ fn execute_add_anyway_with_mismatched_path_is_silently_dropped() {
 
 // ---------------------------------------------------------------------------
 // Effect::Add — non-duplicate happy-path insertion
-// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" — covers the
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" — covers the
 //  `Vault::add` inside `Vault::mutate_and_save` insertion referenced by
 //  `effect_result_add_ok_closes_modal`'s "later slice" comment.)
 // ---------------------------------------------------------------------------
@@ -1485,7 +1485,7 @@ fn execute_add_anyway_with_mismatched_path_is_silently_dropped() {
 ///    carrying the newly assigned account's `AccountSummary` and the
 ///    validation warnings.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"Manual
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"Manual
 /// entries route through `paladin_core::validate_manual(input,
 /// submit_time)` ... Successful additions are wrapped in
 /// `Vault::mutate_and_save`, which runs the `Vault::add` ... mutation
@@ -1651,7 +1651,7 @@ fn execute_add_from_uri_with_no_duplicate_inserts_validated_account_and_persists
 // Effect::Import — auto-detect path
 // ---------------------------------------------------------------------------
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" >
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" >
 // *"Format auto-detect routes through `paladin_core::import::from_file`."*
 // With `format: None` the executor must build
 // `paladin_core::ImportOptions { format: None, .. }`, call
@@ -1892,7 +1892,7 @@ fn execute_import_with_mismatched_path_is_silently_dropped() {
 
 // ---------------------------------------------------------------------------
 // Explicit-format-override executor coverage —
-// IMPLEMENTATION_PLAN_03_TUI.md > "Import modal" >
+// docs/IMPLEMENTATION_PLAN_03_TUI.md > "Import modal" >
 // "Explicit format overrides (`otpauth` / `aegis` / `paladin` / `qr`)
 //  route through `paladin_core::import::from_file`."
 //
@@ -2092,7 +2092,7 @@ fn execute_import_with_forced_format_mismatch_returns_unsupported_import_format_
 // merge action.
 // ---------------------------------------------------------------------------
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" >
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" >
 // *"On-conflict policy (`skip` / `replace` / `append`) is forwarded to
 // `Vault::import_accounts` and reflected in the report counts."*
 // The three tests below seed a vault with a single TOTP row whose
@@ -2415,7 +2415,7 @@ fn execute_import_with_append_conflict_over_colliding_account_inserts_fresh_id_a
 #[cfg(feature = "test-hooks")]
 mod import_save_not_committed {
     //! Effect-executor coverage for the "`save_not_committed` restores
-    //! the core snapshot" bullet in `IMPLEMENTATION_PLAN_03_TUI.md` >
+    //! the core snapshot" bullet in `docs/IMPLEMENTATION_PLAN_03_TUI.md` >
     //! "Import modal". Gated behind the `test-hooks` cargo feature so
     //! the `PALADIN_FAULT_INJECT=pre_commit` hook is compiled into
     //! `paladin-core::storage::fault`. The process-wide env var
@@ -2442,7 +2442,7 @@ mod import_save_not_committed {
     #[test]
     fn execute_import_with_save_not_committed_failure_rolls_back_live_vault_to_pre_attempt_snapshot(
     ) {
-        // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" >
+        // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" >
         //   "A `save_not_committed` failure restores the core snapshot
         //    so `Vault::iter()` matches its pre-attempt state."
         //
@@ -2556,14 +2556,14 @@ mod import_save_not_committed {
 // `paladin_core::export::otpauth_list` and persists via
 // `paladin_core::write_secret_file_atomic`.
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests" > "Export modal": *"Plaintext
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests" > "Export modal": *"Plaintext
 // format selector routes to `paladin_core::export::otpauth_list`"* and
 // *"Output is written through `paladin_core::write_secret_file_atomic`
 // with mode `0600`"*. The executor must render the live vault through
 // `core_export::otpauth_list`, hand the bytes to `write_secret_file_atomic`,
 // and post back `EffectResult::Export { result: Ok(()) }`. The vault
 // state (in-memory and on disk) must be unchanged — Export does not
-// mutate the vault per `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
+// mutate the vault per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
 // Export: *"Export does not mutate the vault, so there is no rollback
 // path."*
 // ---------------------------------------------------------------------------
@@ -2636,7 +2636,7 @@ fn execute_export_with_plaintext_format_routes_through_otpauth_list_and_writes_v
     );
 
     // `write_secret_file_atomic` enforces mode `0600` on the final file
-    // per `DESIGN.md` §4.2 / §4.6 (mirrors the vault-file permission rule).
+    // per `docs/DESIGN.md` §4.2 / §4.6 (mirrors the vault-file permission rule).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -2677,7 +2677,7 @@ fn execute_export_with_plaintext_format_routes_through_otpauth_list_and_writes_v
 // `paladin_core::export::encrypted` and persists via
 // `paladin_core::write_secret_file_atomic`.
 //
-// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests" > "Export modal":
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests" > "Export modal":
 // *"Encrypted format selector routes to `paladin_core::export::encrypted`."*
 // The executor must render the live vault through `core_export::encrypted`
 // with `EncryptionOptions::new(secret)` (default §4.4 Argon2 params per
@@ -2777,7 +2777,7 @@ fn execute_export_with_encrypted_format_routes_through_export_encrypted_and_writ
     );
 
     // Write-path-routing axis: mode `0600` is enforced only by
-    // `write_secret_file_atomic` (per `DESIGN.md` §4.2 / §4.6); a bare
+    // `write_secret_file_atomic` (per `docs/DESIGN.md` §4.2 / §4.6); a bare
     // `fs::write` would inherit the umask instead.
     #[cfg(unix)]
     {
@@ -2814,7 +2814,7 @@ fn execute_export_with_encrypted_format_routes_through_export_encrypted_and_writ
 
 // ---------------------------------------------------------------------------
 // Effect::AddFromClipboardQr — live clipboard image + QR decode + import
-// (IMPLEMENTATION_PLAN_03_TUI.md > Implementation checklist:
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Implementation checklist:
 //   * "Implement clipboard wrapper (arboard reads/writes), QR image
 //     import from clipboard bytes, ...")
 //
@@ -3103,7 +3103,7 @@ mod add_from_clipboard_qr {
     ) {
         // Clipboard holds an image but the QR decoder finds no codes.
         // `qr_image_bytes` rejects with `PaladinError::NoEntriesToImport`
-        // per `DESIGN.md` §4.6, which the executor wraps in
+        // per `docs/DESIGN.md` §4.6, which the executor wraps in
         // `QrImportFailure::Import(_)` for the reducer to render through
         // `render_error_message`.
         with_dryrun("1", || {

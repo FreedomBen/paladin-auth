@@ -19,7 +19,7 @@ jobs:
     name: cargo clippy
     runs-on: ubuntu-latest
     # The workspace includes `paladin-gtk`, which binds `gtk4` `v4_16`
-    # and `libadwaita` `v1_6` per IMPLEMENTATION_PLAN_04_GTK.md
+    # and `libadwaita` `v1_6` per docs/IMPLEMENTATION_PLAN_04_GTK.md
     # §"Dependencies (per §9)". The `ubuntu-24.04` image ships GTK 4.14
     # and libadwaita 1.5 — too old for those `v*` feature gates, so the
     # `gtk4-sys` / `libadwaita-sys` build scripts reject it. Build
@@ -47,7 +47,7 @@ jobs:
     # 1.6 floor; additionally installs `xorg-x11-server-Xvfb` so
     # `crates/paladin-gtk/tests/gtk_smoke.rs` runs under `xvfb-run`
     # instead of skipping. The §"Smoke test" bullet in
-    # IMPLEMENTATION_PLAN_04_GTK.md gates Milestone 7 sign-off on that
+    # docs/IMPLEMENTATION_PLAN_04_GTK.md gates Milestone 7 sign-off on that
     # test being green.
     container:
       image: fedora:42
@@ -108,7 +108,7 @@ jobs:
   packaging-dry-run:
     name: packaging dry-run (.deb / .rpm + installed-payload validators)
     runs-on: ubuntu-latest
-    # Per IMPLEMENTATION_PLAN_04_GTK.md Milestone 7 checklist entry
+    # Per docs/IMPLEMENTATION_PLAN_04_GTK.md Milestone 7 checklist entry
     # "Add the packaging dry-run job to CI: produces .deb, .rpm, Flatpak,
     # and AppImage artifacts and runs desktop-file-validate plus the
     # AppStream validator on the installed payload", this job exercises
@@ -225,7 +225,7 @@ jobs:
   desktop-metainfo:
     name: desktop-file-validate + appstreamcli validate
     runs-on: ubuntu-latest
-    # Per IMPLEMENTATION_PLAN_04_GTK.md §"Linux desktop integration" /
+    # Per docs/IMPLEMENTATION_PLAN_04_GTK.md §"Linux desktop integration" /
     # §"Packaging (per §11)", the v0.2 GUI ships a freedesktop desktop
     # entry and an AppStream metainfo file under
     # `crates/paladin-gtk/data/`. The §11 packaging dry-run validates

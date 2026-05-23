@@ -3,7 +3,7 @@
 //! Pure-logic import-dialog tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/import_dialog_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Format-selector routing (auto-detect / explicit `otpauth` /
 //!   `aegis` / `paladin` / `qr`) reaches the correct
@@ -722,7 +722,7 @@ fn passphrase_needs_reset_distinguishes_relative_paths() {
 // ImportDialogComponent scaffold (Milestone 7 component-tree wiring)
 // ---------------------------------------------------------------------------
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
 // "Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
 // Rename / Import / Export / Passphrase / Settings / StartupError)",
 // `ImportDialogComponent` joins the eight already-mounted controllers

@@ -2,7 +2,7 @@
 
 //! Passphrase-dialog state machine and component for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `PassphraseDialog` and §"Vault interaction", the dialog wraps the
 //! three §4.5 / Phase H passphrase transitions exposed by
 //! `paladin_core`:
@@ -46,7 +46,7 @@
 //! instrumentation match the CLI / TUI verbatim. On success, the
 //! pair is wrapped in an [`EncryptionOptions`] built with the
 //! default Argon2id cost (m=64 MiB, t=3, p=1); the GUI does not
-//! expose KDF tuning per `DESIGN.md` §11 / §13.
+//! expose KDF tuning per `docs/DESIGN.md` §11 / §13.
 //!
 //! # Submission gate (Remove)
 //!
@@ -907,8 +907,8 @@ pub fn format_passphrase_success_toast(sub_flow: SubFlow) -> &'static str {
 
 /// Widget-bearing `adw::Dialog` for the application menu's Passphrase… entry.
 ///
-/// Mounts the libadwaita dialog described in DESIGN.md §7
-/// (`PassphraseDialog`) and `IMPLEMENTATION_PLAN_04_GTK.md`
+/// Mounts the libadwaita dialog described in docs/DESIGN.md §7
+/// (`PassphraseDialog`) and `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Component tree" > `PassphraseDialog`. The widget body contains:
 ///
 /// * An [`adw::ViewSwitcher`]-driven segmented control that exposes

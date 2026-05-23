@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// `VaultPayload` codec (DESIGN.md §4.3).
+// `VaultPayload` codec (docs/DESIGN.md §4.3).
 //
 // `VaultPayload = { accounts: Vec<Account>, settings: VaultSettings }`
 // is encoded with bincode v2 using little-endian + fixed-int encoding
@@ -21,14 +21,14 @@ use crate::ui_contract::{
     AUTO_LOCK_SECS_MAX, AUTO_LOCK_SECS_MIN, CLIPBOARD_CLEAR_SECS_MAX, CLIPBOARD_CLEAR_SECS_MIN,
 };
 
-/// Maximum serialized `VaultPayload` size, in bytes (DESIGN.md §4.3).
+/// Maximum serialized `VaultPayload` size, in bytes (docs/DESIGN.md §4.3).
 ///
 /// Applies to the bincode-encoded payload — i.e. excludes the §4.3
 /// header bytes and the AEAD tag in encrypted mode.
 #[allow(dead_code)] // Wired up by storage::Store (Phase E continuation).
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 
-/// On-disk vault payload (DESIGN.md §4.3).
+/// On-disk vault payload (docs/DESIGN.md §4.3).
 ///
 /// Crate-private: presentation crates interact through `Vault`, never
 /// the raw payload struct.
@@ -39,7 +39,7 @@ pub(crate) struct VaultPayload {
     pub(crate) settings: VaultSettings,
 }
 
-/// Per-vault user preferences (DESIGN.md §4.7).
+/// Per-vault user preferences (docs/DESIGN.md §4.7).
 ///
 /// Persisted **inside** the vault payload (not the file header) so an
 /// encrypted vault's settings are covered by the AEAD tag and cannot
@@ -112,7 +112,7 @@ impl VaultSettings {
     }
 }
 
-/// Hand-rolled serializer that emits the nested DESIGN.md §5 shape:
+/// Hand-rolled serializer that emits the nested docs/DESIGN.md §5 shape:
 ///
 /// ```json
 /// { "auto_lock":  { "enabled": bool, "timeout_secs": number },
@@ -162,7 +162,7 @@ impl serde::Serialize for VaultSettings {
 
 impl Default for VaultSettings {
     fn default() -> Self {
-        // Defaults pinned by DESIGN.md §5 settings table:
+        // Defaults pinned by docs/DESIGN.md §5 settings table:
         // auto-lock and clipboard-clear are off by default; timeouts
         // are 300s and 20s respectively.
         Self {
@@ -174,7 +174,7 @@ impl Default for VaultSettings {
     }
 }
 
-/// Bincode v2 configuration locked to DESIGN.md §4.3.
+/// Bincode v2 configuration locked to docs/DESIGN.md §4.3.
 #[allow(dead_code)] // Wired up by storage::Store (Phase E continuation).
 fn bincode_config() -> Configuration<LittleEndian, Fixint, Limit<MAX_PAYLOAD_BYTES>> {
     bincode::config::standard()
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn vault_settings_default_matches_design_table() {
-        // DESIGN.md §5 settings table pins the off-by-default
+        // docs/DESIGN.md §5 settings table pins the off-by-default
         // behavior and the timeout defaults (300s / 20s).
         let s = VaultSettings::default();
         assert!(!s.auto_lock_enabled());

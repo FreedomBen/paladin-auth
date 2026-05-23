@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `paladin list` — print account metadata (no codes). See DESIGN.md §5
-//! and `IMPLEMENTATION_PLAN_02_CLI.md` "Vault interaction pattern".
+//! `paladin list` — print account metadata (no codes). See docs/DESIGN.md §5
+//! and `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Vault interaction pattern".
 //!
 //! Order of operations:
 //!

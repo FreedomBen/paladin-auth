@@ -5,7 +5,7 @@
 //! `/` and `Ctrl+L` accelerator that focuses the
 //! `AccountListComponent`'s `gtk::SearchBar`.
 //!
-//! `IMPLEMENTATION_PLAN_04_GTK.md` §"Keyboard Shortcuts" pins the
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Keyboard Shortcuts" pins the
 //! type-to-search and focus-search wiring: any printable keypress
 //! on the toplevel window reveals the bar via
 //! `gtk::SearchBar::set_key_capture_widget`, and the dedicated

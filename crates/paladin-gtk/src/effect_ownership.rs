@@ -2,7 +2,7 @@
 
 //! In-flight vault-effect ownership state machine for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership"
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership"
 //! and §"Tests > Pure-logic unit tests >
 //! `tests/effect_ownership_logic.rs`", the GTK `AppModel`
 //! serializes every vault-touching blocking effect through one

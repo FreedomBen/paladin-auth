@@ -4,10 +4,10 @@
 //! [`arboard`]; under the `paladin-cli/test-hooks` cargo feature an
 //! env-var-driven dryrun short-circuit lets process-level integration
 //! tests exercise `paladin copy` end-to-end without a system clipboard
-//! server. See `IMPLEMENTATION_PLAN_02_CLI.md` "Clipboard copy side
+//! server. See `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Clipboard copy side
 //! effects" and the test-hooks bullet.
 //!
-//! The CLI is stateless per DESIGN.md §8 — this adapter does **not**
+//! The CLI is stateless per docs/DESIGN.md §8 — this adapter does **not**
 //! schedule a wipe / auto-clear regardless of `clipboard.clear_enabled`
 //! in vault settings. That preference is stored for the TUI / GUI and
 //! ignored at runtime by the CLI.

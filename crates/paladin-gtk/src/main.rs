@@ -4,7 +4,7 @@
 //!
 //! Defers to [`paladin_gtk::run`] so the library surface owns argv
 //! parsing and the relm4 / libadwaita bootstrap. See
-//! `IMPLEMENTATION_PLAN_04_GTK.md` §"Crate layout".
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Crate layout".
 
 use std::process::ExitCode;
 

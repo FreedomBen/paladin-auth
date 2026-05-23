@@ -2,7 +2,7 @@
 
 //! Pure-logic top-level `AppState` tests for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" and
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" and
 //! §"Vault interaction", `AppModel` owns the resolved vault path
 //! plus one of the `Missing`, `Locked`, `Unlocked`, `UnlockedBusy`,
 //! or `StartupError` states. The pure-logic state machine in
@@ -432,7 +432,7 @@ fn locked_enters_unlocking_busy_and_preserves_path() {
     // The `gio::spawn_blocking paladin_core::open` worker takes the
     // submitted `VaultLock` from the live `UnlockDialogComponent`
     // and runs Argon2 + AEAD decryption off the main loop. Per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction", the
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction", the
     // model transitions `AppState::Locked → AppState::UnlockedBusy`
     // for the worker's lifetime so the busy gating in
     // `is_busy()` / `allows_mutating_menu()` covers the open path
@@ -514,7 +514,7 @@ fn enter_busy_and_enter_unlocking_busy_partition_idle_source_states() {
 fn unlocked_busy_leaves_unlocking_busy_to_locked_and_preserves_path() {
     // The `gio::spawn_blocking paladin_core::open` worker can return
     // a typed wrong-passphrase failure (`DecryptFailed`,
-    // `InvalidPassphrase`). Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // `InvalidPassphrase`). Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"Effect errors", the live `UnlockDialogComponent` stays
     // mounted with the inline error so the user can retype, which
     // means `AppState::UnlockedBusy → AppState::Locked` must release
@@ -3256,7 +3256,7 @@ fn compose_unlock_dispatch_inline_from_non_unlocked_busy_keeps_dialog_with_no_st
 // `UnlockDialogOutput::SubmitLock` arrives and the open worker is about
 // to spawn. Together the two composers bracket the busy gate so the
 // `is_busy()` / `allows_mutating_menu()` gating in `AppState` covers the
-// full open worker lifetime per `IMPLEMENTATION_PLAN_04_GTK.md`
+// full open worker lifetime per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 // §"Vault interaction".
 
 #[test]
@@ -3351,7 +3351,7 @@ fn submit_unlock_app_state_mirrors_enter_unlocking_busy_for_every_variant() {
 // over the matching `AppState` transition method — this one delegates
 // to `AppState::enter_busy()`. Together they document each typed
 // dispatch's source-state contract at the call site in
-// `AppModel::update`. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+// `AppModel::update`. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 // §"Vault interaction".
 
 #[test]
@@ -3448,7 +3448,7 @@ fn submit_rename_app_state_mirrors_enter_busy_for_every_variant() {
 // Vault::mutate_and_save(|v| v.add(...))` worker. Both are name-the-
 // entry-point wrappers over `AppState::enter_busy()` so the call site
 // in `AppModel::update` documents which typed dispatch is opening the
-// busy gate. Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+// busy gate. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
 
 #[test]
 fn submit_add_app_state_from_unlocked_returns_unlocked_busy_preserving_path() {
@@ -5694,7 +5694,7 @@ fn apply_submit_add_inplace_agrees_with_apply_submit_rename_inplace() {
 // defensive `validation_error` / `invalid_state` / `io_error`
 // projections — comes back with the same pair because
 // `Vault::mutate_and_save` is the authoritative rollback /
-// durability source per DESIGN.md §4.3), so this wrapper takes the
+// durability source per docs/DESIGN.md §4.3), so this wrapper takes the
 // pair by value rather than the `Option<(Vault, Store)>` shape
 // `apply_unlock_vault_install_inplace` uses. The
 // `AppMsg::AddWorkerCompleted` handler that lands in a follow-up
@@ -6521,7 +6521,7 @@ fn apply_unlock_vault_install_inplace_mirrors_route_unlock_open_completion_pair_
 // `save_durability_unconfirmed`, `save_not_committed`, and the
 // defensive `validation_error` / `invalid_state` cases — comes back
 // with the same pair because `Vault::mutate_and_save` is the
-// authoritative rollback / durability source per DESIGN.md §4.3),
+// authoritative rollback / durability source per docs/DESIGN.md §4.3),
 // so this wrapper takes the pair by value rather than the
 // `Option<(Vault, Store)>` shape `apply_unlock_vault_install_inplace`
 // uses. The `AppMsg::RenameWorkerCompleted` handler that lands in a
@@ -7001,7 +7001,7 @@ fn should_drop_rename_dialog_after_partitions_on_success_only() {
 // re-project rows off the freshly reinstalled `(Vault, Store)` pair
 // and emit `AccountListMsg::Refresh` so the visible row label
 // matches the post-mutation vault state per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 // `AccountListComponent` ("Refresh the store after every vault
 // mutation … without reordering surviving rows"):
 //
@@ -7613,7 +7613,7 @@ fn compose_rename_dispatch_from_non_unlocked_busy_returns_no_app_state() {
 // rename_success_toast_after — toast-body projection for the rename
 // worker outcome. `AppMsg::RenameWorkerCompleted` consults this to
 // decide whether to raise an `AdwToast` on the `adw::ToastOverlay`
-// per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 // "In-app account rename" ("On success, refresh
 // `AccountListComponent` from the returned vault, close the dialog,
 // and surface a status / toast confirmation."). The projection
@@ -8771,7 +8771,7 @@ fn compose_remove_dispatch_from_non_unlocked_busy_returns_no_app_state() {
 // remove_success_toast_after — toast-body projection for the remove worker
 // outcome. `AppMsg::RemoveWorkerCompleted` consults this to decide whether
 // to raise an `AdwToast` on the `adw::ToastOverlay` per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" > `RemoveDialog`
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" > `RemoveDialog`
 // confirmation flow ("On success, refresh `AccountListComponent` from the
 // returned vault, close the dialog, and surface a status / toast
 // confirmation."). The projection inspects only the typed
@@ -9073,7 +9073,7 @@ fn should_drop_add_dialog_after_partitions_on_success_only() {
 // `AppMsg::AddWorkerCompleted` consults this to decide whether to
 // re-project rows off the freshly reinstalled `(Vault, Store)` pair
 // and emit `AccountListMsg::Refresh` so the new account appears in
-// the visible row set per `IMPLEMENTATION_PLAN_04_GTK.md`
+// the visible row set per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 // §"Component tree" > `AccountListComponent` ("Refresh the store
 // after every vault mutation … without reordering surviving rows"):
 //
@@ -9429,7 +9429,7 @@ fn add_dialog_msg_after_is_mutually_exclusive_with_should_drop() {
 //
 // `AppMsg::AddWorkerCompleted` consults this to decide whether to
 // raise an `AdwToast` on the `adw::ToastOverlay` per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 // `AddAccountComponent` shared shell ("Keep successful manual and URI
 // additions consistent with §7: refresh the list from the returned
 // vault, close the dialog, and surface a status / toast confirmation.").
@@ -10319,7 +10319,7 @@ fn apply_qr_dispatch_inplace_from_non_unlocked_busy_leaves_state_unchanged_and_r
 // projections are exhaustively tested above; these pipeline tests
 // guard against composition-order regressions in `AppModel::update`.
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
 // clipboard image path" > L2765: "Insert the returned accounts
 // through `Vault::import_accounts(accounts, ImportConflict::Skip,
 // import_time)` inside `Vault::mutate_and_save`; report imported /
@@ -10568,7 +10568,7 @@ fn qr_pipeline_failure_keep_with_warning_keeps_pair_installed_refreshes_list_and
     //   dismissing.
     //
     // Mirror of `qr_pipeline_failure_keeps_pair_installed_and_returns_to_unlocked_with_inline_dialog_msg`
-    // for the `KeepWithWarning` branch. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // for the `KeepWithWarning` branch. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"`AddAccountComponent` QR clipboard image path" > "Handle
     // `save_durability_unconfirmed` by keeping the imported accounts visible
     // and surfacing the warning on the counts panel".
@@ -10784,7 +10784,7 @@ fn compose_import_worker_input_from_non_unlocked_returns_pair_back() {
 // the bundled ImportDispatch / compose_import_dispatch /
 // apply_import_dispatch_inplace / apply_import_vault_install_inplace
 // wrapping pair. The dialog stays mounted on every outcome (per
-// IMPLEMENTATION_PLAN_04_GTK.md §"Component tree" > ImportDialog).
+// docs/IMPLEMENTATION_PLAN_04_GTK.md §"Component tree" > ImportDialog).
 // ---------------------------------------------------------------------------
 
 fn import_report_success(imported: usize) -> paladin_core::ImportReport {
@@ -11381,7 +11381,7 @@ fn apply_passphrase_vault_install_inplace_replaces_existing_slot() {
 // passphrase_new_is_encrypted_after — visible vault-mode-flag projection
 // for the typed `PassphraseWorkerEffect`.
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"PassphraseDialog full
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"PassphraseDialog full
 // implementation" checklist line 3403: "On success, update the visible
 // vault-mode flag before closing the dialog, post a status / toast
 // confirmation, and re-ask `IdlePolicy::should_arm` so the auto-lock
@@ -11582,7 +11582,7 @@ fn passphrase_should_arm_idle_after_failure_returns_none() {
 // `compose_settings_dispatch` aggregator over the typed
 // `SettingsWorkerEffect`.
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"SettingsComponent" L3443+:
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"SettingsComponent" L3443+:
 // live-apply through `Vault::mutate_and_save`; dialog stays mounted
 // across every save; success raises an `AdwToast`; auto-lock
 // changes re-ask `IdlePolicy::should_arm`.
@@ -11999,7 +11999,7 @@ fn run_settings_worker_success_persists_clipboard_clear_secs_change() {
 // (Unlocked / UnlockedBusy); every other startup surface leaves the
 // slot `None` so a stray `request_quit` / `auto_lock_expired` cannot
 // transition a startup-error / locked / missing surface through the
-// in-flight machinery per `IMPLEMENTATION_PLAN_04_GTK.md`
+// in-flight machinery per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 // §"In-flight effect ownership".
 // ---------------------------------------------------------------------------
 
@@ -12052,7 +12052,7 @@ fn initial_effects_for_non_unlocked_returns_none() {
 // `Some` slot: delegate to `EffectOwnership::request_quit`, which
 // returns `Now` on the idle `Unlocked` state and `Deferred` (recording
 // the pending_quit flag) on `UnlockedBusy`. Per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -12112,7 +12112,7 @@ fn handle_quit_request_with_busy_effects_is_deferred_and_records_pending_quit() 
 // on the idle `Unlocked` state — transitions the machinery to
 // `UnlockedBusy(kind)`; `Rejected` from `UnlockedBusy` (another
 // worker is in flight) or `StartupError`. Per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -12202,7 +12202,7 @@ fn handle_effect_request_after_completion_re_opens_busy_gate_for_next_effect() {
 // actually fires (Now vs LockDiscarded), and a `pending_quit` always
 // wins over a `pending_lock` per
 // `EffectOwnership::complete_effect`'s contract. Per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -12316,7 +12316,7 @@ fn handle_effect_completion_with_pending_lock_on_plaintext_converted_vault_disca
 // (plaintext vaults short-circuit to `Ignored`); while busy, the
 // expiry is recorded as `pending_lock` and resolved by
 // `handle_effect_completion` against the post-worker mode. Per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership" and
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership" and
 // §"Auto-lock and clipboard auto-clear".
 // ---------------------------------------------------------------------------
 
@@ -12389,7 +12389,7 @@ fn handle_auto_lock_expiry_while_busy_is_deferred_and_records_pending_lock() {
 // `pending_quit` / `pending_lock`, and the control-gating projection
 // stays `all_disabled_for_busy` until the user retries through
 // `StartupErrorComponent`. Per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -12472,7 +12472,7 @@ fn handle_worker_lost_followed_by_effect_completion_does_not_resurrect_unlocked(
 }
 
 // ---------------------------------------------------------------------------
-// Header-bar busy spinner visibility — `IMPLEMENTATION_PLAN_04_GTK.md`
+// Header-bar busy spinner visibility — `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 // §"In-flight effect ownership" requires the busy affordance to surface on
 // the current surface. The header-bar spinner is the visual that tells the
 // user a worker is in flight; the projector below is what the widget binds

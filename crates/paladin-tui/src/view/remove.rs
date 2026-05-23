@@ -2,7 +2,7 @@
 
 //! Remove-modal renderer.
 //!
-//! Per `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md`
+//! Per `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Modals (per §6) > Remove": *"confirmation modal. On confirm,
 //! wraps `Vault::remove` in `Vault::mutate_and_save`."* This slice
 //! paints the freshly-opened baseline — the centered confirmation

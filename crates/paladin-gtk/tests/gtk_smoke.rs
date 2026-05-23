@@ -2,7 +2,7 @@
 
 //! `xvfb-run` headless smoke test for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Smoke test" / §"Tests", this
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Smoke test" / §"Tests", this
 //! suite drives the GTK binary through a virtual X server so that
 //! `adw::init()` and the relm4 bootstrap are exercised without
 //! requiring a real desktop session. This file holds the bullets
@@ -278,7 +278,7 @@ fn app_renders_prepared_accounts() {
     // rows render `copy:on,next:off,kebab:on`; the HOTP `solo` row
     // renders `copy:off,next:on,kebab:on` because its hidden state
     // disables copy and exposes the "next" button per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `AccountRowComponent`. The kebab pair is `on` on every row
     // because every row exposes the Rename… / Remove… menu.
     let widget_states_expected = "paladin-gtk: account_list_widget_states=copy:on,next:off,kebab:on|copy:on,next:off,kebab:on|copy:off,next:on,kebab:on";

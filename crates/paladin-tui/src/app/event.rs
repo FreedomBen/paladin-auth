@@ -3,7 +3,7 @@
 //! `AppEvent` — union of every event the reducer can consume — and
 //! `Effect` — the union of impure actions the reducer can request.
 //!
-//! See `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)".
+//! See `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)".
 
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
@@ -34,7 +34,7 @@ pub enum AppEvent {
     /// event was read from `crossterm`. The reducer feeds it into
     /// [`paladin_core::IdlePolicy::next_deadline`] to refresh the
     /// auto-lock idle deadline so the timer rebases on each keypress
-    /// — per `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+    /// — per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
     /// *"Idle is reset by any `AppEvent::Input`."*
     Input {
         /// The raw terminal event from `crossterm`.
@@ -149,7 +149,7 @@ pub enum EffectResult {
     /// (carried back as `staged_code: Some(_)`), the reducer opens (or
     /// replaces) the reveal slot with that staged code AND surfaces the
     /// committed-but-uncertain status in the status line — per
-    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors":
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors":
     /// *"Durability-unconfirmed failures (`save_durability_unconfirmed`)
     /// reveal the new code and `Code.counter_used` label and report the
     /// committed-but-uncertain status in the status line — the user has
@@ -158,7 +158,7 @@ pub enum EffectResult {
     /// On any other `Err(...)` no reveal opens and the prior reveal
     /// slot (if any) is preserved — pre-commit failures
     /// (`save_not_committed`) have already been rolled back inside
-    /// `Vault::hotp_advance` per `DESIGN.md` §4.3, and other error
+    /// `Vault::hotp_advance` per `docs/DESIGN.md` §4.3, and other error
     /// kinds are surfaced only through the status line.
     ///
     /// Results delivered while not on `Unlocked` (auto-lock, quit-in-
@@ -207,7 +207,7 @@ pub enum EffectResult {
     /// [`paladin_core::ClipboardClearPolicy::schedule`] to seed
     /// `pending_clipboard_clear` with the issued token, the captured
     /// `value`, and the policy-returned deadline — per
-    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per
     /// §6)": *"at copy time it stores the latest
     /// `ClipboardClearToken` plus the captured bytes in UI state."*
     /// When the vault's `clipboard_clear_enabled` is `false` the
@@ -220,7 +220,7 @@ pub enum EffectResult {
     /// surfaces a [`crate::app::state::StatusLine::Error`] carrying
     /// [`crate::app::state::CLIPBOARD_WRITE_FAILED`] and leaves
     /// `pending_clipboard_clear` unchanged — per
-    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors": *"Copy: show
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors": *"Copy: show
     /// a status-line error if clipboard write fails; do not schedule
     /// auto-clear."* The `arboard` error is collapsed to `()` because
     /// the user-facing wording is fixed; the executor's failure
@@ -263,7 +263,7 @@ pub enum EffectResult {
     /// `Vault::mutate_and_save`). On any `Err(...)` the modal stays
     /// open and the rendered error is stashed in
     /// [`crate::app::state::RenameModal::error`] — per
-    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
     /// "Add / remove / rename / settings saves": pre-commit failures
     /// (`save_not_committed`) are rolled back inside
     /// `Vault::mutate_and_save` so memory matches disk;
@@ -302,7 +302,7 @@ pub enum EffectResult {
     /// On any `Err(...)` the modal stays open and the rendered error
     /// is stashed in
     /// [`crate::app::state::RemoveModal::error`] — per
-    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
     /// "Add / remove / rename / settings saves": pre-commit failures
     /// (`save_not_committed`) are rolled back inside
     /// `Vault::mutate_and_save` so memory matches disk (the removed
@@ -334,7 +334,7 @@ pub enum EffectResult {
     /// On `Ok(())` while [`crate::app::state::AppState::Unlocked`]
     /// with `Modal::Settings` open, the reducer closes the modal and
     /// publishes a [`crate::app::state::StatusLine::Confirmation`] —
-    /// per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    /// per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
     /// *"manual Add, URI Add, Remove, Rename, Export, Passphrase, and
     /// Settings close the modal and publish a status-line
     /// confirmation."*
@@ -375,7 +375,7 @@ pub enum EffectResult {
     /// the validated pending account so the reducer can render the
     /// `duplicate_account` rejection and stash the pending state for
     /// a follow-up "add anyway" confirmation — per
-    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     /// *"manual and URI duplicate collisions call
     /// `Vault::find_duplicate(&validated)` before mutation. A
     /// collision initially rejects with the existing account in the
@@ -401,7 +401,7 @@ pub enum EffectResult {
 
     /// Outcome of an [`Effect::AddFromClipboardQr`] attempt.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     /// *"QR imports call `Vault::import_accounts` with
     /// `ImportConflict::Skip` and report imported/skipped/warning
     /// counts plus any warning messages in the post-success counts
@@ -431,7 +431,7 @@ pub enum EffectResult {
 
     /// Outcome of an [`Effect::Import`] attempt.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
     /// *"The modal reports imported/skipped/replaced/appended/warning
     /// counts plus validation-warning messages rendered through
     /// `paladin_core::format_validation_warning()` in a post-success
@@ -466,7 +466,7 @@ pub enum EffectResult {
 
     /// Outcome of an [`Effect::Export`] attempt.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
     /// *"On success the modal closes with a status-line confirmation
     /// showing the written path; `io_error`, `save_not_committed`,
     /// `save_durability_unconfirmed`, `invalid_passphrase`, and the
@@ -497,7 +497,7 @@ pub enum EffectResult {
     /// Outcome of an `Effect::PassphraseSet` / `PassphraseChange` /
     /// `PassphraseRemove` attempt.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
     /// *"The transition methods (`set_passphrase` / `change_passphrase` /
     /// `remove_passphrase`) save themselves through `&Store` and handle
     /// their own pre-commit rollback per DESIGN §4.5 (the in-memory
@@ -514,7 +514,7 @@ pub enum EffectResult {
     /// [`crate::app::state::Modal::Passphrase`] open, the reducer
     /// closes the modal and publishes a
     /// [`crate::app::state::StatusLine::Confirmation`] — per
-    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
     /// "Successful modal outcomes": *"manual Add, URI Add, Remove,
     /// Rename, Export, Passphrase, and Settings close the modal and
     /// publish a status-line confirmation."*
@@ -548,7 +548,7 @@ pub enum EffectResult {
 /// non-fatal `ValidationWarning`s collected by
 /// [`paladin_core::validate_manual`]. The reducer renders the
 /// status-line confirmation from `summary` and includes any
-/// `warnings` text per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+/// `warnings` text per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
 /// §6)" > Add: *"Validation warnings are rendered with
 /// `paladin_core::format_validation_warning()` and do not block
 /// creation: manual / URI additions include them in the status-line
@@ -607,7 +607,7 @@ pub enum AddFailure {
 /// Carries the [`ImportReport`] returned by `Vault::import_accounts`
 /// so the reducer can populate the post-success counts panel with the
 /// `imported` / `skipped` / `warnings` totals and the rendered
-/// warning messages (per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+/// warning messages (per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
 /// §6)" > Add: *"QR imports call `Vault::import_accounts` with
 /// `ImportConflict::Skip` and report imported/skipped/warning counts
 /// plus any warning messages in the post-success counts panel."*).
@@ -626,7 +626,7 @@ pub struct QrImportSuccess {
 ///
 /// Distinguishes the inline-error cases the reducer must render
 /// differently in [`crate::app::state::AddModal::error`], per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal":
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Add modal":
 /// *"No-image, no-QR, and invalid-QR cases reject inline."*
 ///
 /// - [`QrImportFailure::NoClipboardImage`] — `arboard` reported the
@@ -665,7 +665,7 @@ pub enum QrImportFailure {
 /// [`paladin_core::Vault::import_accounts`] so the reducer can populate
 /// the post-success counts panel with the `imported` / `skipped` /
 /// `replaced` / `appended` totals plus the rendered validation
-/// warnings — per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+/// warnings — per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
 /// Import: *"The modal reports imported/skipped/replaced/appended/
 /// warning counts plus validation-warning messages rendered through
 /// `paladin_core::format_validation_warning()` in a post-success
@@ -776,7 +776,7 @@ pub enum Effect {
     /// executor). The executor reads the live clipboard, asks
     /// [`paladin_core::ClipboardClearPolicy::should_clear`], and
     /// writes empty only when the comparison returns `true` — per
-    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per
     /// §6)": *"on wake, it … reads the current clipboard, asks
     /// `ClipboardClearPolicy::should_clear`, and writes empty when
     /// the policy returns `true`."*
@@ -797,7 +797,7 @@ pub enum Effect {
     /// `AppEvent::EffectResult(EffectResult::HotpAdvance(...))` so the
     /// reducer can open a reveal window.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` §6 and the reducer-tests
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` §6 and the reducer-tests
     /// "HOTP `n` triggers a `HotpAdvance` effect" rule: the reducer
     /// emits this effect when `Char('n')` is pressed on Unlocked with
     /// a HOTP-kind account selected and no modal open. The reducer
@@ -816,7 +816,7 @@ pub enum Effect {
     },
     /// Copy the currently selected account's code to the OS clipboard.
     ///
-    /// Per the Keybindings table in `IMPLEMENTATION_PLAN_03_TUI.md`:
+    /// Per the Keybindings table in `docs/IMPLEMENTATION_PLAN_03_TUI.md`:
     /// *"`Enter` — Copy selected code (TOTP: current; HOTP: visible
     /// only)."* The reducer emits this effect when `KeyCode::Enter` is
     /// pressed on `Unlocked` with `Focus::List`, no modal open, no
@@ -828,7 +828,7 @@ pub enum Effect {
     ///
     /// The actual clipboard write, auto-clear scheduling, and
     /// `ClipboardClearPolicy::should_clear` wiring land with the
-    /// clipboard adapter slice (see `IMPLEMENTATION_PLAN_03_TUI.md`
+    /// clipboard adapter slice (see `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     /// "Clipboard auto-clear"); until then the executor consumes the
     /// variant and returns `Continue` without touching the
     /// clipboard.
@@ -845,7 +845,7 @@ pub enum Effect {
     },
     /// Rename the selected account's label and persist the change.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
     /// Rename: *"Confirm wraps `Vault::rename(id, new_label, now)`
     /// in `Vault::mutate_and_save` with the trimmed input regardless
     /// of whether it equals the current label."* The reducer emits
@@ -876,7 +876,7 @@ pub enum Effect {
     },
     /// Remove the selected account and persist the change.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
     /// Remove: *"confirmation modal. On confirm, wraps `Vault::remove`
     /// in `Vault::mutate_and_save`."* The reducer emits this effect
     /// when `Enter` is pressed on `Modal::Remove`; the modal carries
@@ -901,7 +901,7 @@ pub enum Effect {
     /// Apply Settings modal's pending changes to the live vault and
     /// persist them.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
     /// Settings: *"The modal accumulates pending edits in modal-local
     /// state and only commits on Confirm: pending values are applied
     /// through the same setters (`set_auto_lock_*`,
@@ -936,7 +936,7 @@ pub enum Effect {
     },
     /// Insert a Manual-mode account into the vault and persist it.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     /// *"Manual entries route through
     /// `paladin_core::validate_manual(input, submit_time)`. … Each
     /// submit captures one `submit_time` used for account
@@ -959,7 +959,7 @@ pub enum Effect {
     /// carried as `String`; the executor turns an empty string into
     /// `Option::None` per `validate_manual`'s contract. The
     /// `period_secs` and `counter` fields ride together; the executor
-    /// picks one based on `kind` per `DESIGN.md` §5
+    /// picks one based on `kind` per `docs/DESIGN.md` §5
     /// (rejected-on-cross-kind is enforced inside `validate_manual`).
     Add {
         /// The current vault path; the executor uses it for error
@@ -1001,7 +1001,7 @@ pub enum Effect {
     },
     /// Insert a URI-mode account into the vault and persist it.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     /// *"URI mode is a single text field; on submit the entered
     /// string is passed to `paladin_core::parse_otpauth(uri,
     /// submit_time)`, and on success the resulting `ValidatedAccount`
@@ -1041,7 +1041,7 @@ pub enum Effect {
     /// Insert a previously-validated account on the duplicate-allowed
     /// path and persist it.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     /// *"A collision initially rejects with the existing account in
     /// the modal and offers an 'add anyway' confirmation that inserts
     /// the pending validated account on the duplicate-allowed path
@@ -1077,7 +1077,7 @@ pub enum Effect {
     /// `otpauth://` URIs, and import the resulting accounts into the
     /// vault.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     /// *"Clipboard images are read through
     /// `arboard::Clipboard::get_image()`, whose `ImageData` already
     /// carries raw RGBA8 bytes plus width/height; the TUI calls
@@ -1106,7 +1106,7 @@ pub enum Effect {
     },
     /// Import accounts from a source file into the live vault.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
     /// *"The selected `paladin_core::import::from_file` call returns
     /// `Vec<ValidatedAccount>`; on success,
     /// `Vault::import_accounts(accounts, conflict, import_time)` is
@@ -1159,7 +1159,7 @@ pub enum Effect {
     /// Write the live vault to `target_path` as a plaintext
     /// `otpauth://` JSON list or an encrypted Paladin bundle.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
     /// *"format selector (plaintext `otpauth://` JSON list or encrypted
     /// Paladin bundle) and a destination path field. ... Writes go
     /// through `paladin_core::write_secret_file_atomic`. ... Export
@@ -1201,7 +1201,7 @@ pub enum Effect {
     /// Apply a `Set` passphrase transition (plaintext → encrypted) to
     /// the open vault.
     ///
-    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
     /// Passphrase: *"three sub-flows mirroring CLI's `passphrase set
     /// / change / remove`. ... `set` routes through
     /// [`paladin_core::Vault::set_passphrase`]"*. The executor wraps

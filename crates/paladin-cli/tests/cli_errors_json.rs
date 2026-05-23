@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! Cross-cutting `--json` error-envelope schema lock for the
-//! `DESIGN.md` §5 `error_kind` taxonomy
-//! (`IMPLEMENTATION_PLAN_02_CLI.md` crate layout: `cli_errors_json.rs`
+//! `docs/DESIGN.md` §5 `error_kind` taxonomy
+//! (`docs/IMPLEMENTATION_PLAN_02_CLI.md` crate layout: `cli_errors_json.rs`
 //! and the "JSON schema snapshots ... every `error_kind`" Tests
 //! bullet).
 //!
@@ -46,7 +46,7 @@ fn fresh_vault_dir() -> (TempDir, PathBuf) {
     (dir, path)
 }
 
-/// Write a 10-byte plaintext header (DESIGN.md §4.3) at `path` so
+/// Write a 10-byte plaintext header (docs/DESIGN.md §4.3) at `path` so
 /// `inspect()` classifies the file as `Plaintext`. The file mode is
 /// applied after the write so callers can dial it independently of
 /// `write`'s default umask.
@@ -181,7 +181,7 @@ fn validation_error_argv_envelope_for_unknown_subcommand() {
     // Clap rejects an unknown subcommand at parse time. The argv
     // pre-scan reroutes it through the §5 envelope as
     // `validation_error` with `field: "argv"`, `reason: "usage"`
-    // (IMPLEMENTATION_PLAN_02_CLI.md "Output").
+    // (docs/IMPLEMENTATION_PLAN_02_CLI.md "Output").
     let assert = paladin()
         .args(["--json", "definitely-not-a-subcommand"])
         .assert()
@@ -207,7 +207,7 @@ fn validation_error_argv_envelope_for_unknown_top_level_flag() {
 #[test]
 fn json_error_envelopes_include_all_documented_extra_fields() {
     // Cross-cutting sanity check: for each error path that promises
-    // recovery-critical extra fields per §5 / IMPLEMENTATION_PLAN_02_CLI.md
+    // recovery-critical extra fields per §5 / docs/IMPLEMENTATION_PLAN_02_CLI.md
     // "Output", verify those keys are present (not just `error_kind`).
     // The point is to fail loudly if a future refactor strips a
     // recovery-critical field while keeping the same `error_kind`.

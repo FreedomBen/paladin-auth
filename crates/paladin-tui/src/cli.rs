@@ -2,7 +2,7 @@
 
 //! Clap argument tree for the `paladin-tui` binary.
 //!
-//! See `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md` "Global flags".
+//! See `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Global flags".
 //! `paladin-tui` has no JSON mode: `--json` is rejected at parse time
 //! with clap's text diagnostic — the flag is intentionally not defined,
 //! so clap surfaces its standard "unexpected argument" error and never

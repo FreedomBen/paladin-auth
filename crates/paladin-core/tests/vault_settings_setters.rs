@@ -2,7 +2,7 @@
 //
 // Phase G.4: `Vault::set_auto_lock_enabled`, `Vault::set_auto_lock_timeout_secs`,
 // `Vault::set_clipboard_clear_enabled`, `Vault::set_clipboard_clear_secs`
-// and the public timeout-bound constants from DESIGN.md §4.7.
+// and the public timeout-bound constants from docs/DESIGN.md §4.7.
 // `apply_setting_patch` + `SettingPatch` parsing land in a later
 // Phase G bullet alongside the dotted-key grammar.
 
@@ -30,7 +30,7 @@ fn empty_plaintext_vault() -> Vault {
 #[test]
 fn vault_settings_defaults_match_design_section_5_table() {
     // Re-asserted here for completeness — `VaultSettings::default`
-    // has its own unit test, but the DESIGN.md §5 settings table
+    // has its own unit test, but the docs/DESIGN.md §5 settings table
     // pins these specific values for the cross-frontend behavior.
     let s = VaultSettings::default();
     assert!(!s.auto_lock_enabled());

@@ -2,7 +2,7 @@
 
 //! Import-dialog pure-logic state machine for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `ImportDialog` and §"Tests > Pure-logic unit tests >
 //! `tests/import_dialog_logic.rs`", the dialog hosts a
 //! [`gtk::FileDialog`] for the source path, a format selector
@@ -411,7 +411,7 @@ pub struct ImportDialogInit {
 /// `gio::spawn_blocking`; the worker reports completion via
 /// [`Self::SetBusy`] / [`Self::WorkerCompleted`] which renders the
 /// counts panel, durability warning, or inline error per the §"Effect
-/// errors" rules in `IMPLEMENTATION_PLAN_04_GTK.md`.
+/// errors" rules in `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
 ///
 /// The `String` payload of [`Self::PassphraseChanged`] is the
 /// unavoidable §8 UI boundary: the bytes arrive as a `GString` from
@@ -710,8 +710,8 @@ pub fn conflict_choice_from_index(selected: u32) -> Option<ConflictChoice> {
 
 /// Widget-bearing `adw::Dialog` for the application menu's Import… entry.
 ///
-/// Mounts the libadwaita dialog described in DESIGN.md §7
-/// (`ImportDialog`) and `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+/// Mounts the libadwaita dialog described in docs/DESIGN.md §7
+/// (`ImportDialog`) and `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component
 /// tree" > `ImportDialog`. The widget body is an `adw::Dialog`
 /// hosting an `adw::ToolbarView` whose body is a vertical
 /// `gtk::Box` containing the source `adw::ActionRow` with a
@@ -1662,7 +1662,7 @@ pub struct ImportWorkerInput {
 /// restores the snapshot on `save_not_committed`, so the returned
 /// vault is the authoritative post-effect state regardless of the
 /// [`MergeOutcome`] variant. Per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" > "Every
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" > "Every
 /// worker returns `(Vault, Store, EffectOutcome)`".
 #[derive(Debug)]
 pub struct ImportWorkerCompletion {
@@ -1690,7 +1690,7 @@ pub struct ImportWorkerCompletion {
 /// [`classify_merge_result`]. The live `(Vault, Store)` pair is
 /// always returned so `AppModel` reinstalls it regardless of the
 /// typed outcome — `mutate_and_save` is authoritative for the
-/// rollback / durability-unconfirmed semantics per DESIGN.md §4.3.
+/// rollback / durability-unconfirmed semantics per docs/DESIGN.md §4.3.
 pub fn run_import_worker(input: ImportWorkerInput) -> ImportWorkerCompletion {
     let ImportWorkerInput {
         mut vault,

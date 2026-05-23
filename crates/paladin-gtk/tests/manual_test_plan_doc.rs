@@ -2,7 +2,7 @@
 
 //! Guard test for the §"Manual test plan" deliverable.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Tests > Manual test plan
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Tests > Manual test plan
 //! (`tests/manual/MANUAL_TEST_PLAN.md`)" and the Milestone 7 checklist
 //! entry "Manual test plan documented", `tests/manual/MANUAL_TEST_PLAN.md`
 //! must exist and enumerate every required manual-QA item from the plan.
@@ -23,7 +23,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-/// Every required manual-QA bullet from `IMPLEMENTATION_PLAN_04_GTK.md`
+/// Every required manual-QA bullet from `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Tests > Manual test plan (`tests/manual/MANUAL_TEST_PLAN.md`)".
 ///
 /// Entries are the unwrapped bullet text; the doc may wrap text across
@@ -83,7 +83,7 @@ fn manual_test_plan_file_exists() {
     assert!(
         path.is_file(),
         "tests/manual/MANUAL_TEST_PLAN.md is missing — Milestone 7 \
-         deliverable per IMPLEMENTATION_PLAN_04_GTK.md \
+         deliverable per docs/IMPLEMENTATION_PLAN_04_GTK.md \
          §\"Tests > Manual test plan (`tests/manual/MANUAL_TEST_PLAN.md`)\". \
          Expected at: {}",
         path.display(),
@@ -107,7 +107,7 @@ fn manual_test_plan_covers_every_required_item() {
     assert!(
         missing.is_empty(),
         "tests/manual/MANUAL_TEST_PLAN.md is missing one or more \
-         required items from IMPLEMENTATION_PLAN_04_GTK.md \
+         required items from docs/IMPLEMENTATION_PLAN_04_GTK.md \
          §\"Manual test plan\". Add a tickable checkbox line for each \
          of the following:\n  - {}",
         missing.join("\n  - "),
@@ -134,7 +134,7 @@ fn manual_test_plan_has_enough_checkbox_lines() {
         checkbox_count >= REQUIRED_ITEMS.len(),
         "tests/manual/MANUAL_TEST_PLAN.md has {checkbox_count} checkbox \
          line(s); expected at least {} so each required item from \
-         IMPLEMENTATION_PLAN_04_GTK.md §\"Manual test plan\" appears \
+         docs/IMPLEMENTATION_PLAN_04_GTK.md §\"Manual test plan\" appears \
          as a tickable bullet.",
         REQUIRED_ITEMS.len(),
     );

@@ -6,7 +6,7 @@
 //! `AccountSummary.icon_hint` through [`resolve_display_icon`]. The
 //! decision is split out as a pure function so the §"Pure-logic unit
 //! tests > `tests/icon_resolution.rs`" checklist in
-//! `IMPLEMENTATION_PLAN_04_GTK.md` can exercise it without
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md` can exercise it without
 //! `gtk::IconTheme` or a display server; the live theme lookup is
 //! wired up by `AccountRowComponent` in the binary and is covered by
 //! the `tests/gtk_smoke.rs` smoke test.

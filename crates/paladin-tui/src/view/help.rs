@@ -2,7 +2,7 @@
 
 //! Read-only Help-overlay renderer.
 //!
-//! Per `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md`
+//! Per `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Help overlay": *"`?` from list focus opens a read-only Help
 //! overlay listing every keybinding from the table below; `Esc`
 //! closes the overlay and restores list focus. The overlay has no

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Import-flow types (DESIGN.md §4.6 / §4.7 / §5):
+// Import-flow types (docs/DESIGN.md §4.6 / §4.7 / §5):
 //   - `ImportConflict` — Skip / Replace / Append merge policy passed
 //     to `Vault::import_accounts`.
 //   - `ImportWarning` — a `ValidationWarning` paired with the
@@ -57,7 +57,7 @@ pub struct ImportWarning {
     pub warning: ValidationWarning,
 }
 
-/// Outcome of a `Vault::import_accounts` call (DESIGN.md §4.7 / §5).
+/// Outcome of a `Vault::import_accounts` call (docs/DESIGN.md §4.7 / §5).
 ///
 /// The four counts always partition the input: every source row is
 /// accounted for exactly once across `imported`, `skipped`,

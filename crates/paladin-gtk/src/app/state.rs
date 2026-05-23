@@ -2,7 +2,7 @@
 
 //! Top-level `AppModel` state machine for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" and
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" and
 //! §"Vault interaction", `AppModel` carries the resolved vault path
 //! plus one of the lifecycle states tracked by [`AppState`]:
 //!
@@ -222,7 +222,7 @@ impl AppState {
     /// this one only accepts `Locked` — so the `is_busy()` /
     /// `allows_mutating_menu()` gating already in place covers the
     /// open path alongside the post-unlock mutation path per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
     ///
     /// Returns `None` from every other state — `Missing` has no
     /// encrypted vault to open, `Unlocked` is owned by
@@ -262,7 +262,7 @@ impl AppState {
     /// failure return path: the busy window that
     /// `enter_unlocking_busy` opens for the unlock worker is rolled
     /// back here so the dialog's passphrase entry becomes
-    /// interactive again. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// interactive again. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     /// §"Effect errors", the live
     /// [`crate::unlock_dialog::UnlockDialogComponent`] stays mounted
     /// with the inline error so the user can retype without losing
@@ -799,7 +799,7 @@ pub fn route_unlock_open_completion(
 ///   `InvalidPayload`, `UnsupportedFormatVersion`,
 ///   `KdfParamsOutOfBounds`, `IoError`, …) routes to the
 ///   non-mutating [`crate::startup_error::StartupErrorComponent`]
-///   surface per `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors".
+///   surface per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors".
 ///   The dialog gets replaced by the startup-error component.
 ///
 /// The one outcome that keeps the dialog mounted:
@@ -893,7 +893,7 @@ pub fn unlock_dialog_msg_after(effect: &UnlockWorkerEffect) -> Option<&UnlockDia
 ///   `InvalidPayload`, `UnsupportedFormatVersion`,
 ///   `KdfParamsOutOfBounds`, `IoError`, …) replaces the dialog with
 ///   the non-mutating [`crate::startup_error::StartupErrorComponent`]
-///   surface per `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors".
+///   surface per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors".
 /// * [`UnlockWorkerEffect::Failure`] carrying
 ///   [`UnlockFailureEffect::SendUnlockDialogMsg`] — returns `None`.
 ///   The dialog stays mounted with the inline error and `AppState`
@@ -940,7 +940,7 @@ pub fn unlock_app_state_after(effect: &UnlockWorkerEffect) -> Option<&AppState> 
 /// spawns. Together the two composers bracket the busy window so
 /// the [`AppState::is_busy`] / [`AppState::allows_mutating_menu`]
 /// gating in [`AppState`] covers the full open worker lifetime per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
 ///
 /// The helper is a name-the-entry-point wrapper over
 /// [`AppState::enter_unlocking_busy`]: it returns
@@ -972,7 +972,7 @@ pub fn submit_unlock_app_state(current: &AppState) -> Option<AppState> {
 /// (which takes the already-decrypted pair through
 /// `Vault::mutate_and_save`). Together they bracket every typed
 /// dispatch with a documented source-state contract at the
-/// `AppModel::update` call site per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// `AppModel::update` call site per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Vault interaction".
 ///
 /// The helper is a name-the-entry-point wrapper over
@@ -1006,7 +1006,7 @@ pub fn submit_rename_app_state(current: &AppState) -> Option<AppState> {
 /// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`]; this
 /// one fires from the add dialog's manual / URI submit branch so
 /// `AppModel::update` can serialize through one vault-touching
-/// worker at a time per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+/// worker at a time per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
 /// interaction".
 ///
 /// The helper is a name-the-entry-point wrapper over
@@ -1043,7 +1043,7 @@ pub fn submit_add_app_state(current: &AppState) -> Option<AppState> {
 /// state is verified before [`submit_rename_app_state`] consumes the
 /// variant. Together they bracket every typed dispatch with a
 /// documented source-state contract per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
 ///
 /// Returns `Ok(RenameWorkerInput)` iff `current` is
 /// [`AppState::Unlocked`]. The `Err((vault, store))` branch is the
@@ -1106,7 +1106,7 @@ pub fn compose_rename_worker_input(
 /// transition so the source state is verified before
 /// [`submit_add_app_state`] consumes the variant. Together they
 /// bracket every typed dispatch with a documented source-state
-/// contract per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+/// contract per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
 ///
 /// Returns `Ok(AddWorkerInput)` iff `current` is
 /// [`AppState::Unlocked`]. The `Err((vault, store))` branch is the
@@ -1401,7 +1401,7 @@ pub fn qr_dialog_msg_after(effect: &QrWorkerEffect) -> Option<AddAccountMsg> {
 /// * `success_toast` is intentionally absent. The counts panel
 ///   parked by `QrSuccess(summary)` inside the still-mounted dialog
 ///   is the surface for the post-merge counts (per
-///   `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+///   `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
 ///   clipboard image path" > "Surface post-merge counts … inline
 ///   (parity with §6)"). A separate `AdwToast` would be redundant.
 ///
@@ -1419,7 +1419,7 @@ pub struct QrDispatch {
     /// [`qr_final_app_state`] returns regardless of typed effect
     /// (the QR worker always rolls the busy gate back because
     /// `Vault::mutate_and_save` is authoritative for the rollback /
-    /// durability-unconfirmed semantics per DESIGN.md §4.3).
+    /// durability-unconfirmed semantics per docs/DESIGN.md §4.3).
     /// `None` is the defensive case where the worker outcome
     /// arrives but `current` is not [`AppState::UnlockedBusy`] —
     /// `AppModel::update` leaves the state untouched rather than
@@ -1748,7 +1748,7 @@ pub fn should_drop_rename_dialog_after(effect: &RenameWorkerEffect) -> bool {
 /// to re-project rows off the freshly reinstalled `(Vault, Store)`
 /// pair and emit [`crate::account_list::AccountListMsg::Refresh`]
 /// so the visible row label matches the post-mutation vault state
-/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `AccountListComponent` ("Refresh the store after every vault
 /// mutation … without reordering surviving rows"):
 ///
@@ -1846,7 +1846,7 @@ pub fn rename_dialog_msg_after(effect: &RenameWorkerEffect) -> Option<RenameDial
 ///
 /// `AppMsg::RenameWorkerCompleted` consults this to decide whether
 /// to raise an `AdwToast` on the `adw::ToastOverlay` per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 /// "In-app account rename" ("On success, refresh
 /// `AccountListComponent` from the returned vault, close the
 /// dialog, and surface a status / toast confirmation."):
@@ -1902,7 +1902,7 @@ pub struct RenameDispatch {
     /// [`rename_final_app_state`] returns regardless of typed effect
     /// (the rename worker always rolls the busy gate back because
     /// `Vault::mutate_and_save` is authoritative for the rollback /
-    /// durability-unconfirmed semantics per DESIGN.md §4.3). `None`
+    /// durability-unconfirmed semantics per docs/DESIGN.md §4.3). `None`
     /// is the defensive case where the worker outcome arrives but
     /// `current` is not [`AppState::UnlockedBusy`] — `AppModel::update`
     /// leaves the state untouched rather than installing a phantom
@@ -2200,7 +2200,7 @@ pub fn apply_unlock_vault_install_inplace(
 /// defensive `validation_error` / `invalid_state` projections all
 /// come back with the same `(Vault, Store)`, because
 /// `Vault::mutate_and_save` is the authoritative rollback /
-/// durability source per DESIGN.md §4.3. There is no `None` case to
+/// durability source per docs/DESIGN.md §4.3. There is no `None` case to
 /// dispatch on, so the helper takes the pair by value and always
 /// installs.
 ///
@@ -2239,7 +2239,7 @@ pub fn apply_rename_vault_install_inplace(
 /// defensive `validation_error` / `invalid_state` / `io_error`
 /// projections all come back with the same `(Vault, Store)`, because
 /// `Vault::mutate_and_save` is the authoritative rollback /
-/// durability source per DESIGN.md §4.3. There is no `None` case to
+/// durability source per docs/DESIGN.md §4.3. There is no `None` case to
 /// dispatch on, so the helper takes the pair by value and always
 /// installs.
 ///
@@ -2353,7 +2353,7 @@ pub fn should_drop_add_dialog_after(effect: &AddWorkerEffect) -> bool {
 /// `(Vault, Store)` pair and emit
 /// [`crate::account_list::AccountListMsg::Refresh`] so the new
 /// account appears in the visible row set per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `AccountListComponent` ("Refresh the store after every vault
 /// mutation … without reordering surviving rows"):
 ///
@@ -2385,7 +2385,7 @@ pub fn should_refresh_list_after_add(effect: &AddWorkerEffect) -> bool {
 ///
 /// `AppMsg::AddWorkerCompleted` consults this to decide whether to
 /// raise an `AdwToast` on the `adw::ToastOverlay` per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 /// `AddAccountComponent` shared shell ("Keep successful manual and
 /// URI additions consistent with §7: refresh the list from the
 /// returned vault, close the dialog, and surface a status / toast
@@ -2494,7 +2494,7 @@ pub struct AddDispatch {
     /// [`add_final_app_state`] returns regardless of typed effect
     /// (the add worker always rolls the busy gate back because
     /// `Vault::mutate_and_save` is authoritative for the rollback /
-    /// durability-unconfirmed semantics per DESIGN.md §4.3). `None`
+    /// durability-unconfirmed semantics per docs/DESIGN.md §4.3). `None`
     /// is the defensive case where the worker outcome arrives but
     /// `current` is not [`AppState::UnlockedBusy`] — `AppModel::update`
     /// leaves the state untouched rather than installing a phantom
@@ -2844,7 +2844,7 @@ pub fn should_drop_remove_dialog_after(effect: &RemoveWorkerEffect) -> bool {
 /// `(Vault, Store)` pair and emit
 /// [`crate::account_list::AccountListMsg::Refresh`] so the removed
 /// account disappears from the visible row set per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `AccountListComponent` ("Refresh the store after every vault
 /// mutation … without reordering surviving rows"):
 ///
@@ -2939,7 +2939,7 @@ pub struct RemoveDispatch {
     /// [`remove_final_app_state`] returns regardless of typed effect
     /// (the remove worker always rolls the busy gate back because
     /// `Vault::mutate_and_save` is authoritative for the rollback /
-    /// durability-unconfirmed semantics per DESIGN.md §4.3). `None`
+    /// durability-unconfirmed semantics per docs/DESIGN.md §4.3). `None`
     /// is the defensive case where the worker outcome arrives but
     /// `current` is not [`AppState::UnlockedBusy`] — `AppModel::update`
     /// leaves the state untouched rather than installing a phantom
@@ -3026,7 +3026,7 @@ pub fn compose_remove_dispatch(current: &AppState, effect: &RemoveWorkerEffect) 
 ///
 /// `AppMsg::RemoveWorkerCompleted` consults this to decide whether
 /// to raise an `AdwToast` on the `adw::ToastOverlay` per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 /// `RemoveDialog` confirmation flow ("On success, refresh
 /// `AccountListComponent` from the returned vault, close the
 /// dialog, and surface a status / toast confirmation."):
@@ -3108,7 +3108,7 @@ pub fn apply_remove_dispatch_inplace(state: &mut AppState, dispatch: &RemoveDisp
 /// defensive `account_not_found` / `io_error` / `validation_error`
 /// projections all come back with the same `(Vault, Store)`, because
 /// `Vault::mutate_and_save` is the authoritative rollback /
-/// durability source per DESIGN.md §4.3. There is no `None` case to
+/// durability source per docs/DESIGN.md §4.3. There is no `None` case to
 /// dispatch on, so the helper takes the pair by value and always
 /// installs.
 ///
@@ -3233,7 +3233,7 @@ pub fn compose_unlock_worker_input(
 /// `(Vault, Store)` pair on success and `None` on every failure so
 /// `AppModel::update`'s `apply_unlock_vault_install_inplace` /
 /// `apply_unlock_dispatch_inplace` pair can apply the outcome
-/// uniformly per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+/// uniformly per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
 #[must_use]
 pub fn run_unlock_worker(input: UnlockWorkerInput) -> UnlockWorkerCompletion {
     let UnlockWorkerInput { path, lock } = input;
@@ -3364,7 +3364,7 @@ pub fn compose_import_worker_input(
 /// the same `UnlockedBusy → Unlocked` rollback via
 /// [`AppState::leave_busy`] because `Vault::mutate_and_save` is
 /// authoritative for the rollback / durability-unconfirmed semantics
-/// per DESIGN.md §4.3. The dialog-drop / inline-message decisions
+/// per docs/DESIGN.md §4.3. The dialog-drop / inline-message decisions
 /// split off the typed outcome in sibling composers; this composer
 /// owns only the state-machine rollback.
 ///
@@ -3391,7 +3391,7 @@ pub fn import_final_app_state(current: &AppState, _outcome: &MergeOutcome) -> Op
 /// clicks Dismiss, and every failure / warning keeps it open with
 /// the inline error / warning visible so the user can retry. This
 /// diverges from the rename / remove / add path where success drops
-/// the dialog — matching the `IMPLEMENTATION_PLAN_04_GTK.md`
+/// the dialog — matching the `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Component tree" > `ImportDialog` rule "keep the dialog on a
 /// post-success counts panel until the user dismisses it".
 ///
@@ -3433,7 +3433,7 @@ pub fn import_dialog_msg_after(outcome: &MergeOutcome) -> Option<ImportDialogMsg
 
 /// List-refresh projection after an import worker outcome.
 ///
-/// Mirrors `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// Mirrors `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `AccountListComponent` ("Refresh the store after every vault
 /// mutation … without reordering surviving rows"):
 ///
@@ -3499,7 +3499,7 @@ pub struct ImportDispatch {
     /// [`crate::import_dialog::ImportDialogComponent`] controller
     /// after applying [`Self::app_state`]. Always `false` because
     /// the dialog stays mounted on every outcome per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     /// `ImportDialog` ("keep the dialog on a post-success counts
     /// panel until the user dismisses it").
     pub drop_dialog: bool,
@@ -3566,7 +3566,7 @@ pub fn apply_import_dispatch_inplace(state: &mut AppState, dispatch: &ImportDisp
 /// import worker always returns the pair on every branch (`Success`,
 /// `DurabilityWarning`, `NotCommitted`, `Inline`) because
 /// `Vault::mutate_and_save` is the authoritative rollback /
-/// durability source per DESIGN.md §4.3. There is no `None` case to
+/// durability source per docs/DESIGN.md §4.3. There is no `None` case to
 /// dispatch on, so the helper takes the pair by value and always
 /// installs.
 ///
@@ -3595,7 +3595,7 @@ pub fn apply_import_vault_install_inplace(
 /// success path adds the [`Self::success_toast`] field because the
 /// `ExportDialog` closes on success and surfaces the written path through
 /// an [`AdwToast`](adw::Toast) on the main overlay rather than an inline
-/// counts panel (per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// counts panel (per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `ExportDialog`).
 ///
 /// `Clone` is intentionally not derived: the contained
@@ -3902,7 +3902,7 @@ pub fn apply_export_vault_install_inplace(
 // `PassphraseDialogMsg::WorkerFailed(outcome)` so the dialog re-
 // renders the typed `save_not_committed` /
 // `save_durability_unconfirmed` / defensive inline error per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors".
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors".
 // ---------------------------------------------------------------------------
 
 /// Pre-worker `Unlocked → UnlockedBusy` transition for the
@@ -4089,7 +4089,7 @@ pub fn passphrase_success_toast_after(effect: &PassphraseWorkerEffect) -> Option
 ///   open and DESIGN §4.5 owns the in-memory mode rollback /
 ///   replacement, so no flag flip propagates outside the dialog.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`PassphraseDialog` full
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`PassphraseDialog` full
 /// implementation" line 3403 ("On success, update the visible
 /// vault-mode flag before closing the dialog, post a status / toast
 /// confirmation, and re-ask `IdlePolicy::should_arm` so the auto-lock
@@ -4228,7 +4228,7 @@ pub fn apply_passphrase_dispatch_inplace(
 //
 // `reask_idle` flips on for auto-lock changes whose `SaveOutcome` left
 // the new value on disk (Success / DurabilityWarning) per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"SettingsComponent" line 3468:
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"SettingsComponent" line 3468:
 // "Re-ask `IdlePolicy::should_arm` after auto-lock toggle or timeout
 // changes so the timer state tracks the new policy without
 // re-inspecting the file." Clipboard-clear changes never affect the
@@ -4321,7 +4321,7 @@ pub fn compose_settings_worker_input(
 /// Symmetric partner of [`apply_rename_vault_install_inplace`] for
 /// the settings path. The pair is always reinstalled —
 /// `Vault::mutate_and_save` is authoritative for the rollback /
-/// durability-unconfirmed semantics per DESIGN.md §4.3, so the
+/// durability-unconfirmed semantics per docs/DESIGN.md §4.3, so the
 /// returned vault reflects the committed state regardless of which
 /// [`SaveOutcome`] the worker classified.
 pub fn apply_settings_vault_install_inplace(
@@ -4409,7 +4409,7 @@ pub fn settings_success_toast_after(effect: &SettingsWorkerEffect) -> Option<Str
 ///   inputs from `VaultSettings`; the clipboard-clear toggles /
 ///   spinners cannot affect it.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` line 3468: "Re-ask
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` line 3468: "Re-ask
 /// `IdlePolicy::should_arm` after auto-lock toggle or timeout changes
 /// so the timer state tracks the new policy without re-inspecting the
 /// file."
@@ -4552,7 +4552,7 @@ pub fn initial_effects_for(state: &AppState) -> Option<EffectOwnership> {
 /// pending flag on the in-flight state machine (already done by
 /// `request_quit` itself) and waits for the worker-completion path
 /// to surface [`crate::effect_ownership::CompleteOutcome::QuitNow`]
-/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+/// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
 pub fn handle_quit_request(effects: Option<&mut EffectOwnership>) -> QuitDecision {
     match effects {
         Some(state) => state.request_quit(),
@@ -4578,7 +4578,7 @@ pub fn handle_quit_request(effects: Option<&mut EffectOwnership>) -> QuitDecisio
 ///
 /// `AppModel::update`'s vault-touching dispatch branches call this
 /// helper before moving the `(Vault, Store)` pair into a
-/// `gio::spawn_blocking` worker, per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// `gio::spawn_blocking` worker, per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"In-flight effect ownership". An `Accepted` return is the gate
 /// the caller respects when transitioning `AppState` via
 /// [`AppState::enter_busy`].
@@ -4610,7 +4610,7 @@ pub fn handle_effect_request(
 /// `AppModel::update`'s `*WorkerCompleted` branches call this helper
 /// after reinstalling the returned `(Vault, Store)` pair so the
 /// dispatch epilogue's deferred-quit and deferred-lock handlers see
-/// the post-worker state, per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// the post-worker state, per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"In-flight effect ownership".
 pub fn handle_effect_completion(
     effects: Option<&mut EffectOwnership>,
@@ -4641,7 +4641,7 @@ pub fn handle_effect_completion(
 ///
 /// `AppModel::update`'s `AppMsg::AutoLockTimerFired` handler calls
 /// this helper to decide whether to lock now, drop the signal, or
-/// just record the deferral, per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// just record the deferral, per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"In-flight effect ownership" and §"Auto-lock and clipboard
 /// auto-clear".
 pub fn handle_auto_lock_expiry(
@@ -4672,7 +4672,7 @@ pub fn handle_auto_lock_expiry(
 /// `AppModel::update`'s `*WorkerCompleted` branches call this helper
 /// on the failure-before-return paths, then route the surface to
 /// `StartupErrorComponent` without trying to reconstruct in-memory
-/// vault state, per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// vault state, per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"In-flight effect ownership".
 pub fn handle_worker_lost(effects: Option<&mut EffectOwnership>) {
     if let Some(state) = effects {

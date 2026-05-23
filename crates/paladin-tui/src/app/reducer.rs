@@ -2,7 +2,7 @@
 
 //! Pure reducer: `(state, event) → (state, Vec<Effect>)`.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)" this
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)" this
 //! function is the only place the TUI's state transitions live, so
 //! every transition is unit-testable without a terminal. Impure
 //! side effects are returned as [`Effect`] values and executed by
@@ -41,7 +41,7 @@ use crate::search::{filtered_account_ids, select_after_search};
 ///
 /// This slice covers the global quit keybindings, the Unlock screen's
 /// passphrase-input handling, and the [`EffectResult::Unlock`] outcome
-/// from `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)",
+/// from `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)",
 /// "Focus model", and "Startup / vault modes":
 ///
 /// * `Ctrl-C` quits on any screen.
@@ -68,7 +68,7 @@ use crate::search::{filtered_account_ids, select_after_search};
 /// Locked` transition when the current `Unlocked` state carries an
 /// `idle_deadline` and [`paladin_core::IdlePolicy::is_expired`]
 /// returns `true` for the tick's `monotonic` instant — per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)". The carried
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)". The carried
 /// `Vault` / `Store` drop in place on the transition. Ticks with no
 /// deadline, before the deadline, or on non-`Unlocked` screens are
 /// passthrough.
@@ -76,7 +76,7 @@ use crate::search::{filtered_account_ids, select_after_search};
 /// [`AppEvent::ClipboardClear`] on [`AppState::Locked`] with a
 /// matching-token `pending_clipboard_clear` hands the wipe off as an
 /// [`Effect::ClearClipboard`] and clears the pending slot — per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
 /// *"A clipboard auto-clear timer scheduled before lock survives
 /// lock and still fires only-if-unchanged."* Stale-token wakes,
 /// `None`-pending wakes, and wakes on non-`Locked` states are
@@ -85,7 +85,7 @@ use crate::search::{filtered_account_ids, select_after_search};
 ///
 /// `AppEvent::Input` additionally rebases the auto-lock idle deadline
 /// on the event's `at` timestamp when the post-dispatch state is
-/// `Unlocked`, per `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+/// `Unlocked`, per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
 /// *"Idle is reset by any `AppEvent::Input`."* The rebase delegates to
 /// [`compute_idle_deadline`] so the plaintext / disabled `None` cases
 /// fall out of [`paladin_core::IdlePolicy::should_arm`] rather than a
@@ -120,7 +120,7 @@ pub fn reduce(state: AppState, event: AppEvent) -> (AppState, Vec<Effect>) {
 /// variant change; any pending clipboard auto-clear is carried onto
 /// the resulting [`AppState::Locked`] so the timer thread's wake
 /// event still finds pending state to act on. Per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
 /// *"Locking discards the Vault / Store, open HOTP reveal windows,
 /// the search query, and any modal while retaining the resolved
 /// vault path…"* and *"A clipboard auto-clear timer scheduled before
@@ -160,9 +160,9 @@ fn maybe_auto_lock(state: AppState, now: Instant) -> AppState {
 /// and the reveal deadline transitions to [`AppState::Locked`] (which
 /// has no reveal slot) without this helper running — the variant
 /// change is the source of truth for "lock discards open HOTP reveal
-/// windows" (`IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)").
+/// windows" (`docs/IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)").
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > HOTP reveal window":
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests > HOTP reveal window":
 /// *"Reveal closes after the deadline returned by
 /// `paladin_core::policy::hotp_reveal::deadline(now)`
 /// (`paladin_core::HOTP_REVEAL_SECS` measured on a monotonic
@@ -191,7 +191,7 @@ fn maybe_close_expired_hotp_reveal(mut state: AppState, now: Instant) -> AppStat
 /// and clears `pending_clipboard_clear` so a duplicate wake is a
 /// no-op. The live-clipboard read and
 /// [`paladin_core::ClipboardClearPolicy::should_clear`] decision live
-/// in the executor — per `IMPLEMENTATION_PLAN_03_TUI.md`
+/// in the executor — per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 /// "Clipboard auto-clear (per §6)": *"on wake, it ignores stale
 /// tokens, reads the current clipboard, asks
 /// `ClipboardClearPolicy::should_clear`, and writes empty when the
@@ -287,7 +287,7 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
 
 /// Handle the outcome of an [`Effect::Export`].
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" > Export:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" > Export:
 /// *"writer errors (`io_error`, `save_not_committed`,
 /// `save_durability_unconfirmed`, `invalid_passphrase`) and the refused
 /// overwrite gate stay in the Export modal as inline errors. Export
@@ -309,7 +309,7 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
 /// On `Ok(())` while `Modal::Export` is open the reducer closes the
 /// modal (`modal = None`) and publishes a
 /// [`StatusLine::Confirmation`] referencing the written destination
-/// path — per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+/// path — per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
 /// "Successful modal outcomes": *"manual Add, URI Add, Remove,
 /// Rename, Export, Passphrase, and Settings close the modal and
 /// publish a status-line confirmation."* Closing the modal drops the
@@ -354,7 +354,7 @@ fn reduce_export_result(
 /// `pending_clipboard_clear` with the captured bytes. When the
 /// setting is disabled the policy returns `None` and
 /// `pending_clipboard_clear` is left untouched — per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per §6)":
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per §6)":
 /// *"at copy time it stores the latest `ClipboardClearToken` plus the
 /// captured bytes in UI state."* The successful arm also clears any
 /// prior `status_line` (last-write-wins, matching
@@ -422,7 +422,7 @@ fn reduce_copy_code_result(
 /// On `Err(PaladinError::SaveDurabilityUnconfirmed)` with a
 /// `staged_code: Some(_)`, open (or replace) the reveal slot using the
 /// staged code AND surface a status-line note built from
-/// [`render_error_message`] — per `IMPLEMENTATION_PLAN_03_TUI.md`
+/// [`render_error_message`] — per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 /// "Effect errors":
 /// *"Durability-unconfirmed failures (`save_durability_unconfirmed`)
 /// reveal the new code and `Code.counter_used` label and report the
@@ -494,7 +494,7 @@ fn reduce_hotp_advance_result(
 /// [`StatusLine::Confirmation`] derived from the post-rename label —
 /// the executor has already mutated the vault via
 /// `Vault::mutate_and_save`, so `vault.iter()` carries the new
-/// label. Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+/// label. Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
 /// *"manual Add, URI Add, Remove, Rename, Export, Passphrase, and
 /// Settings close the modal and publish a status-line confirmation."*
 ///
@@ -569,7 +569,7 @@ fn reduce_rename_result(
 /// `Vault::iter()` through `Vault::mutate_and_save` by the time the
 /// reducer sees the result, so the label must come back through the
 /// `EffectResult` rather than from a post-hoc vault lookup. Per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"manual Add,
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"manual Add,
 /// URI Add, Remove, Rename, Export, Passphrase, and Settings close
 /// the modal and publish a status-line confirmation."*
 ///
@@ -626,7 +626,7 @@ fn reduce_remove_result(
 ///
 /// On `Ok(())` while [`AppState::Unlocked`] with `Modal::Settings`
 /// open, close the modal and publish a [`StatusLine::Confirmation`]
-/// — per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"manual
+/// — per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"manual
 /// Add, URI Add, Remove, Rename, Export, Passphrase, and Settings
 /// close the modal and publish a status-line confirmation."*
 ///
@@ -672,7 +672,7 @@ fn reduce_settings_result(
 /// Handle the outcome of an `Effect::PassphraseSet` /
 /// `PassphraseChange` / `PassphraseRemove`.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
 /// *"The transition methods (`set_passphrase` / `change_passphrase` /
 /// `remove_passphrase`) save themselves through `&Store` and handle
 /// their own pre-commit rollback per DESIGN §4.5 (the in-memory
@@ -735,7 +735,7 @@ fn reduce_passphrase_result(
 /// Handle the outcome of an [`Effect::Add`] / [`Effect::AddFromUri`] /
 /// [`Effect::AddAnyway`].
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
 /// *"manual and URI duplicate collisions call
 /// `Vault::find_duplicate(&validated)` before mutation. A collision
 /// initially rejects with the existing account in the modal and
@@ -791,7 +791,7 @@ fn reduce_add_result(
             // `format_validation_warning` and appended after the
             // confirmation as `warning: <text>` — multiple warnings
             // are joined with `; ` so the status line stays single-
-            // line per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+            // line per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
             // §6)" > Add.
             let display = format_account_display_label(&success.summary);
             let confirmation = if success.warnings.is_empty() {
@@ -824,7 +824,7 @@ fn reduce_add_result(
 
 /// Handle the outcome of an [`Effect::AddFromClipboardQr`].
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal":
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Add modal":
 /// *"No-image, no-QR, and invalid-QR cases reject inline."* On any
 /// `Err(...)` the Add modal stays open and the rendered failure is
 /// stashed in [`AddModal::error`] via [`format_qr_import_failure`] so
@@ -886,7 +886,7 @@ fn reduce_qr_import_result(
 
 /// Handle the outcome of an [`Effect::Import`].
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
 /// on success the modal renders a post-success counts panel populated
 /// from the carried [`paladin_core::ImportReport`] — the four merge
 /// totals (`imported` / `skipped` / `replaced` / `appended`) flow
@@ -1119,7 +1119,7 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
 
 /// Per-step input handling for the in-app create-vault wizard.
 ///
-/// Per `DESIGN.md` §6 / `IMPLEMENTATION_PLAN_03_TUI.md`
+/// Per `docs/DESIGN.md` §6 / `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 /// "Startup / vault modes":
 ///
 /// * **`ChooseMode`**: `↑` / `↓` / `j` / `k` toggle between
@@ -1379,7 +1379,7 @@ fn reduce_create_vault_input(state: AppState, key: &KeyEvent) -> (AppState, Vec<
 /// Handle a key event on the Unlocked (main list) screen.
 ///
 /// Three transitions land in this slice, all from
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
 ///
 /// * **Modal openers** (seven bare-letter keys):
 ///
@@ -1459,7 +1459,7 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         // The Help overlay is read-only: every key besides `Esc`
         // (handled above) and `Ctrl-C` (caught upstream in
         // [`reduce_input`]) is a silent no-op while it is visible
-        // per `IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay": *"The
+        // per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay": *"The
         // overlay has no inputs and never mutates vault state."*
         // Modal openers, navigation, `q`, `/`, `n`, and even
         // bare-letter Char presses are suppressed so they cannot
@@ -1490,7 +1490,7 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         // modal open, these keys mirror the modal-routing no-op of
         // `PgDn` / `PgUp`. `Ctrl-N` / `Ctrl-P` are the modal-LOCAL
         // aliases of `Tab` / `Shift-Tab` per
-        // `IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation":
+        // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation":
         // they are unbound at the top level (silent no-ops in this
         // branch so they cannot flip List ↔ Search focus) and, with
         // a modal open, they produce the same observable no-op as
@@ -1651,7 +1651,7 @@ fn route_unlocked_char_kbd(mut state: AppState, c: char) -> (AppState, Vec<Effec
 ///
 /// `Ctrl-F` / `Ctrl-B` mirror `PgDn` / `PgUp` and `Ctrl-D` / `Ctrl-U`
 /// are the vim half-page bindings per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation". They only
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation". They only
 /// fire when no modal is open (modals trap focus) and the modifier
 /// set equals `KeyModifiers::CONTROL` exactly — Ctrl-Shift-* /
 /// Ctrl-Alt-* stay unbound, matching the `Ctrl-Shift-G is unbound`
@@ -1691,7 +1691,7 @@ fn n_effects_for_char(
 /// vault + selection, or `None` when the binding is not `R` or when the
 /// selection cannot be resolved to a vault account.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Rename:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Rename:
 /// *"single text field pre-populated with the selected account's
 /// current label."* Selection is gated upstream by
 /// [`selection_gated_status_error`], so a `selected = None` here means
@@ -1720,7 +1720,7 @@ fn pending_rename_for_char(
 /// selection, or `None` when the binding is not `r` or when nothing
 /// is selected.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Remove: a
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Remove: a
 /// confirmation gate keyed by the selected account. Selection is
 /// gated upstream by [`selection_gated_status_error`], so a
 /// `selected = None` here means the caller bypassed the gate
@@ -1742,7 +1742,7 @@ fn pending_remove_for_char(c: char, selected: Option<AccountId>) -> Option<Remov
 /// Construct the [`SettingsModal`] payload for `s` from the live vault
 /// settings, or `None` when the binding is not `s`.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Settings:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Settings:
 /// *"The modal accumulates pending edits in modal-local state and
 /// only commits on Confirm."* The reducer snapshots the live
 /// [`paladin_core::VaultSettings`] into the modal's pending fields at
@@ -1801,7 +1801,7 @@ fn route_modal_input(
 
 /// Add modal's input path.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
 /// *"`←` / `→` change segmented selectors"* and *"`Tab` and `Ctrl-N`
 /// move to the next control, `Shift-Tab` and `Ctrl-P` move to the
 /// previous control."*
@@ -1970,7 +1970,7 @@ fn route_add_modal_input(
     // the modal-local focus aliases `Ctrl-N` / `Ctrl-P` (and their
     // `Tab` / `Shift-Tab` siblings) must be silent no-ops rather
     // than cycle the now-hidden field set. Per
-    // `IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation":
+    // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation":
     // *"`Ctrl-N` / `Ctrl-P` inside modals have no effect on a
     // post-success counts panel — lands alongside the counts panel
     // payload (Add / Import / Export)."*
@@ -1978,7 +1978,7 @@ fn route_add_modal_input(
         return Vec::new();
     }
     // Pending duplicate-add state shortcircuits Enter on both Manual
-    // and URI modes per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+    // and URI modes per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
     // §6)" > Add: *"A collision initially rejects with the existing
     // account in the modal and offers an 'add anyway' confirmation
     // that inserts the pending validated account on the
@@ -2087,7 +2087,7 @@ fn route_add_modal_input(
 /// `otpauth://` URIs via `paladin_core::import::qr_image_bytes`, and
 /// import them via `Vault::import_accounts` with
 /// [`paladin_core::ImportConflict::Skip`] per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add. QR mode
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add. QR mode
 /// has no modal-local form fields, so every other key is a silent
 /// no-op so the modal-trap contract holds.
 fn route_add_qr_mode_input(path: &std::path::Path, key: &KeyEvent) -> Vec<Effect> {
@@ -2131,7 +2131,7 @@ fn route_add_uri_mode_input(
 
 /// Settings modal's input path.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
 /// `Ctrl-N` move to the next control, `Shift-Tab` and `Ctrl-P` move
 /// to the previous control … `Space` toggles the focused checkbox /
 /// toggle … `↑` / `↓` adjust spinners … The spinners clamp to the
@@ -2149,7 +2149,7 @@ fn route_add_uri_mode_input(
 /// [`Effect::ApplySettings`] carrying exactly the changed
 /// [`SettingPatch`]es (declaration order of [`SettingsFocus`]). An
 /// empty diff closes the modal in place without emitting any effect
-/// — per `IMPLEMENTATION_PLAN_03_TUI.md` > Settings modal: *"Confirm
+/// — per `docs/IMPLEMENTATION_PLAN_03_TUI.md` > Settings modal: *"Confirm
 /// with no changes closes the modal without invoking save."*
 /// Every other key is a silent no-op; Esc / Help / Ctrl-C are
 /// filtered upstream of the modal trap. The bool in the tuple return
@@ -2266,7 +2266,7 @@ fn pending_settings_diff(modal: &SettingsModal, vault: &Vault) -> Vec<SettingPat
 /// inclusive `min..=max` range so saturation at either end is a
 /// silent no-op rather than wrapping or overshooting. Implements the
 /// "spinners clamp to the shared core bounds" rule from
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)".
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)".
 fn step_spinner(current: u32, up: bool, min: u32, max: u32) -> u32 {
     let step = min;
     if up {
@@ -2295,7 +2295,7 @@ fn is_modal_focus_prev(key: &KeyEvent) -> bool {
 
 /// Remove modal's input path.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Remove:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Remove:
 /// confirmation modal whose only affordance is `Enter` to confirm
 /// removal. `Enter` emits [`Effect::Remove`] carrying the
 /// snapshotted `account_id`. Every other key (printable Chars,
@@ -2319,7 +2319,7 @@ fn route_remove_modal_input(
 
 /// Rename modal's input path.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Rename:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Rename:
 /// printable Chars append to `draft`, Backspace pops, Enter validates
 /// through [`paladin_core::validate_label`] and either emits
 /// [`Effect::Rename`] (with the trimmed draft) or surfaces an inline
@@ -2363,7 +2363,7 @@ fn route_rename_modal_input(
 
 /// Import modal's input path.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
 /// the modal collects a source path, a format selector (auto-detect or
 /// explicit `otpauth` / `aegis` / `paladin` / `qr`), and an
 /// on-conflict selector.
@@ -2485,7 +2485,7 @@ fn route_import_modal_input(
 
 /// Export modal's input path.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
 /// *"Overwriting an existing file is rejected unless the user
 /// confirms an inline overwrite gate (parity with CLI `--force`)."*
 /// The refused-overwrite gate is the first submit-time check: if the
@@ -2496,11 +2496,11 @@ fn route_import_modal_input(
 /// `reason = "output_exists"` lands in
 /// [`ExportModal::error`](crate::app::state::ExportModal::error) so
 /// the wording matches `paladin-cli/src/commands/export.rs`'s
-/// `refuse_existing_overwrite` (DESIGN.md §5) and the GTK
+/// `refuse_existing_overwrite` (docs/DESIGN.md §5) and the GTK
 /// `overwrite_gate_needs_reset` flow.
 ///
 /// The second submit-time check is the encrypted twice-confirm
-/// passphrase gate. Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals
+/// passphrase gate. Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals
 /// (per §6)" > Export: *"Encrypted exports prompt twice for the
 /// bundle passphrase ..."*. When `format = ExportFormat::Encrypted`
 /// and the two typed buffers differ byte-for-byte, the reducer
@@ -2509,11 +2509,11 @@ fn route_import_modal_input(
 /// `reason = "confirmation_mismatch"` inline on
 /// [`ExportModal::error`](crate::app::state::ExportModal::error) so
 /// the wording matches the CLI's `prompt_new_passphrase`
-/// (`paladin-cli/src/prompt.rs`, DESIGN.md §5) and the GTK
+/// (`paladin-cli/src/prompt.rs`, docs/DESIGN.md §5) and the GTK
 /// `SubmitRejection::ConfirmationMismatch` wire code.
 ///
 /// The third submit-time check is the zero-length passphrase gate.
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests" > Export modal:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests" > Export modal:
 /// *"Encrypted export rejects empty new passphrase with
 /// `zero_length`."*. When `format = ExportFormat::Encrypted` and the
 /// twice-confirmed buffer is empty (both rows blank slip past the
@@ -2528,7 +2528,7 @@ fn route_import_modal_input(
 ///
 /// The plaintext path has its own submit-time check: the
 /// unencrypted-secrets acknowledgement gate. Per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
 /// *"Plaintext exports render
 /// `paladin_core::format_plaintext_export_warning()` verbatim and the
 /// user must confirm before the write proceeds."*. When
@@ -2539,7 +2539,7 @@ fn route_import_modal_input(
 /// [`paladin_core::format_plaintext_export_warning`] lands verbatim
 /// on [`ExportModal::error`](crate::app::state::ExportModal::error) so
 /// the wording matches the CLI's stderr advisory
-/// (`paladin-cli/src/commands/export.rs`, DESIGN.md §4.6 / §6) and
+/// (`paladin-cli/src/commands/export.rs`, docs/DESIGN.md §4.6 / §6) and
 /// the GTK `ExportDialog`'s `plaintext_warning_body()` checkbox label.
 ///
 /// Once every gate passes, the reducer emits a single
@@ -2549,7 +2549,7 @@ fn route_import_modal_input(
 /// [`PassphraseBuffer::take`]. The companion `confirm_passphrase`
 /// buffer is wiped via [`PassphraseBuffer::clear`] in the same step so
 /// both halves of the twice-prompt zeroize on submit per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers":
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers":
 /// *"Encrypted export passphrase buffer zeroizes on submit, cancel,
 /// modal close, and auto-lock."* The plaintext path emits the same
 /// [`Effect::Export`] shape with `passphrase = None`.
@@ -2614,7 +2614,7 @@ fn route_export_modal_input(
 
 /// Passphrase modal's input path (submit axis).
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
 /// *"three sub-flows mirroring CLI's `passphrase set / change /
 /// remove`. ... New passphrases (`set`, `change`) are prompted twice
 /// and confirmed; mismatch returns to the modal with an inline
@@ -2636,7 +2636,7 @@ fn route_export_modal_input(
 /// [`Effect::PassphraseChange`], and the `confirm_passphrase`
 /// sibling is wiped via [`crate::prompt::PassphraseBuffer::clear`]
 /// — both operations zeroize in place per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"All
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"All
 /// passphrase-entry fields ... keep typed bytes in zeroizing
 /// buffers, convert to `secrecy::SecretString` only for core calls,
 /// and zeroize on submit, cancel, modal close, and auto-lock."*
@@ -2696,7 +2696,7 @@ fn route_passphrase_modal_input(
 /// error when a selection-gated action key fires without a selected
 /// row. Returns `Some(StatusLine::Error(...))` for `n` / `r` / `R`
 /// with `selected = None` and `None` for every other shape per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": *"With no
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": *"With no
 /// selection, `Enter`, `n`, `r`, and `R` produce a status-line 'no
 /// account selected' error and no effect; Add / Import / Export /
 /// Passphrase / Settings remain available from list focus."*
@@ -2766,7 +2766,7 @@ fn dispatch_unlocked_char(
     }
     if c == '?' {
         // `?` opens the read-only Help overlay from list focus per
-        // `IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay". This arm
+        // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay". This arm
         // is only reached when no modal is open (filtered upstream),
         // focus is `Focus::List` (Focus::Search consumes Char as
         // text input), no Ctrl/Alt modifier is held (filtered
@@ -2879,7 +2879,7 @@ fn enter_on_unlocked(
 /// Resolve whether `Enter` on Unlocked should emit a
 /// [`Effect::CopyCode`] for the currently selected account.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` Keybindings: *"`Enter` — Copy
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` Keybindings: *"`Enter` — Copy
 /// selected code (TOTP: current; HOTP: visible only)."* The rules:
 ///
 /// * No selection → `None`.
@@ -3081,7 +3081,7 @@ fn recenter_viewport(mut state: AppState) -> (AppState, Vec<Effect>) {
 /// surfaces (`Focus::List` ↔ `Focus::Search`) for the `Tab` /
 /// `Shift-Tab` keybinding.
 ///
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings" rule: *"Cycle focus
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings" rule: *"Cycle focus
 /// between search bar and list (preserves active query when leaving
 /// search)"*. Top-level Unlocked has only two surfaces, so `Tab` and
 /// `Shift-Tab` (which crossterm reports as `KeyCode::BackTab`) swap
@@ -3214,7 +3214,7 @@ fn route_search_focus_char(
 /// Map a bare-letter Unlocked-screen keybinding to the payload-free
 /// modal it opens, or `None` if the character is not such a binding.
 ///
-/// Mirrors `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)"
+/// Mirrors `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)"
 /// for the modals whose initial state does not depend on vault data:
 /// Add / Import / Export / Passphrase. The `r` (Remove), `R`
 /// (Rename), and `s` (Settings) bindings are handled separately by
@@ -3354,11 +3354,11 @@ fn quits_on_q(state: &AppState) -> bool {
 
 /// Wipe the Unlock-screen passphrase buffer in place on a cancel-quit.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers":
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers":
 /// *"Unlock passphrase buffer zeroizes on submit, cancel, and
 /// auto-lock."* The same guarantee covers
 /// [`CreateVaultStep::EnterPassphrase`] (per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes": *"Esc
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes": *"Esc
 /// returns to `ChooseMode` (both buffers zeroized); Ctrl-C quits and
 /// zeroizes."*).
 ///

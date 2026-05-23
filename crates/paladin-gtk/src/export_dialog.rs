@@ -2,7 +2,7 @@
 
 //! Export-dialog pure-logic state machine for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `ExportDialog` and §"Tests > Pure-logic unit tests >
 //! `tests/export_dialog_logic.rs`", the dialog hosts a
 //! [`gtk::FileDialog`] for the destination path, a format selector
@@ -652,7 +652,7 @@ pub fn compose_submit_outcome(state: &ExportDialogState) -> SubmitOutcome {
 
 /// Input bundle moved into the `gio::spawn_blocking` worker.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `ExportDialog`: the live `(Vault, Store)` pair is moved into the
 /// worker so the export read happens off the main loop (the
 /// encrypted-bundle path runs the §4.4 Argon2id KDF and a fresh AEAD
@@ -706,7 +706,7 @@ pub struct ExportWorkerCompletion {
 
 /// Synchronous body of the `gio::spawn_blocking` export worker.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `ExportDialog`:
 ///
 /// 1. Render the export bytes:
@@ -780,7 +780,7 @@ pub struct ExportDialogInit {
 /// Messages handled by [`ExportDialogComponent`].
 ///
 /// The set covers the format-selector + destination-picker +
-/// overwrite-gate sub-items from `IMPLEMENTATION_PLAN_04_GTK.md`
+/// overwrite-gate sub-items from `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Milestone 7 checklist" > `ExportDialogComponent` plus the
 /// explicit Cancel / Close dismissal paths. Subsequent sub-items
 /// extend the enum with the plaintext-warning toggle, the
@@ -855,7 +855,7 @@ pub enum ExportDialogMsg {
     /// emits [`ExportDialogOutput::Cancel`] so `AppModel` drops the
     /// live controller and the form draft is discarded. Passphrase
     /// buffers are zeroized before the output is emitted per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Secret entry handling".
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Secret entry handling".
     Cancel,
     /// User dismissed the dialog via the parent close path (Escape /
     /// window close). The dispatch arm emits
@@ -973,7 +973,7 @@ pub struct ExportDialogState {
     /// Inline warning staged after a `save_durability_unconfirmed`
     /// writer outcome. Carries the typed [`InlineWarning`] so the
     /// dialog body can render the committed-but-uncertain warning per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors". Cleared on
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors". Cleared on
     /// `WorkerCompleted(Success)` and on subsequent successful
     /// submissions.
     inline_warning: Option<InlineWarning>,
@@ -1510,8 +1510,8 @@ pub fn format_export_success_toast(destination: &Path) -> String {
 
 /// Widget-bearing `adw::Dialog` for the application menu's Export… entry.
 ///
-/// Mounts the libadwaita dialog described in DESIGN.md §7
-/// (`ExportDialog`) and `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+/// Mounts the libadwaita dialog described in docs/DESIGN.md §7
+/// (`ExportDialog`) and `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component
 /// tree" > `ExportDialog`. The widget body now exposes the
 /// destination picker (an `adw::ActionRow` with a "Choose file…"
 /// `gtk::Button` that opens a [`gtk::FileDialog`]) and the format
@@ -1536,7 +1536,7 @@ pub struct ExportDialogComponent {
     /// `AdwPasswordEntryRow` so [`Self::update`] can call
     /// [`adw::PasswordEntryRow::set_text("")`] to wipe the GTK
     /// `gtk::EntryBuffer` on Submit / Cancel / Close per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Secret entry handling". A
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Secret entry handling". A
     /// `#[watch]` binding on `set_text:` would loop indefinitely
     /// because `gtk_editable_set_text` is implemented as `delete +
     /// insert` and always emits `changed`; the explicit call here
@@ -1854,7 +1854,7 @@ impl SimpleComponent for ExportDialogComponent {
         // `SecretEntry` shadows are cleared inside `apply_msg`; the
         // explicit `set_text("")` here wipes the widget buffer (the
         // unavoidable UI-side copy of the typed passphrase) per
-        // `IMPLEMENTATION_PLAN_04_GTK.md` §"Secret entry handling".
+        // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Secret entry handling".
         // `WorkerCompleted(Success)` also triggers a wipe because the
         // dialog tears down on the emitted `Close` output, and the
         // widget should not hold the typed passphrase between the

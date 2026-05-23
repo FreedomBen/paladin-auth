@@ -10,7 +10,7 @@
 //! grid via `insta::assert_snapshot!`.
 //!
 //! Screen renderers land slice-by-slice per
-//! `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Insta snapshots":
+//! `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Insta snapshots":
 //! create-vault / startup-error / unlock first (the boundary
 //! screens), list view next (with TOTP gauges, HOTP reveal labels,
 //! status-line states, and search highlighting), then modals and
@@ -104,7 +104,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color
             // The read-only Help overlay paints last so it sits on
             // top of any modal that might also be open. The reducer
             // suppresses `?` while a modal is open (per
-            // `IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay"), so in
+            // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay"), so in
             // practice the two are mutually exclusive — drawing the
             // overlay last is a defensive layer that keeps the
             // dismiss-hint visible if the invariant were ever

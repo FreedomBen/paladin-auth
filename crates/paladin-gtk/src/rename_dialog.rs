@@ -2,7 +2,7 @@
 
 //! Rename-dialog pure-logic state machine for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" > Rename
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" > Rename
 //! dialog and §"Effect errors" > "Add / remove / rename / settings
 //! saves", `RenameDialog` edits the label of an existing account
 //! and routes the worker outcome of
@@ -205,7 +205,7 @@ pub enum RenameWorkerEffect {
 /// outcome — `Vault::mutate_and_save` already restores the snapshot
 /// on `save_not_committed`, so the returned vault is the
 /// authoritative post-effect state regardless of the
-/// [`RenameWorkerEffect`] variant. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// [`RenameWorkerEffect`] variant. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Vault interaction" > "Every worker returns `(Vault, Store,
 /// EffectOutcome)`".
 ///
@@ -241,7 +241,7 @@ pub struct RenameWorkerCompletion {
 /// live `(Vault, Store)` pair is always returned so `AppModel`
 /// reinstalls it regardless of the typed effect — `mutate_and_save`
 /// is authoritative for the rollback / durability-unconfirmed
-/// semantics per DESIGN.md §4.3.
+/// semantics per docs/DESIGN.md §4.3.
 ///
 /// Extracting the worker body as a pure function lets
 /// `AppModel::update`'s closure stay a thin
@@ -439,7 +439,7 @@ pub fn format_rename_dialog_save_label() -> &'static str {
 /// Body text for the `AdwToast` raised on the
 /// [`RenameWorkerEffect::Success`] branch.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 /// "In-app account rename" ("On success, refresh
 /// `AccountListComponent` from the returned vault, close the dialog,
 /// and surface a status / toast confirmation."). The widget layer
@@ -471,7 +471,7 @@ pub fn format_rename_dialog_success_toast() -> &'static str {
 /// [`RenameDialogState::is_busy`] (a `Vault::mutate_and_save` worker
 /// is in flight; the user cannot kick off a second rename worker
 /// before the first returns the `(Vault, Store)` pair per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership").
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership").
 ///
 /// Pure — inspects only the cached [`SubmitOutcome`] and the busy
 /// latch, never re-runs validation. The widget binds this through
@@ -606,7 +606,7 @@ pub struct RenameDialogState {
     /// `true`, [`format_rename_dialog_save_button_sensitive`] dims
     /// the Save button so the user cannot kick off a second rename
     /// worker before the first returns the `(Vault, Store)` pair
-    /// per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
     /// ownership". Independent of [`Self::worker_outcome`], which
     /// is the post-return projection; `busy` is the pre-return
     /// latch.
@@ -686,7 +686,7 @@ impl RenameDialogState {
     /// arm so the state's shadow of the `adw::EntryRow` is wiped
     /// before `AppModel` drops the controller and releases the
     /// widget tree. The dismissal contract — L1789 in
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     /// `RenameDialog` — covers cancel, successful submit, and
     /// auto-lock / parent-navigation close; for non-secret label
     /// state, the obligation is the standard widget-buffer reset

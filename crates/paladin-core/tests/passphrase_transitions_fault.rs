@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Phase H passphrase transitions under save-pipeline fault injection
-// (DESIGN.md §4.5 / §4.3).
+// (docs/DESIGN.md §4.5 / §4.3).
 //
 // Pins the §4.5 commit-point semantics:
 //

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! `/dev/tty` passphrase, account, and destructive-confirmation
-//! prompts per `IMPLEMENTATION_PLAN_02_CLI.md` "Passphrase prompts"
-//! and "Non-passphrase TTY prompts" and DESIGN.md §5.
+//! prompts per `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Passphrase prompts"
+//! and "Non-passphrase TTY prompts" and docs/DESIGN.md §5.
 //!
 //! All interactive prompts go through `/dev/tty` in both text and
 //! `--json` modes — never stdin/stdout/stderr — so a script that
@@ -12,12 +12,12 @@
 //! so the `--json` byte-clean contract is preserved end-to-end.
 //!
 //! `/dev/tty` is unconditionally targeted because Paladin v0.1 is
-//! Linux-only (DESIGN.md §2). Cross-platform abstraction can land
+//! Linux-only (docs/DESIGN.md §2). Cross-platform abstraction can land
 //! later if the target list grows.
 
 // The public prompt entry points and their tty I/O helpers are unused
 // in the binary until the command handlers wire them in (see
-// `IMPLEMENTATION_PLAN_02_CLI.md` checklist). The pure-logic helpers
+// `docs/IMPLEMENTATION_PLAN_02_CLI.md` checklist). The pure-logic helpers
 // are covered by the unit tests below; the I/O helpers are exercised
 // end-to-end by the future `assert_cmd` + scripted-tty tests. Drop this
 // `allow` once `init`/`passphrase`/`add`/`remove` start calling in.

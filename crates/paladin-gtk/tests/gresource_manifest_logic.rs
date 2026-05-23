@@ -2,7 +2,7 @@
 
 //! Gresource manifest contract tests for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop integration" /
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop integration" /
 //! §"Crate layout" and the Milestone 7 checklist entry "Wire
 //! `build.rs` + `data/paladin-gtk.gresource.xml` to compile the
 //! gresource bundle deterministically via `glib-compile-resources`

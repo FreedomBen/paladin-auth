@@ -1,6 +1,6 @@
 # cargo-deny policy for the Paladin workspace.
 #
-# DESIGN.md §8 ("no network, no telemetry") is enforced here:
+# docs/DESIGN.md §8 ("no network, no telemetry") is enforced here:
 #   * License hygiene -- AGPL-compatible permissive licenses only.
 #   * No advisories ride along.
 #   * Network-stack crates are denied outright; new dependencies require
@@ -9,11 +9,11 @@
 [advisories]
 yanked = "deny"
 ignore = [
-    # bincode 2.x is the deliberate vault encoding per DESIGN.md §4.5.
+    # bincode 2.x is the deliberate vault encoding per docs/DESIGN.md §4.5.
     # Upstream announced no further releases (RUSTSEC-2025-0141, "Bincode is
     # unmaintained") but the v2 format is feature-complete for our needs and
     # we treat this as accepted risk; revisit if a successor format is chosen.
-    { id = "RUSTSEC-2025-0141", reason = "bincode 2 pinned per DESIGN.md §4.5; upstream halted but format is complete" },
+    { id = "RUSTSEC-2025-0141", reason = "bincode 2 pinned per docs/DESIGN.md §4.5; upstream halted but format is complete" },
     # `paste` 1.x reaches us transitively via `ratatui` 0.29 and `tui-input`
     # 0.11 (RUSTSEC-2024-0436, "paste is unmaintained / archived"). It is a
     # compile-time procedural-macro crate with no runtime, network, or crypto
@@ -66,8 +66,8 @@ deny = [
     # `crates/paladin-core/tests/no_network.rs` further asserts that no
     # banned dep is reachable from `paladin-core`, `paladin-cli`, or
     # `paladin-tui`, so the no-network rule remains in force for the
-    # security-sensitive subtree. See `IMPLEMENTATION_PLAN_04_GTK.md`
-    # §"Dependencies" / §"GUI runtime carve-out" and `DESIGN.md` §8.
+    # security-sensitive subtree. See `docs/IMPLEMENTATION_PLAN_04_GTK.md`
+    # §"Dependencies" / §"GUI runtime carve-out" and `docs/DESIGN.md` §8.
     { name = "tokio", wrappers = ["relm4"] },
     { name = "tokio-util" },
     { name = "tokio-rustls" },

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase G.1: in-memory `Vault` account-list operations (DESIGN.md §4.7
+// Phase G.1: in-memory `Vault` account-list operations (docs/DESIGN.md §4.7
 // `impl Vault` block). Covers `add` returning a stable `AccountId`,
 // `iter` (insertion order), `get` by ID, `remove` by ID, and
 // `summaries` non-secret projection. Storage round-trip stays in

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Human text renderers per DESIGN.md §5. Each helper writes a short,
+//! Human text renderers per docs/DESIGN.md §5. Each helper writes a short,
 //! parseable line to the supplied `Write` and is parameterized so the
 //! command bodies don't have to thread `format!` calls through their
 //! own logic.
@@ -212,7 +212,7 @@ pub fn write_export_success(
 /// supplied stream, prefixed with `paladin: warning:`. The CLI calls
 /// this in text mode only — under `--json` warnings flow through the
 /// success envelope's `warnings` array (per the strict-mode rule in
-/// `IMPLEMENTATION_PLAN_02_CLI.md`).
+/// `docs/IMPLEMENTATION_PLAN_02_CLI.md`).
 pub fn write_validation_warning(
     warning: &ValidationWarning,
     mut out: impl Write,
@@ -225,7 +225,7 @@ pub fn write_validation_warning(
 }
 
 /// Print every `<dotted-key>=<value>` row in the §5 settings table to
-/// stdout, in the table order from `IMPLEMENTATION_PLAN_02_CLI.md`. Used
+/// stdout, in the table order from `docs/IMPLEMENTATION_PLAN_02_CLI.md`. Used
 /// for `paladin settings get` (no key filter) and as the post-mutation
 /// summary for `paladin settings set` in text mode.
 pub fn write_settings_all(settings: &VaultSettings, mut out: impl Write) -> std::io::Result<()> {

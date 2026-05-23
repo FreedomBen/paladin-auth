@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Clap argument tree for the `paladin` binary. See DESIGN.md §5 and
-//! `IMPLEMENTATION_PLAN_02_CLI.md` for the authoritative command surface.
+//! Clap argument tree for the `paladin` binary. See docs/DESIGN.md §5 and
+//! `docs/IMPLEMENTATION_PLAN_02_CLI.md` for the authoritative command surface.
 
 use std::path::PathBuf;
 
@@ -32,7 +32,7 @@ pub struct GlobalArgs {
     #[arg(long, global = true)]
     pub no_color: bool,
 
-    /// Emit stable JSON envelopes per DESIGN.md §5 instead of human text.
+    /// Emit stable JSON envelopes per docs/DESIGN.md §5 instead of human text.
     #[arg(long, global = true)]
     pub json: bool,
 }
@@ -43,7 +43,7 @@ pub struct GlobalArgs {
 /// through the §5 `validation_error` envelope with the hyphenated flag
 /// name as `field` (`"kdf-memory-mib"`, `"kdf-time"`,
 /// `"kdf-parallelism"`) instead of clap's text diagnostic. See
-/// `IMPLEMENTATION_PLAN_02_CLI.md` "Encrypted-write KDF flags" and
+/// `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Encrypted-write KDF flags" and
 /// [`crate::kdf::parse_argon2_params`].
 #[derive(Debug, Args)]
 #[allow(clippy::struct_field_names)]

@@ -2,7 +2,7 @@
 //
 // Integration tests for the encrypted-mode `Store::open` /
 // `Store::create` / `Store::create_force` / `Vault::save` round-trip
-// (DESIGN.md §4.3 + §4.4).
+// (docs/DESIGN.md §4.3 + §4.4).
 //
 // Tests use the cheapest in-bounds Argon2 params (`m_kib=8192 / t=1 /
 // p=1`) so the suite stays under a few seconds. The §4.4 acceptance

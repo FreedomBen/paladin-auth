@@ -4,7 +4,7 @@
 //!
 //! Tracks the §"Tests > Pure-logic unit tests >
 //! `tests/settings_logic.rs`" checklist in
-//! `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Live-apply path runs `Vault::mutate_and_save` once per accepted
 //!   change (modeled here as `ToggleOutcome::Save` /
@@ -750,7 +750,7 @@ fn apply_save_io_error_for_clipboard_clear_enabled_routes_to_inline_and_keeps_co
 #[test]
 fn format_settings_dialog_auto_lock_group_title_returns_auto_lock() {
     // The SettingsComponent organizes the dialog into two
-    // `AdwPreferencesGroup`s per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // `AdwPreferencesGroup`s per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"libadwaita usage" > "Preferences": one for auto-lock,
     // one for clipboard-clear. This helper pins the title for
     // the auto-lock group so the wording appears in one place
@@ -778,7 +778,7 @@ fn format_settings_dialog_clipboard_clear_enabled_row_title_returns_clear_after_
     // that controls
     // `paladin_core::VaultSettings::clipboard_clear_enabled`.
     // Sibling of `format_settings_dialog_auto_lock_enabled_row_title`
-    // on the clipboard side per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // on the clipboard side per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"libadwaita usage" > "Preferences".
     //
     // The wording (`"Clear clipboard after copy"`) names the
@@ -800,7 +800,7 @@ fn format_settings_dialog_clipboard_clear_enabled_row_title_returns_clear_after_
 fn format_settings_dialog_auto_lock_secs_row_title_returns_inactivity_timeout() {
     // The auto-lock `AdwSpinRow` carries the spinner that
     // controls `paladin_core::VaultSettings::auto_lock_secs`.
-    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
     // "Preferences" and §"Component tree" > `SettingsComponent`,
     // the spinner clamps to
     // `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
@@ -825,7 +825,7 @@ fn format_settings_dialog_auto_lock_secs_row_title_returns_inactivity_timeout() 
 fn format_settings_dialog_auto_lock_enabled_row_title_returns_lock_after_inactivity() {
     // The auto-lock `AdwSwitchRow` carries the toggle that
     // controls `paladin_core::VaultSettings::auto_lock_enabled`.
-    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
     // "Preferences", the SettingsComponent uses idiomatic
     // libadwaita rows — `AdwSwitchRow` for toggles, `AdwSpinRow`
     // for timeouts.
@@ -874,7 +874,7 @@ fn format_settings_dialog_clipboard_clear_group_title_returns_clipboard() {
 fn compose_settings_dialog_clipboard_clear_secs_sensitive_follows_clipboard_clear_enabled() {
     // The clipboard-clear seconds `AdwSpinRow` binds its
     // `set_sensitive:` attribute to this composer per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `SettingsComponent`. Sibling of
     // `compose_settings_dialog_auto_lock_secs_sensitive` on the
     // clipboard side; together they cover both
@@ -901,7 +901,7 @@ fn compose_settings_dialog_clipboard_clear_secs_sensitive_follows_clipboard_clea
 fn compose_settings_dialog_auto_lock_secs_sensitive_follows_auto_lock_enabled() {
     // The auto-lock seconds `AdwSpinRow` binds its
     // `set_sensitive:` attribute to this composer per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `SettingsComponent`. When the auto-lock toggle is off, the
     // seconds spinner has no effect — disabling it follows the
     // GNOME HIG ("disable controls whose effect is conditional on
@@ -937,7 +937,7 @@ fn compose_settings_dialog_clipboard_clear_enabled_active_mirrors_committed_clip
 ) {
     // The clipboard-clear `AdwSwitchRow` binds its `set_active:`
     // attribute to this composer per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `SettingsComponent`. Sibling of
     // `compose_settings_dialog_auto_lock_enabled_active` on the
     // clipboard side; together they cover both
@@ -964,7 +964,7 @@ fn compose_settings_dialog_clipboard_clear_enabled_active_mirrors_committed_clip
 fn compose_settings_dialog_auto_lock_enabled_active_mirrors_committed_auto_lock_enabled() {
     // The auto-lock `AdwSwitchRow` binds its `set_active:`
     // attribute to this composer per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `SettingsComponent`. Toggle clicks bypass the spinner
     // debounce buffer because they reflect a discrete user
     // intent — the committed `CommittedSettings::auto_lock_enabled`
@@ -996,7 +996,7 @@ fn compose_settings_dialog_auto_lock_enabled_active_mirrors_committed_auto_lock_
 #[test]
 fn compose_settings_dialog_auto_lock_secs_value_casts_visible_auto_lock_secs_to_f64() {
     // The auto-lock `AdwSpinRow` binds its `set_value:` attribute
-    // to this composer per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // to this composer per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"Component tree" > `SettingsComponent`. The spinner
     // value is the buffered (pending) auto-lock seconds while a
     // 500 ms debounce is in flight and the committed value
@@ -1051,7 +1051,7 @@ fn compose_settings_dialog_auto_lock_secs_value_reflects_pending_spinner_buffer(
 fn compose_settings_dialog_clipboard_clear_secs_value_casts_visible_clipboard_clear_secs_to_f64() {
     // The clipboard-clear `AdwSpinRow` binds its `set_value:`
     // attribute to this composer per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `SettingsComponent`. Sibling of
     // `compose_settings_dialog_auto_lock_secs_value` on the
     // clipboard side; together they cover both
@@ -1097,7 +1097,7 @@ fn compose_settings_dialog_clipboard_clear_secs_value_reflects_pending_spinner_b
 #[test]
 fn format_settings_dialog_auto_lock_secs_adjustment_returns_paladin_core_bounds() {
     // The auto-lock `AdwSpinRow` consumes a `gtk::Adjustment`
-    // built from this helper per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // built from this helper per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"libadwaita usage" > "Preferences" and §"Component tree"
     // > `SettingsComponent`. Returning the
     // `(lower, upper, step_increment)` tuple here keeps the
@@ -1134,7 +1134,7 @@ fn format_settings_dialog_auto_lock_secs_adjustment_returns_paladin_core_bounds(
 fn format_settings_dialog_clipboard_clear_secs_adjustment_returns_paladin_core_bounds() {
     // The clipboard-clear `AdwSpinRow` consumes a
     // `gtk::Adjustment` built from this helper per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
     // "Preferences" and §"Component tree" > `SettingsComponent`.
     // Returning the `(lower, upper, step_increment)` tuple here
     // keeps the spinner bounds pinned against
@@ -1169,7 +1169,7 @@ fn format_settings_dialog_clipboard_clear_secs_adjustment_returns_paladin_core_b
 fn format_settings_dialog_clipboard_clear_secs_row_title_returns_clear_delay() {
     // The clipboard-clear `AdwSpinRow` carries the spinner that
     // controls `paladin_core::VaultSettings::clipboard_clear_secs`.
-    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
     // "Preferences" and §"Component tree" > `SettingsComponent`,
     // the spinner clamps to
     // `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`
@@ -1198,7 +1198,7 @@ fn format_settings_dialog_clipboard_clear_secs_row_title_returns_clear_delay() {
 
 #[test]
 fn format_settings_dialog_saved_toast_returns_settings_saved() {
-    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
     // "Toast surface", `SettingsComponent` confirms an accepted
     // change with an `AdwToast` carrying the "settings-saved
     // confirmation" body. Pinning the wording through a helper
@@ -2391,7 +2391,7 @@ fn format_settings_dialog_saved_toast_timeout_returns_five_seconds() {
 // SettingsComponent scaffold (Milestone 7 component-tree wiring)
 // ---------------------------------------------------------------------------
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
 // "Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
 // Rename / Import / Export / Passphrase / Settings / StartupError)",
 // `SettingsComponent` joins the seven already-mounted controllers
@@ -2763,7 +2763,7 @@ fn dispatch_settings_dialog_msg_debounce_tick_idle_returns_noop() {
 }
 
 // ---------------------------------------------------------------------------
-// Busy gating — `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership":
+// Busy gating — `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership":
 // while the AppModel is in `UnlockedBusy`, the settings toggles and spinner
 // rows dim so the user cannot kick off a second `apply_setting_patch` worker
 // before the first returns the `(Vault, Store)` pair.
@@ -2907,7 +2907,7 @@ fn compose_settings_dialog_clipboard_clear_secs_sensitive_busy_returns_false_eve
 // Coalesce settings spinner debounce to the latest pre-save value when an
 // effect is in flight; refuse toggle changes that would overlap an active
 // vault effect until the control is re-enabled (line 4030 of
-// IMPLEMENTATION_PLAN_04_GTK.md).
+// docs/IMPLEMENTATION_PLAN_04_GTK.md).
 // ---------------------------------------------------------------------------
 
 #[test]

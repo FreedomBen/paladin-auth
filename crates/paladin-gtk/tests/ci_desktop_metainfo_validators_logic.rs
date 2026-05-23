@@ -4,7 +4,7 @@
 //! `AppStream` validator against the paladin-gtk desktop + metainfo
 //! files.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop integration" and
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop integration" and
 //! the Milestone 7 checklist entry "Add `desktop-file-validate` and the
 //! `AppStream` validator to the CI / packaging dry-run so both files are
 //! checked on every build."
@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 fn workspace_root() -> PathBuf {
     // tests run in `crates/paladin-gtk/`; the workspace root is two
-    // levels up. The `IMPLEMENTATION_PLAN_04_GTK.md` and the
+    // levels up. The `docs/IMPLEMENTATION_PLAN_04_GTK.md` and the
     // `.github/workflows/` checkout live there.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -44,7 +44,7 @@ fn ci_workflow_runs_desktop_file_validate_on_the_desktop_entry() {
     let workflow = read_ci_workflow();
     assert!(
         workflow.contains("desktop-file-validate"),
-        ".github/workflows/ci.yml must run `desktop-file-validate` against the §11.3 desktop entry per IMPLEMENTATION_PLAN_04_GTK.md",
+        ".github/workflows/ci.yml must run `desktop-file-validate` against the §11.3 desktop entry per docs/IMPLEMENTATION_PLAN_04_GTK.md",
     );
     assert!(
         workflow.contains("crates/paladin-gtk/data/org.tamx.Paladin.Gui.desktop"),
@@ -57,7 +57,7 @@ fn ci_workflow_runs_appstreamcli_validate_on_the_metainfo_file() {
     let workflow = read_ci_workflow();
     assert!(
         workflow.contains("appstreamcli validate"),
-        ".github/workflows/ci.yml must run `appstreamcli validate` against the AppStream metainfo per IMPLEMENTATION_PLAN_04_GTK.md",
+        ".github/workflows/ci.yml must run `appstreamcli validate` against the AppStream metainfo per docs/IMPLEMENTATION_PLAN_04_GTK.md",
     );
     assert!(
         workflow.contains("crates/paladin-gtk/data/metainfo/org.tamx.Paladin.Gui.metainfo.xml"),

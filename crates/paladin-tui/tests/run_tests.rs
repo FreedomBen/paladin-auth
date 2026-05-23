@@ -2,7 +2,7 @@
 
 //! Tests for the `app::run` production composers.
 //!
-//! Tracks `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
+//! Tracks `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
 //! *"Effects are executed by `app::run`, which is the only boundary
 //! that may call impure core / clipboard / writer functions."*
 //!
@@ -220,7 +220,7 @@ fn run_event_loop_seeds_first_render_with_initial_wall_clock() {
 }
 
 // ---------------------------------------------------------------------------
-// run_with_terminal_guard (IMPLEMENTATION_PLAN_03_TUI.md > Implementation
+// run_with_terminal_guard (docs/IMPLEMENTATION_PLAN_03_TUI.md > Implementation
 // checklist: "Implement terminal raw-mode / alternate-screen lifecycle with
 // guarded restoration on exit, error, Ctrl-C, and panic unwind")
 //
@@ -474,7 +474,7 @@ fn run_with_terminal_guard_restores_terminal_when_render_panics() {
 }
 
 // ---------------------------------------------------------------------------
-// exit_code_from_run_result (IMPLEMENTATION_PLAN_03_TUI.md > Implementation
+// exit_code_from_run_result (docs/IMPLEMENTATION_PLAN_03_TUI.md > Implementation
 // checklist: "Implement terminal raw-mode / alternate-screen lifecycle with
 // guarded restoration on exit, error, Ctrl-C, and panic unwind")
 //
@@ -604,7 +604,7 @@ fn run_with_terminal_guard_seeds_first_render_with_initial_wall_clock() {
 }
 
 // ---------------------------------------------------------------------------
-// build_render_closure (IMPLEMENTATION_PLAN_03_TUI.md > Implementation
+// build_render_closure (docs/IMPLEMENTATION_PLAN_03_TUI.md > Implementation
 // checklist: "Implement terminal raw-mode / alternate-screen lifecycle with
 // guarded restoration on exit, error, Ctrl-C, and panic unwind")
 //
@@ -907,7 +907,7 @@ fn merge_render_failure_into_run_result_prefers_setup_error_when_both_sources_fa
 }
 
 // ---------------------------------------------------------------------------
-// run_with_components (IMPLEMENTATION_PLAN_03_TUI.md > Implementation
+// run_with_components (docs/IMPLEMENTATION_PLAN_03_TUI.md > Implementation
 // checklist) — top-level composer the `paladin_tui::run()` binary entry uses
 // to tie `build_initial_state`, the ratatui `Terminal` construction, the
 // lifecycle `TerminalGuard`, the render-error sink, and the exit-code mapper

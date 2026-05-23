@@ -3,7 +3,7 @@
 //! Pure-logic HOTP reveal-window tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/hotp_reveal_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Reveal window timing routes through
 //!   `paladin_core::policy::hotp_reveal::deadline` (uses

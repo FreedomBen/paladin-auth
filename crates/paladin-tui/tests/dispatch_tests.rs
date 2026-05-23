@@ -2,7 +2,7 @@
 
 //! Dispatch-loop tests for `paladin-tui`.
 //!
-//! Tracks `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
+//! Tracks `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
 //! *"Single thread runs the reducer. ... The reducer is a pure
 //! function over `(state, event) → (state, Vec<Effect>)` so it is
 //! unit-testable without a terminal. Effects are executed by
@@ -69,7 +69,7 @@ fn tag(state: &AppState) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// Dispatch loop (IMPLEMENTATION_PLAN_03_TUI.md > Event loop (per §6))
+// Dispatch loop (docs/IMPLEMENTATION_PLAN_03_TUI.md > Event loop (per §6))
 // ---------------------------------------------------------------------------
 
 #[test]

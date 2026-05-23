@@ -2,11 +2,11 @@
 
 //! Incremental search filter over [`Vault::iter`].
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` §3 (project layout) and the
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` §3 (project layout) and the
 //! "Tests > Search" checklist, the TUI delegates issuer / label
 //! matching to [`paladin_core::account_matches_search`] so the
 //! search-bar predicate stays byte-for-byte identical to the CLI
-//! query resolution path in `DESIGN.md` §5. Insertion order is
+//! query resolution path in `docs/DESIGN.md` §5. Insertion order is
 //! preserved because [`Vault::iter`] already walks accounts in
 //! insertion order.
 
@@ -35,7 +35,7 @@ pub fn filtered_account_ids(vault: &Vault, query: &str) -> Vec<AccountId> {
 ///
 /// Composes [`filtered_account_ids`] with
 /// [`paladin_core::select_after_filter`] so the TUI's list-view
-/// selection follows the DESIGN.md §6 / §7 search-selection
+/// selection follows the docs/DESIGN.md §6 / §7 search-selection
 /// preservation rule:
 ///
 /// * if `prev` is `Some` and still appears in the new filtered set,

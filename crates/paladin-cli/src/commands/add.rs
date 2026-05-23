@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! `paladin add` — add an account interactively, from `--uri`, manual
-//! flags, or `--qr`. See DESIGN.md §5 and `IMPLEMENTATION_PLAN_02_CLI.md`
+//! flags, or `--qr`. See docs/DESIGN.md §5 and `docs/IMPLEMENTATION_PLAN_02_CLI.md`
 //! "Add modes".
 //!
 //! Order of operations (locked by the plan):

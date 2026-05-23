@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // No-panic property tests for the public URI and base32 entry points
-// (DESIGN.md §4.4, §4.6).
+// (docs/DESIGN.md §4.4, §4.6).
 //
 // Round-trip property coverage that asserts decoded `Secret` byte
 // equality lives in `src/domain/validation.rs`'s `proptests` module:

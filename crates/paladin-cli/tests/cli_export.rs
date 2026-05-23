@@ -13,7 +13,7 @@
 //! Encrypted-export happy paths require entering a fresh export-bundle
 //! passphrase via `/dev/tty` plus a confirmation; those land alongside
 //! the dedicated PTY harness called out in
-//! `IMPLEMENTATION_PLAN_02_CLI.md`.
+//! `docs/IMPLEMENTATION_PLAN_02_CLI.md`.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -716,7 +716,7 @@ fn pty_encrypted_export_with_custom_kdf_writes_requested_params_to_bundle_header
     );
 
     // Bundle is byte-compatible with the on-disk encrypted vault
-    // header per `build_encrypted_bundle_for_export` (DESIGN.md
+    // header per `build_encrypted_bundle_for_export` (docs/DESIGN.md
     // §4.6): magic (8) + format_ver (1) + mode (1) + kdf_id (1) +
     // m_kib LE u32 (4) + t LE u32 (4) + p LE u32 (4) + salt (16) +
     // aead_id (1) + nonce (24).

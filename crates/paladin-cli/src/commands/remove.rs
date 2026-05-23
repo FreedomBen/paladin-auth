@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `paladin remove <query>` — remove a single account. See DESIGN.md §5
-//! and `IMPLEMENTATION_PLAN_02_CLI.md` "Vault interaction pattern" /
+//! `paladin remove <query>` — remove a single account. See docs/DESIGN.md §5
+//! and `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Vault interaction pattern" /
 //! "Non-passphrase TTY prompts".
 //!
 //! Order of operations (locked by the plan):

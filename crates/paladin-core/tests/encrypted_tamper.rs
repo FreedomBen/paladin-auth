@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Encrypted-mode tamper matrix (DESIGN.md §4.3 + §4.4).
+// Encrypted-mode tamper matrix (docs/DESIGN.md §4.3 + §4.4).
 //
 // One named test per region asserts that flipping bytes inside a
 // fully-committed encrypted vault drives `Store::open` into the
@@ -34,7 +34,7 @@ const PASSPHRASE: &str = "hunter2";
 const ENCRYPTED_HEADER_LEN: usize = 64;
 const AEAD_TAG_LEN: usize = 16;
 
-// Header region offsets (DESIGN.md §4.3).
+// Header region offsets (docs/DESIGN.md §4.3).
 const MAGIC_RANGE: std::ops::Range<usize> = 0..8;
 const FORMAT_VER_OFFSET: usize = 8;
 const MODE_OFFSET: usize = 9;

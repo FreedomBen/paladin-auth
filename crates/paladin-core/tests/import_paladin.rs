@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase I.4 — `import::paladin` (DESIGN.md §4.6 / §4.7).
+// Phase I.4 — `import::paladin` (docs/DESIGN.md §4.6 / §4.7).
 //
 // A Paladin import bundle is the same on-disk format as the encrypted
 // vault file (magic + 64-byte AAD-bound header + AEAD ciphertext over a

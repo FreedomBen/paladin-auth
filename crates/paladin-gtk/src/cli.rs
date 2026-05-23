@@ -2,7 +2,7 @@
 
 //! Clap argument tree for the `paladin-gtk` binary.
 //!
-//! See `DESIGN.md` §5 and `IMPLEMENTATION_PLAN_04_GTK.md` "Global
+//! See `docs/DESIGN.md` §5 and `docs/IMPLEMENTATION_PLAN_04_GTK.md` "Global
 //! flags". Parity with the CLI and TUI siblings is limited to
 //! `--vault <PATH>` (overrides the default vault location) and
 //! `--no-color` (accepted for parity; a parser-level no-op in the

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase H cached-key/passphrase zeroization (DESIGN.md §4.4 / §4.5).
+// Phase H cached-key/passphrase zeroization (docs/DESIGN.md §4.4 / §4.5).
 //
 // Pins the cached-cache lifecycle for `Vault::change_passphrase` and
 // `Vault::remove_passphrase`:

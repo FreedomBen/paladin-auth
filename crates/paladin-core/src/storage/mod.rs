@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Vault storage (DESIGN.md §4.3).
+// Vault storage (docs/DESIGN.md §4.3).
 //
 // Phase E ships the in-memory `VaultPayload` + bincode v2 codec
 // (little-endian, fixed-int, 16 MiB cap, full-input consumption), the
@@ -59,7 +59,7 @@ mod perms_other;
 mod perms_unix;
 
 // Save-pipeline fault injection. Compiles to no-op stubs unless the
-// `test-fault-injection` cargo feature is enabled (DESIGN.md §10 /
+// `test-fault-injection` cargo feature is enabled (docs/DESIGN.md §10 /
 // Phase E.7). The two checks are wired into every atomic-write site
 // in this module so the hook reaches them uniformly.
 mod fault;
@@ -84,7 +84,7 @@ use crate::error::PermissionSubject;
 /// Argon2 salt length in bytes (matches the encrypted header `salt`).
 const SALT_LEN: usize = 16;
 
-/// Result of the `inspect()` header probe (DESIGN.md §4.7).
+/// Result of the `inspect()` header probe (docs/DESIGN.md §4.7).
 ///
 /// `Missing` reflects an absent primary file — distinct from any I/O
 /// error (which is propagated as `io_error`) and from an unrecognized
@@ -158,7 +158,7 @@ fn read_up_to(f: &mut File, buf: &mut [u8]) -> Result<usize> {
     Ok(filled)
 }
 
-/// Init-flow precheck classification (DESIGN.md §5).
+/// Init-flow precheck classification (docs/DESIGN.md §5).
 ///
 /// CLI `init` and GUI `InitDialog` share this truth table so they
 /// agree on when an existing vault must be confirmed-clobbered with
@@ -193,7 +193,7 @@ pub fn classify_init_precheck(probe: Result<VaultStatus>) -> InitPrecheck {
     }
 }
 
-// ---------- Store + VaultLock + VaultInit (DESIGN.md §4.7) ----------
+// ---------- Store + VaultLock + VaultInit (docs/DESIGN.md §4.7) ----------
 
 /// Caller-supplied lock used by [`Store::open`] to assert the on-disk
 /// vault mode the caller expects. A mismatch surfaces
@@ -220,7 +220,7 @@ pub enum VaultInit {
 }
 
 /// Crypto state preserved across regular encrypted saves
-/// (DESIGN.md §4.4): Argon2id `salt` and cost `params` are reused; the
+/// (docs/DESIGN.md §4.4): Argon2id `salt` and cost `params` are reused; the
 /// nonce is regenerated per save and lives in the encrypted header.
 /// Reset on passphrase transitions (Phase H).
 #[derive(Debug, Clone, Copy)]
@@ -316,7 +316,7 @@ impl Store {
         }
     }
 
-    /// `init --force` staged clobber per DESIGN.md §5.
+    /// `init --force` staged clobber per docs/DESIGN.md §5.
     ///
     /// Stages the new vault to `vault.bin.tmp` and `fsync`s it before
     /// touching any existing primary. If staging succeeds and a
@@ -470,7 +470,7 @@ impl Store {
     }
 }
 
-/// Test-only `Store` constructor (DESIGN.md §10 / Phase E.7).
+/// Test-only `Store` constructor (docs/DESIGN.md §10 / Phase E.7).
 ///
 /// Builds a `Store` directly from `path` and `mode` without performing
 /// any filesystem I/O — bypasses the `open` / `create` / `create_force`
@@ -682,7 +682,7 @@ fn save_plaintext(path: &Path, payload: &VaultPayload) -> Result<()> {
     // indistinguishable from a real rename error: the old primary is
     // still authoritative at `vault.bin`, primary_tmp is cleaned up
     // best-effort, and the typed error is `save_not_committed` with
-    // `backup_path: None` per DESIGN.md §5 — `backup_path` is only
+    // `backup_path: None` per docs/DESIGN.md §5 — `backup_path` is only
     // populated for save sites where the old primary was rotated away
     // (see `save_plaintext_clobber` for `init --force`).
     if fault::pre_commit_should_fail() || fs::rename(&primary_tmp, path).is_err() {
@@ -907,7 +907,7 @@ fn save_plaintext_clobber(path: &Path, payload: &VaultPayload) -> Result<()> {
 }
 
 /// Atomically write `content` to `path` with a same-directory tempfile,
-/// fsync, rename, and parent-directory fsync (DESIGN.md §4.3 / §4.7).
+/// fsync, rename, and parent-directory fsync (docs/DESIGN.md §4.3 / §4.7).
 /// On Unix targets the final file is `0600`. This is the shared writer
 /// used by export and other secret-file surfaces; it does **not**
 /// enforce the §4.3 directory permissions check, does **not** reject an
@@ -1000,7 +1000,7 @@ fn stage_secret_tempfile(tmp: &Path, content: &[u8]) -> bool {
     f.sync_all().is_ok()
 }
 
-// ---------- Encrypted-mode lifecycle (DESIGN.md §4.3 + §4.4) ----------
+// ---------- Encrypted-mode lifecycle (docs/DESIGN.md §4.3 + §4.4) ----------
 
 fn create_encrypted(path: &Path, opts: EncryptionOptions) -> Result<(crate::Vault, Store)> {
     create_encrypted_internal(path, opts, /* allow_clobber */ false)
@@ -1223,7 +1223,7 @@ fn open_encrypted(path: &Path, passphrase: SecretString) -> Result<(crate::Vault
     ))
 }
 
-/// Build the on-disk bytes for a Paladin export bundle (DESIGN.md
+/// Build the on-disk bytes for a Paladin export bundle (docs/DESIGN.md
 /// §4.6 export path).
 ///
 /// Wraps `VaultSettings::default()` around the supplied accounts (the
@@ -1248,7 +1248,7 @@ pub(crate) fn build_encrypted_bundle_for_export(
     build_encrypted_on_disk(&payload, &salt, options.kdf_params, &key)
 }
 
-/// Decrypt an in-memory Paladin bundle (DESIGN.md §4.6 import path).
+/// Decrypt an in-memory Paladin bundle (docs/DESIGN.md §4.6 import path).
 ///
 /// Mirrors the post-IO half of [`open_encrypted`] — header parse,
 /// Argon2id key derivation, AEAD decrypt + AAD verification, and

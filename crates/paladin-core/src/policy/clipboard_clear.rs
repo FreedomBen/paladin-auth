@@ -2,13 +2,13 @@
 //
 // `policy::clipboard_clear::ClipboardClearPolicy` — wipe-after-copy
 // scheduling and only-if-unchanged byte-equality decision shared by
-// the TUI and the GTK GUI (DESIGN.md §6 / §7).
+// the TUI and the GTK GUI (docs/DESIGN.md §6 / §7).
 //
 // Front ends own the OS clipboard surface (`arboard`,
 // `gdk::Clipboard`); the policy module owns the schedule decision,
 // monotonic token issuance, and the only-if-unchanged byte-equality
 // decision so both presentation crates drive their clipboards with
-// identical semantics. The CLI is stateless (DESIGN.md §6) and
+// identical semantics. The CLI is stateless (docs/DESIGN.md §6) and
 // ignores `clipboard.clear_enabled` entirely; this policy is opt-in
 // for TUI / GUI only.
 //
@@ -55,7 +55,7 @@ impl ClipboardClearToken {
 /// carries the comparison semantics.
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(0);
 
-/// Clipboard wipe-after-copy policy (DESIGN.md §4.7 / §6 / §7).
+/// Clipboard wipe-after-copy policy (docs/DESIGN.md §4.7 / §6 / §7).
 ///
 /// Stateless: every method takes the inputs it needs, so the same
 /// policy serves both presentation crates without sharing mutable

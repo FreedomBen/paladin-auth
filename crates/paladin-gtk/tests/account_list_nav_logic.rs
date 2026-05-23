@@ -13,7 +13,7 @@
 //!   edge transition handled by the widget wiring rather than the
 //!   dispatcher itself.
 //!
-//! `IMPLEMENTATION_PLAN_04_GTK.md` §"Keyboard Shortcuts" pins the
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Keyboard Shortcuts" pins the
 //! mapping: bare arrow keys mirror their vim-style Ctrl+J / Ctrl+K
 //! and readline-style Ctrl+N / Ctrl+P equivalents, any compound
 //! chord carrying ALT / SUPER / HYPER / META is rejected, arrow

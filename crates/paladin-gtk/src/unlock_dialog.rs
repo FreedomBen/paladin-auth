@@ -2,7 +2,7 @@
 
 //! Unlock-dialog pure-logic state machine for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `UnlockComponent` and §"Vault interaction", `UnlockComponent` is
 //! the passphrase-entry view `AppModel` presents whenever
 //! [`paladin_core::inspect`] reports

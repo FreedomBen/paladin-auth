@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Save-pipeline fault injection (DESIGN.md §10 / Phase E.7).
+// Save-pipeline fault injection (docs/DESIGN.md §10 / Phase E.7).
 //
 // Compiled in only when the `test-fault-injection` cargo feature is
 // enabled — production builds get the no-op stubs at the bottom so
@@ -18,7 +18,7 @@
 //   rename — e.g. `init --force`'s clobber — so the caller knows
 //   where to find the previous vault content; regular saves leave the
 //   old primary at `vault.bin` and report `backup_path: None` per
-//   DESIGN.md §5).
+//   docs/DESIGN.md §5).
 //
 // * `post_commit` — return true at the post-rename / parent-fsync
 //   injection point so the surrounding save site bails out via its
@@ -28,7 +28,7 @@
 //
 // * `csprng_read` — return true at every OS CSPRNG draw used to
 //   generate Argon2 salts and XChaCha20-Poly1305 nonces in the
-//   encrypted-write pipeline (Phase F.15 / DESIGN.md §5). The
+//   encrypted-write pipeline (Phase F.15 / docs/DESIGN.md §5). The
 //   surrounding generator surfaces `io_error { operation:
 //   "csprng_read" }` and the encrypted save / create / create_force
 //   path bails out before staging any tempfile, so no partial vault
@@ -36,7 +36,7 @@
 //
 // * `kdf_allocation` — return true at every Argon2id key-derivation
 //   call in both encrypted-write and encrypted-read pipelines (Phase
-//   F.16 / DESIGN.md §5). The surrounding wrapper short-circuits the
+//   F.16 / docs/DESIGN.md §5). The surrounding wrapper short-circuits the
 //   real KDF and surfaces `io_error { operation: "kdf_allocation" }`
 //   without panicking, so a host that runs out of memory while
 //   deriving the AEAD key fails cleanly. On write paths no partial

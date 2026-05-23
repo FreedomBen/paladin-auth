@@ -3,7 +3,7 @@
 //! Effect executor: the only impure boundary between the pure reducer
 //! and `paladin-core` / OS resources.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
 //!
 //! > The reducer is a pure function over
 //! > `(state, event) → (state, Vec<Effect>)` so it is unit-testable
@@ -103,7 +103,7 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             EffectOutcome::Continue
         }
         Effect::ClearClipboard { value } => {
-            // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear
+            // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear
             // (per §6)": *"on wake, it ignores stale tokens, reads the
             // current clipboard, asks
             // `ClipboardClearPolicy::should_clear`, and writes empty
@@ -157,7 +157,7 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             // Placeholder: the `arboard` clipboard write and
             // `ClipboardClearPolicy::schedule` wiring land with the
             // clipboard adapter slice (see
-            // `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear":
+            // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear":
             // *"Copy schedules a clear via
             // `ClipboardClearPolicy::schedule`."*). The executor
             // needs access to the live `(Vault, Store)` carried in
@@ -176,7 +176,7 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             // removed account back to its prior iteration position
             // while post-commit `save_durability_unconfirmed` leaves
             // the account removed in memory matching the on-disk
-            // primary, per `IMPLEMENTATION_PLAN_03_TUI.md`
+            // primary, per `docs/IMPLEMENTATION_PLAN_03_TUI.md`
             // "Effect errors" >
             // "Add / remove / rename / settings saves".
             //
@@ -243,7 +243,7 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             // in-memory label back to its pre-rename value while
             // post-commit `save_durability_unconfirmed` leaves the
             // new label in memory matching the on-disk primary, per
-            // `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
+            // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
             // "Add / remove / rename / settings saves".
             //
             // The path check protects against a stale effect emitted
@@ -366,7 +366,7 @@ fn execute_create_vault(
 
 /// Execute an [`Effect::Add`] for a Manual-mode submit.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
 ///
 /// 1. Build a [`paladin_core::AccountInput`] from the carried form
 ///    fields, mapping the empty issuer string to `None` and parsing
@@ -479,7 +479,7 @@ fn execute_add(
 
 /// Execute an [`Effect::AddFromUri`] for a URI-mode submit.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
 /// *"URI mode is a single text field; on submit the entered string is
 /// passed to `paladin_core::parse_otpauth(uri, submit_time)`, and on
 /// success the resulting `ValidatedAccount` shares the manual path's
@@ -558,7 +558,7 @@ fn execute_add_from_uri(
 /// pre-commit failure snaps every pending value back to its
 /// pre-attempt state, while `save_durability_unconfirmed` leaves them
 /// all committed in memory matching the on-disk primary — per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" > "Add / remove /
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" > "Add / remove /
 /// rename / settings saves".
 ///
 /// The path check protects against a stale effect emitted before an
@@ -601,7 +601,7 @@ fn execute_apply_settings(
 /// Execute an [`Effect::AddAnyway`] for the "add anyway" follow-up
 /// confirmation on the duplicate-allowed path.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"A
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"A
 /// collision initially rejects with the existing account in the modal
 /// and offers an 'add anyway' confirmation that inserts the pending
 /// validated account on the duplicate-allowed path (CLI parity with
@@ -671,7 +671,7 @@ fn execute_add_anyway(
 /// Pre-commit save failures (`save_not_committed`) and
 /// durability-unconfirmed saves both deliver as
 /// [`AddFailure::Save`]; the reducer surfaces either inline per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
 /// "Add / remove / rename / settings saves".
 fn commit_validated_add(
     vault: &mut paladin_core::Vault,
@@ -696,7 +696,7 @@ fn commit_validated_add(
 
 /// Execute an [`Effect::AddFromClipboardQr`] for an Add-modal QR submit.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"QR
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"QR
 /// imports call `Vault::import_accounts` with `ImportConflict::Skip`
 /// and report imported/skipped/warning counts plus any warning
 /// messages in the post-success counts panel."*
@@ -795,7 +795,7 @@ fn execute_add_from_clipboard_qr(
 
 /// Execute an [`Effect::Import`] for an Import-modal submit.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
 ///
 /// 1. Build a [`paladin_core::ImportOptions`] from the carried
 ///    `format` (`None` runs auto-detect via
@@ -874,7 +874,7 @@ fn execute_import(
 
 /// Execute an [`Effect::Export`] for an Export-modal submit.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
 ///
 /// 1. Render the live vault's bytes:
 ///    [`ExportFormat::Plaintext`] routes through
@@ -939,7 +939,7 @@ fn execute_export(
 /// Execute an [`Effect::PassphraseSet`] for a `Set` sub-flow submit
 /// (plaintext → encrypted).
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
 /// Passphrase: *"The transition methods (`set_passphrase` /
 /// `change_passphrase` / `remove_passphrase`) save themselves through
 /// `&Store` and handle their own pre-commit rollback per DESIGN §4.5

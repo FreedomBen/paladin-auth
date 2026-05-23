@@ -2,7 +2,7 @@
 
 //! Init-dialog pure-logic state machine for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" and
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" and
 //! §"Vault interaction", `InitDialog` is the only path that creates
 //! a vault from the GUI (DESIGN §6, §7). The widget layer hosts two
 //! [`adw::PasswordEntryRow`] passphrase fields, an explicit
@@ -170,7 +170,7 @@ impl SubmitRejection {
 /// * `Ok(VaultInit::Encrypted(_))` when both passphrase fields are
 ///   non-empty AND match. The encrypted variant carries an
 ///   [`EncryptionOptions`] built with the default Argon2 cost; the
-///   GUI does not expose KDF tuning per `DESIGN.md` §11 / §13.
+///   GUI does not expose KDF tuning per `docs/DESIGN.md` §11 / §13.
 /// * `Err(SubmitRejection::PlaintextWarningRequired)` when plaintext
 ///   mode is selected but the warning is unticked.
 /// * `Err(SubmitRejection::ConfirmationMismatch)` when encrypted

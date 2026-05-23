@@ -2,7 +2,7 @@
 
 //! TOTP ticker pure-logic glue for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" TOTP
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" TOTP
 //! ticker section, the GUI owns the `glib::timeout_add_local`
 //! timeout source and the per-tick widget refresh, but every
 //! lifecycle decision (install / teardown based on app state plus

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Phase K coverage — `IconHintInput` tri-state behavior through
-// `validate_manual` at the public surface (DESIGN.md §4.1 / §4.7).
+// `validate_manual` at the public surface (docs/DESIGN.md §4.1 / §4.7).
 //
 // Internal unit tests cover `IconHintInput::resolve` in isolation;
 // this file pins the end-to-end contract a TUI / GUI manual-add

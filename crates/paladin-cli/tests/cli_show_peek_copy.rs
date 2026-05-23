@@ -7,7 +7,7 @@
 //! any-HOTP rejected by `show` but unconditionally allowed by `peek`),
 //! and HOTP counter overflow against a plaintext vault. Encrypted
 //! coverage requires a scripted `/dev/tty` and lands with the
-//! dedicated PTY harness called out in `IMPLEMENTATION_PLAN_02_CLI.md`.
+//! dedicated PTY harness called out in `docs/IMPLEMENTATION_PLAN_02_CLI.md`.
 //!
 //! The `copy` tests use the test-build-only
 //! `PALADIN_CLIPBOARD_DRYRUN=1|fail` env var honored only when

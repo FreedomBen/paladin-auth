@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Source-level guardrail for `IMPLEMENTATION_PLAN_04_GTK.md`
+//! Source-level guardrail for `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 //! §"Milestone 7 checklist" → "Secret-entry ownership and zeroization
 //! guardrails".
 //!
-//! Per `DESIGN.md` §8 and the plan's §"Secret entry handling", the
+//! Per `docs/DESIGN.md` §8 and the plan's §"Secret entry handling", the
 //! following secret-bearing values must never live in the long-lived
 //! `AppModel`, `AppMsg`, dialog `*Output`, `AppInit`, or `AppState`
 //! types — they must stay in modal-local
@@ -94,7 +94,7 @@ const KNOWN_NON_SECRET_LINES: &[(&str, &[&str])] = &[
     // `search_query` mirrors `AccountListComponent::current_query` —
     // the literal substring the user typed into the `gtk::SearchEntry`
     // that drives `paladin_core::account_matches_search` against
-    // issuer / label text. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // issuer / label text. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"Component tree" > `AccountListComponent` and DESIGN §8, the
     // search query is not one of the secret-bearing values that must
     // be wrapped in zeroizing storage.
@@ -344,7 +344,7 @@ fn long_lived_types_carry_no_raw_secret_bearing_strings() {
                      wrap secret-bearing bytes in \
                      `crate::secret_fields::SecretEntry`, `zeroize::Zeroizing`, \
                      `secrecy::SecretString`, or a typed `paladin_core` value \
-                     per IMPLEMENTATION_PLAN_04_GTK.md §\"Secret entry handling\""
+                     per docs/IMPLEMENTATION_PLAN_04_GTK.md §\"Secret entry handling\""
                 ));
             }
         }
@@ -396,7 +396,7 @@ fn dialog_output_enums_carry_no_raw_secret_bearing_strings() {
                  forbidden raw type `{token}` — wrap the bytes in \
                  `secrecy::SecretString`, `zeroize::Zeroizing`, or a typed \
                  `paladin_core` value per \
-                 IMPLEMENTATION_PLAN_04_GTK.md §\"Secret entry handling\""
+                 docs/IMPLEMENTATION_PLAN_04_GTK.md §\"Secret entry handling\""
             ));
         }
     }

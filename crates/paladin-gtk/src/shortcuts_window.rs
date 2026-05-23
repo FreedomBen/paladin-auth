@@ -2,8 +2,8 @@
 
 //! Keyboard-shortcuts window for the GTK front-end.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Keyboard Shortcuts window"
-//! and `DESIGN.md` §7, the primary menu's "Keyboard Shortcuts" entry
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Keyboard Shortcuts window"
+//! and `docs/DESIGN.md` §7, the primary menu's "Keyboard Shortcuts" entry
 //! and the GNOME-canonical `Ctrl+?` accelerator open a
 //! `gtk::ShortcutsWindow` listing every window-wide accelerator
 //! currently registered through

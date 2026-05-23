@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase J.3 / J.4 — `Send` and `Sync` posture audit (DESIGN.md §4.7 /
-// IMPLEMENTATION_PLAN_01_CORE.md Phase J).
+// Phase J.3 / J.4 — `Send` and `Sync` posture audit (docs/DESIGN.md §4.7 /
+// docs/IMPLEMENTATION_PLAN_01_CORE.md Phase J).
 //
 // J.3 — Send. The `paladin-gtk` front end moves vault state across
 // `gio::spawn_blocking` boundaries and `paladin-tui` hands import work
-// to a worker thread (DESIGN.md §6 / §7). Every public type that
+// to a worker thread (docs/DESIGN.md §6 / §7). Every public type that
 // crosses those boundaries must be `Send` so the move compiles. This
 // file gates the full set with `fn assert_send<T: Send>()` calls so a
 // future change introducing `Rc` or another `!Send` field fails the
@@ -14,7 +14,7 @@
 // J.4 — Sync. Of the same worker-boundary set, every type *except*
 // `Store` is `Sync`. `Store` is `!Sync` because it carries
 // `Cell<VaultMode>` and `Cell<Option<EncryptedSaveContext>>` for
-// in-place save-pipeline state (DESIGN.md §4.3) and `Cell<T>: !Sync`
+// in-place save-pipeline state (docs/DESIGN.md §4.3) and `Cell<T>: !Sync`
 // by definition. The remaining secret-bearing types (`Vault`,
 // `Account`, `Secret`, `EncryptionOptions`, `AccountInput`,
 // `ValidatedAccount`, `VaultLock`, `VaultInit`, `PaladinError`) are
@@ -26,7 +26,7 @@
 // public-api snapshot in CI and require an explicit review.
 //
 // The asserted set mirrors the worker-boundary contract enumerated in
-// the plan; do not narrow it without updating IMPLEMENTATION_PLAN_01_CORE.md
+// the plan; do not narrow it without updating docs/IMPLEMENTATION_PLAN_01_CORE.md
 // Phase J.
 
 use paladin_core::{
@@ -113,7 +113,7 @@ const _: fn() = || {
 };
 
 // Negative assertion: `Store` carries `Cell<...>` fields for the save
-// pipeline (DESIGN.md §4.3) and is therefore `!Sync` by construction.
+// pipeline (docs/DESIGN.md §4.3) and is therefore `!Sync` by construction.
 // Pinning this lets a future refactor that removes the `Cell`s — for
 // example, by switching to `&mut self` everywhere — show up in CI as
 // a deliberate posture change rather than a silent loosening.

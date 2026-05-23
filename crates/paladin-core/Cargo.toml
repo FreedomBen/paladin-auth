@@ -13,7 +13,7 @@ workspace = true
 
 [features]
 default = []
-# Test-only fault-injection hook (DESIGN.md §10 / Phase E.7). Off by
+# Test-only fault-injection hook (docs/DESIGN.md §10 / Phase E.7). Off by
 # default; production builds never link the hook. When enabled, exposes
 # a `Store::for_test_fault_injection` constructor and routes every
 # atomic-write site through `storage::fault`, which honors
@@ -21,7 +21,7 @@ default = []
 # stable §4.7 public API.
 test-fault-injection = []
 
-# Test-only zeroization witness (DESIGN.md §4.4 / Phase F.14). Off by
+# Test-only zeroization witness (docs/DESIGN.md §4.4 / Phase F.14). Off by
 # default; production builds compile the witness `observe()` calls
 # down to no-ops. When enabled, the `crypto::ZeroizingBytes` Drop impl
 # records every observation into a thread-local that integration
@@ -32,7 +32,7 @@ test-fault-injection = []
 test-zeroize-witness = []
 
 # Opt-in `serde::Serialize` for non-secret projection types
-# (DESIGN.md §4.7 / Phase J). Off by default. Stable Phase B
+# (docs/DESIGN.md §4.7 / Phase J). Off by default. Stable Phase B
 # guarantee: secret-bearing types (`Account`, `Secret`, …) remain
 # `!Serialize` even when this feature is enabled — see
 # `tests/trybuild/` and `tests/secret_audits.rs`. Phase J wires the

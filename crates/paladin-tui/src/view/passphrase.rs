@@ -2,7 +2,7 @@
 
 //! Passphrase-modal renderer.
 //!
-//! Per `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md`
+//! Per `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Modals (per §6) > Passphrase": *"three sub-flows mirroring
 //! CLI's `passphrase set / change / remove`. The available sub-flow
 //! is gated by [`Vault::is_encrypted()`](paladin_core::Vault::is_encrypted):

@@ -2,7 +2,7 @@
 
 //! Build script for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Crate layout" the GUI binary
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Crate layout" the GUI binary
 //! ships icons, the application stylesheet, and (in subsequent
 //! commits) `*.ui` templates and the placeholder icon through a
 //! single `gresource` bundle. This build script invokes

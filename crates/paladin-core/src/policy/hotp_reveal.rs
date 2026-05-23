@@ -2,7 +2,7 @@
 //
 // `policy::hotp_reveal::deadline` — HOTP reveal countdown deadline
 // shared by the TUI reveal panel and the GTK GUI reveal panel
-// (DESIGN.md §6 / §7).
+// (docs/DESIGN.md §6 / §7).
 //
 // HOTP codes do not roll over on a wall-clock cadence the way TOTP
 // does, so the front ends hide the displayed code after a fixed

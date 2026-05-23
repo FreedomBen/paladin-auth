@@ -2,7 +2,7 @@
 
 //! `--no-color` / `NO_COLOR` runtime gating for the renderer.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Global flags":
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Global flags":
 //!
 //! > `--no-color` disables ratatui styling; the `NO_COLOR`
 //! > environment variable does the same when `--no-color` is

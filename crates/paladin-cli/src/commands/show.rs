@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! `paladin show <query>` — print the current code; advances HOTP and
-//! persists before printing. See DESIGN.md §5 and
-//! `IMPLEMENTATION_PLAN_02_CLI.md` "Vault interaction pattern" /
+//! persists before printing. See docs/DESIGN.md §5 and
+//! `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Vault interaction pattern" /
 //! "Query resolution".
 //!
 //! Order of operations (locked by the plan):

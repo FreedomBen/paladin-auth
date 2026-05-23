@@ -2,7 +2,7 @@
 
 //! Terminal lifecycle tests.
 //!
-//! Tracks `IMPLEMENTATION_PLAN_03_TUI.md` > Tests > "Terminal lifecycle":
+//! Tracks `docs/IMPLEMENTATION_PLAN_03_TUI.md` > Tests > "Terminal lifecycle":
 //! the guard restores raw mode and alternate-screen state on normal
 //! exit, startup failure after raw-mode enable, `Ctrl-C`, and panic
 //! unwind. `Ctrl-C` is funneled through the reducer as
@@ -93,7 +93,7 @@ impl TerminalBackend for RawModeFailureBackend {
 }
 
 // ---------------------------------------------------------------------------
-// Terminal lifecycle (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Terminal lifecycle)
+// Terminal lifecycle (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Terminal lifecycle)
 // ---------------------------------------------------------------------------
 
 #[test]

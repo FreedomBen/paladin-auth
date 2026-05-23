@@ -2,7 +2,7 @@
 
 //! Production composers for the TUI event loop.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
 //!
 //! > Effects are executed by `app::run`, which is the only boundary
 //! > that may call impure core / clipboard / writer functions.

@@ -2,7 +2,7 @@
 
 //! Clipboard-QR add-image pure-logic glue for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `AddAccountComponent` and §"Tests > Pure-logic unit tests >
 //! `tests/qr_clipboard_logic.rs`", the "scan from clipboard image"
 //! path reads a `gdk::Texture` from the GDK clipboard, allocates an
@@ -30,7 +30,7 @@ use relm4::gtk::gdk;
 
 /// Fixed merge policy for clipboard-QR additions.
 ///
-/// §6 / `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent`" pin
+/// §6 / `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent`" pin
 /// the clipboard-QR path to [`ImportConflict::Skip`]: a colliding
 /// `(secret, issuer, label)` triple keeps the existing entry and is
 /// counted under [`ImportReport::skipped`]. The user can run an
@@ -162,7 +162,7 @@ pub fn prepare_rgba_layout(
 /// Pre-download bridge from [`prepare_rgba_layout`] into the unified
 /// [`QrPreflightError`] surface.
 ///
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
 /// image path" defines four preflight failure categories:
 ///
 /// 1. no clipboard image — constructed as
@@ -197,7 +197,7 @@ pub fn classify_layout_preflight(
 
 /// `gdk::MemoryFormat` the clipboard-QR download must request.
 ///
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
 /// image path" pins the download format to
 /// [`gdk::MemoryFormat::R8g8b8a8`] — straight (non-premultiplied)
 /// 8-bit RGBA. The default `gdk::Texture::download` path yields
@@ -343,7 +343,7 @@ pub fn decode_clipboard_qr(
 /// [`paladin_core::import::qr_image_bytes`] without first running
 /// the [`verify_download_layout`] check. Each variant maps onto an
 /// inline error category surfaced in the Add dialog without
-/// mutating the vault, per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// mutating the vault, per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"`AddAccountComponent` QR clipboard image path".
 #[derive(Debug)]
 pub enum QrDecodeOutcome {
@@ -375,7 +375,7 @@ pub enum QrDecodeOutcome {
 /// layout, forwards width / height (from `layout`), `rgba`, and
 /// `import_time` into [`paladin_core::import::qr_image_bytes`] via
 /// [`decode_clipboard_qr`]. Per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
 /// clipboard image path", the call returns `Vec<ValidatedAccount>`
 /// regardless of QR count, and the dispatch site forwards it
 /// through [`crate::app::state::compose_qr_worker_input`] for the
@@ -435,7 +435,7 @@ impl QrImportSummary {
 /// when the clipboard-QR sub-path could not produce a non-empty
 /// `Vec<ValidatedAccount>` for the merge worker.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
 /// clipboard image path" L2836 the four user-visible categories are:
 ///
 /// * No clipboard image — [`Self::NoClipboardImage`] (no `gdk::Texture`

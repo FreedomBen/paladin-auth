@@ -10,7 +10,7 @@
 //! pattern mirrors [`paladin-cli`'s `clipboard`
 //! adapter](../../../paladin-cli/src/clipboard.rs) so the two
 //! front-ends share the same DRYRUN contract — see
-//! `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear" and the
+//! `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear" and the
 //! `test-hooks` feature comment in `Cargo.toml`.
 //!
 //! All text-read / text-write error paths collapse to `Err(())` because
@@ -23,7 +23,7 @@
 //! distinct user-facing wordings the reducer renders for
 //! `QrImportFailure::NoClipboardImage` vs
 //! `QrImportFailure::ImageDecodeFailure` (per
-//! `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal": *"No-image, no-QR, and
+//! `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Add modal": *"No-image, no-QR, and
 //! invalid-QR cases reject inline."*).
 
 /// Raw RGBA8 image pulled off the OS clipboard, re-shaped into a stable
@@ -52,7 +52,7 @@ pub struct ClipboardImage {
 /// Two variants instead of one so the executor can route to the
 /// matching `crate::app::event::QrImportFailure` variant — the
 /// reducer renders different inline-error wording for each per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal".
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Add modal".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageReadError {
     /// The clipboard does not currently hold an image (the active

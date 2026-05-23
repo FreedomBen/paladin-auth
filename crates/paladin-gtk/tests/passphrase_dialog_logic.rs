@@ -4,7 +4,7 @@
 //!
 //! Tracks the §"Tests > Pure-logic unit tests >
 //! `tests/passphrase_dialog_logic.rs`" checklist in
-//! `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Sub-flow gating against `Vault::is_encrypted()`: `set` is
 //!   available only when the getter returns `false`; `change` and
@@ -331,7 +331,7 @@ fn passphrase_state_clear_for_auto_lock_wipes_all_state() {
 // PassphraseDialogComponent scaffold (Milestone 7 component-tree wiring)
 // ---------------------------------------------------------------------------
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
 // "Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
 // Rename / Import / Export / Passphrase / Settings / StartupError)",
 // `PassphraseDialogComponent` joins the ten already-mounted
@@ -1143,7 +1143,7 @@ fn submit_button_insensitive_while_dispatching() {
 
 #[test]
 fn cancel_button_insensitive_while_dispatching() {
-    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
     // ownership": "Dialog close/cancel is disabled for the surface
     // that owns the in-flight mutation until the worker returns".
     let mut state = PassphraseDialogState::new(false);

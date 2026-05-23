@@ -2,7 +2,7 @@
 
 //! Export-modal renderer.
 //!
-//! Per `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md`
+//! Per `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Modals (per §6) > Export": *"Export writes either the plaintext
 //! `otpauth://` JSON list (with an explicit unencrypted-secrets
 //! warning before the write) or an encrypted Paladin bundle

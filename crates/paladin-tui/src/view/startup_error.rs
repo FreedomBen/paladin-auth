@@ -2,8 +2,8 @@
 
 //! Startup-error screen renderer.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes" #6
-//! and `DESIGN.md` §6: when vault-path resolution fails, or
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes" #6
+//! and `docs/DESIGN.md` §6: when vault-path resolution fails, or
 //! `inspect` / `open` returns any error other than `decrypt_failed`,
 //! the TUI shows a non-mutating screen with the error text and quits
 //! on `Esc`, `q`, or `Ctrl-C`. `unsafe_permissions` errors render the
@@ -28,7 +28,7 @@ use crate::view::theme;
 /// Render the startup-error screen.
 ///
 /// `path` is `None` only when `default_vault_path()` itself failed
-/// (per the deferred-test note in `IMPLEMENTATION_PLAN_03_TUI.md`
+/// (per the deferred-test note in `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 /// "Tests > Vault modes and startup"). `message` is the pre-rendered
 /// error text — `unsafe_permissions` errors carry the multi-line
 /// `Some(text)` from [`paladin_core::format_unsafe_permissions`]

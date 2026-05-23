@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase I — `import::detect` content-sniffing matrix (DESIGN.md §4.6).
+// Phase I — `import::detect` content-sniffing matrix (docs/DESIGN.md §4.6).
 //
 // Detection order: Paladin magic → image magic → Aegis JSON shape →
 // otpauth text/JSON → Unknown. `detect` inspects shape only and never

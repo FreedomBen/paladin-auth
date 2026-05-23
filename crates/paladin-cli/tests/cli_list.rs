@@ -4,7 +4,7 @@
 //! paths only — `vault_missing`, an empty plaintext vault, and a
 //! populated plaintext vault under both text and `--json`. Encrypted
 //! coverage requires a scripted `/dev/tty` and lands with the PTY
-//! harness called out in `IMPLEMENTATION_PLAN_02_CLI.md`.
+//! harness called out in `docs/IMPLEMENTATION_PLAN_02_CLI.md`.
 
 mod common;
 

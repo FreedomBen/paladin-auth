@@ -2,7 +2,7 @@
 
 //! GDK clipboard glue for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Auto-lock and clipboard
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Auto-lock and clipboard
 //! auto-clear (per §7)" and the §"Milestone 7 checklist" bullet
 //! "Wire `gdk::Clipboard.read_text` / `set_text` for the copy and
 //! clear paths inside `clipboard.rs`", the GUI owns the

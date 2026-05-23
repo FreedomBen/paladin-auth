@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Export surface (DESIGN.md §4.6 / §4.7).
+// Export surface (docs/DESIGN.md §4.6 / §4.7).
 //
 // Two formats are supported:
 //   - [`otpauth_list`] — infallible JSON array of canonical

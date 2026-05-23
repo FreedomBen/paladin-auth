@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Phase B trybuild driver: every `.rs` under `tests/trybuild/` is a
-// compile-fail proof for the secret-bearing-type audit (DESIGN.md §8
-// / IMPLEMENTATION_PLAN_01_CORE.md Phase B). The four cells are:
+// compile-fail proof for the secret-bearing-type audit (docs/DESIGN.md §8
+// / docs/IMPLEMENTATION_PLAN_01_CORE.md Phase B). The four cells are:
 //
 //   * `secret_not_debug.rs`        — `Secret: !Debug`
 //   * `account_input_not_debug.rs` — `AccountInput: !Debug`

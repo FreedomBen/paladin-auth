@@ -2,8 +2,8 @@
 
 //! `paladin tui` exec wrapper: resolves `paladin-tui` on `PATH` and
 //! `execvp`s it, forwarding `--vault` and `--no-color` verbatim. See
-//! `IMPLEMENTATION_PLAN_02_CLI.md` "`paladin tui` exec wrapper" and
-//! DESIGN.md §5.
+//! `docs/IMPLEMENTATION_PLAN_02_CLI.md` "`paladin tui` exec wrapper" and
+//! docs/DESIGN.md §5.
 //!
 //! `--json` is rejected here (rather than during clap parsing) so the
 //! wrapper participates in the same `validation_error` `field: "argv"`

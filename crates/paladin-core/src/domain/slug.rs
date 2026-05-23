@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Icon-name slug rules (DESIGN.md §4.1).
+// Icon-name slug rules (docs/DESIGN.md §4.1).
 //
 // The slug grammar is a strict subset of the freedesktop icon-naming
 // spec: lowercase ASCII letters, digits, underscore, and hyphen, up to

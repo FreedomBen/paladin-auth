@@ -2,7 +2,7 @@
 
 //! HOTP reveal-window pure-logic glue for `paladin-gtk`.
 //!
-//! Per the `IMPLEMENTATION_PLAN_04_GTK.md` checklist under
+//! Per the `docs/IMPLEMENTATION_PLAN_04_GTK.md` checklist under
 //! `tests/hotp_reveal_logic.rs` (§"Tests", "Pure-logic unit tests"),
 //! the GUI owns the reveal-panel widgetry (label, countdown, "next"
 //! button) but every reveal-window timing decision routes through
@@ -203,7 +203,7 @@ pub fn apply_advance_outcome(outcome: AdvanceOutcome) -> AdvanceDecision {
 // Manual `Debug` impls for the worker types — Vault / Store redact
 // their secrets via their own `Debug` impls in `paladin_core`, but
 // `Zeroizing<String>` would print the code bytes via `Deref`, so we
-// redact the code fields here per DESIGN.md §"Memory hygiene".
+// redact the code fields here per docs/DESIGN.md §"Memory hygiene".
 
 impl fmt::Debug for RevealWindow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -273,7 +273,7 @@ impl fmt::Debug for HotpAdvanceWorkerCompletion {
 /// Inputs consumed by [`run_hotp_advance_worker`] when
 /// `AppModel::update` fires the `gio::spawn_blocking
 /// Vault::hotp_advance` worker from the row's "next" button
-/// activation per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7
+/// activation per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7
 /// checklist" > HOTP reveal window behavior.
 ///
 /// The live `(Vault, Store)` pair is moved into the worker so
@@ -326,7 +326,7 @@ pub struct HotpAdvanceWorkerCompletion {
 /// Body text for the `AdwToast` raised on the
 /// `Err(SaveDurabilityUnconfirmed)` HOTP-advance path.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
 /// bullet *"On `save_durability_unconfirmed`, additionally post an
 /// `AdwToast` carrying the committed-but-uncertain warning so the
 /// row stays usable with the new code in hand."* Sibling of the
@@ -341,7 +341,7 @@ pub fn format_hotp_durability_unconfirmed_toast() -> &'static str {
 /// HOTP-advance failure (pre-commit `SaveNotCommitted` and any other
 /// typed error).
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
 /// bullet *"On worker pre-commit failure (`save_not_committed`) or
 /// any other typed error, leave the previous reveal state unchanged
 /// …, zeroize the staged code, and surface the inline / status
@@ -455,7 +455,7 @@ pub fn row_display_for_reveal(summary: &AccountSummary, window: &RevealWindow) -
 /// Synchronous body of the `gio::spawn_blocking Vault::hotp_advance`
 /// worker fired by `AppModel::update` on a row "next" press.
 ///
-/// Per the `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
+/// Per the `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
 /// HOTP reveal-window bullet *"On row activation of 'next', stage
 /// the would-be visible Code from `Vault::hotp_peek` into a
 /// zeroizing pending slot before calling `Vault::hotp_advance`

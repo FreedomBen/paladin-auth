@@ -2,7 +2,7 @@
 
 //! Ticker thread tests for `paladin-tui`.
 //!
-//! Tracks `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
+//! Tracks `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)":
 //! *"Ticker thread — sleeps `paladin_core::TICK_INTERVAL_MS`, emits
 //! `AppEvent::Tick { wall_clock, monotonic }`."* The producer is a
 //! long-lived thread that the reducer drives off; the only impure
@@ -39,7 +39,7 @@ fn unwrap_tick(evt: AppEvent) -> (SystemTime, Instant) {
 }
 
 // ---------------------------------------------------------------------------
-// Ticker thread (IMPLEMENTATION_PLAN_03_TUI.md > Event loop > Ticker thread)
+// Ticker thread (docs/IMPLEMENTATION_PLAN_03_TUI.md > Event loop > Ticker thread)
 // ---------------------------------------------------------------------------
 
 #[test]

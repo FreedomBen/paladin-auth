@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// `ui_contract` constants locked by fixture (DESIGN.md §6 / §7,
-// IMPLEMENTATION_PLAN_01_CORE.md Phase G.17).
+// `ui_contract` constants locked by fixture (docs/DESIGN.md §6 / §7,
+// docs/IMPLEMENTATION_PLAN_01_CORE.md Phase G.17).
 //
 // Pins the values shared by `paladin-tui` and `paladin-gtk` so a
 // presentation crate cannot drift out of sync with the core. Each

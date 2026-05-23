@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! Wire-format guards for the off-by-default `error-serde` cargo
-//! feature. The CLI's `--json` envelopes (DESIGN.md §5) consume these
+//! feature. The CLI's `--json` envelopes (docs/DESIGN.md §5) consume these
 //! impls, so any drift would silently change a public scripting
 //! contract. Every test below pins the shape with `serde_json::json!`.
 

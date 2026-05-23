@@ -3,7 +3,7 @@
 //! Flatpak (`flatpak-builder`) manifest contract tests for
 //! `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §11.4 and the Milestone 7
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §11.4 and the Milestone 7
 //! packaging checklist entry "Add `packaging/flatpak/paladin-gtk.yml`":
 //!
 //! * Declares the app ID `org.tamx.Paladin.Gui` — the same string
@@ -22,7 +22,7 @@
 //!   (`--socket=wayland`, `--socket=fallback-x11`, `--share=ipc`,
 //!   `--filesystem=xdg-data/paladin:create`,
 //!   `--filesystem=xdg-config/paladin:create`) and **does not**
-//!   declare `--share=network` (DESIGN.md §3 / §5 forbid all
+//!   declare `--share=network` (docs/DESIGN.md §3 / §5 forbid all
 //!   network access; the Flatpak sandbox is the strongest place to
 //!   enforce that posture).
 //! * Installs the desktop entry, the `AppStream` metainfo, and the
@@ -70,7 +70,7 @@ const REQUIRED_FINISH_ARGS: &[&str] = &[
 ];
 
 /// `finish-args:` permissions that MUST NOT appear under any
-/// circumstances. `--share=network` would breach DESIGN.md §3 / §5
+/// circumstances. `--share=network` would breach docs/DESIGN.md §3 / §5
 /// "No network, no telemetry"; other broad portals would weaken the
 /// XDG-scoped vault-only filesystem posture.
 const FORBIDDEN_FINISH_ARGS: &[&str] = &[
@@ -326,7 +326,7 @@ fn flatpak_manifest_declares_every_required_finish_arg() {
 
 #[test]
 fn flatpak_manifest_does_not_declare_any_forbidden_finish_arg() {
-    // DESIGN.md §3 / §5 "No network, no telemetry" — the Flatpak
+    // docs/DESIGN.md §3 / §5 "No network, no telemetry" — the Flatpak
     // sandbox is the strongest place to enforce that posture. The
     // file system surface is also scoped strictly to the paladin
     // XDG namespace, so a future merge that adds `--filesystem=host`
@@ -342,7 +342,7 @@ fn flatpak_manifest_does_not_declare_any_forbidden_finish_arg() {
     assert!(
         found.is_empty(),
         "Flatpak `finish-args:` must NOT declare any of {FORBIDDEN_FINISH_ARGS:?} — \
-         DESIGN.md §3 / §5 forbid network access and the §11.4 filesystem posture is \
+         docs/DESIGN.md §3 / §5 forbid network access and the §11.4 filesystem posture is \
          strictly scoped to the paladin XDG namespace; found: {found:?}",
     );
 }
@@ -366,7 +366,7 @@ fn flatpak_manifest_finish_args_are_exactly_the_milestone_7_baseline_set() {
         "Flatpak `finish-args:` must declare ONLY the §11.4 baseline set \
          {REQUIRED_FINISH_ARGS:?}; found unexpected entries: {extras:?}. If a new \
          sandbox permission is genuinely required, update \
-         IMPLEMENTATION_PLAN_04_GTK.md §11.4 first and add it to REQUIRED_FINISH_ARGS \
+         docs/IMPLEMENTATION_PLAN_04_GTK.md §11.4 first and add it to REQUIRED_FINISH_ARGS \
          in this test.",
     );
 }

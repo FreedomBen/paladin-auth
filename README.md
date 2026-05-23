@@ -11,7 +11,7 @@ common core library. Local-first, no telemetry, no network.
 | `paladin-gtk`  | bin  | GTK4 + libadwaita GUI (`crates/paladin-gtk`) — `relm4`                |
 
 Binaries depend only on `paladin-core` — they never reach into each
-other. See [`DESIGN.md`](DESIGN.md) for the full design; it remains the
+other. See [`docs/DESIGN.md`](docs/DESIGN.md) for the full design; it remains the
 source of truth for behavior and APIs.
 
 ## Status
@@ -20,10 +20,10 @@ Implementation in progress. Design approved 2026-05-04.
 
 | Milestone               | Plan                                                     | State       |
 | ----------------------- | -------------------------------------------------------- | ----------- |
-| 1–3 Core OTP + storage  | [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md) | Complete    |
-| 4 CLI (`paladin`)       | [`IMPLEMENTATION_PLAN_02_CLI.md`](IMPLEMENTATION_PLAN_02_CLI.md)   | Complete    |
-| 5 TUI (`paladin-tui`)   | [`IMPLEMENTATION_PLAN_03_TUI.md`](IMPLEMENTATION_PLAN_03_TUI.md)   | Active      |
-| 7 GUI (`paladin-gtk`)   | [`IMPLEMENTATION_PLAN_04_GTK.md`](IMPLEMENTATION_PLAN_04_GTK.md)   | Active (v0.2 target) |
+| 1–3 Core OTP + storage  | [`docs/IMPLEMENTATION_PLAN_01_CORE.md`](docs/IMPLEMENTATION_PLAN_01_CORE.md) | Complete    |
+| 4 CLI (`paladin`)       | [`docs/IMPLEMENTATION_PLAN_02_CLI.md`](docs/IMPLEMENTATION_PLAN_02_CLI.md)   | Complete    |
+| 5 TUI (`paladin-tui`)   | [`docs/IMPLEMENTATION_PLAN_03_TUI.md`](docs/IMPLEMENTATION_PLAN_03_TUI.md)   | Active      |
+| 7 GUI (`paladin-gtk`)   | [`docs/IMPLEMENTATION_PLAN_04_GTK.md`](docs/IMPLEMENTATION_PLAN_04_GTK.md)   | Active (v0.2 target) |
 
 The CLI and core are usable today; the TUI and GTK GUI are
 under active development and ship pure-logic tests ahead of UI wiring.
@@ -49,7 +49,7 @@ under active development and ship pure-logic tests ahead of UI wiring.
 - **No network, no telemetry.** Enforced via `cargo deny` policy.
 
 v0.1 targets Linux. macOS and Windows are deferred to v0.2+
-(see [`DESIGN.md` §2](DESIGN.md)).
+(see [`docs/DESIGN.md` §2](docs/DESIGN.md)).
 
 ## Quick start
 
@@ -81,7 +81,7 @@ paladin tui
 ```
 
 `paladin --help` and `paladin <command> --help` document every flag.
-`--json` emits stable JSON envelopes per [`DESIGN.md` §5](DESIGN.md) for
+`--json` emits stable JSON envelopes per [`docs/DESIGN.md` §5](docs/DESIGN.md) for
 scripting; `--no-color` disables ANSI styling; `--vault <PATH>`
 overrides the default location.
 
@@ -111,11 +111,11 @@ cargo run -p paladin-gtk     # requires GTK4 >= 4.16, libadwaita >= 1.6
 
 `paladin-gtk` additionally needs GTK4 and libadwaita development headers
 at the versions declared in
-[`IMPLEMENTATION_PLAN_04_GTK.md`](IMPLEMENTATION_PLAN_04_GTK.md).
+[`docs/IMPLEMENTATION_PLAN_04_GTK.md`](docs/IMPLEMENTATION_PLAN_04_GTK.md).
 
 ## CI gate
 
-Per [`DESIGN.md` §10](DESIGN.md) and
+Per [`docs/DESIGN.md` §10](docs/DESIGN.md) and
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml), every change
 must clear:
 
@@ -143,11 +143,11 @@ any diff against
 │   ├── paladin-tui/    # `paladin-tui` binary (ratatui)
 │   └── paladin-gtk/    # `paladin-gtk` binary (relm4 + libadwaita)
 ├── xtask/              # workspace tooling (pinned dev-tools, package orchestration)
-├── DESIGN.md           # source of truth (locked sections approved 2026-05-04)
-├── IMPLEMENTATION_PLAN_01_CORE.md
-├── IMPLEMENTATION_PLAN_02_CLI.md
-├── IMPLEMENTATION_PLAN_03_TUI.md
-├── IMPLEMENTATION_PLAN_04_GTK.md
+├── docs/DESIGN.md           # source of truth (locked sections approved 2026-05-04)
+├── docs/IMPLEMENTATION_PLAN_01_CORE.md
+├── docs/IMPLEMENTATION_PLAN_02_CLI.md
+├── docs/IMPLEMENTATION_PLAN_03_TUI.md
+├── docs/IMPLEMENTATION_PLAN_04_GTK.md
 └── docs/               # supplementary notes (e.g. `CORE_DEVIATIONS.md`)
 ```
 
@@ -155,7 +155,7 @@ any diff against
 
 Patches welcome. Before opening a PR:
 
-- Re-read the relevant `DESIGN.md` section; sections §4.3–§4.6 and §8
+- Re-read the relevant `docs/DESIGN.md` section; sections §4.3–§4.6 and §8
   are locked for v0.1 — flag any deviation in the PR description.
 - When changing the CLI / TUI / GTK, update the corresponding
   `IMPLEMENTATION_PLAN_0X_*.md` first so design and code stay aligned.

@@ -4,7 +4,7 @@
 //! restoration on normal exit, startup failure after setup, `Ctrl-C`,
 //! and panic unwind.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)" the
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)" the
 //! guard is installed before the first draw and dropped after the
 //! event loop terminates. `Ctrl-C` is delivered as a `crossterm`
 //! key event and funnels through the reducer's `Effect::Quit` so its

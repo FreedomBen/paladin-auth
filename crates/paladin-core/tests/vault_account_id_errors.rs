@@ -2,11 +2,11 @@
 //
 // Phase G.8: pin the stable `invalid_state` operation/state pairs
 // returned by every `Vault` method that takes an `AccountId`
-// (DESIGN.md §4.7 stable error matrix). One file exercises the full
+// (docs/DESIGN.md §4.7 stable error matrix). One file exercises the full
 // matrix so a refactor that swaps an operation tag, state tag, or
 // error kind cannot pass tests by only updating the per-method file.
 //
-// The pairs locked here, per DESIGN.md §4.7:
+// The pairs locked here, per docs/DESIGN.md §4.7:
 //
 //   | Method         | Missing ID         | Wrong kind |
 //   |----------------|--------------------|------------|

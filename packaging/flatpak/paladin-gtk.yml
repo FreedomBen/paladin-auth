@@ -2,7 +2,7 @@
 #
 # flatpak-builder manifest for paladin-gtk (Flathub).
 #
-# Per IMPLEMENTATION_PLAN_04_GTK.md §11.4, this manifest builds against
+# Per docs/IMPLEMENTATION_PLAN_04_GTK.md §11.4, this manifest builds against
 # org.gnome.Platform//47 (which bundles GTK 4.16 + libadwaita 1.6,
 # matching the workspace's gtk4 (v4_16) / libadwaita (v1_6) crate
 # features) and ships the same install payload as the .deb / .rpm
@@ -16,13 +16,13 @@
 # The sandbox posture is strict: only the Wayland and X11-fallback
 # display sockets, IPC for clipboard, and `create`-scoped writes
 # into the paladin XDG namespace (xdg-data/paladin and
-# xdg-config/paladin). No `--share=network` (DESIGN.md §3 / §5
+# xdg-config/paladin). No `--share=network` (docs/DESIGN.md §3 / §5
 # "No network, no telemetry"), no host filesystem portals.
 #
 # Cargo runs `--offline --locked --release` so Flathub builds
 # reproducibly without network access at build time; vendored
 # Cargo deps ride alongside the release tarball
-# (IMPLEMENTATION_PLAN_04_GTK.md §"Reproducible builds").
+# (docs/IMPLEMENTATION_PLAN_04_GTK.md §"Reproducible builds").
 #
 # The contract pinned by this file is covered by
 # crates/paladin-gtk/tests/packaging_flatpak_manifest_logic.rs;
@@ -37,7 +37,7 @@ sdk: org.gnome.Sdk
 command: paladin-gtk
 
 # §11.4 sandbox permissions. Each entry is reviewed in
-# IMPLEMENTATION_PLAN_04_GTK.md §11.4; additions need a plan update
+# docs/IMPLEMENTATION_PLAN_04_GTK.md §11.4; additions need a plan update
 # first (the contract test rejects unrecognized entries).
 finish-args:
   # Wayland is the primary display socket on modern GNOME / KDE.
@@ -50,7 +50,7 @@ finish-args:
   # and clipboard image imports for QR add).
   - --share=ipc
   # Scoped write into $XDG_DATA_HOME/paladin/ — where the vault
-  # files live (DESIGN.md §4). `:create` lets paladin-gtk create
+  # files live (docs/DESIGN.md §4). `:create` lets paladin-gtk create
   # the directory on first run; nothing outside that namespace is
   # reachable.
   - --filesystem=xdg-data/paladin:create
@@ -58,7 +58,7 @@ finish-args:
   # here (auto-lock timeout, clipboard-clear interval, etc.).
   - --filesystem=xdg-config/paladin:create
   # NB: NO `--share=network`. The Flatpak sandbox is the strongest
-  # place to enforce the DESIGN.md §3 / §5 "no network, no
+  # place to enforce the docs/DESIGN.md §3 / §5 "no network, no
   # telemetry" posture, so a future merge that adds network access
   # has to land alongside an explicit plan update first.
 
@@ -89,7 +89,7 @@ modules:
       # Stage the AppStream metainfo. flatpak-builder exports
       # /app/share/metainfo/<app-id>.metainfo.xml to the host's
       # AppStream pool — the conceptual "/usr/share/metainfo/"
-      # location IMPLEMENTATION_PLAN_04_GTK.md §11.4 refers to.
+      # location docs/IMPLEMENTATION_PLAN_04_GTK.md §11.4 refers to.
       - install -Dm644 crates/paladin-gtk/data/metainfo/org.tamx.Paladin.Gui.metainfo.xml /app/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml
       # Stage the hicolor icon set. The scalable and symbolic SVGs
       # cover GTK4 / libadwaita icon-theme lookups; PNG sizes round

@@ -3,7 +3,7 @@
 //! Pure-logic search tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/search_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * Filtering routes through `paladin_core::account_matches_search`
 //!   with the same case-insensitive substring rules as the CLI / TUI

@@ -6,7 +6,7 @@
 //! { "version": { "name": "paladin", "version": "x.y.z" } }
 //! ```
 //!
-//! per DESIGN.md §5. Text mode keeps clap's normal `clap::crate_version!`
+//! per docs/DESIGN.md §5. Text mode keeps clap's normal `clap::crate_version!`
 //! rendering and is handled at the call site.
 
 use std::io::Write;

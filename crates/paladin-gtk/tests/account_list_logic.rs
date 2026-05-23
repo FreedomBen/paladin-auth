@@ -3,7 +3,7 @@
 //! Pure-logic coverage for `account_list::row_models_from_vault` and
 //! the shared `account_list::format_rendered_marker` helper.
 //!
-//! `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `AccountListComponent` pins the row factory to a `gio::ListStore`
 //! built from `paladin_core::AccountSummary` projections — the
 //! widget layer never touches secret bytes. These tests exercise
@@ -176,7 +176,7 @@ fn row_models_drop_empty_issuer_in_display_label() {
 }
 
 // ---------------------------------------------------------------------------
-// Refresh-after-mutation order invariants (`IMPLEMENTATION_PLAN_04_GTK.md`
+// Refresh-after-mutation order invariants (`docs/IMPLEMENTATION_PLAN_04_GTK.md`
 // §"Milestone 7 checklist" > `AccountListComponent` > "Refresh the store
 // after every vault mutation (Add / Remove / Rename / Import / settings
 // change that toggles a row's presentation) **without reordering surviving
@@ -378,7 +378,7 @@ fn filtered_row_models_after_vault_rename_updates_label_in_place() {
 
 #[test]
 fn row_models_after_sequence_of_add_rename_remove_preserves_surviving_order() {
-    // End-to-end pin for `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+    // End-to-end pin for `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component
     // tree" > `AccountListComponent`: "Refresh the store after every
     // vault mutation (Add / Remove / Rename / Import / settings change
     // that toggles a row's presentation) **without reordering
@@ -394,7 +394,7 @@ fn row_models_after_sequence_of_add_rename_remove_preserves_surviving_order() {
     // (Add → Rename → Remove) so a future regression that depends on
     // composition order would surface here.
     //
-    // Import (`IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // Import (`docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `ImportDialog` → "On success, refresh `AccountListComponent`
     // from the returned vault") plugs into the same
     // `filtered_row_models_from_vault` helper once
@@ -1039,7 +1039,7 @@ fn row_copy_action_name_is_copy() {
 fn build_kebab_menu_model_exposes_rename_and_remove_in_order() {
     // The row kebab `gtk::MenuButton` carries the `gio::Menu`
     // produced by [`build_kebab_menu_model`]. Per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `AccountRowComponent`, the menu must expose exactly two
     // entries — "Rename…" then "Remove…" — whose action targets
     // resolve through the per-row `gio::SimpleActionGroup` named
@@ -1107,7 +1107,7 @@ fn dispatch_row_action_routes_next_to_request_advance() {
     // `AccountListComponent` forwards it via [`forward_row_output`]
     // as `AccountListOutput::AdvanceHotp(id)` so `AppModel` can spawn
     // the `Vault::hotp_peek` / `Vault::hotp_advance` worker per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `AccountRowComponent`.
     let id = AccountId::new();
     assert_eq!(
@@ -1124,7 +1124,7 @@ fn dispatch_row_action_routes_copy_to_request_copy() {
     // as `AccountListOutput::CopyCode(id)` so `AppModel` can write
     // the visible code into `gdk::Clipboard` and schedule the
     // clipboard auto-clear policy per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `AccountRowComponent`.
     let id = AccountId::new();
     assert_eq!(
@@ -1648,7 +1648,7 @@ fn bind_display_for_row_returned_clone_does_not_alias_cache() {
 fn bind_display_for_row_busy_dims_cache_hit_affordances() {
     // While `AppModel` is `UnlockedBusy`, the per-row mutating
     // affordances dim regardless of the cache hit's intrinsic
-    // state. Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    // state. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
     // ownership", `apply_busy_mask` flips copy / next / kebab
     // enabled to `false`; the visible code, counter, progress, and
     // visibility bits stay intact so the row keeps rendering while

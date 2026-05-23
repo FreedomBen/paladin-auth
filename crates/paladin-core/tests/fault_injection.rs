@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Cross-save-site fault-injection coverage (DESIGN.md §10 / Phase E.7
+// Cross-save-site fault-injection coverage (docs/DESIGN.md §10 / Phase E.7
 // + Phase J.6 cross-save-site table).
 //
 // Compiles and runs only with the `test-fault-injection` cargo feature
@@ -635,7 +635,7 @@ fn store_for_test_constructor_drives_fault_hook() {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// CSPRNG failure surface (Phase F.15 / DESIGN.md §5).
+// CSPRNG failure surface (Phase F.15 / docs/DESIGN.md §5).
 //
 // Every encrypted-write site reads the OS CSPRNG to draw a fresh salt
 // (encrypted `create` / `create_force`) or fresh nonce (every encrypted
@@ -853,7 +853,7 @@ fn csprng_fault_value_does_not_trip_pre_or_post_commit_paths() {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Argon2id allocation failure surface (Phase F.16 / DESIGN.md §5).
+// Argon2id allocation failure surface (Phase F.16 / docs/DESIGN.md §5).
 //
 // Every encrypted save / open path runs Argon2id to derive the 32-byte
 // AEAD key. On a memory-constrained host the underlying allocator can
@@ -1218,7 +1218,7 @@ fn hotp_advance_post_commit_keeps_mutation_and_surfaces_durability_unconfirmed()
 // here because they require the `PALADIN_FAULT_INJECT` hook and
 // must serialize on the shared env-var mutex.
 //
-// Locked semantics, per DESIGN.md §4.7:
+// Locked semantics, per docs/DESIGN.md §4.7:
 //   - `save_not_committed`           → restore the snapshot
 //   - `save_durability_unconfirmed`  → keep the mutated state in memory
 //

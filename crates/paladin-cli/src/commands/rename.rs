@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! `paladin rename <query> <new-label>` — rename an account. See
-//! DESIGN.md §5 and `IMPLEMENTATION_PLAN_02_CLI.md` "Vault interaction
+//! docs/DESIGN.md §5 and `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Vault interaction
 //! pattern".
 //!
 //! Order of operations (locked by the plan):

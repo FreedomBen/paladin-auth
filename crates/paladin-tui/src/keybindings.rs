@@ -2,7 +2,7 @@
 
 //! Workspace-wide keybindings table for `paladin-tui`.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay" and the
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay" and the
 //! "Packaging — Man page" bullet: the overlay's content is
 //! generated from the same keybindings table that the workspace
 //! `cargo xtask man` target appends into the man page (after the
@@ -45,8 +45,8 @@ pub struct Keybinding {
 /// Documented `paladin-tui` keybindings in row order.
 ///
 /// Mirrors the "Keybindings (initial v0.1)" table in
-/// [`DESIGN.md`](../../../../DESIGN.md) §6 and the matching table in
-/// `IMPLEMENTATION_PLAN_03_TUI.md`. The order is meaningful: the
+/// [`docs/DESIGN.md`](../../../../docs/DESIGN.md) §6 and the matching table in
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md`. The order is meaningful: the
 /// Help overlay and the man page both render rows top-to-bottom, so
 /// `?` lands at the bottom of the action keys (where the user
 /// who just hit it expects to see it) and the global quit keys

@@ -2,7 +2,7 @@
 
 //! Help-overlay reducer tests for `paladin-tui`.
 //!
-//! Tracks `IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay" and the
+//! Tracks `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay" and the
 //! "Implementation checklist" item *"Implement the read-only Help
 //! overlay (`?` from list focus, `Esc` to close); … suppress `?` on
 //! the unlock, create-vault, and startup-error screens."*
@@ -186,7 +186,7 @@ fn assert_help_open(state: &AppState, expected: bool, msg: &str) {
 
 // ---------------------------------------------------------------------------
 // Opening: `?` from list focus
-// (IMPLEMENTATION_PLAN_03_TUI.md > Help overlay)
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Help overlay)
 // ---------------------------------------------------------------------------
 
 #[test]

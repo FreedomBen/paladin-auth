@@ -2,7 +2,7 @@
 
 //! `paladin-gtk` library surface.
 //!
-//! See `IMPLEMENTATION_PLAN_04_GTK.md` and `DESIGN.md` §7. The binary
+//! See `docs/IMPLEMENTATION_PLAN_04_GTK.md` and `docs/DESIGN.md` §7. The binary
 //! at `src/main.rs` is a thin shim that hands off to [`run`]; all
 //! presentation logic lives in submodules so the pure-logic helpers
 //! (search, icon resolution, auto-lock, clipboard wiring, clipboard-clear
@@ -56,7 +56,7 @@ pub const APP_ID: &str = "org.tamx.Paladin.Gui";
 
 /// Run the `paladin-gtk` binary.
 ///
-/// Milestone 7 foundation per `IMPLEMENTATION_PLAN_04_GTK.md`:
+/// Milestone 7 foundation per `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 /// parse [`cli::GlobalArgs`], initialize libadwaita, construct the
 /// relm4 [`RelmApp`](relm4::RelmApp) around [`app::model::AppModel`],
 /// and run the main loop. The hidden `--exit-after-startup` flag
@@ -95,7 +95,7 @@ pub fn run() -> ExitCode {
     // `gio` resource pool before any consumer (`wire_app_css_provider`
     // here; future widget `gtk::Builder::from_resource` /
     // `gtk::Image::from_resource` call sites) looks up a payload at
-    // `/org/tamx/Paladin/Gui/...` per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // `/org/tamx/Paladin/Gui/...` per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"Window shell and toast surface".
     app::model::register_app_gresource_bundle();
 
@@ -104,7 +104,7 @@ pub fn run() -> ExitCode {
     // and register the bundled icon-theme root with `gtk::IconTheme`
     // so the row-factory placeholder symbolic
     // (`icon_resolution::PLACEHOLDER_ICON_NAME`) resolves identically
-    // in native and Flatpak builds per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // in native and Flatpak builds per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"Icon resolution". Adwaita owns the base palette / colors /
     // widget styles; the CSS layer only adds the Paladin-specific
     // tweaks the v0.2 GUI needs and never re-skins the Adwaita

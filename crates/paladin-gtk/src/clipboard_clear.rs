@@ -2,7 +2,7 @@
 
 //! Clipboard auto-clear pure-logic glue for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md`
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 //! §"Auto-lock and clipboard auto-clear (per §7)", the GUI owns the
 //! [`gdk::Clipboard`][gdk_clipboard] reads / writes and the timer
 //! plumbing, but every policy decision routes through

@@ -5,7 +5,7 @@
 //! manifests and validates the installed payload with
 //! `desktop-file-validate` plus `appstreamcli validate --no-net`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` Milestone 7 checklist entry
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` Milestone 7 checklist entry
 //! "Add the packaging dry-run job to CI: produces `.deb`, `.rpm`,
 //! Flatpak, and `AppImage` artifacts and runs `desktop-file-validate`
 //! plus the `AppStream` validator on the installed payload":

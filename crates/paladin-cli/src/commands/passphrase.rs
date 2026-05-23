@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! `paladin passphrase {set,change,remove}` — vault passphrase
-//! transitions (DESIGN.md §4.5 / §5). See `IMPLEMENTATION_PLAN_02_CLI.md`
+//! transitions (docs/DESIGN.md §4.5 / §5). See `docs/IMPLEMENTATION_PLAN_02_CLI.md`
 //! "Passphrase prompts" / "Vault interaction pattern".
 //!
 //! Order of operations (locked by the plan):
@@ -14,7 +14,7 @@
 //!    `paladin remove --json`.
 //! 3. (`set` / `change` only) Parse + validate KDF flags. Errors here
 //!    win over `vault_missing`, `invalid_state`, the unlock prompt, and
-//!    the new-passphrase prompt — locked by `IMPLEMENTATION_PLAN_02_CLI.md`
+//!    the new-passphrase prompt — locked by `docs/IMPLEMENTATION_PLAN_02_CLI.md`
 //!    "Encrypted-write KDF flags".
 //! 4. `inspect(path)`. The result also serves as the wrong-state gate
 //!    *before* any prompt: `set` on `Encrypted` returns `invalid_state`

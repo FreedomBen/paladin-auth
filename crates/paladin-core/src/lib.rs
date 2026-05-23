@@ -2,8 +2,8 @@
 
 //! Paladin core: domain types, OTP math, vault storage, crypto, and import/export.
 //!
-//! The public surface is locked to DESIGN.md §4.7; anything not re-exported
-//! here is `pub(crate)` and an implementation detail. See DESIGN.md §3 for
+//! The public surface is locked to docs/DESIGN.md §4.7; anything not re-exported
+//! here is `pub(crate)` and an implementation detail. See docs/DESIGN.md §3 for
 //! the workspace layout and §4 for module-by-module behavior.
 
 #![forbid(unsafe_code)]
@@ -11,11 +11,11 @@
 
 // §4.7 mandates these three submodule namespaces; everything else is
 // reached through the `pub use` block below.
-/// Vault export pipelines (otpauth list, encrypted Paladin bundle). See DESIGN.md §4.6.
+/// Vault export pipelines (otpauth list, encrypted Paladin bundle). See docs/DESIGN.md §4.6.
 pub mod export;
-/// Vault import detection, parsers, and dispatch facade. See DESIGN.md §4.6.
+/// Vault import detection, parsers, and dispatch facade. See docs/DESIGN.md §4.6.
 pub mod import;
-/// Front-end UI policies (auto-lock, clipboard-clear, HOTP reveal). See DESIGN.md §4.5.
+/// Front-end UI policies (auto-lock, clipboard-clear, HOTP reveal). See docs/DESIGN.md §4.5.
 pub mod policy;
 
 mod crypto;

@@ -3,7 +3,7 @@
 //! Pure-logic icon-resolution tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/icon_resolution.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * `None` / empty slug routes to the placeholder icon without
 //!   invoking `gtk::IconTheme` (the actual lookup is exercised by the

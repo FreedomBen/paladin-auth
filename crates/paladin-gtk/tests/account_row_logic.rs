@@ -2,7 +2,7 @@
 
 //! Pure-logic `AccountRowComponent` tests for `paladin-gtk`.
 //!
-//! Tracks `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! Tracks `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 //! `AccountRowComponent`:
 //!
 //! * Display label matches the CLI / TUI `<issuer>:<label>` body
@@ -399,7 +399,7 @@ fn progress_urgency_css_classes_are_adwaita_semantics() {
 fn kebab_visible_always_on_for_totp_and_hotp() {
     // Every row in `AccountListComponent` exposes the kebab
     // `MenuButton` (Rename… / Remove…) per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `AccountRowComponent`. The projection returns `true`
     // unconditionally so the row factory can build the affordance
     // without branching on kind.
@@ -410,7 +410,7 @@ fn kebab_visible_always_on_for_totp_and_hotp() {
 // ---------------------------------------------------------------------------
 // `next_button_enabled` — intrinsic clickability; mirrors visibility (HOTP only)
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 // `AccountRowComponent`, the "next" button is rendered only on HOTP rows.
 // The intrinsic-enabled projection mirrors that visibility — the widget
 // layer feeds it into `gtk::Button::set_sensitive` and the per-component
@@ -440,7 +440,7 @@ fn kebab_enabled_always_on() {
 // ---------------------------------------------------------------------------
 // `apply_busy_mask` — clamp mutating-row affordances during `UnlockedBusy`
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership" /
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership" /
 // §"Component tree" > `AccountRowComponent` ("Disable mutating row
 // controls (copy, 'next', kebab) while `AppModel` is `UnlockedBusy`"),
 // the row factory threads the current `AppState::is_busy()` flag through
@@ -533,7 +533,7 @@ fn copy_enabled_totp_regardless_of_visible_code() {
 fn copy_enabled_hotp_only_with_visible_code() {
     // HOTP rows hide their code until the user activates "next" and
     // the reveal window is open; copying a hidden HOTP row is
-    // explicitly disabled per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // explicitly disabled per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"Component tree" > `AccountRowComponent`.
     assert!(!copy_enabled(AccountKindSummary::Hotp, false));
     assert!(copy_enabled(AccountKindSummary::Hotp, true));
@@ -705,7 +705,7 @@ fn project_row_collapses_empty_issuer_to_bare_label() {
 // AccountRowComponent scaffold (Milestone 7 component-tree wiring)
 // ---------------------------------------------------------------------------
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
 // "Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
 // Rename / Import / Export / Passphrase / Settings / StartupError)",
 // `AccountRowComponent` is the final entry, joining the eleven
@@ -831,7 +831,7 @@ fn account_row_component_input_and_output_match_dispatch_edges() {
 
 // ---------------------------------------------------------------------------
 // Row widget construction lives in `paladin_gtk::account_row` per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 // `AccountListComponent`. The `AccountRowComponent`
 // `FactoryComponent::init_widgets` callback owns the per-row
 // `gtk::Box`, the bind walk, the icon theme resolve, and the per-row

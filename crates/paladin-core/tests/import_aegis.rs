@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase I.3 — `import::aegis_plaintext` (DESIGN.md §4.6 / §4.7).
+// Phase I.3 — `import::aegis_plaintext` (docs/DESIGN.md §4.6 / §4.7).
 //
 // Aegis Authenticator JSON exports come in two shapes:
 //   - Plaintext: `db` is a JSON object with `version` + `entries[]`.

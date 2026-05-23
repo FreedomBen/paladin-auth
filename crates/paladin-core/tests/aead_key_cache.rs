@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// AEAD key cache assertions (DESIGN.md §4.4 / Phase F.13).
+// AEAD key cache assertions (docs/DESIGN.md §4.4 / Phase F.13).
 //
 // `Store::open` and `Store::create` derive the 32-byte AEAD key once
 // via Argon2id and cache it on the returned `Vault`. Subsequent

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase I.8 — `export::otpauth_list` (DESIGN.md §4.6 / §4.7).
+// Phase I.8 — `export::otpauth_list` (docs/DESIGN.md §4.6 / §4.7).
 
 #![cfg(unix)]
 

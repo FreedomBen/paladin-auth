@@ -3,7 +3,7 @@
 //! Pure-logic clipboard-QR tests for `paladin-gtk`.
 //!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/qr_clipboard_logic.rs`"
-//! checklist in `IMPLEMENTATION_PLAN_04_GTK.md`:
+//! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!
 //! * RGBA byte-length / stride preparation matches `width * 4` rows /
 //!   `width * height * 4` total with overflow-checked multiplication.
@@ -159,7 +159,7 @@ fn prepare_rgba_layout_runs_before_buffer_is_allocated() {
 // `prepare_rgba_layout` is the gate; `allocate_rgba_buffer` is the
 // materialization step that runs *after* the gate has accepted the
 // layout. Together they satisfy the
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
 // clipboard image path" sub-item:
 //   "Allocate an exact width * height * 4 straight (non-premultiplied)
 //    RGBA8 buffer with overflow-checked multiplication; reject sizes
@@ -251,7 +251,7 @@ fn allocate_rgba_buffer_at_qr_rgba_max_bytes_succeeds() {
 // Item 2c: clipboard_qr_memory_format selects straight RGBA8
 // ---------------------------------------------------------------------------
 //
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
 // image path" pins the GDK download format to
 // `gdk::MemoryFormat::R8g8b8a8` (straight, non-premultiplied RGBA) so
 // the `rqrr`-based QR decoder behind
@@ -510,7 +510,7 @@ fn decode_clipboard_qr_uses_supplied_import_time() {
 // ---------------------------------------------------------------------------
 // `compose_qr_decode_outcome`: post-download verify + decode glue
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
 // clipboard image path" L2738, the live `AppModel` clipboard-QR
 // handler hands the validated `RgbaLayout`, the GDK-downloaded RGBA
 // buffer, GDK's reported row stride, and the `import_time` stamp
@@ -675,7 +675,7 @@ fn compose_qr_decode_outcome_decoded_carries_empty_vec_only_under_unreachable_pa
 // ---------------------------------------------------------------------------
 // Item 4: pre-worker inline-error categories
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
 // image path", the four user-visible inline-error categories the dialog
 // must surface without mutating the vault are:
 //

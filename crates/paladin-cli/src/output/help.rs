@@ -6,7 +6,7 @@
 //! { "help": { "command": "paladin add", "text": "..." } }
 //! ```
 //!
-//! per DESIGN.md §5. Text mode keeps clap's normal help rendering and
+//! per docs/DESIGN.md §5. Text mode keeps clap's normal help rendering and
 //! is handled at the call site. The JSON shape is locked by the
 //! integration tests in `tests/cli_global_flags.rs`.
 

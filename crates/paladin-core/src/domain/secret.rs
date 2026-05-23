@@ -7,7 +7,7 @@
 // `Secret` deliberately does **not** derive `Debug`, `Display`, or
 // `serde::Serialize`. The vault payload encoder is written by hand
 // (bincode v2) so it can serialize the inner bytes without exposing them
-// through the public surface; see DESIGN.md §8.
+// through the public surface; see docs/DESIGN.md §8.
 
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Public import facade — `ImportOptions`, `from_bytes`, `from_file`
-// (DESIGN.md §4.6 / §4.7).
+// (docs/DESIGN.md §4.6 / §4.7).
 //
 // Auto-detection runs `detect(bytes)` to choose an `ImportFormat`.
 // Forced formats override auto-detection but are still sanity-checked

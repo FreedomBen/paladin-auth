@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `paladin init` — create a new vault. See DESIGN.md §5 and
-//! `IMPLEMENTATION_PLAN_02_CLI.md` "Vault interaction pattern" /
+//! `paladin init` — create a new vault. See docs/DESIGN.md §5 and
+//! `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Vault interaction pattern" /
 //! "Passphrase prompts".
 //!
 //! Order of operations (locked by the plan):

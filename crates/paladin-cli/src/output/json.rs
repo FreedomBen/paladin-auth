@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Stable JSON envelope renderers per DESIGN.md §5. Each helper writes
+//! Stable JSON envelope renderers per docs/DESIGN.md §5. Each helper writes
 //! exactly one JSON document to the supplied `Write` followed by a
 //! single newline, with no other bytes — matching the CLI's
 //! "stdout is one document plus newline" wire contract under `--json`.

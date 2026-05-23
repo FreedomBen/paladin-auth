@@ -2,7 +2,7 @@
 
 //! `AppImage` assembly script contract tests for `paladin-gtk`.
 //!
-//! Per `IMPLEMENTATION_PLAN_04_GTK.md` §11.5 and the Milestone 7
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §11.5 and the Milestone 7
 //! packaging checklist entry "Wire `AppImage` assembly via
 //! `linuxdeploy` + `linuxdeploy-plugin-gtk`":
 //!

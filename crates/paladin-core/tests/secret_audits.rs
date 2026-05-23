@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase B audit (DESIGN.md §8 / IMPLEMENTATION_PLAN_01_CORE.md
+// Phase B audit (docs/DESIGN.md §8 / docs/IMPLEMENTATION_PLAN_01_CORE.md
 // Phase B): the `Debug` output of every secret-bearing public type
 // must omit the raw secret bytes (and any passphrase or AEAD key
 // material). Companion to the trybuild compile-fail tests in

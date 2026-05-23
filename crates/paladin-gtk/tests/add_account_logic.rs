@@ -3,7 +3,7 @@
 //! Pure-logic Add Account manual-path tests for `paladin-gtk`.
 //!
 //! Tracks the §"Component tree" > `AddAccountComponent` rules in
-//! `IMPLEMENTATION_PLAN_04_GTK.md` for the *manual* input sub-path:
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md` for the *manual* input sub-path:
 //!
 //! * Empty issuer maps to `None`; non-empty issuer threads through.
 //! * Period / counter are kind-conditional (TOTP carries period, HOTP
@@ -858,7 +858,7 @@ fn run_add_worker_save_failure_routes_inline_and_returns_pair() {
     // vault state after rollback depends on which `Vault::save` step
     // failed (snapshot-restored for `save_not_committed`,
     // post-mutation for any other error) — that contract is owned by
-    // `Vault::mutate_and_save` per DESIGN.md §4.3, so the worker test
+    // `Vault::mutate_and_save` per docs/DESIGN.md §4.3, so the worker test
     // asserts only that the pair survives and the dispatch routes
     // `Inline` rather than re-deriving rollback semantics here.
     let _ = completion.vault;
@@ -5975,7 +5975,7 @@ fn compose_save_button_sensitive_qr_path_remains_false_with_prior_buffers() {
 }
 
 // `AddAccountMsg::SetBusy(bool)` is the parent's hook for
-// `IMPLEMENTATION_PLAN_04_GTK.md` L2080 — "every path can disable
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` L2080 — "every path can disable
 // submit while a worker is in flight". `AppModel` flips this around
 // the `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
 // worker the same way `AccountListMsg::SetBusy` flips
@@ -6249,7 +6249,7 @@ fn compose_save_button_sensitive_busy_then_form_cleared_stays_false() {
 // `AddAccountMsg::Close` is the parent's hook for window-close /
 // parent-navigation / modal-dismissal cases that `Cancel` does not
 // cover. The dispatch routes through the same centralized
-// secret-clearing helper as `Cancel` (per `IMPLEMENTATION_PLAN_04_GTK.md`
+// secret-clearing helper as `Cancel` (per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 // §"Secret entry handling": submit / cancel / close / auto-lock all
 // wipe the relevant buffers) and emits a distinct
 // `AddAccountOutput::Close` so `AppModel` can tell the two dismissal
@@ -6410,7 +6410,7 @@ fn format_add_path_label_uri_returns_uri() {
 fn format_add_path_label_qr_returns_scan_clipboard() {
     // The `AdwViewSwitcher` page title for the clipboard-QR sub-path
     // is the fixed label `"Scan clipboard"`, matching the
-    // IMPLEMENTATION_PLAN_04_GTK.md §"Component tree" wording for
+    // docs/IMPLEMENTATION_PLAN_04_GTK.md §"Component tree" wording for
     // the `AdwViewStack`'s "Scan clipboard" page. The widget
     // binding feeds each `AddPath` in `format_add_path_order`
     // through this helper to set the page title, so pinning the
@@ -8710,7 +8710,7 @@ fn format_add_dialog_save_label_returns_save() {
     // when the Save button lands in the view alongside the
     // already-extracted `compose_save_button_sensitive` sensitivity
     // projection. Wording is the fixed `"Save"` verb mirroring the
-    // `IMPLEMENTATION_PLAN_04_GTK.md` Add / Rename "Save / Cancel
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` Add / Rename "Save / Cancel
     // buttons" convention, with the function name keeping the
     // `save` role even though the visible label intentionally lives
     // in one place behind this helper (see the same role-vs-label
@@ -8723,7 +8723,7 @@ fn format_add_dialog_save_label_returns_save() {
     assert_eq!(
         format_add_dialog_save_label(),
         "Save",
-        "dialog save button label matches the IMPLEMENTATION_PLAN_04_GTK.md \"Save / Cancel\" wording",
+        "dialog save button label matches the docs/IMPLEMENTATION_PLAN_04_GTK.md \"Save / Cancel\" wording",
     );
 }
 
@@ -8904,7 +8904,7 @@ fn compose_uri_text_value_returns_empty_after_switch_path_away_from_uri() {
 // ---------------------------------------------------------------------------
 // `format_add_dialog_success_toast` — body text for the `AdwToast` raised
 // after a successful add worker outcome per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" > `AddAccountComponent`
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" > `AddAccountComponent`
 // shared shell ("Keep successful manual and URI additions consistent with §7:
 // refresh the list from the returned vault, close the dialog, and surface a
 // status / toast confirmation."). Sibling of
@@ -8946,7 +8946,7 @@ fn format_add_dialog_success_toast_is_non_empty_single_sentence() {
 // `AdwViewStack`'s `connect_visible_child_notify` handler to translate the
 // notified visible-child-name slug back into an `AddPath` so the widget can
 // dispatch `AddAccountMsg::SwitchPath(path)`. The on-page-switch contract at
-// `IMPLEMENTATION_PLAN_04_GTK.md` L2122 hinges on every user-driven page
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` L2122 hinges on every user-driven page
 // switch reaching `AddSecretState::switch_path`, so this inverse helper has
 // to recognize exactly the slugs `format_add_path_name` emits — no extra
 // case-folding, no whitespace tolerance — and reject anything else so a
@@ -9134,7 +9134,7 @@ fn parse_add_path_name_is_case_sensitive() {
 // `RenderInlineError` back via `controller.emit(...)`. The shared
 // pipeline keeps the manual and URI submit paths converging on a
 // single `AddAccountOutput::Submit { account }` boundary per
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 // `AddAccountComponent` shared shell L2161.
 
 #[test]
@@ -9276,7 +9276,7 @@ fn apply_msg_save_clicked_routes_identically_for_manual_and_uri_paths() {
     // active. Both Manual and URI submissions converge on the
     // same parent boundary so the duplicate-detection / mutate-
     // and-save worker stays a single shared pipeline per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §2161.
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §2161.
     use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
     use paladin_gtk::secret_fields::AddPath;
 
@@ -9540,7 +9540,7 @@ fn parse_manual_algorithm_from_selected_round_trips_format_manual_algorithm_sele
 // QR clipboard post-success counts panel
 // ---------------------------------------------------------------------------
 //
-// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 // `AddAccountComponent` shared shell L2230:
 //
 //   "Keep successful clipboard-QR additions on a post-success counts panel
@@ -9882,7 +9882,7 @@ fn apply_msg_worker_failed_inline_clears_prior_qr_success_counts() {
     // row alongside the freshly-rendered inline error, which is
     // confusing and not the spec's contract. Mirror of the
     // `apply_msg_qr_success_clears_prior_worker_outcome` rule, run
-    // the other direction. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // the other direction. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"`AddAccountComponent` QR clipboard image path" > "Handle
     // `save_not_committed` by … keeping the Add dialog open with
     // the inline error".
@@ -9940,7 +9940,7 @@ fn apply_msg_worker_failed_keep_with_warning_clears_prior_qr_success_counts() {
     // — leaving a stale panel from an earlier scan would mislead the
     // user about the latest attempt. The warning still renders via
     // the existing `post_effect_warning_label` projection against
-    // `worker_outcome`. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // `worker_outcome`. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     // §"`AddAccountComponent` QR clipboard image path" > "Handle
     // `save_durability_unconfirmed` by keeping the imported accounts
     // visible and surfacing the warning on the counts panel".
@@ -10183,7 +10183,7 @@ fn compose_qr_counts_panel_warnings_label_returns_some_after_success() {
 // ---------------------------------------------------------------------------
 // DESIGN §5 manual-add defaults contract.
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 // `AddAccountComponent` manual fields path: a freshly-opened Add
 // dialog must seed the manual form widgets with the CLI manual-add
 // defaults from DESIGN §5 — TOTP, SHA1, 6 digits, 30 s period, HOTP
@@ -10878,7 +10878,7 @@ fn compose_scan_clipboard_button_sensitive_inactive_on_uri_path() {
 #[test]
 fn compose_scan_clipboard_button_sensitive_inactive_when_busy() {
     // An in-flight worker owns the `(Vault, Store)` pair per
-    // `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
     // The Scan clipboard button must dim while busy, mirroring the
     // `compose_save_button_sensitive` busy short-circuit.
     use paladin_gtk::add_account::{
@@ -11295,7 +11295,7 @@ fn run_qr_worker_save_failure_routes_inline_and_returns_pair() {
 // ---------------------------------------------------------------------------
 // QR preflight inline-error projection
 //
-// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
 // image path" L2836 ("Surface no-image, image-decode failure,
 // zero-decoded-QRs, and invalid-payload errors inline in the Add dialog;
 // never mutate vault state on failure"), the live `AppModel::update`

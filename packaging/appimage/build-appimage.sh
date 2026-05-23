@@ -3,7 +3,7 @@
 #
 # AppImage assembly script for paladin-gtk.
 #
-# Per IMPLEMENTATION_PLAN_04_GTK.md §11.5, this script wraps
+# Per docs/IMPLEMENTATION_PLAN_04_GTK.md §11.5, this script wraps
 # linuxdeploy + linuxdeploy-plugin-gtk to bundle the GTK4 runtime
 # pieces (modules, GSettings schemas, gdk-pixbuf loaders) inside the
 # resulting AppImage so the artifact runs on a host whose GTK theme
@@ -15,7 +15,7 @@
 #                      [workspace.package].version. Drives the output
 #                      filename and ${OUTPUT}'s version slot.
 #   SOURCE_DATE_EPOCH  Optional. Release-tag-derived Unix timestamp
-#                      (DESIGN.md §11.6 "Reproducible builds"). When
+#                      (docs/DESIGN.md §11.6 "Reproducible builds"). When
 #                      set, the script exports it so the cargo build,
 #                      linuxdeploy, linuxdeploy-plugin-gtk, and the
 #                      mksquashfs step appimagetool invokes all see
@@ -64,7 +64,7 @@ cd "${WORKSPACE_ROOT}"
 # subprocess this script spawns — cargo build, linuxdeploy,
 # linuxdeploy-plugin-gtk, and the mksquashfs step appimagetool invokes
 # transitively — embeds the same tag-timestamp instead of wall-clock
-# `now`. That is what DESIGN.md §11.6 "Reproducible builds" relies on
+# `now`. That is what docs/DESIGN.md §11.6 "Reproducible builds" relies on
 # to guarantee byte-identical AppImage output across re-runs of the
 # same tag. Pinned by
 # crates/paladin-gtk/tests/packaging_reproducible_build_logic.rs::appimage_script_exports_source_date_epoch_for_linuxdeploy_subprocess.

@@ -2,8 +2,8 @@
 
 //! Reducer tests for the in-app create-vault wizard.
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes" and
-//! `DESIGN.md` §6: when the vault is missing the TUI walks the user
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes" and
+//! `docs/DESIGN.md` §6: when the vault is missing the TUI walks the user
 //! through creation in-app. These tests pin every transition of the
 //! [`CreateVaultStep`] state machine plus the executor-result reducer
 //! (`Ok(...)` lands on `Unlocked` with an empty list; `Err(...)`
@@ -408,7 +408,7 @@ fn create_vault_enter_passphrase_ctrl_c_quits() {
 // ---------- EffectResult::CreateVault ----------
 
 fn create_actual_vault(dir: &tempfile::TempDir, encrypted: bool) -> (Vault, Store) {
-    // `Store::create` enforces a 0700 parent-dir mode per DESIGN.md §4.3.
+    // `Store::create` enforces a 0700 parent-dir mode per docs/DESIGN.md §4.3.
     // The system umask in test environments often produces 0770 dirs, so
     // tighten it explicitly before the create call.
     use std::os::unix::fs::PermissionsExt;

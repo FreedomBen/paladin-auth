@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Pre-AEAD / post-AEAD plaintext buffer (DESIGN.md §4.4 / Phase F.14).
+// Pre-AEAD / post-AEAD plaintext buffer (docs/DESIGN.md §4.4 / Phase F.14).
 //
 // `ZeroizingBytes` wraps the secret-plaintext `Vec<u8>` that the
 // encrypted-storage paths hand to / receive from `crypto::aead`:
@@ -29,7 +29,7 @@ use zeroize::Zeroize;
 use super::zeroize_witness::{observe, WitnessSite};
 
 /// A `Vec<u8>` whose initialized contents are wiped on drop
-/// (DESIGN.md §4.4).
+/// (docs/DESIGN.md §4.4).
 ///
 /// Deliberately does not derive `Debug`: the payload is plaintext
 /// vault material and §4.7's "no debug impls that leak bytes" rule

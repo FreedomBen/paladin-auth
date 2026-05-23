@@ -4,7 +4,7 @@
 #
 # This file is the artifact that gets PR'd to
 # https://github.com/flathub/flathub to register the new app
-# `org.tamx.Paladin.Gui` (DESIGN.md §11.4: "Publication. Flathub.
+# `org.tamx.Paladin.Gui` (docs/DESIGN.md §11.4: "Publication. Flathub.
 # Each front-end is its own Flathub submission with its own review
 # thread and update cadence."). Once Flathub accepts the
 # submission, this same file lives at the root of the resulting
@@ -28,7 +28,7 @@
 # source pointer therefore has to be an upstream `type: git`
 # pointing at the tagged release.
 #
-# Signing: per DESIGN.md §11.4 / §11.6 ("Flatpak releases inherit
+# Signing: per docs/DESIGN.md §11.4 / §11.6 ("Flatpak releases inherit
 # Flathub's signing"), Flathub signs every published build with
 # its own key. The release pipeline's `packaging/sign/sign-artifact.sh`
 # is therefore NOT invoked for the Flatpak output — only for the
@@ -47,7 +47,7 @@ finish-args:
   # codes and clipboard image imports for QR add).
   - --share=ipc
   # Scoped write into `$XDG_DATA_HOME/paladin/` — where the vault
-  # files live (DESIGN.md §4). `:create` lets paladin-gtk create
+  # files live (docs/DESIGN.md §4). `:create` lets paladin-gtk create
   # the directory on first run; nothing outside that namespace is
   # reachable.
   - --filesystem=xdg-data/paladin:create
@@ -55,7 +55,7 @@ finish-args:
   # here (auto-lock timeout, clipboard-clear interval, etc.).
   - --filesystem=xdg-config/paladin:create
   # NB: NO `--share=network`. The Flatpak sandbox is the strongest
-  # place to enforce the DESIGN.md §3 / §5 "no network, no
+  # place to enforce the docs/DESIGN.md §3 / §5 "no network, no
   # telemetry" posture, so a future merge that adds network access
   # has to land alongside an explicit plan update first.
 build-options:
@@ -73,7 +73,7 @@ modules:
       # Build the release binary against the vendored cargo deps.
       # `--locked` keeps the lockfile authoritative; `--offline`
       # mirrors the sandbox's lack of network access at build time;
-      # `--release` is the artifact shape DESIGN.md §11.6 requires.
+      # `--release` is the artifact shape docs/DESIGN.md §11.6 requires.
       - cargo build --release --locked --offline -p paladin-gtk
       # Stage the release binary at /app/bin/paladin-gtk. mode 0755
       # is required because `install -Dm644` would land a non-
@@ -86,7 +86,7 @@ modules:
       # Stage the AppStream metainfo. flatpak-builder exports
       # /app/share/metainfo/<app-id>.metainfo.xml to the host's
       # AppStream pool — the conceptual "/usr/share/metainfo/"
-      # location IMPLEMENTATION_PLAN_04_GTK.md §11.4 refers to.
+      # location docs/IMPLEMENTATION_PLAN_04_GTK.md §11.4 refers to.
       - install -Dm644 crates/paladin-gtk/data/metainfo/org.tamx.Paladin.Gui.metainfo.xml /app/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml
       # Stage the hicolor icon set. The scalable and symbolic SVGs
       # cover GTK4 / libadwaita icon-theme lookups; PNG sizes round

@@ -2,7 +2,7 @@
 
 //! Add-modal renderer.
 //!
-//! Per `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md`
+//! Per `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
 //! "Modals (per §6) > Add": the Add modal carries three input
 //! modes (Manual / URI / QR) selected via a segmented header inside
 //! the modal. This slice paints the freshly-opened (Manual-mode, no
@@ -35,7 +35,7 @@
 //! the post-success summary view: the field stack is replaced with
 //! the four `paladin_core::ImportReport` merge totals
 //! (`imported`/`skipped`/`replaced`/`appended`) plus an `Enter or Esc
-//! to close` hint per `DESIGN.md` §6's "The modal reports
+//! to close` hint per `docs/DESIGN.md` §6's "The modal reports
 //! imported/skipped/replaced/appended/warning counts plus
 //! validation-warning messages rendered through
 //! `paladin_core::format_validation_warning()` in a post-success
@@ -280,7 +280,7 @@ fn kind_label(kind: AccountKindInput) -> &'static str {
 
 /// Paint the post-success summary view inside the modal's inner area.
 ///
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add":
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add":
 /// *"Clipboard QR import uses `ImportConflict::Skip` and reports
 /// imported / skipped counts."* and *"QR-add validation warnings are
 /// rendered through `paladin_core::format_validation_warning()` in the

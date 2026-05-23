@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// `export::otpauth_list` (DESIGN.md §4.6 / §4.7).
+// `export::otpauth_list` (docs/DESIGN.md §4.6 / §4.7).
 //
 // Infallible JSON-array dump of the vault's accounts as canonical
 // `otpauth://` URIs. The emitter (`crate::otpauth::emit_otpauth`) is

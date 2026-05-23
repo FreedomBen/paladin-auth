@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Shared validation entry points (DESIGN.md §4.1, §4.7).
+// Shared validation entry points (docs/DESIGN.md §4.1, §4.7).
 //
 // `validate_manual` is the one place where flag-driven manual input is
 // turned into a fully validated `Account`. The same validation table
@@ -25,7 +25,7 @@ pub const SHORT_SECRET_THRESHOLD_BYTES: usize = 16;
 pub const DIGITS_MIN: u8 = 6;
 /// Maximum OTP digit count accepted by `validate_digits` (inclusive).
 pub const DIGITS_MAX: u8 = 8;
-/// CLI manual-add and importer fallback digit count per `DESIGN.md` §5.
+/// CLI manual-add and importer fallback digit count per `docs/DESIGN.md` §5.
 pub const DIGITS_DEFAULT: u8 = 6;
 /// Minimum TOTP period in seconds accepted by `validate_totp_period`
 /// (inclusive).
@@ -33,7 +33,7 @@ pub const TOTP_PERIOD_MIN: u32 = 1;
 /// Maximum TOTP period in seconds accepted by `validate_totp_period`
 /// (inclusive).
 pub const TOTP_PERIOD_MAX: u32 = 300;
-/// CLI manual-add and importer fallback TOTP period per `DESIGN.md` §5.
+/// CLI manual-add and importer fallback TOTP period per `docs/DESIGN.md` §5.
 pub const TOTP_PERIOD_DEFAULT: u32 = 30;
 /// Inclusive upper bound on Unix-seconds timestamps stored in the
 /// vault: `9999-12-31T23:59:59Z`.

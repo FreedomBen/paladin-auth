@@ -5,7 +5,7 @@
 //! `render: FnMut(&AppState, SystemTime)` closure) to a real
 //! [`ratatui::Terminal::draw`] call against [`crate::view::render`].
 //!
-//! Per `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)" and the
+//! Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)" and the
 //! `dispatch` module docs: *"The production `app::run` … supplies a
 //! render closure that drives `ratatui::Terminal::draw` against
 //! `crate::view::render`."* This module holds that one-liner so the
