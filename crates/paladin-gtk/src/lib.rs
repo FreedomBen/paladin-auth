@@ -29,6 +29,7 @@ pub mod clipboard;
 pub mod clipboard_clear;
 pub mod effect_ownership;
 pub mod export_dialog;
+pub mod gsettings;
 pub mod hotp_reveal;
 pub mod icon_resolution;
 pub mod import_dialog;

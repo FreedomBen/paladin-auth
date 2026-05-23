@@ -22,7 +22,7 @@
 //!   refreshes (add / remove / rename / search) clear and re-push
 //!   the factory through one code path on `AccountListMsg::Refresh`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -504,8 +504,16 @@ fn build_section_header_label(text: &str) -> gtk::Label {
 /// keeps its own `Rc` clone so subsequent
 /// [`AccountListMsg::Refresh`] handlers can swap the table contents
 /// without re-installing the closure.
-fn install_section_header_func(list_box: &gtk::ListBox, headers: Rc<RefCell<Vec<Option<String>>>>) {
+fn install_section_header_func(
+    list_box: &gtk::ListBox,
+    headers: Rc<RefCell<Vec<Option<String>>>>,
+    enabled: Rc<Cell<bool>>,
+) {
     list_box.set_header_func(move |row, _before| {
+        if !enabled.get() {
+            row.set_header(gtk::Widget::NONE);
+            return;
+        }
         let Ok(idx) = usize::try_from(row.index()) else {
             row.set_header(gtk::Widget::NONE);
             return;
@@ -846,6 +854,14 @@ pub struct AccountListInit {
     /// search"). `None` skips the wiring — e.g. unit tests that
     /// construct an isolated component without a parent window.
     pub key_capture_widget: Option<gtk::Widget>,
+    /// Initial value of the per-user `show-section-headers`
+    /// `GSettings` key. When `false`, the
+    /// [`gtk::ListBox::set_header_func`] closure renders no
+    /// headers regardless of the precomputed dispatch table; when
+    /// `true`, headers fire per [`row_section_header`]. Live
+    /// updates from the `SettingsComponent` toggle flow through
+    /// [`AccountListMsg::SetShowSectionHeaders`].
+    pub show_section_headers: bool,
 }
 
 /// Widget-bearing list view for the unlocked vault state.
@@ -930,6 +946,14 @@ pub struct AccountListComponent {
     /// then asks the list box to invalidate its headers so the
     /// closure re-reads the table without being re-installed.
     section_headers: Rc<RefCell<Vec<Option<String>>>>,
+    /// Per-user `show-section-headers` `GSettings` gate, shared with
+    /// the [`install_section_header_func`] closure. When `false`,
+    /// the closure attaches no header widgets; when `true`, it
+    /// consults [`Self::section_headers`] as usual.
+    /// [`AccountListMsg::SetShowSectionHeaders`] updates the cell
+    /// and asks the list box to invalidate its headers so the
+    /// closure re-runs against the new value.
+    show_section_headers: Rc<Cell<bool>>,
 }
 
 /// Messages handled by [`AccountListComponent`].
@@ -1016,6 +1040,16 @@ pub enum AccountListMsg {
     /// `Locked` / `StartupError` transitions. Idempotent — sending
     /// the same value twice is a benign no-op (no broadcast fires).
     SetBusy(bool),
+    /// Live update for the per-user `show-section-headers`
+    /// `GSettings` key. `AppModel` connects
+    /// `changed::show-section-headers` on its `gio::Settings`
+    /// clone and dispatches this message so a toggle from the
+    /// `SettingsComponent` dialog re-evaluates the list's header
+    /// rendering without recomputing the row models.
+    ///
+    /// Idempotent — sending the same value twice is a benign
+    /// no-op (no `invalidate_headers` call fires).
+    SetShowSectionHeaders(bool),
 }
 
 #[allow(missing_docs)]
@@ -1071,7 +1105,12 @@ impl SimpleComponent for AccountListComponent {
         }
 
         let section_headers = Rc::new(RefCell::new(precompute_section_headers(&init.rows)));
-        install_section_header_func(factory.widget(), Rc::clone(&section_headers));
+        let show_section_headers = Rc::new(Cell::new(init.show_section_headers));
+        install_section_header_func(
+            factory.widget(),
+            Rc::clone(&section_headers),
+            Rc::clone(&show_section_headers),
+        );
 
         apply_list_box_selection(factory.widget(), &init.rows, init.initial_selection);
 
@@ -1154,6 +1193,7 @@ impl SimpleComponent for AccountListComponent {
             live_displays: HashMap::new(),
             busy: false,
             section_headers,
+            show_section_headers,
         };
         ComponentParts {
             model: component,
@@ -1248,6 +1288,13 @@ impl SimpleComponent for AccountListComponent {
                 }
                 self.busy = busy;
                 self.factory.broadcast(AccountRowMsg::SetBusy(busy));
+            }
+            AccountListMsg::SetShowSectionHeaders(enabled) => {
+                if self.show_section_headers.get() == enabled {
+                    return;
+                }
+                self.show_section_headers.set(enabled);
+                self.factory.widget().invalidate_headers();
             }
         }
     }

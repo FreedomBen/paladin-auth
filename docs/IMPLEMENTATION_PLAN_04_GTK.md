@@ -25,9 +25,10 @@ Per DESIGN §3: depends only on `paladin-core`. Never reaches into
 ```
 crates/paladin-gtk/
 ├── Cargo.toml             # license = "AGPL-3.0-or-later"; declares both [lib] and [[bin]] (name = "paladin-gtk") so tests/ can compile against internal modules
-├── build.rs               # gresource bundle (icons, *.ui, *.css)
+├── build.rs               # gresource bundle (icons, *.ui, *.css) + glib-compile-schemas → OUT_DIR/schemas/
 ├── data/
 │   ├── paladin-gtk.gresource.xml
+│   ├── org.tamx.Paladin.Gui.gschema.xml  # per-user GSettings schema (show-section-headers, …); installs to /usr/share/glib-2.0/schemas/
 │   ├── ui/                # *.ui templates
 │   ├── icons/             # app icon + fallbacks
 │   ├── metainfo/          # AppStream metadata; file is named `<app-id>.metainfo.xml` (`org.tamx.Paladin.Gui.metainfo.xml`) so Flathub's reproducible-build check matches; installs to `/usr/share/metainfo/<app-id>.metainfo.xml`
@@ -55,6 +56,7 @@ crates/paladin-gtk/
 │   │   └── settings.rs        # SettingsComponent (toggles + spinners)
 │   ├── clipboard.rs       # gdk::Clipboard plumbing driving paladin_core::policy::clipboard_clear::ClipboardClearPolicy
 │   ├── auto_lock.rs       # GLib idle/timeout plumbing driving paladin_core::policy::auto_lock::IdlePolicy (encrypted-only; plaintext no-op)
+│   ├── gsettings.rs       # per-user gio::Settings access for the show-section-headers schema key (and any future GUI-only prefs)
 │   ├── hotp_reveal.rs     # per-row reveal window via paladin_core::policy::hotp_reveal::deadline (uses paladin_core::HOTP_REVEAL_SECS)
 │   ├── icons.rs           # gtk::IconTheme lookup against AccountSummary.icon_hint
 │   ├── secret_fields.rs   # extract/clear passphrase + manual-secret entries
@@ -85,6 +87,7 @@ crates/paladin-gtk/
     ├── export_dialog_logic.rs
     ├── passphrase_dialog_logic.rs
     ├── settings_logic.rs
+    ├── gsettings_logic.rs        # pure logic; loads build.rs-compiled gschema from OUT_DIR
     ├── effect_ownership_logic.rs
     ├── no_tokio_source.rs
     ├── thinness.rs
@@ -194,7 +197,7 @@ inclusion.
   which re-installed the row's `gio::SimpleActionGroup` mid-frame and
   intermittently dropped pointer events.
 
-  Section headers. The `gtk::ListBox` carries a
+  Section headers (per-user, opt-in). The `gtk::ListBox` carries a
   `set_header_func` that groups consecutive rows by
   `AccountSummary.issuer`: the first row of each issuer-run gets a
   small inline `gtk::Label` header above it (issuer text verbatim;
@@ -215,6 +218,36 @@ inclusion.
   rule applied (i.e. `Some("")` collapses to `None`) so grouping
   and display stay in lockstep with the row's
   `<issuer>:<label>` body.
+
+  Whether the closure actually renders any header is gated by the
+  per-user `show-section-headers` boolean GSettings key (schema id
+  `org.tamx.Paladin.Gui`, defined in
+  `data/org.tamx.Paladin.Gui.gschema.xml` and compiled into
+  `OUT_DIR/schemas/` by `build.rs`).  Default `false`.  The closure
+  reads the value through a shared `Rc<Cell<bool>>` populated from
+  `AccountListInit::show_section_headers`;
+  `AccountListMsg::SetShowSectionHeaders(bool)` updates the cell
+  and calls `invalidate_headers()` so a toggle from the
+  SettingsComponent dialog re-evaluates every row without
+  recomputing the row models.  `AppModel` holds a `gio::Settings`
+  clone and connects `changed::show-section-headers` to dispatch
+  `AppMsg::ShowSectionHeadersChanged(bool)`, which routes to the
+  live `AccountListComponent`.
+
+  The Preferences dialog (`SettingsComponent`) carries a third
+  `AdwPreferencesGroup` titled `Display` with a single
+  `AdwSwitchRow` (`Show section headers`) bound directly to the
+  same `gio::Settings`.  The toggle's `connect_active_notify`
+  writes through `crate::gsettings::set_show_section_headers`,
+  which fires the `changed::show-section-headers` signal that
+  closes the loop back through `AppModel`.
+
+  The schema is GUI-only — vault behavior preferences (auto-lock,
+  clipboard auto-clear) stay in `paladin_core::VaultSettings`
+  inside the encrypted payload per DESIGN §4.7.  The
+  `crate::gsettings` module is the only place that knows about
+  schema ids / key names; callers go through `app_settings()`,
+  `show_section_headers()`, and `set_show_section_headers()`.
 
   Search uses a `gtk::SearchEntry` hosted inside a `gtk::SearchBar`
   whose `search-mode-enabled` is bound to the header bar's
@@ -1203,6 +1236,23 @@ These run without a display server. Each lives under
   issuer. Decision is on the projected `Option<String>` issuer (so
   `Some("")` is treated identically to `None`).
 
+#### `tests/gsettings_logic.rs`
+
+- [ ] `build.rs`-compiled gschema declares the
+  `show-section-headers` key under schema id
+  `org.tamx.Paladin.Gui` so
+  `paladin_gtk::gsettings::show_section_headers` resolves at
+  runtime.
+- [ ] Default value of `show-section-headers` is `false` (per
+  DESIGN §7).
+- [ ] Round-trip through a memory-backed `gio::Settings`:
+  `set_boolean(true) → boolean() == true → set_boolean(false) →
+  boolean() == false`.
+- [ ] `changed::show-section-headers` signal fires when the key is
+  written, so the `AppModel` handler can dispatch
+  `AccountListMsg::SetShowSectionHeaders` to the live list
+  controller.
+
 #### `tests/account_row_logic.rs`
 
 - [x] Row display labels match CLI / TUI summary formatting for
@@ -1426,6 +1476,11 @@ These run without a display server. Each lives under
 - [x] `save_durability_unconfirmed` keeps the new value visible and
   attaches the warning to the changed `AdwPreferencesGroup` row
   inside the `AdwPreferencesDialog`.
+- [ ] The pinned `Display` `AdwPreferencesGroup` title, the
+  `Show section headers` `AdwSwitchRow` title, and its subtitle
+  are stable across helper invocations and the subtitle names the
+  default-off behavior so the wording does not silently drift
+  from DESIGN §7.
 
 #### `tests/effect_ownership_logic.rs`
 

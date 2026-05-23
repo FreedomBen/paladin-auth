@@ -69,6 +69,7 @@ use std::time::{Instant, SystemTime};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use relm4::gtk;
+use relm4::gtk::gio;
 use relm4::gtk::glib;
 use relm4::prelude::*;
 
@@ -517,6 +518,14 @@ pub struct AppModel {
     /// §"In-flight effect ownership".
     #[allow(dead_code)]
     effects: Option<EffectOwnership>,
+    /// Per-user `gio::Settings` clone bound to
+    /// `paladin_gtk::gsettings::SCHEMA_ID`. Held on `self` so the
+    /// `changed::show-section-headers` signal handler installed in
+    /// `init` survives across messages and keeps dispatching
+    /// `AccountListMsg::SetShowSectionHeaders` whenever the
+    /// `SettingsComponent` toggle (or any other external write)
+    /// flips the value.
+    app_settings: gio::Settings,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -605,6 +614,7 @@ impl std::fmt::Debug for AppModel {
                 &self.auto_lock_source.as_ref().map(|_| "<installed>"),
             )
             .field("effects", &self.effects)
+            .field("app_settings", &"<gio::Settings>")
             .finish()
     }
 }
@@ -654,6 +664,14 @@ pub enum AppMsg {
     /// (e.g. the user hit the accelerator while
     /// [`AppState`] is `Locked` / `Missing` / `StartupError`).
     FocusSearch,
+    /// New value of the per-user `show-section-headers` `GSettings`
+    /// key, forwarded from the `changed::show-section-headers`
+    /// signal handler installed in `init`. `AppModel`'s handler
+    /// dispatches `AccountListMsg::SetShowSectionHeaders` to the
+    /// live [`AccountListComponent`] when it is mounted, and is a
+    /// benign no-op otherwise (the next mount reads the freshly
+    /// committed value through `crate::gsettings::show_section_headers`).
+    ShowSectionHeadersChanged(bool),
     /// Forwarded from the live [`RenameDialogComponent`] when the
     /// user interacts with the dialog. Today only
     /// [`RenameDialogOutput::Cancel`] is emitted — `AppModel`
@@ -1614,6 +1632,11 @@ impl SimpleComponent for AppModel {
         // `AppModel::account_list` is `None`.
         wire_app_window_search_focus_controller(&root, sender.input_sender());
 
+        // Per-user GUI preferences (e.g. `show-section-headers`).
+        // Held on `self` so the `changed::*` signal handler wired
+        // below outlives `init`.
+        let app_settings = crate::gsettings::app_settings();
+
         let account_list = if state.is_unlocked() {
             let controller = AccountListComponent::builder()
                 .launch(AccountListInit {
@@ -1621,6 +1644,7 @@ impl SimpleComponent for AppModel {
                     initial_query: String::new(),
                     initial_selection: None,
                     key_capture_widget: Some(root.clone().upcast::<gtk::Widget>()),
+                    show_section_headers: crate::gsettings::show_section_headers(&app_settings),
                 })
                 .forward(sender.input_sender(), AppMsg::AccountListAction);
             widgets.content.append(controller.widget());
@@ -1702,7 +1726,21 @@ impl SimpleComponent for AppModel {
             idle_source: IdleSource::new(),
             auto_lock_source: None,
             effects,
+            app_settings,
         };
+
+        // Forward live changes to the per-user
+        // `show-section-headers` GSettings key back through the
+        // model so the live `AccountListComponent` (if any)
+        // re-evaluates its `gtk::ListBox::set_header_func`.
+        let app_settings_input = sender.input_sender().clone();
+        model.app_settings.connect_changed(
+            Some(crate::gsettings::SHOW_SECTION_HEADERS_KEY),
+            move |s, _| {
+                let value = crate::gsettings::show_section_headers(s);
+                let _ = app_settings_input.send(AppMsg::ShowSectionHeadersChanged(value));
+            },
+        );
 
         // Install the TOTP ticker if the resolved startup state is
         // `Unlocked` and the projected row set contains at least one
@@ -2110,6 +2148,20 @@ impl SimpleComponent for AppModel {
                     controller.emit(AccountListMsg::FocusSearch);
                 }
             }
+            AppMsg::ShowSectionHeadersChanged(enabled) => {
+                // The `changed::show-section-headers` GSettings
+                // signal fired (typically from the SettingsComponent
+                // toggle, but any external write hits the same
+                // path). Drive the live `AccountListComponent` to
+                // re-evaluate its `gtk::ListBox::set_header_func`;
+                // benign no-op when the list is not mounted
+                // (Locked / Missing / StartupError) because the
+                // next mount reads the freshly committed value
+                // through `crate::gsettings::show_section_headers`.
+                if let Some(controller) = self.account_list.as_ref() {
+                    controller.emit(AccountListMsg::SetShowSectionHeaders(enabled));
+                }
+            }
             AppMsg::RenameDialogAction(RenameDialogOutput::Cancel) => {
                 // Detach the dialog widget from the content tree and
                 // drop the controller. Defensive: if the field is
@@ -2273,6 +2325,7 @@ impl SimpleComponent for AppModel {
                         if let Some((vault, _)) = self.vault.as_ref() {
                             let init = SettingsDialogInit {
                                 settings: CommittedSettings::from_vault_settings(vault.settings()),
+                                app_settings: self.app_settings.clone(),
                             };
                             let controller = SettingsComponent::builder()
                                 .launch(init)
@@ -4836,6 +4889,9 @@ impl AppModel {
                         initial_query: String::new(),
                         initial_selection: None,
                         key_capture_widget: Some(self.window.clone().upcast::<gtk::Widget>()),
+                        show_section_headers: crate::gsettings::show_section_headers(
+                            &self.app_settings,
+                        ),
                     })
                     .forward(sender.input_sender(), AppMsg::AccountListAction);
                 self.content.append(controller.widget());

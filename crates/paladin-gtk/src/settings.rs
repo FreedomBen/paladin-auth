@@ -49,6 +49,7 @@
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use relm4::gtk;
+use relm4::gtk::gio;
 use relm4::gtk::glib;
 use relm4::prelude::*;
 
@@ -494,6 +495,40 @@ pub fn format_settings_dialog_clipboard_clear_enabled_row_title() -> &'static st
 #[must_use]
 pub fn format_settings_dialog_clipboard_clear_secs_row_title() -> &'static str {
     "Clear delay (seconds)"
+}
+
+/// Title rendered on the per-user "Display" `AdwPreferencesGroup`
+/// that hosts the section-headers `AdwSwitchRow` per
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `SettingsComponent` > Display group.
+///
+/// Returned by a dedicated helper (vs.
+/// [`format_settings_dialog_auto_lock_group_title`] /
+/// [`format_settings_dialog_clipboard_clear_group_title`]) so the
+/// three groups' titles stay aligned in the same module and so a
+/// future locale pass updates them together.
+#[must_use]
+pub fn format_settings_dialog_display_group_title() -> &'static str {
+    "Display"
+}
+
+/// Title rendered on the section-headers `AdwSwitchRow` per
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `SettingsComponent` > Display group.
+///
+/// Verb-led wording matches the auto-lock / clipboard rows.
+#[must_use]
+pub fn format_settings_dialog_section_headers_row_title() -> &'static str {
+    "Show section headers"
+}
+
+/// Subtitle rendered on the section-headers `AdwSwitchRow` so the
+/// user knows what flipping it does without having to consult the
+/// docs.  Explains the issuer-grouping behavior and the
+/// vault-insertion-order caveat in one sentence.
+#[must_use]
+pub fn format_settings_dialog_section_headers_row_subtitle() -> &'static str {
+    "Group consecutive accounts by issuer with a small heading. Off by default."
 }
 
 /// Fixed `(lower, upper, step_increment)` tuple the widget hands
@@ -1773,6 +1808,15 @@ impl SettingsState {
 pub struct SettingsDialogInit {
     /// On-disk settings snapshot the dialog renders.
     pub settings: CommittedSettings,
+    /// Per-user `gio::Settings` clone bound to
+    /// [`crate::gsettings::SCHEMA_ID`].  Drives the new "Display"
+    /// `AdwPreferencesGroup`'s `Show section headers`
+    /// `AdwSwitchRow`: the initial active state is read from this
+    /// instance, and the row's `connect_active_notify` writes back
+    /// to it (which fires the `changed::show-section-headers`
+    /// signal that `AppModel` has wired up to refresh the live
+    /// `AccountListComponent`).
+    pub app_settings: gio::Settings,
 }
 
 /// Messages handled by [`SettingsComponent`].
@@ -2013,6 +2057,13 @@ pub struct SettingsComponent {
     /// only the latest buffered value per
     /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` line 3458.
     debounce_source: Option<glib::SourceId>,
+    /// Per-user `gio::Settings` clone seeded from
+    /// [`SettingsDialogInit::app_settings`].  Drives the new
+    /// "Display" group's section-headers `AdwSwitchRow`: the
+    /// initial active state reads from this instance, and the
+    /// row's `connect_active_notify` writes back through
+    /// [`crate::gsettings::set_show_section_headers`].
+    app_settings: gio::Settings,
 }
 
 #[allow(missing_docs)]
@@ -2076,6 +2127,23 @@ impl SimpleComponent for SettingsComponent {
                             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                             let secs = spin.value() as u32;
                             sender.input(SettingsDialogMsg::AutoLockSecsSpinnerChanged(secs));
+                        },
+                    },
+                },
+
+                add = &adw::PreferencesGroup {
+                    set_title: format_settings_dialog_display_group_title(),
+
+                    #[name = "show_section_headers_row"]
+                    add = &adw::SwitchRow {
+                        set_title: format_settings_dialog_section_headers_row_title(),
+                        set_subtitle: format_settings_dialog_section_headers_row_subtitle(),
+                        set_active: crate::gsettings::show_section_headers(&model.app_settings),
+                        connect_active_notify[app_settings_for_toggle] => move |row| {
+                            let _ = crate::gsettings::set_show_section_headers(
+                                &app_settings_for_toggle,
+                                row.is_active(),
+                            );
                         },
                     },
                 },
@@ -2150,7 +2218,12 @@ impl SimpleComponent for SettingsComponent {
         let model = SettingsComponent {
             state,
             debounce_source: None,
+            app_settings: init.app_settings,
         };
+        // Pre-clone the per-user `gio::Settings` so the `view!`
+        // macro's `connect_active_notify[app_settings_for_toggle]`
+        // capture has a sibling binding to clone into the closure.
+        let app_settings_for_toggle = model.app_settings.clone();
         let widgets = view_output!();
         // Forward the dialog's intrinsic close signal (Escape /
         // window close button) as `SettingsDialogOutput::Close` so

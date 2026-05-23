@@ -2407,11 +2407,54 @@ fn format_settings_dialog_saved_toast_timeout_returns_five_seconds() {
 // can mount it.
 
 #[test]
+fn settings_dialog_display_group_title_is_pinned() {
+    use paladin_gtk::settings::format_settings_dialog_display_group_title;
+
+    assert_eq!(format_settings_dialog_display_group_title(), "Display");
+}
+
+#[test]
+fn settings_dialog_section_headers_row_title_is_pinned() {
+    use paladin_gtk::settings::format_settings_dialog_section_headers_row_title;
+
+    assert_eq!(
+        format_settings_dialog_section_headers_row_title(),
+        "Show section headers",
+    );
+}
+
+#[test]
+fn settings_dialog_section_headers_row_subtitle_calls_out_default_off() {
+    use paladin_gtk::settings::format_settings_dialog_section_headers_row_subtitle;
+
+    let subtitle = format_settings_dialog_section_headers_row_subtitle();
+    assert!(
+        subtitle.to_lowercase().contains("off by default"),
+        "subtitle should tell the user the default state; got {subtitle:?}",
+    );
+    assert!(
+        subtitle.to_lowercase().contains("issuer"),
+        "subtitle should mention what the grouping axis is; got {subtitle:?}",
+    );
+}
+
+#[test]
 fn settings_dialog_init_round_trips_committed_settings() {
+    use paladin_gtk::gsettings::SCHEMA_ID;
     use paladin_gtk::settings::SettingsDialogInit;
+    use relm4::gtk::gio;
 
     let snapshot = defaults();
-    let init = SettingsDialogInit { settings: snapshot };
+    let schema_dir = env!("PALADIN_GTK_SCHEMA_DIR");
+    let source = gio::SettingsSchemaSource::from_directory(schema_dir, None, false)
+        .expect("build.rs compiled the gschema into PALADIN_GTK_SCHEMA_DIR");
+    let schema = source.lookup(SCHEMA_ID, true).expect("schema id matches");
+    let backend = gio::functions::memory_settings_backend_new();
+    let app_settings = gio::Settings::new_full(&schema, Some(&backend), None);
+    let init = SettingsDialogInit {
+        settings: snapshot,
+        app_settings,
+    };
     assert_eq!(init.settings, snapshot);
 }
 

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  Per-user GSettings schema for paladin-gtk.  The reverse-DNS id
+  matches `paladin_gtk::APP_ID` (also the gio::Application id and
+  the .desktop file basename) and the path is the canonical
+  `/<id-as-path>/` form so dconf groups the keys under
+  `org/tamx/Paladin/Gui/`.
+
+  Keys here describe per-user GUI display preferences only — never
+  vault behavior.  Vault-bound preferences (auto-lock, clipboard
+  auto-clear, …) live in `paladin_core::VaultSettings` and are
+  persisted inside the vault payload per DESIGN §4.7.
+-->
+<schemalist>
+  <schema id="org.tamx.Paladin.Gui" path="/org/tamx/Paladin/Gui/">
+    <key name="show-section-headers" type="b">
+      <default>false</default>
+      <summary>Show issuer section headers</summary>
+      <description>
+        When enabled, the account list groups consecutive rows by
+        issuer and renders a small heading above the first row of
+        each issuer run.  Vault insertion order is preserved — rows
+        are never reordered for grouping.  Disabled by default so
+        the list stays compact.
+      </description>
+    </key>
+  </schema>
+</schemalist>
