@@ -307,14 +307,17 @@ fn render_totp_row(
         Err(_) => ("------".to_string(), 0),
     };
     let gauge_text = render_gauge(secs_remaining, period);
-    let color = theme::code_color(secs_remaining, period);
+    let gauge = theme::gauge_color(secs_remaining, period);
     let code_padded = format!("{code_text:>CODE_COL_WIDTH$}");
 
     let mut spans = highlight_prefix_with_search(&prefix_text, search_query, no_color);
     spans.push(Span::raw("  "));
-    spans.push(Span::styled(code_padded, theme::fg_bold(color, no_color)));
+    spans.push(Span::styled(
+        code_padded,
+        theme::fg_bold(theme::CODE, no_color),
+    ));
     spans.push(Span::raw("   "));
-    spans.push(Span::styled(gauge_text, theme::fg(color, no_color)));
+    spans.push(Span::styled(gauge_text, theme::fg(gauge, no_color)));
     spans.push(Span::raw(format!("  {secs_remaining:>3}s")));
     Line::from(spans)
 }
@@ -332,9 +335,10 @@ fn render_totp_row(
 ///   account): title gets a `(#N)` suffix using
 ///   `reveal.counter_used` — the *pre-advance* counter that
 ///   produced the visible code — and the right-side column shows
-///   the visible code rendered in bold green (formatted by
+///   the visible code rendered in bold cyan (formatted by
 ///   [`format_code_digits`] for parity with TOTP rows). HOTP codes
-///   never time out so they always render in the calm green tier.
+///   render in the same [`theme::CODE`] hue as TOTP rows; they have
+///   no rotation window so there is no urgency tier to encode.
 ///
 /// The caller is responsible for filtering `reveal` to the row's
 /// account; passing the reveal slot for a different account would
@@ -355,7 +359,7 @@ fn render_hotp_row(
                 r.counter_used,
                 vec![Span::styled(
                     code_padded,
-                    theme::fg_bold(theme::CODE_CALM, no_color),
+                    theme::fg_bold(theme::CODE, no_color),
                 )],
             )
         }

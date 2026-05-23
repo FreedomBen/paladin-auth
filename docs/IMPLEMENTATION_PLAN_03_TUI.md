@@ -3312,18 +3312,22 @@ user's terminal theme decides exact hues:
   startup-error screen border + title, and the `StatusLine::Error`
   bottom-row tint.
 - `SUCCESS` (Green) — `StatusLine::Confirmation` bottom-row tint.
-- `CODE_CALM` (Green) — TOTP code digits, HOTP revealed-code
-  digits, and the period-gauge fill in the calm tier (bold).
-- `WARN` (Yellow) — TOTP code / period-gauge color when 6–15
-  seconds remain in the rotation window, search-hit highlight (bold
-  + underlined) on the title column, plaintext-mode chip in the
-  list view title (`[plaintext]`, bold), HOTP `▸ press n to advance`
-  prompt (dim), plaintext-storage warning text in the create-vault
-  wizard and the passphrase-remove modal.
-- `URGENT` (Red) — TOTP code / period-gauge color in the final
-  5 seconds of the rotation window. Thresholds are absolute seconds
-  matching `paladin-gtk`'s `progress_urgency` so a 30 s and 60 s
-  TOTP transition at the same wall-clock moment.
+- `CODE` (Cyan, bold) — TOTP code digits and HOTP revealed-code
+  digits. Stable across the rotation window so the user has a calm
+  visual anchor while scanning rows; urgency is encoded by the
+  period gauge, not the digits.
+- `CODE_CALM` (Green) — period-gauge fill when more than 15
+  seconds remain in the rotation window.
+- `WARN` (Yellow) — period-gauge fill when 6–15 seconds remain in
+  the rotation window, search-hit highlight (bold + underlined) on
+  the title column, plaintext-mode chip in the list view title
+  (`[plaintext]`, bold), HOTP `▸ press n to advance` prompt (dim),
+  plaintext-storage warning text in the create-vault wizard and the
+  passphrase-remove modal.
+- `URGENT` (Red) — period-gauge fill in the final 5 seconds of the
+  rotation window. Gauge thresholds are absolute seconds matching
+  `paladin-gtk`'s `progress_urgency` so a 30 s and 60 s TOTP
+  transition at the same wall-clock moment.
 - `KEY_HINT` (Cyan) — Help overlay key column (bold).
 
 Selected list-view rows render with `Modifier::REVERSED + BOLD` on

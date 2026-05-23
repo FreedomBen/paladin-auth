@@ -34,19 +34,27 @@ pub const ERROR: Color = Color::Red;
 /// bottom-row tint.
 pub const SUCCESS: Color = Color::Green;
 
-/// Color used to render TOTP code digits when the rotation window
-/// has plenty of time left. Switches to [`WARN`] then [`URGENT`] as
-/// the window drains (see [`code_color`]).
+/// Color used to render the period progress gauge while the
+/// rotation window has plenty of time left. Switches to [`WARN`]
+/// then [`URGENT`] as the window drains (see [`gauge_color`]). The
+/// code-digit column itself is always rendered in [`CODE`] so the
+/// user sees a stable hue while scanning rows.
 pub const CODE_CALM: Color = Color::Green;
 
-/// Color used for the warning tier — TOTP digits and gauge cells in
-/// the second half of the rotation window, the plaintext-mode chip,
-/// the HOTP `▸ press n to advance` prompt.
+/// Color used for the warning tier — period-gauge cells when 6–15
+/// seconds remain, plus the plaintext-mode chip and the HOTP
+/// `▸ press n to advance` prompt.
 pub const WARN: Color = Color::Yellow;
 
-/// Color used for the urgent tier — TOTP digits and gauge cells in
-/// the final 5 seconds of the rotation window.
+/// Color used for the urgent tier — period-gauge cells in the final
+/// 5 seconds of the rotation window.
 pub const URGENT: Color = Color::Red;
+
+/// Color used to render TOTP and HOTP code digits in the list view.
+/// Distinct from [`CODE_CALM`] / [`WARN`] / [`URGENT`] so the
+/// digits stay visually stable while the countdown gauge encodes
+/// urgency.
+pub const CODE: Color = Color::Cyan;
 
 /// Color used for the Help overlay's key column. Cyan reads as a
 /// distinct "interactive control" hue against the blue accents used
@@ -133,9 +141,9 @@ pub fn selected_row_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// Pick a foreground color for TOTP code digits and the period
-/// progress gauge based on how many seconds remain in the rotation
-/// window.
+/// Pick a foreground color for the period progress gauge based on
+/// how many seconds remain in the rotation window. Code digits are
+/// not colored by this function — they always render in [`CODE`].
 ///
 /// Thresholds are absolute seconds remaining (matching the GTK
 /// frontend's `progress_urgency` bands in `paladin-gtk`):
@@ -144,7 +152,7 @@ pub fn selected_row_style() -> Style {
 /// defensively — `paladin_core::validation` rejects a zero period
 /// upstream, so this path never fires in practice.
 #[must_use]
-pub fn code_color(seconds_remaining: u32, period: u32) -> Color {
+pub fn gauge_color(seconds_remaining: u32, period: u32) -> Color {
     if period == 0 {
         return CODE_CALM;
     }
@@ -163,45 +171,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn code_color_calm_above_fifteen_seconds() {
-        assert_eq!(code_color(30, 30), CODE_CALM);
-        assert_eq!(code_color(16, 30), CODE_CALM);
-        assert_eq!(code_color(60, 60), CODE_CALM);
-        assert_eq!(code_color(16, 60), CODE_CALM);
+    fn gauge_color_calm_above_fifteen_seconds() {
+        assert_eq!(gauge_color(30, 30), CODE_CALM);
+        assert_eq!(gauge_color(16, 30), CODE_CALM);
+        assert_eq!(gauge_color(60, 60), CODE_CALM);
+        assert_eq!(gauge_color(16, 60), CODE_CALM);
     }
 
     #[test]
-    fn code_color_warn_between_six_and_fifteen_seconds() {
-        assert_eq!(code_color(15, 30), WARN);
-        assert_eq!(code_color(10, 30), WARN);
-        assert_eq!(code_color(6, 30), WARN);
-        assert_eq!(code_color(15, 60), WARN);
-        assert_eq!(code_color(6, 60), WARN);
+    fn gauge_color_warn_between_six_and_fifteen_seconds() {
+        assert_eq!(gauge_color(15, 30), WARN);
+        assert_eq!(gauge_color(10, 30), WARN);
+        assert_eq!(gauge_color(6, 30), WARN);
+        assert_eq!(gauge_color(15, 60), WARN);
+        assert_eq!(gauge_color(6, 60), WARN);
     }
 
     #[test]
-    fn code_color_urgent_at_or_below_five_seconds() {
-        assert_eq!(code_color(5, 30), URGENT);
-        assert_eq!(code_color(2, 30), URGENT);
-        assert_eq!(code_color(1, 30), URGENT);
-        assert_eq!(code_color(0, 30), URGENT);
-        assert_eq!(code_color(5, 60), URGENT);
-        assert_eq!(code_color(0, 60), URGENT);
+    fn gauge_color_urgent_at_or_below_five_seconds() {
+        assert_eq!(gauge_color(5, 30), URGENT);
+        assert_eq!(gauge_color(2, 30), URGENT);
+        assert_eq!(gauge_color(1, 30), URGENT);
+        assert_eq!(gauge_color(0, 30), URGENT);
+        assert_eq!(gauge_color(5, 60), URGENT);
+        assert_eq!(gauge_color(0, 60), URGENT);
     }
 
     #[test]
-    fn code_color_clamps_remaining_to_period() {
+    fn gauge_color_clamps_remaining_to_period() {
         // A defensively over-large remaining should clamp into the
         // calm band when the period itself exceeds 15 s.
-        assert_eq!(code_color(120, 30), CODE_CALM);
+        assert_eq!(gauge_color(120, 30), CODE_CALM);
         // When the period is small enough that the clamped value
         // lands in the urgent band, urgent wins.
-        assert_eq!(code_color(99, 5), URGENT);
+        assert_eq!(gauge_color(99, 5), URGENT);
     }
 
     #[test]
-    fn code_color_zero_period_returns_calm() {
-        assert_eq!(code_color(0, 0), CODE_CALM);
-        assert_eq!(code_color(30, 0), CODE_CALM);
+    fn gauge_color_zero_period_returns_calm() {
+        assert_eq!(gauge_color(0, 0), CODE_CALM);
+        assert_eq!(gauge_color(30, 0), CODE_CALM);
     }
 }
