@@ -15,7 +15,7 @@
 //! that is the path the in-process `paladin_gtk::gsettings::app_settings`
 //! consults first.
 
-use paladin_gtk::gsettings::{SCHEMA_ID, SHOW_SECTION_HEADERS_KEY};
+use paladin_gtk::gsettings::{SCHEMA_ID, SHOW_COLUMN_HEADERS_KEY, SHOW_SECTION_HEADERS_KEY};
 use relm4::gtk::gio;
 use relm4::gtk::gio::prelude::*;
 
@@ -84,17 +84,109 @@ fn changed_signal_fires_for_show_section_headers_write() {
     // Pin the contract that a write actually fires the signal so
     // that wiring does not silently no-op if either the key name
     // or the gschema id drifts.
-    let settings = memory_backed_settings();
-    let fired: std::rc::Rc<std::cell::Cell<bool>> = std::rc::Rc::new(std::cell::Cell::new(false));
-    let fired_for_closure = std::rc::Rc::clone(&fired);
-    settings.connect_changed(Some(SHOW_SECTION_HEADERS_KEY), move |_, _| {
-        fired_for_closure.set(true);
+    //
+    // Each signal-fired test runs inside a fresh `MainContext`
+    // (pushed as this thread's default for the duration of the
+    // closure) so parallel cargo-test threads cannot steal each
+    // other's pending dispatches.
+    run_with_isolated_main_context(|| {
+        let settings = memory_backed_settings();
+        let fired: std::rc::Rc<std::cell::Cell<bool>> =
+            std::rc::Rc::new(std::cell::Cell::new(false));
+        let fired_for_closure = std::rc::Rc::clone(&fired);
+        settings.connect_changed(Some(SHOW_SECTION_HEADERS_KEY), move |_, _| {
+            fired_for_closure.set(true);
+        });
+        settings
+            .set_boolean(SHOW_SECTION_HEADERS_KEY, true)
+            .expect("write the show-section-headers key");
+        assert!(
+            fired.get(),
+            "writing the key must fire the `changed::{SHOW_SECTION_HEADERS_KEY}` signal",
+        );
     });
-    settings
-        .set_boolean(SHOW_SECTION_HEADERS_KEY, true)
-        .expect("write the show-section-headers key");
+}
+
+#[test]
+fn schema_carries_show_column_headers_key() {
+    let schema = build_time_schema();
     assert!(
-        fired.get(),
-        "writing the key must fire the `changed::{SHOW_SECTION_HEADERS_KEY}` signal",
+        schema.has_key(SHOW_COLUMN_HEADERS_KEY),
+        "the gschema must declare `{SHOW_COLUMN_HEADERS_KEY}` so \
+         `paladin_gtk::gsettings::show_column_headers` resolves",
     );
+}
+
+#[test]
+fn show_column_headers_default_is_true() {
+    // Default-on is the contract chosen for the column-header
+    // strip — most users benefit from the labels, and a single
+    // GSettings toggle is the escape hatch for users who want a
+    // chrome-free list.
+    let settings = memory_backed_settings();
+    assert!(
+        settings.boolean(SHOW_COLUMN_HEADERS_KEY),
+        "column headers default to true",
+    );
+}
+
+#[test]
+fn show_column_headers_round_trip_via_memory_backend() {
+    let settings = memory_backed_settings();
+    settings
+        .set_boolean(SHOW_COLUMN_HEADERS_KEY, false)
+        .expect("write the show-column-headers key");
+    assert!(
+        !settings.boolean(SHOW_COLUMN_HEADERS_KEY),
+        "writing false and re-reading should return false",
+    );
+    settings
+        .set_boolean(SHOW_COLUMN_HEADERS_KEY, true)
+        .expect("write the show-column-headers key back to true");
+    assert!(
+        settings.boolean(SHOW_COLUMN_HEADERS_KEY),
+        "writing true and re-reading should return true",
+    );
+}
+
+#[test]
+fn changed_signal_fires_for_show_column_headers_write() {
+    // `AppModel` registers a `changed::show-column-headers`
+    // handler so SettingsComponent toggles route through
+    // `AppMsg::ShowColumnHeadersChanged` →
+    // `AccountListMsg::SetShowColumnHeaders`. Pin the contract
+    // that a write actually fires the signal.  Runs inside its
+    // own `MainContext` so it does not race with the matching
+    // section-headers test on the GLib default context.
+    run_with_isolated_main_context(|| {
+        let settings = memory_backed_settings();
+        let fired: std::rc::Rc<std::cell::Cell<bool>> =
+            std::rc::Rc::new(std::cell::Cell::new(false));
+        let fired_for_closure = std::rc::Rc::clone(&fired);
+        settings.connect_changed(Some(SHOW_COLUMN_HEADERS_KEY), move |_, _| {
+            fired_for_closure.set(true);
+        });
+        settings
+            .set_boolean(SHOW_COLUMN_HEADERS_KEY, false)
+            .expect("write the show-column-headers key");
+        assert!(
+            fired.get(),
+            "writing the key must fire the `changed::{SHOW_COLUMN_HEADERS_KEY}` signal",
+        );
+    });
+}
+
+/// Push a fresh `glib::MainContext` as this thread's default for the
+/// duration of `body`, then drain pending dispatches.  Necessary
+/// because cargo runs tests on a thread pool that shares the `GLib`
+/// default `MainContext`, so two `changed::*` tests racing on that
+/// context can steal each other's pending signals and surface as
+/// "the closure never ran" assertion failures.
+fn run_with_isolated_main_context<F: FnOnce()>(body: F) {
+    let ctx = relm4::gtk::glib::MainContext::new();
+    ctx.with_thread_default(|| {
+        body();
+        while ctx.iteration(false) {}
+    })
+    .expect("push a fresh GLib MainContext as this thread's default");
 }

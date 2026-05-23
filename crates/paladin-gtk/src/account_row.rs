@@ -52,6 +52,26 @@ use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Code};
 
 use crate::icon_resolution::{resolve_display_icon, PLACEHOLDER_ICON_NAME};
 
+/// Horizontal spacing (in pixels) between cells of one row and of
+/// the column-header strip.  Shared so [`build_row_widget`] and
+/// [`build_column_header_strip`] cannot drift.
+pub const ROW_COLUMN_SPACING: i32 = 12;
+
+/// Display title for the "Account" column in the column-header
+/// strip.  Pure-string accessor so unit tests in
+/// `tests/account_row_logic.rs` can pin the wording without
+/// constructing widgets.
+#[must_use]
+pub fn format_account_column_title() -> &'static str {
+    "Account"
+}
+
+/// Display title for the "Code" column in the column-header strip.
+#[must_use]
+pub fn format_code_column_title() -> &'static str {
+    "Code"
+}
+
 /// Render the row's display-label string.
 ///
 /// Returns `<issuer>:<label>` when `summary.issuer` is
@@ -514,6 +534,13 @@ pub struct AccountRowInit {
     /// applies the busy mask via [`apply_busy_mask`] on top of
     /// `initial_display` before binding.
     pub initial_busy: bool,
+    /// Per-column [`gtk::SizeGroup`] bundle the row registers its
+    /// children with so the column-header strip
+    /// ([`build_column_header_strip`]) stays aligned with the row's
+    /// cells.  Cloning is cheap — each member is a `GObject`-
+    /// reference count bump that shares the same backing
+    /// [`gtk::SizeGroup`] across every row + the header strip.
+    pub column_size_groups: ColumnSizeGroups,
 }
 
 /// Messages handled by [`AccountRowComponent`].
@@ -627,6 +654,7 @@ pub struct AccountRowComponent {
     intrinsic_display: RowDisplay,
     icon_hint: Option<String>,
     busy: bool,
+    column_size_groups: ColumnSizeGroups,
 }
 
 /// Typed widget handle bundle returned by
@@ -667,6 +695,7 @@ impl FactoryComponent for AccountRowComponent {
             intrinsic_display: init.initial_display,
             icon_hint: init.initial_icon_hint,
             busy: init.initial_busy,
+            column_size_groups: init.column_size_groups,
         }
     }
 
@@ -688,6 +717,7 @@ impl FactoryComponent for AccountRowComponent {
         root.set_child(Some(&container));
         bind_row(&container, &self.current_display());
         bind_row_icon(&container, self.icon_hint.as_deref());
+        register_row_size_groups(&container, &self.column_size_groups);
         install_row_action_group(&container, self.account_id, sender.output_sender());
         AccountRowWidgets { container }
     }
@@ -792,7 +822,7 @@ fn format_counter_label(counter: CounterText) -> String {
 pub fn build_row_widget() -> gtk::Box {
     let container = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
+        .spacing(ROW_COLUMN_SPACING)
         .hexpand(true)
         .build();
     let icon = gtk::Image::builder()
@@ -1009,4 +1039,200 @@ pub fn bind_row_icon(container: &gtk::Box, icon_hint: Option<&str>) {
     let icon_theme = gtk::IconTheme::for_display(&gtk::prelude::WidgetExt::display(container));
     let icon_name = resolve_display_icon(icon_hint, |slug| icon_theme.has_icon(slug));
     icon_widget.set_icon_name(Some(icon_name));
+}
+
+// ---------------------------------------------------------------------------
+// Column-header strip + per-column SizeGroups.
+//
+// Goal: a single non-scrolling header strip mounted above the row
+// list that labels the visible columns (currently “Account” and
+// “Code”).  Alignment with the rows is guaranteed by a bundle of
+// per-column `gtk::SizeGroup`s ([`ColumnSizeGroups`]) — each row's
+// cell and the matching header cell are registered in the same
+// `SizeGroup`, so width changes propagate symmetrically.  The
+// header strip never scrolls because it lives outside the
+// `gtk::ScrolledWindow` that wraps the `gtk::ListBox`.
+
+/// Per-column [`gtk::SizeGroup`] bundle that the row factory and the
+/// column-header strip share so each header cell sits over the
+/// corresponding row cell.
+///
+/// One [`gtk::SizeGroup::Mode::Horizontal`] group per slot in the
+/// row's child order (see [`build_row_widget`]):
+///
+/// ```text
+///   icon → label → counter → code → progress → copy → next → kebab
+/// ```
+///
+/// Cloning the bundle is a refcount bump on each member, so
+/// [`AccountListComponent`](crate::account_list::AccountListComponent)
+/// can hold one `ColumnSizeGroups` and clone it cheaply into every
+/// new [`AccountRowInit`].
+#[derive(Debug, Clone)]
+pub struct ColumnSizeGroups {
+    /// Width sync for the leading [`gtk::Image`] icon column.
+    pub icon: gtk::SizeGroup,
+    /// Width sync for the expanding `<issuer>:<label>` display
+    /// [`gtk::Label`] column.
+    pub label: gtk::SizeGroup,
+    /// Width sync for the (HOTP-only) counter [`gtk::Label`] column.
+    pub counter: gtk::SizeGroup,
+    /// Width sync for the code [`gtk::Label`] column.
+    pub code: gtk::SizeGroup,
+    /// Width sync for the (TOTP-only) progress [`gtk::ProgressBar`]
+    /// column.
+    pub progress: gtk::SizeGroup,
+    /// Width sync for the copy [`gtk::Button`] column.
+    pub copy: gtk::SizeGroup,
+    /// Width sync for the HOTP "next" [`gtk::Button`] column.
+    pub next: gtk::SizeGroup,
+    /// Width sync for the kebab [`gtk::MenuButton`] column.
+    pub kebab: gtk::SizeGroup,
+}
+
+impl Default for ColumnSizeGroups {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ColumnSizeGroups {
+    /// Construct a fresh bundle of [`gtk::SizeGroup::Mode::Horizontal`]
+    /// `SizeGroup`s, one per row column.
+    ///
+    /// Each `gtk::SizeGroup` starts empty; [`register_row_size_groups`]
+    /// adds row cells and [`build_column_header_strip`] adds header
+    /// cells.
+    #[must_use]
+    pub fn new() -> Self {
+        let new_group = || gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
+        Self {
+            icon: new_group(),
+            label: new_group(),
+            counter: new_group(),
+            code: new_group(),
+            progress: new_group(),
+            copy: new_group(),
+            next: new_group(),
+            kebab: new_group(),
+        }
+    }
+}
+
+/// Register the eight children of a row container (in
+/// [`build_row_widget`] order) with the matching members of
+/// `groups`.
+///
+/// The walk mirrors [`bind_row`]'s `first_child`/`next_sibling`
+/// chain, so additions to the row template must update both
+/// functions in lockstep.  The function is a no-op if the row's
+/// child types do not match the expected layout — defensive against
+/// a future row-template refactor that ships before this helper is
+/// updated.
+pub fn register_row_size_groups(row: &gtk::Box, groups: &ColumnSizeGroups) {
+    let Some(icon) = row.first_child().and_downcast::<gtk::Image>() else {
+        return;
+    };
+    let Some(label) = icon.next_sibling().and_downcast::<gtk::Label>() else {
+        return;
+    };
+    let Some(counter) = label.next_sibling().and_downcast::<gtk::Label>() else {
+        return;
+    };
+    let Some(code) = counter.next_sibling().and_downcast::<gtk::Label>() else {
+        return;
+    };
+    let Some(progress) = code.next_sibling().and_downcast::<gtk::ProgressBar>() else {
+        return;
+    };
+    let Some(copy) = progress.next_sibling().and_downcast::<gtk::Button>() else {
+        return;
+    };
+    let Some(next) = copy.next_sibling().and_downcast::<gtk::Button>() else {
+        return;
+    };
+    let Some(kebab) = next.next_sibling().and_downcast::<gtk::MenuButton>() else {
+        return;
+    };
+    groups.icon.add_widget(&icon);
+    groups.label.add_widget(&label);
+    groups.counter.add_widget(&counter);
+    groups.code.add_widget(&code);
+    groups.progress.add_widget(&progress);
+    groups.copy.add_widget(&copy);
+    groups.next.add_widget(&next);
+    groups.kebab.add_widget(&kebab);
+}
+
+/// Build the column-header strip — a horizontal [`gtk::Box`] whose
+/// children mirror the row's eight-cell template ([`build_row_widget`])
+/// but only carry text in the "Account" and "Code" slots.  Each cell
+/// is added to the matching member of `groups` so its width tracks
+/// the row's corresponding column.
+///
+/// Empty spacer cells (icon, counter, progress, copy, next, kebab)
+/// are zero-width [`gtk::Label`]s — they contribute nothing to the
+/// `SizeGroup` and let the row's natural column width win.
+///
+/// Visibility of the returned strip is controlled by the caller
+/// (typically the per-user `show-column-headers` `GSettings` key);
+/// this helper does not gate it.
+#[must_use]
+pub fn build_column_header_strip(groups: &ColumnSizeGroups) -> gtk::Box {
+    let container = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(ROW_COLUMN_SPACING)
+        .hexpand(true)
+        .margin_start(12)
+        .margin_end(12)
+        .margin_top(6)
+        .margin_bottom(2)
+        .build();
+    container.add_css_class("paladin-column-headers");
+
+    let icon_spacer = gtk::Label::new(None);
+    let account_label = gtk::Label::builder()
+        .label(format_account_column_title())
+        .halign(gtk::Align::Start)
+        .xalign(0.0)
+        .hexpand(true)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .build();
+    account_label.add_css_class("dim-label");
+    account_label.add_css_class("caption-heading");
+
+    let counter_spacer = gtk::Label::new(None);
+
+    let code_label = gtk::Label::builder()
+        .label(format_code_column_title())
+        .halign(gtk::Align::End)
+        .xalign(1.0)
+        .build();
+    code_label.add_css_class("dim-label");
+    code_label.add_css_class("caption-heading");
+
+    let progress_spacer = gtk::Label::new(None);
+    let copy_spacer = gtk::Label::new(None);
+    let next_spacer = gtk::Label::new(None);
+    let kebab_spacer = gtk::Label::new(None);
+
+    container.append(&icon_spacer);
+    container.append(&account_label);
+    container.append(&counter_spacer);
+    container.append(&code_label);
+    container.append(&progress_spacer);
+    container.append(&copy_spacer);
+    container.append(&next_spacer);
+    container.append(&kebab_spacer);
+
+    groups.icon.add_widget(&icon_spacer);
+    groups.label.add_widget(&account_label);
+    groups.counter.add_widget(&counter_spacer);
+    groups.code.add_widget(&code_label);
+    groups.progress.add_widget(&progress_spacer);
+    groups.copy.add_widget(&copy_spacer);
+    groups.next.add_widget(&next_spacer);
+    groups.kebab.add_widget(&kebab_spacer);
+
+    container
 }

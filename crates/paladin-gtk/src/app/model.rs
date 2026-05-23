@@ -672,6 +672,14 @@ pub enum AppMsg {
     /// benign no-op otherwise (the next mount reads the freshly
     /// committed value through `crate::gsettings::show_section_headers`).
     ShowSectionHeadersChanged(bool),
+    /// New value of the per-user `show-column-headers` `GSettings`
+    /// key, forwarded from the `changed::show-column-headers`
+    /// signal handler installed in `init`. `AppModel`'s handler
+    /// dispatches `AccountListMsg::SetShowColumnHeaders` to the live
+    /// [`AccountListComponent`] when it is mounted, and is a benign
+    /// no-op otherwise (the next mount reads the freshly committed
+    /// value through `crate::gsettings::show_column_headers`).
+    ShowColumnHeadersChanged(bool),
     /// Forwarded from the live [`RenameDialogComponent`] when the
     /// user interacts with the dialog. Today only
     /// [`RenameDialogOutput::Cancel`] is emitted — `AppModel`
@@ -1645,6 +1653,7 @@ impl SimpleComponent for AppModel {
                     initial_selection: None,
                     key_capture_widget: Some(root.clone().upcast::<gtk::Widget>()),
                     show_section_headers: crate::gsettings::show_section_headers(&app_settings),
+                    show_column_headers: crate::gsettings::show_column_headers(&app_settings),
                 })
                 .forward(sender.input_sender(), AppMsg::AccountListAction);
             widgets.content.append(controller.widget());
@@ -1739,6 +1748,19 @@ impl SimpleComponent for AppModel {
             move |s, _| {
                 let value = crate::gsettings::show_section_headers(s);
                 let _ = app_settings_input.send(AppMsg::ShowSectionHeadersChanged(value));
+            },
+        );
+
+        // Forward live changes to the per-user
+        // `show-column-headers` GSettings key back through the
+        // model so the live `AccountListComponent` (if any) reveals
+        // or hides its column-header strip.
+        let app_settings_input = sender.input_sender().clone();
+        model.app_settings.connect_changed(
+            Some(crate::gsettings::SHOW_COLUMN_HEADERS_KEY),
+            move |s, _| {
+                let value = crate::gsettings::show_column_headers(s);
+                let _ = app_settings_input.send(AppMsg::ShowColumnHeadersChanged(value));
             },
         );
 
@@ -2160,6 +2182,18 @@ impl SimpleComponent for AppModel {
                 // through `crate::gsettings::show_section_headers`.
                 if let Some(controller) = self.account_list.as_ref() {
                     controller.emit(AccountListMsg::SetShowSectionHeaders(enabled));
+                }
+            }
+            AppMsg::ShowColumnHeadersChanged(enabled) => {
+                // The `changed::show-column-headers` GSettings
+                // signal fired. Drive the live
+                // `AccountListComponent` to reveal / hide its
+                // column-header strip; benign no-op when the list
+                // is not mounted (the next mount reads the
+                // freshly committed value through
+                // `crate::gsettings::show_column_headers`).
+                if let Some(controller) = self.account_list.as_ref() {
+                    controller.emit(AccountListMsg::SetShowColumnHeaders(enabled));
                 }
             }
             AppMsg::RenameDialogAction(RenameDialogOutput::Cancel) => {
@@ -4890,6 +4924,9 @@ impl AppModel {
                         initial_selection: None,
                         key_capture_widget: Some(self.window.clone().upcast::<gtk::Widget>()),
                         show_section_headers: crate::gsettings::show_section_headers(
+                            &self.app_settings,
+                        ),
+                        show_column_headers: crate::gsettings::show_column_headers(
                             &self.app_settings,
                         ),
                     })

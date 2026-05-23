@@ -741,11 +741,21 @@ fn account_row_init_round_trips_account_id() {
         icon_hint: None,
         issuer: None,
     };
+    // `ColumnSizeGroups::new` allocates `gtk::SizeGroup`s, which
+    // need the GObject type registry. `gtk::init` is idempotent;
+    // we skip the test gracefully if the headless environment has
+    // no display (mirrors the `tests/gtk_smoke.rs` skip pattern).
+    if relm4::gtk::init().is_err() {
+        eprintln!("skipping: relm4::gtk::init() failed (no display server)");
+        return;
+    }
+
     let init = AccountRowInit {
         account_id: id,
         initial_display: hidden_row_display(&model),
         initial_icon_hint: None,
         initial_busy: false,
+        column_size_groups: paladin_gtk::account_row::ColumnSizeGroups::new(),
     };
     assert_eq!(init.account_id, id);
     assert!(matches!(
@@ -863,4 +873,33 @@ fn install_row_action_group_is_exposed_from_account_row_module() {
 
     let _: fn(&relm4::gtk::Box, AccountId, &relm4::Sender<AccountRowOutput>) =
         paladin_gtk::account_row::install_row_action_group;
+}
+
+// ---------------------------------------------------------------------------
+// Column-header strip — pure-string title accessors.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn account_column_title_is_pinned() {
+    use paladin_gtk::account_row::format_account_column_title;
+
+    assert_eq!(format_account_column_title(), "Account");
+}
+
+#[test]
+fn code_column_title_is_pinned() {
+    use paladin_gtk::account_row::format_code_column_title;
+
+    assert_eq!(format_code_column_title(), "Code");
+}
+
+#[test]
+fn row_column_spacing_matches_documented_value() {
+    // The row body and the column-header strip both use this
+    // constant for their `gtk::Box::set_spacing` — drift would
+    // misalign the headers from the cells. Pin the value so a
+    // future refactor that touches `build_row_widget` and forgets
+    // to update `build_column_header_strip` (or vice versa) is
+    // caught here.
+    assert_eq!(paladin_gtk::account_row::ROW_COLUMN_SPACING, 12);
 }

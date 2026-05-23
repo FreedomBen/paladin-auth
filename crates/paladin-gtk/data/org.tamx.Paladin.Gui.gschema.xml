@@ -26,5 +26,16 @@
         the list stays compact.
       </description>
     </key>
+    <key name="show-column-headers" type="b">
+      <default>true</default>
+      <summary>Show account-list column headers</summary>
+      <description>
+        When enabled, a single non-scrolling header strip above the
+        account list labels the visible columns (currently
+        “Account” and “Code”).  The header strip and each row
+        share per-column GtkSizeGroups so the labels stay aligned
+        with the data underneath.  Enabled by default.
+      </description>
+    </key>
   </schema>
 </schemalist>

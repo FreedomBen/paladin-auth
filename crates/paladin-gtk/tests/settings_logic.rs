@@ -2439,6 +2439,31 @@ fn settings_dialog_section_headers_row_subtitle_calls_out_default_off() {
 }
 
 #[test]
+fn settings_dialog_column_headers_row_title_is_pinned() {
+    use paladin_gtk::settings::format_settings_dialog_column_headers_row_title;
+
+    assert_eq!(
+        format_settings_dialog_column_headers_row_title(),
+        "Show column headers",
+    );
+}
+
+#[test]
+fn settings_dialog_column_headers_row_subtitle_calls_out_default_on() {
+    use paladin_gtk::settings::format_settings_dialog_column_headers_row_subtitle;
+
+    let subtitle = format_settings_dialog_column_headers_row_subtitle();
+    assert!(
+        subtitle.to_lowercase().contains("on by default"),
+        "subtitle should tell the user the default state; got {subtitle:?}",
+    );
+    assert!(
+        subtitle.to_lowercase().contains("column"),
+        "subtitle should mention columns so the toggle is self-explanatory; got {subtitle:?}",
+    );
+}
+
+#[test]
 fn settings_dialog_init_round_trips_committed_settings() {
     use paladin_gtk::gsettings::SCHEMA_ID;
     use paladin_gtk::settings::SettingsDialogInit;
