@@ -2497,7 +2497,7 @@ fn build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a
         format_app_about_dialog_debug_info_filename, format_app_about_dialog_designers,
         format_app_about_dialog_developer_name, format_app_about_dialog_developers,
         format_app_about_dialog_documenters, format_app_about_dialog_issue_url,
-        format_app_about_dialog_license_text, format_app_about_dialog_license_type,
+        format_app_about_dialog_license_markup, format_app_about_dialog_license_type,
         format_app_about_dialog_program_name, format_app_about_dialog_release_notes,
         format_app_about_dialog_release_notes_version, format_app_about_dialog_support_url,
         format_app_about_dialog_translator_credits, format_app_about_dialog_version,
@@ -2550,8 +2550,8 @@ fn build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a
     );
     assert_eq!(
         dialog.license(),
-        format_app_about_dialog_license_text(),
-        "AdwAboutDialog license body must be sourced from format_app_about_dialog_license_text so the gresource-bundled AGPL-3.0-or-later text is the visible license body",
+        format_app_about_dialog_license_markup().as_str(),
+        "AdwAboutDialog license body must be sourced from format_app_about_dialog_license_markup (the markup-safe escape of the gresource-bundled AGPL-3.0-or-later text) so the dialog footer renders without a Pango markup parse failure",
     );
     assert_eq!(
         dialog.website(),
@@ -4598,6 +4598,77 @@ fn format_app_about_dialog_license_text_does_not_contain_a_null_byte() {
     assert!(
         !format_app_about_dialog_license_text().contains('\u{0}'),
         "AdwAboutDialog license text must not contain a NUL byte",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_license_markup_parses_as_valid_pango_markup() {
+    // `adw::AboutDialog::set_license` feeds its input through
+    // Pango markup. The raw AGPL-3.0-or-later body contains
+    // URLs in `<https://…>` form (e.g. `<https://fsf.org/>`)
+    // that the markup parser rejects ("Odd character '/',
+    // expected a '>' …"), which makes the dialog drop the
+    // visible license body and emit a `Gtk-WARNING`.
+    // `format_app_about_dialog_license_markup` is the escaping
+    // shim the dialog now consumes; pinning it as
+    // `pango::parse_markup`-clean catches a regression that
+    // bypasses the escape (or breaks the escape impl) before
+    // users see the empty license footer.
+    use paladin_gtk::app::model::format_app_about_dialog_license_markup;
+    use relm4::gtk::pango;
+
+    let markup = format_app_about_dialog_license_markup();
+    let parsed = pango::parse_markup(&markup, '\0');
+    assert!(
+        parsed.is_ok(),
+        "format_app_about_dialog_license_markup must round-trip through pango::parse_markup; error: {:?}",
+        parsed.err(),
+    );
+}
+
+#[test]
+fn format_app_about_dialog_license_markup_preserves_the_raw_license_body_after_unescape() {
+    // The escaped markup must render *exactly* the raw
+    // `LICENSE` body when Pango unescapes the entities — the
+    // visible license footer must not gain or lose characters
+    // because of the escape pass. `pango::parse_markup`'s
+    // second tuple element is the plain text the markup
+    // resolves to (entities replaced, tags stripped); the raw
+    // body has no markup tags, only entities (`&lt;`/`&gt;`
+    // for the URLs), so the round-trip must equal the source
+    // bytes verbatim.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_license_markup, format_app_about_dialog_license_text,
+    };
+    use relm4::gtk::pango;
+
+    let markup = format_app_about_dialog_license_markup();
+    let (_attrs, text, _accel) = pango::parse_markup(&markup, '\0')
+        .expect("license markup must parse cleanly as Pango markup");
+    assert_eq!(
+        text.as_str(),
+        format_app_about_dialog_license_text(),
+        "Pango-unescaped license markup must equal the raw LICENSE body verbatim",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_license_markup_escapes_the_fsf_url_angle_brackets() {
+    // Sanity check on the specific tokens that caused the
+    // crash: the FSF URL `<https://fsf.org/>` and the GNU
+    // license URL `<https://www.gnu.org/licenses/>` must
+    // appear in the markup as escaped entities, not as raw
+    // angle brackets that Pango would mis-parse as XML tags.
+    use paladin_gtk::app::model::format_app_about_dialog_license_markup;
+
+    let markup = format_app_about_dialog_license_markup();
+    assert!(
+        !markup.contains("<https://"),
+        "license markup must escape `<https://…>` URLs so Pango does not parse them as tags",
+    );
+    assert!(
+        markup.contains("&lt;https://fsf.org/&gt;"),
+        "license markup must carry the escaped FSF URL `&lt;https://fsf.org/&gt;`",
     );
 }
 

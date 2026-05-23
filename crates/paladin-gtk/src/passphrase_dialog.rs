@@ -946,6 +946,22 @@ impl SimpleComponent for PassphraseDialogComponent {
         adw::Dialog {
             set_title: format_passphrase_dialog_title(),
 
+            // `connect_closed` fires on Escape / window-close /
+            // parent-navigation close, distinct from the explicit
+            // Cancel button. Routed through the same
+            // `PassphraseDialogMsg::Cancel` arm so secret-bearing
+            // shadow buffers are wiped uniformly regardless of the
+            // dismissal channel. The send goes through the bare
+            // `Sender` (instead of `ComponentSender::input`, which
+            // panics on a closed channel) so the closure is safe to
+            // fire during teardown — `force_close` from the
+            // `AppMsg::PassphraseDialogAction(Close)` handler emits
+            // `closed` synchronously, and the runtime may have
+            // already scheduled shutdown by then.
+            connect_closed[sender] => move |_| {
+                let _ = sender.input_sender().send(PassphraseDialogMsg::Cancel);
+            },
+
             #[wrap(Some)]
             set_child = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {},
@@ -1059,7 +1075,14 @@ impl SimpleComponent for PassphraseDialogComponent {
                             #[watch]
                             set_sensitive: model.state.cancel_button_sensitive(),
                             connect_clicked[sender] => move |_| {
-                                sender.input(PassphraseDialogMsg::Cancel);
+                                // `Sender::send` is used in place of
+                                // `ComponentSender::input` (which
+                                // `.expect`s on a closed channel) so
+                                // a stray click that arrives after
+                                // `AppMsg::PassphraseDialogAction(Close)`
+                                // has dropped the controller is a
+                                // benign no-op instead of an abort.
+                                let _ = sender.input_sender().send(PassphraseDialogMsg::Cancel);
                             },
                         },
 

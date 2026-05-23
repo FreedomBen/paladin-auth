@@ -2676,20 +2676,24 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::PassphraseDialogAction(PassphraseDialogOutput::Close) => {
-                // User dismissed the `adw::Dialog`. Drop the live
-                // controller so the widget is released and any
-                // in-flight pending form draft (selected sub-flow,
-                // current / new / confirm passphrase entries, pending
-                // destructive acknowledgement) is discarded.
-                // `adw::Dialog` self-detaches from its toplevel
-                // parent on close, so no `self.content.remove` is
-                // needed — unlike `AddAccountComponent` /
-                // `RenameDialogComponent` / `RemoveDialogComponent`
-                // which are appended into the content tree directly.
-                // Defensive: if the field is already `None`
-                // (controller swapped under us by a future race),
-                // this is a benign no-op.
-                self.passphrase_dialog = None;
+                // User dismissed the `adw::Dialog`. Call
+                // `force_close` *before* dropping the controller so
+                // the dialog is removed from its dialog-host parent —
+                // simply dropping the controller releases our
+                // refcount but leaves the dialog presented (the host
+                // still holds it), which lets a stray second Cancel
+                // click reach a closure whose `ComponentSender`
+                // points at a runtime that has already shut down and
+                // panic in `sender.input`. Mirrors the Submit success
+                // path below. The pending form draft (selected
+                // sub-flow, current / new / confirm passphrase
+                // entries, destructive acknowledgement) zeroizes as
+                // the controller drops. Defensive: if the field is
+                // already `None` (controller swapped under us by a
+                // future race), this is a benign no-op.
+                if let Some(controller) = self.passphrase_dialog.take() {
+                    controller.widget().force_close();
+                }
             }
             AppMsg::PassphraseDialogAction(PassphraseDialogOutput::Submit(payload)) => {
                 // Save button entry side of the `gio::spawn_blocking
@@ -6706,7 +6710,7 @@ pub fn build_app_about_dialog() -> adw::AboutDialog {
     dialog.set_developer_name(format_app_about_dialog_developer_name());
     dialog.set_copyright(format_app_about_dialog_copyright());
     dialog.set_license_type(format_app_about_dialog_license_type());
-    dialog.set_license(format_app_about_dialog_license_text());
+    dialog.set_license(&format_app_about_dialog_license_markup());
     dialog.set_website(format_app_about_dialog_website());
     dialog.set_issue_url(format_app_about_dialog_issue_url());
     dialog.set_support_url(format_app_about_dialog_support_url());
@@ -6907,6 +6911,21 @@ pub fn format_app_about_dialog_license_type() -> gtk::License {
 #[must_use]
 pub fn format_app_about_dialog_license_text() -> &'static str {
     include_str!("../../../../LICENSE")
+}
+
+/// Pango-markup-safe rendering of
+/// [`format_app_about_dialog_license_text`] for
+/// [`adw::AboutDialog::set_license`], which interprets its input
+/// as Pango markup. The raw `LICENSE` body contains URLs in
+/// `<https://…>` form (e.g. `<https://fsf.org/>`) that Pango
+/// otherwise mis-parses as malformed XML, dropping the visible
+/// license body and emitting a `Gtk-WARNING`. Escaping the
+/// active characters (`<`, `>`, `&`) once, here, lets the
+/// dialog footer render the verbatim license bytes without
+/// editing the source-of-truth file.
+#[must_use]
+pub fn format_app_about_dialog_license_markup() -> String {
+    glib::markup_escape_text(format_app_about_dialog_license_text()).into()
 }
 
 /// Absolute gresource path the application menu's "About
