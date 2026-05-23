@@ -197,3 +197,27 @@ fn ignores_unrelated_fields_like_digits_or_period() {
     let hit = vault.find_duplicate(&candidate).expect("expected match");
     assert_eq!(hit.id(), stored_id);
 }
+
+#[test]
+fn remove_clears_duplicate_hit_for_subsequent_find() {
+    // Round-trip: a candidate that matches a stored account should
+    // stop matching after the stored account is removed. Guards
+    // against an internal cache or index that survives `remove` and
+    // would let a stale duplicate hit linger.
+    let mut vault = empty_plaintext_vault();
+    let stored = validated("alice", Some("Acme"), SECRET_A);
+    let stored_id = stored.account.id();
+    vault.add(stored.account);
+
+    let candidate = validated("alice", Some("Acme"), SECRET_A);
+    let hit = vault.find_duplicate(&candidate).expect("hit before remove");
+    assert_eq!(hit.id(), stored_id);
+
+    let removed = vault.remove(stored_id).expect("alice removed");
+    assert_eq!(removed.id(), stored_id);
+
+    assert!(
+        vault.find_duplicate(&candidate).is_none(),
+        "find_duplicate must report no match after the colliding account is removed"
+    );
+}

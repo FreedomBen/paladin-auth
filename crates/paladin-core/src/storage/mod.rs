@@ -49,7 +49,11 @@ use crate::error::{ErrorKind, PaladinError, Result, VaultMode};
 pub(crate) mod header;
 pub mod path;
 pub mod payload;
-#[cfg(not(unix))]
+// `perms_other` is the production stub for non-Unix targets, but it
+// also compiles under `cfg(test)` so its three helpers can be unit-
+// tested on the Unix CI runner — otherwise the stub ships entirely
+// uncovered.
+#[cfg(any(not(unix), test))]
 mod perms_other;
 #[cfg(unix)]
 mod perms_unix;

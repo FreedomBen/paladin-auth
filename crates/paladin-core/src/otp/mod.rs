@@ -114,6 +114,14 @@ mod tests {
         assert_eq!(pow10(8), 100_000_000);
     }
 
+    // §4.2 says the maximum supported digit width is 8. `pow10` is
+    // hardcoded above to handle 8; widening `MAX_DIGITS` without
+    // re-auditing the `u64 % pow10(digits)` arithmetic is unsafe.
+    #[test]
+    fn max_digits_is_8() {
+        assert_eq!(MAX_DIGITS, 8);
+    }
+
     #[test]
     fn truncate_matches_rfc4226_appendix_d_offset_4() {
         // RFC 4226 Appendix D Count=0 HMAC-SHA1 result. Last byte 0xfa

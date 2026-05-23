@@ -364,6 +364,42 @@ mod tests {
         }
     }
 
+    // §4.1 numeric bounds. The validators that consume these constants
+    // are exercised by surrounding tests; these fixtures lock the
+    // values themselves so a refactor that loosens (or accidentally
+    // tightens) the table is caught at the constant site rather than
+    // through a cascade of broken validator tests.
+    #[test]
+    fn label_max_bytes_is_128() {
+        assert_eq!(LABEL_MAX_BYTES, 128);
+    }
+
+    #[test]
+    fn issuer_max_bytes_is_128() {
+        assert_eq!(ISSUER_MAX_BYTES, 128);
+    }
+
+    #[test]
+    fn secret_min_bytes_is_10() {
+        assert_eq!(SECRET_MIN_BYTES, 10);
+    }
+
+    #[test]
+    fn secret_max_bytes_is_1024() {
+        assert_eq!(SECRET_MAX_BYTES, 1024);
+    }
+
+    #[test]
+    fn short_secret_threshold_bytes_is_16() {
+        assert_eq!(SHORT_SECRET_THRESHOLD_BYTES, 16);
+    }
+
+    #[test]
+    fn timestamp_max_inclusive_is_year_9999_utc() {
+        // 253_402_300_799 == 9999-12-31T23:59:59Z in Unix seconds.
+        assert_eq!(TIMESTAMP_MAX_INCLUSIVE, 253_402_300_799);
+    }
+
     #[test]
     fn happy_path_totp_default() {
         let v = validate_manual(manual_input("alice@example.com"), now_for_tests()).unwrap();

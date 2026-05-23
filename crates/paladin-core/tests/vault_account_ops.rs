@@ -176,6 +176,38 @@ fn summaries_yield_insertion_order_non_secret_projections() {
 }
 
 #[test]
+fn summaries_pin_icon_hint_and_timestamps_for_fresh_imports() {
+    // The existing summaries tests confirm field-equality with
+    // `Account::summary()`, but they don't pin the *specific* values
+    // for `icon_hint`, `created_at`, `updated_at`. These three fields
+    // come from import-time derivation (issuer → slug) and clock
+    // sampling (now → Unix seconds), so a regression in either
+    // derivation would slip past the structural shape tests.
+    let mut vault = empty_plaintext_vault();
+    let id = vault.add(make_account("alice", Some("Acme")));
+
+    let summary = vault.summaries().next().expect("one account");
+    assert_eq!(summary.id, id);
+
+    // `Acme` → `acme` per `slug::derive_default_from_issuer`.
+    assert_eq!(summary.icon_hint.as_deref(), Some("acme"));
+
+    // `fixture_now()` is 1_700_000_000 Unix-seconds; both timestamps
+    // sample the same instant for a freshly imported account.
+    assert_eq!(summary.created_at, 1_700_000_000);
+    assert_eq!(summary.updated_at, 1_700_000_000);
+    assert_eq!(summary.created_at, summary.updated_at);
+
+    // An issuer-less account derives no icon_hint.
+    let id_b = vault.add(make_account("bob", None));
+    let summary_b = vault
+        .summaries()
+        .find(|s| s.id == id_b)
+        .expect("bob present");
+    assert_eq!(summary_b.icon_hint, None);
+}
+
+#[test]
 fn summaries_match_account_summary_for_each_entry() {
     let mut vault = empty_plaintext_vault();
     vault.add(make_account("alice", Some("Acme")));
