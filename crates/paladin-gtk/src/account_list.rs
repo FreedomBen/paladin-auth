@@ -165,6 +165,18 @@ pub enum AccountListOutput {
     /// matching [`AccountListMsg::Refresh`] back so the
     /// `gio::ListStore` reflects the new filter.
     QueryChanged(String),
+    /// The owned `gtk::SearchBar`'s `search-mode-enabled` property
+    /// flipped. Emitted from the bar's `notify::search-mode-enabled`
+    /// handler so `AppModel` can mirror the new state back onto the
+    /// header-bar search-toggle `gtk::ToggleButton` — necessary
+    /// because the bar can flip itself open via
+    /// `set_key_capture_widget` (type-to-search) or
+    /// [`AccountListMsg::FocusSearch`] (`/` / `Ctrl+K`), independent
+    /// of the toggle click. The toggle's `active` is idempotent on
+    /// re-assign so the round-trip (toggle click →
+    /// `AppMsg::SearchToggled` → `AccountListMsg::SetSearchModeEnabled`
+    /// → notify → here → `set_active`) does not loop.
+    SearchModeChanged(bool),
 }
 
 /// Compute the per-row dispatch plan for a single
@@ -476,6 +488,15 @@ pub struct AccountListInit {
     /// and the live refresh share one selection-application code
     /// path.
     pub initial_selection: Option<AccountId>,
+    /// Toplevel widget (the `adw::ApplicationWindow`) the embedded
+    /// `gtk::SearchBar` registers as its
+    /// [`set_key_capture_widget`][gtk::SearchBar::set_key_capture_widget]
+    /// target so any printable keypress on the window that is not
+    /// consumed by a focused entry reveals the bar and forwards the
+    /// keystroke into the embedded `gtk::SearchEntry` ("type to
+    /// search"). `None` skips the wiring — e.g. unit tests that
+    /// construct an isolated component without a parent window.
+    pub key_capture_widget: Option<gtk::Widget>,
 }
 
 /// Widget-bearing list view for the unlocked vault state.
@@ -587,6 +608,13 @@ pub enum AccountListMsg {
     /// Show / hide the `gtk::SearchBar`. Mirrors the header-bar
     /// search-toggle button's `active` state.
     SetSearchModeEnabled(bool),
+    /// Reveal the `gtk::SearchBar` and move keyboard focus onto the
+    /// embedded `gtk::SearchEntry`. Posted by `AppModel` in response
+    /// to the window-level `/` or `Ctrl+K` accelerator so the user
+    /// can start refining the search query without first reaching
+    /// for the mouse or the header-bar toggle. Existing query text
+    /// is preserved (the user may have already typed something).
+    FocusSearch,
     /// Per-tick TOTP refresh from the [`crate::ticker`] driver.
     ///
     /// `AppModel`'s per-tick `glib::timeout_add_local` callback
@@ -686,6 +714,29 @@ impl SimpleComponent for AccountListComponent {
         search_bar.set_child(Some(&search_entry));
         search_bar.connect_entry(&search_entry);
 
+        // Wire GTK's built-in "type to search" capture so any
+        // printable keypress on the toplevel window that is not
+        // consumed by a focused entry reveals the bar and forwards
+        // the keystroke into `search_entry`. Skipped when the parent
+        // did not supply a toplevel (e.g. an isolated unit test that
+        // never mounts the component into a window).
+        if let Some(capture_widget) = init.key_capture_widget.as_ref() {
+            search_bar.set_key_capture_widget(Some(capture_widget));
+        }
+
+        // Mirror the bar's `search-mode-enabled` back to `AppModel`
+        // so the header-bar search-toggle `gtk::ToggleButton` tracks
+        // bar-initiated reveals (type-to-search,
+        // `AccountListMsg::FocusSearch`, or the bar's own close
+        // button) in addition to its own click. The toggle's
+        // `set_active` is idempotent on a matching value, so the
+        // round-trip toggle → set_search_mode → notify → set_active
+        // settles in one cycle.
+        let notify_output = sender.output_sender().clone();
+        search_bar.connect_search_mode_enabled_notify(move |bar| {
+            let _ = notify_output.send(AccountListOutput::SearchModeChanged(bar.is_search_mode()));
+        });
+
         let factory_widget = factory.widget();
         let widgets = view_output!();
 
@@ -753,6 +804,10 @@ impl SimpleComponent for AccountListComponent {
             }
             AccountListMsg::SetSearchModeEnabled(enabled) => {
                 self.search_bar.set_search_mode(enabled);
+            }
+            AccountListMsg::FocusSearch => {
+                self.search_bar.set_search_mode(true);
+                self.search_entry.grab_focus();
             }
             AccountListMsg::Tick(displays) => {
                 if displays.is_empty() {

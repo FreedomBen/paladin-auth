@@ -195,8 +195,23 @@ inclusion.
   intermittently dropped pointer events.
   Search uses a `gtk::SearchEntry` hosted inside a `gtk::SearchBar`
   whose `search-mode-enabled` is bound to the header bar's
-  search-toggle button (see "libadwaita usage" below). Filtering
-  rebuilds the row set from `Vault::iter()` so it can call
+  search-toggle button (see "libadwaita usage" below). The bar's
+  `set_key_capture_widget` is bound to the toplevel
+  `adw::ApplicationWindow`, so any printable keypress on the window
+  that no focused entry consumed reveals the bar and forwards the
+  keystroke into the embedded `gtk::SearchEntry` ("type to search"
+  parity with stock GNOME apps like Files). A dedicated window-level
+  `EventControllerKey` (`wire_app_window_search_focus_controller`,
+  capture-phase) intercepts `/` and `Ctrl+K` first and posts
+  `AppMsg::FocusSearch`, which emits `AccountListMsg::FocusSearch` to
+  reveal the bar and grab focus on the entry without inserting the
+  keystroke into the entry's buffer — matching the GitHub / GNOME
+  Files convention. The bar's `notify::search-mode-enabled` round-
+  trips back through `AccountListOutput::SearchModeChanged(bool)` so
+  the header-bar toggle button mirrors bar-initiated reveals (type-
+  to-search, focus shortcut, the bar's own close button) in addition
+  to its own click. Filtering rebuilds the row set from
+  `Vault::iter()` so it can call
   `paladin_core::account_matches_search(&Account, query)` before
   projecting matches to `AccountSummary`; the `FactoryVecDeque` never
   holds secret fields (each `AccountRowComponent` only sees
@@ -3659,6 +3674,51 @@ sign-off.
     `format_app_search_button_icon_name`,
     `format_app_search_button_tooltip`, and the search-toggle
     dispatch unit tests in `tests/account_list_logic.rs`.)
+  - [x] Wire `gtk::SearchBar::set_key_capture_widget` against the
+    toplevel `adw::ApplicationWindow` so any printable keypress on
+    the window that no focused entry consumed reveals the bar and
+    forwards the keystroke into the embedded `gtk::SearchEntry`
+    ("type to search"). Mirror the bar's
+    `notify::search-mode-enabled` back to `AppModel` via
+    `AccountListOutput::SearchModeChanged(bool)` so the header-bar
+    search-toggle button tracks bar-initiated reveals in addition
+    to its own click.
+    (`AccountListInit::key_capture_widget: Option<gtk::Widget>` is
+    handed the cloned `adw::ApplicationWindow` at both the `init`
+    and `remount_for_state` mount sites in `app/model.rs`;
+    `AccountListComponent::init` calls
+    `search_bar.set_key_capture_widget(Some(widget))` and connects
+    `connect_search_mode_enabled_notify` to
+    `sender.output(AccountListOutput::SearchModeChanged(...))`.
+    `AppModel`'s update arm consumes that variant by setting the
+    cached `search_button.set_active(active)` only on a real
+    change, so the toggle / notify round-trip settles in one
+    cycle.)
+  - [x] Wire the `/` and `Ctrl+K` window-level focus-search
+    accelerator. A capture-phase `gtk::EventControllerKey` attached
+    to the `adw::ApplicationWindow` runs before the
+    `set_key_capture_widget` controller and posts
+    `AppMsg::FocusSearch` on a match, returning
+    `Propagation::Stop` so the keystroke is not also inserted into
+    the `gtk::SearchEntry`. `AppMsg::FocusSearch` emits
+    `AccountListMsg::FocusSearch` on the live controller, which
+    sets `search_mode = true` and calls `search_entry.grab_focus()`.
+    The dispatch is silently dropped when
+    `AppModel::account_list` is `None`. The focus-search shortcut
+    is **not** registered through
+    `format_app_window_accelerator_bindings` (which drives
+    `gio::Application::set_accels_for_action`) because it lives
+    behind a window-level `EventControllerKey` so a focused entry
+    gets first crack at the keystroke and inline `/`-typing into
+    any text entry still works.
+    (Pinned by `wire_app_window_search_focus_controller`,
+    `dispatch_app_window_search_focus_key`,
+    `format_app_search_focus_accelerator` /
+    `format_app_search_focus_label`, and the dispatch unit tests in
+    `tests/search_focus_logic.rs`. The
+    `format_app_shortcuts_window_entries` row at index 1
+    surfaces the `slash <Control>k` accelerator pair in the
+    `GtkShortcutsWindow`.)
   - [x] Add the primary `gtk::MenuButton` driven by a `gio::Menu`
     with the fixed entries Import…, Export…, Passphrase…,
     Preferences, About Paladin, Quit.

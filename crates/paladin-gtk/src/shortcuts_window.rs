@@ -29,6 +29,7 @@ use crate::app::model::{
     format_app_menu_keyboard_shortcuts_accelerator, format_app_menu_keyboard_shortcuts_label,
     format_app_menu_preferences_accelerator, format_app_menu_preferences_label,
     format_app_menu_quit_accelerator, format_app_menu_quit_label,
+    format_app_search_focus_accelerator, format_app_search_focus_label,
 };
 
 /// Fixed title of the single `GtkShortcutsGroup` inside the
@@ -59,6 +60,14 @@ pub fn format_app_shortcuts_window_section_title() -> &'static str {
 ///   [`format_app_add_button_accelerator`] and same wording as
 ///   [`format_app_add_button_tooltip`], so the row mirrors the
 ///   header-bar `+` button surface.
+/// * `(slash <Control>k, "Search accounts")` —
+///   [`format_app_search_focus_accelerator`] /
+///   [`format_app_search_focus_label`] mirror the window-level
+///   focus-search accelerator wired by
+///   [`crate::app::model::wire_app_window_search_focus_controller`].
+///   The `accelerator` property accepts a space-separated list, so
+///   the single row renders both bindings together — matching how
+///   the helper itself treats them as interchangeable shortcuts.
 /// * `(<Control>comma, "Preferences")` —
 ///   [`format_app_menu_preferences_accelerator`] /
 ///   [`format_app_menu_preferences_label`] mirror the primary
@@ -71,23 +80,32 @@ pub fn format_app_shortcuts_window_section_title() -> &'static str {
 ///   [`format_app_menu_quit_label`] mirror the primary menu's Quit
 ///   entry.
 ///
-/// Display order is the most-frequent-use flow (Add →
+/// Display order is the most-frequent-use flow (Add → Search →
 /// Preferences → Keyboard Shortcuts → Quit) and is intentionally
 /// distinct from the
 /// [`crate::app::model::format_app_window_accelerator_bindings`]
 /// iteration order (which is Add → Quit → Preferences →
 /// Keyboard Shortcuts) — the bindings array is sized to keep
 /// `set_accels_for_action` wiring stable, while this array is
-/// sized for human reading.
+/// sized for human reading. The Search row is intentionally absent
+/// from `format_app_window_accelerator_bindings` because it is not
+/// a `gio::SimpleAction` accelerator (it lives behind a window-
+/// level `gtk::EventControllerKey` so a focused entry gets first
+/// crack at the keystroke and inline `/`-typing into any text
+/// entry still works).
 ///
 /// Pure — returns an owned array of two-tuples without
 /// allocating.
 #[must_use]
-pub fn format_app_shortcuts_window_entries() -> [(&'static str, &'static str); 4] {
+pub fn format_app_shortcuts_window_entries() -> [(&'static str, &'static str); 5] {
     [
         (
             format_app_add_button_accelerator(),
             format_app_add_button_tooltip(),
+        ),
+        (
+            format_app_search_focus_accelerator(),
+            format_app_search_focus_label(),
         ),
         (
             format_app_menu_preferences_accelerator(),
@@ -215,9 +233,9 @@ mod tests {
     }
 
     #[test]
-    fn format_app_shortcuts_window_entries_lists_four_rows_in_display_order() {
+    fn format_app_shortcuts_window_entries_lists_five_rows_in_display_order() {
         let entries = format_app_shortcuts_window_entries();
-        assert_eq!(entries.len(), 4);
+        assert_eq!(entries.len(), 5);
         assert_eq!(
             entries[0],
             (
@@ -228,19 +246,26 @@ mod tests {
         assert_eq!(
             entries[1],
             (
+                format_app_search_focus_accelerator(),
+                format_app_search_focus_label(),
+            )
+        );
+        assert_eq!(
+            entries[2],
+            (
                 format_app_menu_preferences_accelerator(),
                 format_app_menu_preferences_label(),
             )
         );
         assert_eq!(
-            entries[2],
+            entries[3],
             (
                 format_app_menu_keyboard_shortcuts_accelerator(),
                 format_app_menu_keyboard_shortcuts_label(),
             )
         );
         assert_eq!(
-            entries[3],
+            entries[4],
             (
                 format_app_menu_quit_accelerator(),
                 format_app_menu_quit_label(),

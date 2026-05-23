@@ -350,6 +350,22 @@ pub struct AppModel {
     /// bump on the underlying `GObject`. Mirrors the pattern used
     /// for [`Self::toast_overlay`] / [`Self::content`].
     busy_spinner: gtk::Spinner,
+    /// Header-bar search-toggle button cloned out of
+    /// `widgets.search_button` at init so the
+    /// [`AppMsg::AccountListAction(AccountListOutput::SearchModeChanged)`]
+    /// arm can mirror bar-initiated reveals (type-to-search,
+    /// [`AccountListMsg::FocusSearch`], the bar's own close button)
+    /// back onto the toggle's `active` state without going through
+    /// `update_view`. The clone is a refcount bump on the underlying
+    /// `GObject`. Mirrors the pattern used for
+    /// [`Self::busy_spinner`].
+    search_button: gtk::ToggleButton,
+    /// Toplevel `adw::ApplicationWindow` cloned at init so
+    /// [`Self::remount_for_state`] can hand the same widget back to
+    /// freshly-mounted `AccountListComponent` controllers as their
+    /// `gtk::SearchBar::set_key_capture_widget` target. The clone
+    /// is a refcount bump on the underlying `GObject`.
+    window: adw::ApplicationWindow,
     /// Pending wipe-after-copy slot for the clipboard auto-clear
     /// policy.
     ///
@@ -555,6 +571,8 @@ impl std::fmt::Debug for AppModel {
             )
             .field("last_settings_busy", &self.last_settings_busy)
             .field("busy_spinner", &"<gtk::Spinner>")
+            .field("search_button", &"<gtk::ToggleButton>")
+            .field("window", &"<adw::ApplicationWindow>")
             .field("idle_source", &self.idle_source)
             .field(
                 "auto_lock_source",
@@ -598,6 +616,17 @@ pub enum AppMsg {
     /// state is a benign no-op — `AppModel` drops it when
     /// [`AppModel::account_list`] is `None`.
     SearchToggled(bool),
+    /// Posted by the window-level `EventControllerKey` installed by
+    /// [`wire_app_window_search_focus_controller`] when the user
+    /// presses `/` or `Ctrl+K` and no focused entry has consumed the
+    /// keystroke. The update arm emits
+    /// [`AccountListMsg::FocusSearch`] on the live
+    /// [`AccountListComponent`] controller so the embedded
+    /// `gtk::SearchBar` reveals and the `gtk::SearchEntry` grabs
+    /// focus. Silently dropped when the controller is not mounted
+    /// (e.g. the user hit the accelerator while
+    /// [`AppState`] is `Locked` / `Missing` / `StartupError`).
+    FocusSearch,
     /// Forwarded from the live [`RenameDialogComponent`] when the
     /// user interacts with the dialog. Today only
     /// [`RenameDialogOutput::Cancel`] is emitted — `AppModel`
@@ -1549,12 +1578,22 @@ impl SimpleComponent for AppModel {
         // stays a single iteration over the pinned source of truth.
         wire_app_window_accelerators(&relm4::main_application());
 
+        // Install the `/` and `Ctrl+K` capture-phase controller so
+        // either accelerator posts `AppMsg::FocusSearch`, which
+        // reveals the `AccountListComponent`'s `gtk::SearchBar` and
+        // grabs focus on its `gtk::SearchEntry`. The controller
+        // stays attached across state transitions; the
+        // `AppMsg::FocusSearch` handler is a benign no-op whenever
+        // `AppModel::account_list` is `None`.
+        wire_app_window_search_focus_controller(&root, sender.input_sender());
+
         let account_list = if state.is_unlocked() {
             let controller = AccountListComponent::builder()
                 .launch(AccountListInit {
                     rows,
                     initial_query: String::new(),
                     initial_selection: None,
+                    key_capture_widget: Some(root.clone().upcast::<gtk::Widget>()),
                 })
                 .forward(sender.input_sender(), AppMsg::AccountListAction);
             widgets.content.append(controller.widget());
@@ -1621,6 +1660,8 @@ impl SimpleComponent for AppModel {
             reveal_windows: HashMap::new(),
             toast_overlay: widgets.toast_overlay.clone(),
             busy_spinner: widgets.busy_spinner.clone(),
+            search_button: widgets.search_button.clone(),
+            window: root.clone(),
             pending_clipboard: None,
             last_account_list_busy: false,
             last_add_dialog_busy: false,
@@ -1938,6 +1979,26 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
+            AppMsg::AccountListAction(AccountListOutput::SearchModeChanged(active)) => {
+                // The live `AccountListComponent` reported that its
+                // owned `gtk::SearchBar`'s `search-mode-enabled`
+                // flipped (driven by either the type-to-search
+                // `set_key_capture_widget` capture, the
+                // `/` / `Ctrl+K` accelerator's
+                // `AccountListMsg::FocusSearch`, or the bar's own
+                // close button). Mirror the new state onto the
+                // header-bar toggle so its `active` state stays in
+                // lockstep with what the user sees. `set_active`
+                // only fires `connect_toggled` when the value
+                // actually changes, so the round-trip toggle click →
+                // `AppMsg::SearchToggled` →
+                // `AccountListMsg::SetSearchModeEnabled` → notify →
+                // here → `set_active` settles in one cycle without
+                // a re-entrant dispatch.
+                if self.search_button.is_active() != active {
+                    self.search_button.set_active(active);
+                }
+            }
             AppMsg::AccountListAction(AccountListOutput::QueryChanged(query)) => {
                 // The user typed into the search bar. Cache the query
                 // on `self.search_query` so the post-mutation refresh
@@ -1975,6 +2036,22 @@ impl SimpleComponent for AppModel {
                 // button was hidden), this is a benign no-op.
                 if let Some(controller) = self.account_list.as_ref() {
                     controller.emit(format_app_search_toggle_msg(active));
+                }
+            }
+            AppMsg::FocusSearch => {
+                // The window-level `/` / `Ctrl+K` capture-phase
+                // controller installed by
+                // `wire_app_window_search_focus_controller` matched.
+                // Drive the live `AccountListComponent` to reveal
+                // its `gtk::SearchBar` and grab focus on the
+                // `gtk::SearchEntry`; the bar's
+                // `notify::search-mode-enabled` callback round-trips
+                // through `AccountListOutput::SearchModeChanged` so
+                // the header-bar toggle button mirrors the new
+                // state. Silently dropped when the controller is
+                // not mounted (Locked / Missing / StartupError).
+                if let Some(controller) = self.account_list.as_ref() {
+                    controller.emit(AccountListMsg::FocusSearch);
                 }
             }
             AppMsg::RenameDialogAction(RenameDialogOutput::Cancel) => {
@@ -4684,6 +4761,7 @@ impl AppModel {
                         rows,
                         initial_query: String::new(),
                         initial_selection: None,
+                        key_capture_widget: Some(self.window.clone().upcast::<gtk::Widget>()),
                     })
                     .forward(sender.input_sender(), AppMsg::AccountListAction);
                 self.content.append(controller.widget());
@@ -4974,6 +5052,49 @@ pub fn format_app_search_button_icon_name() -> &'static str {
 #[must_use]
 pub fn format_app_search_button_tooltip() -> &'static str {
     "Search accounts"
+}
+
+/// Space-separated accelerator string for the window-level
+/// "focus search" keystroke surfaced in
+/// [`crate::shortcuts_window::format_app_shortcuts_window_entries`].
+///
+/// Returns `"slash <Control>k"` — the two accelerators the
+/// `EventControllerKey` installed by
+/// [`wire_app_window_search_focus_controller`] dispatches through
+/// [`dispatch_app_window_search_focus_key`] into
+/// [`AppMsg::FocusSearch`]. `GtkShortcutsShortcut.accelerator`
+/// accepts a space-separated list, so listing both here renders
+/// one row that shows both bindings together — matching how the
+/// helper itself treats them as interchangeable focus shortcuts.
+///
+/// Distinct from [`format_app_window_accelerator_bindings`]
+/// because the focus-search shortcut is not a
+/// [`gtk::gio::SimpleAction`] accelerator (it lives behind a
+/// window-level [`gtk::EventControllerKey`] so a focused entry
+/// gets first crack at the keystroke and inline `/`-typing into
+/// any text entry still works), and therefore the bindings
+/// helper — whose iteration drives
+/// `gio::Application::set_accels_for_action` — must not include
+/// it.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_search_focus_accelerator() -> &'static str {
+    "slash <Control>k"
+}
+
+/// Human-readable label the `GtkShortcutsWindow` row for the
+/// focus-search accelerator surfaces.
+///
+/// Returns the same wording as
+/// [`format_app_search_button_tooltip`] ("Search accounts") so the
+/// header-bar toggle tooltip, the focus-search shortcuts-window
+/// row, and the inline search affordance all read identically.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_search_focus_label() -> &'static str {
+    format_app_search_button_tooltip()
 }
 
 /// Freedesktop icon name the widget hands to the [`AppModel`]'s
@@ -6524,6 +6645,93 @@ pub fn wire_app_window_idle_controllers(
         let _ = motion_sender.send(AppMsg::IdleEvent(Instant::now()));
     });
     window.add_controller(motion_controller);
+}
+
+/// Decide whether a window-level key press should focus the
+/// `AccountListComponent`'s `gtk::SearchBar`.
+///
+/// Returns [`Some(AppMsg::FocusSearch)`][AppMsg::FocusSearch] when
+/// `keyval` matches the `/` (`gdk::Key::slash`) or `Ctrl+K`
+/// (`gdk::Key::k` / `gdk::Key::K` with `CONTROL_MASK`) accelerator,
+/// rejecting any press that also carries `ALT_MASK` / `SUPER_MASK`
+/// / `HYPER_MASK` / `META_MASK` (those compound chords are reserved
+/// for other shortcuts). The `/` arm rejects `CONTROL_MASK` too so
+/// `Ctrl+/` (a different conventional shortcut) does not fall into
+/// the focus path. Returns `None` for everything else; the closure
+/// installed by [`wire_app_window_search_focus_controller`] returns
+/// [`gtk::glib::Propagation::Proceed`] in that case so the press
+/// continues to the entry / list / `set_key_capture_widget` capture
+/// surfaces.
+///
+/// Pure logic so the unit tests can pin the accelerator coverage
+/// without spinning up a `gtk::EventControllerKey` (or a display
+/// server). The dispatched [`AppMsg::FocusSearch`] handler is a
+/// benign no-op when [`AppModel::account_list`] is `None`, so the
+/// controller can stay attached across every state without an
+/// explicit `is_unlocked()` gate.
+#[must_use]
+pub fn dispatch_app_window_search_focus_key(
+    keyval: gtk::gdk::Key,
+    mods: gtk::gdk::ModifierType,
+) -> Option<AppMsg> {
+    let disallowed = gtk::gdk::ModifierType::ALT_MASK
+        | gtk::gdk::ModifierType::SUPER_MASK
+        | gtk::gdk::ModifierType::HYPER_MASK
+        | gtk::gdk::ModifierType::META_MASK;
+    if mods.intersects(disallowed) {
+        return None;
+    }
+    let ctrl = mods.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+    match keyval {
+        gtk::gdk::Key::slash if !ctrl => Some(AppMsg::FocusSearch),
+        gtk::gdk::Key::k | gtk::gdk::Key::K if ctrl => Some(AppMsg::FocusSearch),
+        _ => None,
+    }
+}
+
+/// Attach the window-level `/` and `Ctrl+K` capture-phase
+/// `gtk::EventControllerKey` that posts
+/// [`AppMsg::FocusSearch`] whenever the user hits either
+/// accelerator without a focused entry first consuming the press.
+///
+/// Installs a single [`gtk::EventControllerKey`] on `window` at
+/// [`gtk::PropagationPhase::Capture`] so the closure fires before
+/// the `AccountListComponent`'s
+/// [`gtk::SearchBar::set_key_capture_widget`]-installed capture
+/// controller (which would otherwise forward `/` into the
+/// `gtk::SearchEntry` as a literal slash). On a match
+/// ([`dispatch_app_window_search_focus_key`] returning `Some`),
+/// the closure posts the [`AppMsg`] through `input_sender` and
+/// returns [`gtk::glib::Propagation::Stop`] so the keystroke does
+/// not also reach the entry. On no match it returns
+/// [`gtk::glib::Propagation::Proceed`] so every other key (every
+/// printable character forwarded by `set_key_capture_widget`,
+/// `Ctrl+N` / `Ctrl+Q` / `Ctrl+,` / `Ctrl+?` accelerators, the
+/// `gtk::EventControllerKey` installed by
+/// [`wire_app_window_idle_controllers`]) is unaffected. The
+/// controller stays attached across state transitions; the
+/// `AppMsg::FocusSearch` handler is a benign no-op when
+/// [`AppModel::account_list`] is `None`.
+///
+/// Pure side-effect helper (no return value). The closure
+/// captures `input_sender` by clone, so `wire_app_window_search_focus_controller`'s
+/// caller does not need to retain a reference to the controller.
+pub fn wire_app_window_search_focus_controller(
+    window: &adw::ApplicationWindow,
+    input_sender: &relm4::Sender<AppMsg>,
+) {
+    let controller = gtk::EventControllerKey::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let focus_sender = input_sender.clone();
+    controller.connect_key_pressed(move |_, keyval, _, mods| {
+        if let Some(msg) = dispatch_app_window_search_focus_key(keyval, mods) {
+            let _ = focus_sender.send(msg);
+            gtk::glib::Propagation::Stop
+        } else {
+            gtk::glib::Propagation::Proceed
+        }
+    });
+    window.add_controller(controller);
 }
 
 /// Install `connect_activate` closures on every
