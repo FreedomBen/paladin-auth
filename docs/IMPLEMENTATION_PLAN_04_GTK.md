@@ -5666,8 +5666,8 @@ below reflects those resolutions.
 - [ ] Tests: section rows are non-selectable; toggling the `show-section-headers` GSettings key rebuilds the row list without resetting the live account-row selection; section rows render in the correct positions relative to the account rows per the `row_section_header` predicate.
 
 #### Column-header visibility preference
-- [ ] `show-column-headers` schema key in `org.tamx.Paladin.Gui.gschema.xml`, default `true`.
-- [ ] `crate::gsettings::{show_column_headers, set_show_column_headers, SHOW_COLUMN_HEADERS_KEY}` mirroring the existing `show_section_headers` helpers.
+- [x] `show-column-headers` schema key in `org.tamx.Paladin.Gui.gschema.xml`, default `true`.
+- [x] `crate::gsettings::{show_column_headers, set_show_column_headers, SHOW_COLUMN_HEADERS_KEY}` mirroring the existing `show_section_headers` helpers.
 - [ ] `AppMsg::ShowColumnHeadersChanged(bool)` + `changed::show-column-headers` signal wiring mirroring `show-section-headers`.
 - [ ] `AccountListMsg::SetShowColumnHeaders(bool)` → toggle visibility on each `gtk::ColumnViewColumn` header widget (or use `column_view.set_show_column_separators(false)` + CSS to hide the whole header strip, whichever produces the cleaner look in libadwaita).
 - [ ] Preferences row in `settings.rs` Display group with title/subtitle helper fns, alongside the existing `show-section-headers` row.
