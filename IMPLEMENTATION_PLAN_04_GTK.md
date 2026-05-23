@@ -1276,9 +1276,9 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   (so warning wording stays in lockstep with the CLI and TUI). The
   full passphrase-field / destructive-`create_force` wiring described
   in the §"Component tree" and §"Milestone 7 checklist" entry for
-  `InitDialog` lands in follow-up commits; this bullet covers the
-  read-only mount only, mirroring the staged rollout that the
-  `StartupErrorComponent` bullet uses. Under `--exit-after-startup`,
+  `InitDialog` is implemented in `crates/paladin-gtk/src/init_dialog.rs`
+  (two `AdwPasswordEntryRow`s plus the `Store::create_force` worker
+  dispatched via `gio::spawn_blocking`). Under `--exit-after-startup`,
   `AppModel` emits an additional stdout marker —
   `paladin-gtk: init_dialog_path=<path>` produced by
   `init_dialog::format_init_dialog_marker` — exclusively from the
@@ -1301,9 +1301,11 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   The full passphrase-entry / `gio::spawn_blocking` `paladin_core::open`
   worker / inline-decrypt-failure wiring described in the
   §"Component tree" and §"Milestone 7 checklist" entry for
-  `UnlockComponent` lands in follow-up commits; this bullet covers
-  the read-only mount only, mirroring the staged rollout that the
-  `StartupErrorComponent` and `InitDialogComponent` bullets use.
+  `UnlockComponent` is implemented in
+  `crates/paladin-gtk/src/unlock_dialog.rs` (passphrase entry with
+  keystroke shadowing, `gio::spawn_blocking` Argon2id worker, inline
+  `decrypt_failed` / `invalid_passphrase` rendering with non-auth
+  failures routed to `StartupErrorComponent`).
   Under `--exit-after-startup`, `AppModel` emits an additional
   stdout marker — `paladin-gtk: unlock_dialog_path=<path>` produced
   by `unlock_dialog::format_unlock_dialog_marker` — exclusively
@@ -1401,11 +1403,13 @@ sign-off.
   `SimpleComponent`) so `AccountListComponent` can drive a
   `FactoryVecDeque<AccountRowComponent>` over a `gtk::ListBox`
   instead of a `gio::ListStore` + `SignalListItemFactory` over a
-  `gtk::ListView`. The follow-up commits for each
-  controller (full passphrase entry on `InitDialog` / `UnlockDialog`,
-  full form widgets on `AddAccountComponent` / `ImportDialogComponent`
-  / `ExportDialogComponent` / `PassphraseDialogComponent` /
-  `SettingsComponent`) attach behavior on top of these mounts.
+  `gtk::ListView`. The behavior on top of each mount —
+  full passphrase entry on `InitDialog` / `UnlockDialog`, full form
+  widgets on `AddAccountComponent` / `ImportDialogComponent` /
+  `ExportDialogComponent` / `PassphraseDialogComponent` /
+  `SettingsComponent` — has landed; see each controller's source
+  file for the implementation and the matching
+  `tests/<name>_logic.rs` for the pinned pure-logic surface.
 - [x] Global argument parser contract (`cli.rs`).
   - [x] Accept `--vault <path>` and plumb the optional override into
     `AppInit` so startup probes inspect that path instead of the default.
@@ -2743,12 +2747,12 @@ sign-off.
     compose_scan_clipboard_button_sensitive(&model.state)`, and a
     `connect_clicked` handler that dispatches
     `AddAccountMsg::ScanClipboardClicked`. The `apply_msg` arm for
-    that variant is currently a state-side no-op (initial-stage
-    landing — parity with the `WorkerFailed` staged rollout); the
-    `AppModel`-side handler that reads `gdk::Display::default()
-    .clipboard()`, runs `gdk::TextureDownloader` (next sub-item), and
-    dispatches the QR worker (subsequent sub-items) lands in
-    follow-up commits. Pinned by
+    that variant is a state-side no-op (the component emits the
+    request as an output and the `AppModel`-side handler at
+    `crates/paladin-gtk/src/app/model.rs` owns the live
+    `gdk::Display::default().clipboard().read_texture_async`
+    round-trip plus the `gdk::TextureDownloader` decode and the QR
+    worker dispatch covered by the sub-items below). Pinned by
     `tests/add_account_logic.rs::format_scan_clipboard_button_label_is_non_empty`,
     `format_scan_clipboard_button_label_returns_scan_clipboard`,
     `compose_scan_clipboard_button_sensitive_active_on_qr_path_when_idle`,
@@ -2947,9 +2951,12 @@ sign-off.
     failure runs before the `Vault::mutate_and_save(|v|
     v.import_accounts(...))` worker is dispatched. The live GDK
     clipboard texture read / download / decode wiring on
-    `AppModel::update` lands in a follow-up commit (initial-stage
-    parity with the other QR sub-items L2651-L2798); the pure-
-    logic helpers and routing decisions are pinned by
+    `AppModel::update` is implemented in
+    `crates/paladin-gtk/src/app/model.rs` (the `read_texture_async`
+    callback feeds `load_clipboard_qr_capture`, which runs
+    `gdk::TextureDownloader` and the QR worker via
+    `gtk::gio::spawn_blocking`); the pure-logic helpers and routing
+    decisions are pinned by
     `tests/qr_clipboard_logic.rs::qr_preflight_error_no_clipboard_image_kind_is_invalid_state`,
     `qr_preflight_error_layout_rejected_kind_is_invalid_payload`,
     `qr_preflight_error_download_mismatch_kind_is_invalid_payload`,
