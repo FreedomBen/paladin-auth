@@ -1805,6 +1805,17 @@ sign-off.
     `crate::clipboard_clear::prepare_copy_bytes`, writes through
     `gdk::Clipboard::set_text`, and arms the auto-clear policy via
     `schedule_copy` into `AppModel::pending_clipboard`.
+  - [x] After a successful copy, raise an `adw::Toast` on the shared
+    `adw::ToastOverlay` with a body projected by
+    `crate::clipboard_clear::format_copy_toast(&VaultSettings)` —
+    `"Code copied"` when clipboard auto-clear is off and
+    `"Code copied — clears in {N}s"` when the user has opted into
+    `clipboard_clear_enabled`, so the security-relevant deadline that
+    just armed is visible in the same surface that confirms the write.
+    The formatter is pure-logic and covered by
+    `tests/clipboard_clear_logic.rs`. The toast is skipped when
+    `prepare_copy_bytes` returns `None` (hidden HOTP row, raced
+    removal) so a benign no-op stays silent.
   - [x] If a GDK clipboard write fails, surface an inline / status
     error and do not schedule clipboard auto-clear for that attempt.
     GTK4's `gdk::Clipboard::set_text` has no failure return — the

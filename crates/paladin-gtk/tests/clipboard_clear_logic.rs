@@ -35,7 +35,8 @@ use paladin_core::{
 
 use paladin_gtk::auto_lock::{lock_on_expiry, UnlockedDiscards};
 use paladin_gtk::clipboard_clear::{
-    evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
+    evaluate_wake, format_copy_toast, prepare_copy_bytes, schedule_copy, PendingClipboardClear,
+    WakeDecision,
 };
 use paladin_gtk::hotp_reveal::RevealWindow;
 
@@ -583,4 +584,85 @@ fn prepare_copy_bytes_ignores_reveal_window_for_totp_row() {
     let expected = vault.totp_code(id, now).expect("totp code generation");
     assert_eq!(&bytes[..], expected.code.as_bytes());
     assert_ne!(&bytes[..], b"000000");
+}
+
+// ---------------------------------------------------------------------------
+// format_copy_toast — post-copy toast body projection.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_copy_toast_returns_plain_body_when_clipboard_clear_disabled() {
+    let tmp = secure_tempdir();
+    let (vault, _store) = create_plaintext(&tmp.path().join("plain.bin"));
+    assert!(!vault.settings().clipboard_clear_enabled());
+
+    assert_eq!(format_copy_toast(vault.settings()), "Code copied");
+}
+
+#[test]
+fn format_copy_toast_includes_default_secs_when_enabled() {
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    vault.set_clipboard_clear_enabled(true);
+    vault.save(&store).unwrap();
+    // DESIGN §5 default is 20s.
+    assert_eq!(vault.settings().clipboard_clear_secs(), 20);
+
+    assert_eq!(
+        format_copy_toast(vault.settings()),
+        "Code copied — clears in 20s"
+    );
+}
+
+#[test]
+fn format_copy_toast_reflects_custom_secs_when_enabled() {
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    enable_clipboard_clear(&mut vault, &store, 60);
+
+    assert_eq!(
+        format_copy_toast(vault.settings()),
+        "Code copied — clears in 60s"
+    );
+}
+
+#[test]
+fn format_copy_toast_handles_min_boundary_secs() {
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    // DESIGN §5 inclusive lower bound for clipboard_clear_secs is 5.
+    enable_clipboard_clear(&mut vault, &store, 5);
+
+    assert_eq!(
+        format_copy_toast(vault.settings()),
+        "Code copied — clears in 5s"
+    );
+}
+
+#[test]
+fn format_copy_toast_handles_max_boundary_secs() {
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    // DESIGN §5 inclusive upper bound for clipboard_clear_secs is 600.
+    enable_clipboard_clear(&mut vault, &store, 600);
+
+    assert_eq!(
+        format_copy_toast(vault.settings()),
+        "Code copied — clears in 600s"
+    );
+}
+
+#[test]
+fn format_copy_toast_ignores_secs_when_disabled() {
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    // Stage a non-default secs but leave the toggle off; the formatter
+    // must not leak the configured deadline when the policy isn't armed.
+    vault
+        .set_clipboard_clear_secs(45)
+        .expect("clipboard_clear_secs within bounds");
+    vault.save(&store).unwrap();
+    assert!(!vault.settings().clipboard_clear_enabled());
+
+    assert_eq!(format_copy_toast(vault.settings()), "Code copied");
 }

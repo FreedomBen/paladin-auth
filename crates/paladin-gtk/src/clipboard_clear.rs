@@ -198,3 +198,28 @@ pub fn prepare_copy_bytes<S: BuildHasher>(
         }
     }
 }
+
+/// Format the toast body raised on the `adw::ToastOverlay` after a
+/// successful row-level copy.
+///
+/// The toast confirms the write actually happened (the only feedback
+/// channel for a fast clipboard interaction) and, when the user has
+/// opted into clipboard auto-clear via
+/// [`VaultSettings::clipboard_clear_enabled`], folds the configured
+/// clear deadline into the same message so the security-relevant
+/// "the code is on the clipboard *and* it will clear in N seconds"
+/// state is visible in one surface.
+///
+/// Pure-logic so the strings are exercised by
+/// `tests/clipboard_clear_logic.rs` without a display server.
+#[must_use]
+pub fn format_copy_toast(settings: &VaultSettings) -> String {
+    if settings.clipboard_clear_enabled() {
+        format!(
+            "Code copied — clears in {}s",
+            settings.clipboard_clear_secs()
+        )
+    } else {
+        "Code copied".to_string()
+    }
+}

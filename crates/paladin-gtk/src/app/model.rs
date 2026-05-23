@@ -110,7 +110,8 @@ use crate::auto_lock::{
     IdleSource, LockedTransition, UnlockedDiscards,
 };
 use crate::clipboard_clear::{
-    evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
+    evaluate_wake, format_copy_toast, prepare_copy_bytes, schedule_copy, PendingClipboardClear,
+    WakeDecision,
 };
 use crate::effect_ownership::{
     CompleteOutcome, EffectKind, EffectOwnership, EffectStart, LockDecision, QuitDecision,
@@ -2024,11 +2025,13 @@ impl SimpleComponent for AppModel {
                     {
                         let clipboard = WidgetExt::display(&self.content).clipboard();
                         crate::clipboard::write_payload(&clipboard, &bytes);
+                        let toast_body = format_copy_toast(vault.settings());
                         if let Some(pending) =
                             schedule_copy(Instant::now(), vault.settings(), bytes)
                         {
                             self.pending_clipboard = Some(pending);
                         }
+                        self.toast_overlay.add_toast(adw::Toast::new(&toast_body));
                     }
                 }
             }
