@@ -580,29 +580,41 @@ fn project_row_collapses_empty_issuer_to_bare_label() {
 // same scaffold shape: `<Name>Init` / `<Name>Msg` / `<Name>Output`
 // plus a `relm4::SimpleComponent` impl.
 //
-// Unlike the other ten widget-bearing dialog controllers, Row is
-// per-list-item: `AccountListComponent` currently binds the row's
-// display children through a `SignalListItemFactory` against the
-// pure-logic helpers in `account_row.rs`, and its
-// `AccountListOutput::OpenRenameDialog(AccountId)` /
-// `AccountListOutput::OpenRemoveDialog(AccountId)` variants already
-// forward the row's kebab dispatches up to `AppModel`. The scaffold
-// here adds the parallel `AccountRowComponent` controller surface
-// (`AccountRowInit { account_id }`, `AccountRowOutput` covering the
-// same Rename / Remove forwards) so a follow-up migration from
-// `SignalListItemFactory` to a `relm4::factory::FactoryVecDeque<
-// AccountRowComponent>` has a stable public API to land against.
-// This commit only adds the controller surface — `AccountListComponent`
-// keeps its existing factory-bound rendering until that migration
-// lands.
+// `AccountRowComponent` is the one exception: it is a
+// `relm4::factory::FactoryComponent` (not a `SimpleComponent`) so
+// `AccountListComponent` can drive a
+// `FactoryVecDeque<AccountRowComponent>` over a `gtk::ListBox`. Its
+// public scaffold is therefore checked through `FactoryComponent`
+// rather than `SimpleComponent`.
 
 #[test]
 fn account_row_init_round_trips_account_id() {
+    use paladin_core::AccountKindSummary;
+    use paladin_gtk::account_list::hidden_row_display;
+    use paladin_gtk::account_list::AccountRowModel;
     use paladin_gtk::account_row::AccountRowInit;
 
     let id = AccountId::new();
-    let init = AccountRowInit { account_id: id };
+    let model = AccountRowModel {
+        id,
+        display_label: "issuer:label".to_string(),
+        kind: AccountKindSummary::Totp,
+        counter: None,
+        icon_hint: None,
+    };
+    let init = AccountRowInit {
+        account_id: id,
+        initial_display: hidden_row_display(&model),
+        initial_icon_hint: None,
+        initial_busy: false,
+    };
     assert_eq!(init.account_id, id);
+    assert!(matches!(
+        init.initial_display.kind,
+        AccountKindSummary::Totp
+    ));
+    assert!(!init.initial_busy);
+    assert!(init.initial_icon_hint.is_none());
 }
 
 #[test]
@@ -613,9 +625,9 @@ fn account_row_output_request_rename_carries_account_id() {
     let output = AccountRowOutput::RequestRename(id);
     match output {
         AccountRowOutput::RequestRename(carried) => assert_eq!(carried, id),
-        AccountRowOutput::RequestRemove(other) => {
-            panic!("expected RequestRename({id:?}), got RequestRemove({other:?})")
-        }
+        AccountRowOutput::RequestRemove(_)
+        | AccountRowOutput::RequestCopy(_)
+        | AccountRowOutput::RequestAdvance(_) => panic!("expected RequestRename({id:?})"),
     }
 }
 
@@ -627,27 +639,53 @@ fn account_row_output_request_remove_carries_account_id() {
     let output = AccountRowOutput::RequestRemove(id);
     match output {
         AccountRowOutput::RequestRemove(carried) => assert_eq!(carried, id),
-        AccountRowOutput::RequestRename(other) => {
-            panic!("expected RequestRemove({id:?}), got RequestRename({other:?})")
-        }
+        AccountRowOutput::RequestRename(_)
+        | AccountRowOutput::RequestCopy(_)
+        | AccountRowOutput::RequestAdvance(_) => panic!("expected RequestRemove({id:?})"),
+    }
+}
+
+#[test]
+fn account_row_output_request_copy_carries_account_id() {
+    use paladin_gtk::account_row::AccountRowOutput;
+
+    let id = AccountId::new();
+    let output = AccountRowOutput::RequestCopy(id);
+    match output {
+        AccountRowOutput::RequestCopy(carried) => assert_eq!(carried, id),
+        AccountRowOutput::RequestRename(_)
+        | AccountRowOutput::RequestRemove(_)
+        | AccountRowOutput::RequestAdvance(_) => panic!("expected RequestCopy({id:?})"),
+    }
+}
+
+#[test]
+fn account_row_output_request_advance_carries_account_id() {
+    use paladin_gtk::account_row::AccountRowOutput;
+
+    let id = AccountId::new();
+    let output = AccountRowOutput::RequestAdvance(id);
+    match output {
+        AccountRowOutput::RequestAdvance(carried) => assert_eq!(carried, id),
+        AccountRowOutput::RequestRename(_)
+        | AccountRowOutput::RequestRemove(_)
+        | AccountRowOutput::RequestCopy(_) => panic!("expected RequestAdvance({id:?})"),
     }
 }
 
 #[test]
 fn account_row_component_input_and_output_match_dispatch_edges() {
     use paladin_gtk::account_row::{AccountRowComponent, AccountRowMsg, AccountRowOutput};
-    use relm4::SimpleComponent;
+    use relm4::factory::FactoryComponent;
 
     // Compile-only assertion that ties `AccountRowComponent` to its
-    // associated `Input` / `Output` types so a future migration of
-    // `AccountListComponent` from `SignalListItemFactory` to
-    // `relm4::factory::FactoryVecDeque<AccountRowComponent>` stays
-    // in lock-step with the row controller surface. If a future
-    // refactor renames `AccountRowMsg` or `AccountRowOutput`, this
-    // test fails at compile time before the integration build does.
+    // associated `Input` / `Output` types as a `FactoryComponent`.
+    // If a future refactor renames `AccountRowMsg` or
+    // `AccountRowOutput`, this test fails at compile time before the
+    // integration build does.
     fn assert_types<C>()
     where
-        C: SimpleComponent<Input = AccountRowMsg, Output = AccountRowOutput>,
+        C: FactoryComponent<Input = AccountRowMsg, Output = AccountRowOutput>,
     {
     }
     assert_types::<AccountRowComponent>();
@@ -656,14 +694,10 @@ fn account_row_component_input_and_output_match_dispatch_edges() {
 // ---------------------------------------------------------------------------
 // Row widget construction lives in `paladin_gtk::account_row` per
 // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-// `AccountListComponent` ("Mount a `gtk::ListView` bound to the store
-// via a `SignalListItemFactory` whose row body is the
-// `AccountRowComponent`"). The `SignalListItemFactory` in
-// `account_list.rs` is the binding mechanism, but the row body
-// construction (the per-row `gtk::Box`, the bind walk, the icon
-// theme resolve, and the per-row `gio::SimpleActionGroup` install)
-// lives in the `AccountRowComponent` module so the row body's
-// canonical owner matches the plan. These compile-only assertions
+// `AccountListComponent`. The `AccountRowComponent`
+// `FactoryComponent::init_widgets` callback owns the per-row
+// `gtk::Box`, the bind walk, the icon theme resolve, and the per-row
+// `gio::SimpleActionGroup` install. These compile-only assertions
 // pin those four helpers to `paladin_gtk::account_row` — a silent
 // move back into `account_list.rs` surfaces as a hard-error import
 // drift rather than as an undetected re-shuffle of widget ownership.
@@ -686,8 +720,8 @@ fn bind_row_icon_is_exposed_from_account_row_module() {
 
 #[test]
 fn install_row_action_group_is_exposed_from_account_row_module() {
-    use paladin_gtk::account_list::AccountListOutput;
+    use paladin_gtk::account_row::AccountRowOutput;
 
-    let _: fn(&relm4::gtk::Box, AccountId, relm4::Sender<AccountListOutput>) =
+    let _: fn(&relm4::gtk::Box, AccountId, &relm4::Sender<AccountRowOutput>) =
         paladin_gtk::account_row::install_row_action_group;
 }

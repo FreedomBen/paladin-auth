@@ -44,8 +44,8 @@ crates/paladin-gtk/
 │   │   ├── init.rs        # InitDialog — vault creation (incl. create_force clobber confirmation)
 │   │   ├── unlock.rs      # UnlockComponent — encrypted vaults only
 │   │   ├── startup_error.rs # non-mutating startup/open error view
-│   │   ├── account_list.rs    # AccountListComponent (gtk::ListView + factory)
-│   │   ├── account_row.rs     # AccountRowComponent (label, code, gauge/next, copy, kebab → rename / remove)
+│   │   ├── account_list.rs    # AccountListComponent (gtk::ListBox + FactoryVecDeque<AccountRowComponent>)
+│   │   ├── account_row.rs     # AccountRowComponent (FactoryComponent: label, code, gauge/next, copy, kebab → rename / remove)
 │   │   ├── add_account.rs     # AddAccountComponent (manual fields + otpauth:// URI paste + paste image)
 │   │   ├── remove.rs          # RemoveDialog (confirmation gate)
 │   │   ├── rename.rs          # RenameDialog (label edit; calls Vault::rename)
@@ -175,23 +175,43 @@ inclusion.
   per §"Secret entry handling".
 - `UnlockComponent` — passphrase entry, **shown only when the vault is
   encrypted**. Skipped entirely for plaintext vaults.
-- `AccountListComponent` — `gtk::ListView` with a custom row factory bound
-  to a `gio::ListStore` of `AccountRowModel` built from
-  `paladin_core::AccountSummary` projections. Search uses a
-  `gtk::SearchEntry` hosted inside a `gtk::SearchBar` whose
-  `search-mode-enabled` is bound to the header bar's search-toggle button
-  (see "libadwaita usage" below). Filtering rebuilds the list from
-  `Vault::iter()` so it can call
-  `paladin_core::account_matches_search(&Account, query)` before projecting
-  matches to `AccountSummary`; the `gio::ListStore` never stores secret
-  fields. The entry applies the same case-insensitive substring matching as
-  §5 / §6; no Unicode normalization. Empty issuer is allowed and the colon
-  is still present in the match key; insertion order is preserved among
-  matches. After a filter rebuild, selection is computed by
-  `paladin_core::select_after_filter(prev, filtered)` (preserve prior
-  selection if still present, else first match) — parity with the TUI.
-  The CLI's `id:` prefix form is **not** honored by the GUI search
-  (parity with the TUI).
+- `AccountListComponent` — `gtk::ListBox` (inside a `gtk::ScrolledWindow`)
+  driven by `relm4::factory::FactoryVecDeque<AccountRowComponent>`. Each
+  account in `paladin_core::AccountSummary` order is one persistent
+  `AccountRowComponent` whose widgets are constructed once at factory
+  push time and reused for the lifetime of the row. There is **no**
+  `gio::ListStore` and **no** `gtk::SignalListItemFactory`: per-tick
+  updates target individual rows through `factory.send(index, …)` (or
+  `broadcast(…)` for busy-flag changes) so the row's widget tree is
+  never torn down, rebuilt, or recycled outside of an explicit
+  `Refresh`. Refreshes (add / remove / rename / search-filter rebuild)
+  clear and re-push the factory so a full row set change still goes
+  through one code path. The migration away from `gtk::ListView` +
+  `gio::ListStore` was driven by the flicker / unreliable-click
+  symptom that came out of splicing the store on every tick: each
+  splice fired `items-changed(0, N, N)` and forced `gtk::ListView` to
+  rebind every visible row through `SignalListItemFactory::connect_bind`,
+  which re-installed the row's `gio::SimpleActionGroup` mid-frame and
+  intermittently dropped pointer events.
+  Search uses a `gtk::SearchEntry` hosted inside a `gtk::SearchBar`
+  whose `search-mode-enabled` is bound to the header bar's
+  search-toggle button (see "libadwaita usage" below). Filtering
+  rebuilds the row set from `Vault::iter()` so it can call
+  `paladin_core::account_matches_search(&Account, query)` before
+  projecting matches to `AccountSummary`; the `FactoryVecDeque` never
+  holds secret fields (each `AccountRowComponent` only sees
+  `AccountRowModel` projections plus the row's currently bound
+  `RowDisplay`). The entry applies the same case-insensitive substring
+  matching as §5 / §6; no Unicode normalization. Empty issuer is
+  allowed and the colon is still present in the match key; insertion
+  order is preserved among matches. After a filter rebuild, selection
+  is computed by `paladin_core::select_after_filter(prev, filtered)`
+  (preserve prior selection if still present, else first match) —
+  parity with the TUI. Selection lives on the `gtk::ListBox` itself
+  (`selection_mode = Single`, `select_row(Some(&row))`) rather than on
+  a `gtk::SingleSelection`, because `FactoryVecDeque` does not stand
+  up a `gio::ListModel`. The CLI's `id:` prefix form is **not**
+  honored by the GUI search (parity with the TUI).
 - `AccountRowComponent` — label, code, progress (TOTP) / "next" button
   (HOTP), copy button, and a kebab `gtk::MenuButton` whose `gio::Menu`
   exposes "Rename…" (opens `RenameDialog` for that row's account) and
@@ -207,6 +227,19 @@ inclusion.
   `Code.counter_used` that produced the visible code until expiry. Copying a
   hidden HOTP row is **disabled**; copying during the reveal window copies
   the visible code and does not advance again.
+  Implemented as a `relm4::factory::FactoryComponent` whose
+  `Root = gtk::ListBoxRow`. Each instance owns its widget bundle for
+  its lifetime; parent updates flow in as targeted
+  `AccountRowMsg::Rebind(RowDisplay)` / `RebindIcon(Option<String>)` /
+  `SetBusy(bool)` messages (or `FactoryVecDeque::broadcast` for
+  busy-flag changes), and user activations route out as
+  `AccountRowOutput::RequestRename / RequestRemove / RequestCopy /
+  RequestAdvance` carrying the row's `AccountId`. The
+  `AccountListComponent` `FactoryVecDeque::forward` mapper converts
+  each row output to the matching `AccountListOutput` variant
+  (`OpenRenameDialog`, `OpenRemoveDialog`, `CopyCode`, `AdvanceHotp`),
+  so `AppModel` sees the same parent-output surface as before the
+  migration.
 - `AddAccountComponent` — three input paths in a single dialog:
   manual fields, paste of an `otpauth://` URI, and "scan from clipboard
   image" (an `AdwViewStack` controlled by an `AdwViewSwitcher` selects the
@@ -1199,10 +1232,9 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   unlocked `AppModel` builds a `Vec<AccountRowModel>` via
   `account_list::row_models_from_vault` (an `AccountSummary`-driven
   projection — no secret bytes leave `paladin_core`) and launches an
-  `AccountListComponent` controller; the component binds a
-  `gio::ListStore` of `BoxedAnyObject<AccountRowModel>` to a
-  `gtk::ListView` through a `SignalListItemFactory` that reads only
-  `AccountRowModel::display_label`. Under `--exit-after-startup`,
+  `AccountListComponent` controller; the component pushes each
+  `AccountRowModel` into a `FactoryVecDeque<AccountRowComponent>`
+  whose parent widget is a `gtk::ListBox`. Under `--exit-after-startup`,
   `AppModel` emits a second stdout marker —
   `paladin-gtk: account_list_rows=<labels>` produced by
   `account_list::format_rendered_marker` — so the smoke test
@@ -1364,18 +1396,16 @@ sign-off.
   All twelve controllers mount with the same `<Name>Init` /
   `<Name>Msg` / `<Name>Output` plus `relm4::SimpleComponent` scaffold
   shape, with TDD coverage in the per-component
-  `tests/<name>_logic.rs`. Row sits inside `AccountListComponent`'s
-  `SignalListItemFactory` binding today rather than as a separate
-  `Controller<AccountRowComponent>` on `AppModel`; the parallel
-  `AccountRowComponent` controller surface is in place so a follow-
-  up migration from `SignalListItemFactory` to
-  `relm4::factory::FactoryVecDeque<AccountRowComponent>` has a
-  stable public API to land against. The follow-up commits for each
+  `tests/<name>_logic.rs`. `AccountRowComponent` is the one
+  exception: it is a `relm4::factory::FactoryComponent` (not a
+  `SimpleComponent`) so `AccountListComponent` can drive a
+  `FactoryVecDeque<AccountRowComponent>` over a `gtk::ListBox`
+  instead of a `gio::ListStore` + `SignalListItemFactory` over a
+  `gtk::ListView`. The follow-up commits for each
   controller (full passphrase entry on `InitDialog` / `UnlockDialog`,
   full form widgets on `AddAccountComponent` / `ImportDialogComponent`
   / `ExportDialogComponent` / `PassphraseDialogComponent` /
-  `SettingsComponent`, full row body migration) attach behavior on
-  top of these mounts.
+  `SettingsComponent`) attach behavior on top of these mounts.
 - [x] Global argument parser contract (`cli.rs`).
   - [x] Accept `--vault <path>` and plumb the optional override into
     `AppInit` so startup probes inspect that path instead of the default.
@@ -1545,27 +1575,27 @@ sign-off.
     error text fallback so wording matches the CLI / TUI exactly.
   - [x] Zeroize the passphrase widget buffer on submit / cancel /
     dialog close / auto-lock per §"Secret entry handling".
-- [x] `AccountListComponent` full implementation (`gtk::ListView` +
-  factory + `gio::ListStore`, search bar + entry, selection
-  management).
-  - [x] Build a `gio::ListStore<BoxedAnyObject<AccountRowModel>>`
-    seeded from `Vault::iter()` projected through
-    `paladin_core::AccountSummary` (no secret bytes leave
-    `paladin_core`).
-  - [x] Mount a `gtk::ListView` bound to the store via a
-    `SignalListItemFactory` whose row body is the
-    `AccountRowComponent` (see the row item below). The list-level
-    wiring (the `gtk::ListView`, the `SignalListItemFactory`
-    instantiation, the `gio::ListStore` splice, and the search bar)
-    stays in `account_list.rs`; the row body — the per-row
+- [x] `AccountListComponent` full implementation (`gtk::ListBox` +
+  `FactoryVecDeque<AccountRowComponent>`, search bar + entry,
+  selection management).
+  - [x] Build the row set from `Vault::iter()` projected through
+    `paladin_core::AccountSummary` into `AccountRowModel` entries —
+    no secret bytes leave `paladin_core`.
+  - [x] Mount a `gtk::ListBox` (inside a `gtk::ScrolledWindow`)
+    driven by a `relm4::factory::FactoryVecDeque<AccountRowComponent>`.
+    Each `AccountRowModel` is pushed as one persistent
+    `AccountRowComponent` whose `Root = gtk::ListBoxRow` is
+    constructed once at push time and reused for the row's lifetime.
+    The list-level wiring (the `gtk::ListBox`, the search bar, the
+    selection plumbing, and the factory's parent → row dispatch)
+    lives in `account_list.rs`; the row body — the per-row
     `gtk::Box` (`build_row_widget`), the bind walk (`bind_row`),
     the `gtk::IconTheme` resolve (`bind_row_icon`), and the per-row
     `gio::SimpleActionGroup` install (`install_row_action_group`) —
     lives in `account_row.rs` so the `AccountRowComponent` module
     is the canonical owner of row body construction. The
-    `SignalListItemFactory::connect_setup` / `connect_bind`
-    callbacks import those four helpers from
-    `paladin_gtk::account_row`; the helper ownership is pinned by
+    `FactoryComponent::init_widgets` callback drives those four
+    helpers; the helper ownership is pinned by
     `tests/account_row_logic.rs::{build_row_widget_is_exposed_from_account_row_module,
     bind_row_is_exposed_from_account_row_module,
     bind_row_icon_is_exposed_from_account_row_module,
@@ -1573,6 +1603,18 @@ sign-off.
     so a silent move back into `account_list.rs` surfaces as a
     hard-error import drift rather than as an undetected re-shuffle
     of widget ownership.
+  - [x] Per-tick TOTP refresh and busy-state changes route through
+    targeted per-row inputs (`factory.send(index, AccountRowMsg::Rebind(…))`
+    and `factory.broadcast(AccountRowMsg::SetBusy(busy))`), so the
+    row widget tree is never torn down or rebuilt by the ticker.
+    Full row-set rebuilds (Add / Remove / Rename / Import / search
+    filter changes) clear and re-push the factory through one code
+    path on the `Refresh` arm. The "stop splicing on every tick"
+    contract is pinned by
+    `tests/account_list_logic.rs::tick_routes_only_to_changed_rows`
+    so a regression to a full-list rebuild on tick surfaces as a
+    failing test rather than as a return of the flicker / dropped-
+    click bug that prompted the migration.
   - [x] Host a `gtk::SearchEntry` inside a `gtk::SearchBar` whose
     `search-mode-enabled` is bound to the header-bar search-toggle
     button.

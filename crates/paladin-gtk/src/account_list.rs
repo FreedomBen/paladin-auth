@@ -3,10 +3,10 @@
 //! `AccountListComponent` for `paladin-gtk`.
 //!
 //! Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-//! `AccountListComponent`, the unlocked view is a `gtk::ListView`
-//! with a custom row factory bound to a `gio::ListStore` of
-//! [`AccountRowModel`] entries built from
-//! `paladin_core::AccountSummary` projections (no secret bytes).
+//! `AccountListComponent`, the unlocked view is a `gtk::ListBox`
+//! driven by a `relm4::factory::FactoryVecDeque<AccountRowComponent>`,
+//! built from `paladin_core::AccountSummary` projections (no secret
+//! bytes).
 //!
 //! This module has two layers:
 //!
@@ -15,76 +15,46 @@
 //!   which the integration tests in `tests/account_list_logic.rs`
 //!   exercise without a display server.
 //! * The widget binding [`AccountListComponent`], which owns the
-//!   `gio::ListStore` plus the `gtk::SignalListItemFactory` that
-//!   maps each [`AccountRowModel`] onto a row label. The widget
-//!   layer never reaches for the live `Account` — it only reads
-//!   the already-projected [`AccountRowModel`].
+//!   `FactoryVecDeque<AccountRowComponent>` (whose parent widget is
+//!   a `gtk::ListBox`) plus the search bar / entry. Per-tick TOTP
+//!   refresh routes through `factory.send(index, …)` so the row
+//!   widget tree is never torn down or rebuilt mid-frame; full
+//!   refreshes (add / remove / rename / search) clear and re-push
+//!   the factory through one code path on `AccountListMsg::Refresh`.
 
-use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::rc::Rc;
 
+use relm4::factory::FactoryVecDeque;
 use relm4::gtk;
-use relm4::gtk::gio;
-use relm4::gtk::glib;
 use relm4::gtk::prelude::*;
 use relm4::prelude::*;
 
 use paladin_core::{select_after_filter, AccountId, AccountKindSummary, Vault};
 
 use crate::account_row::{
-    apply_busy_mask, bind_row, bind_row_icon, build_row_widget, copy_enabled,
-    install_row_action_group, kebab_enabled, kebab_visible, next_button_enabled,
-    next_button_visible, progress_visible, summary_display_label, CodeDisplay, CounterText,
-    RowDisplay,
+    apply_busy_mask, copy_enabled, kebab_enabled, kebab_visible, next_button_enabled,
+    next_button_visible, progress_visible, summary_display_label, AccountRowComponent,
+    AccountRowInit, AccountRowMsg, AccountRowOutput, CodeDisplay, CounterText, RowDisplay,
 };
 use crate::search::filtered_account_ids;
 
-/// Shared per-row live [`RowDisplay`] cache.
+/// Resolve the per-row [`RowDisplay`] the row factory should bind
+/// for a given [`AccountRowModel`].
 ///
-/// The factory's `connect_bind` callback consults this cache via
-/// [`bind_display_for_row`] before falling back to
-/// [`hidden_row_display`]; per-tick refresh (and follow-up HOTP
-/// reveal commits) updates entries here and then forces a rebind via
-/// `gio::ListStore::splice` so the factory re-projects every row.
-///
-/// `Rc<RefCell<…>>` because the cache is shared between the
-/// [`AccountListComponent`] state (which writes entries on
-/// [`AccountListMsg::Tick`]) and the row factory closure (which
-/// reads entries on rebind). The map is single-threaded — the GTK
-/// main loop is the only writer.
-pub type LiveDisplayCache = Rc<RefCell<HashMap<AccountId, RowDisplay>>>;
-
-/// Shared per-list "is the parent `AppModel` in `UnlockedBusy`?" flag.
-///
-/// `AppModel` dispatches [`AccountListMsg::SetBusy`] when it enters /
-/// leaves `AppState::UnlockedBusy`; the component stores the latest
-/// value through this `Cell` and the row factory closure reads it on
-/// every bind so [`bind_display_for_row`] can clamp the mutating-row
-/// affordances via [`apply_busy_mask`] per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
-///
-/// `Rc<Cell<bool>>` because the flag is shared between the
-/// [`AccountListComponent`] state (which writes on
-/// [`AccountListMsg::SetBusy`]) and the row factory closure (which
-/// reads on rebind). Single-threaded — the GTK main loop is the
-/// only writer.
-pub type BusyFlag = Rc<Cell<bool>>;
-
-/// Resolve the per-row [`RowDisplay`] the factory should bind for a
-/// given [`AccountRowModel`].
-///
-/// Routes through the cache's [`HashMap::get`] first so the per-tick
-/// refresh path can publish a live visible code without rebuilding
-/// the [`AccountRowModel`] entries in the `gio::ListStore`. When no
-/// cache entry is present (the initial mount before the first tick,
-/// the brief window between [`AccountListMsg::Refresh`] and the next
-/// tick, or any HOTP row outside its reveal window), falls back to
+/// Routes through the live-display cache first so per-tick TOTP /
+/// HOTP-reveal updates pick up the most recent visible code without
+/// re-deriving the projection from the vault. When the cache misses
+/// (the initial mount before the first tick, the brief window
+/// between [`AccountListMsg::Refresh`] and the next tick, or any
+/// HOTP row outside its reveal window), falls back to
 /// [`hidden_row_display`].
 ///
 /// The helper is pure logic so the cache-then-hidden contract is
 /// pinned by `tests/account_list_logic.rs` without spinning up GTK
-/// or libadwaita.
+/// or libadwaita. The widget layer uses it to compute the
+/// `initial_display` it hands to each new
+/// [`crate::account_row::AccountRowComponent`] on
+/// [`AccountListMsg::Refresh`].
 #[must_use]
 pub fn bind_display_for_row(
     live: Option<&RowDisplay>,
@@ -139,73 +109,17 @@ pub const ACCOUNT_LIST_RENDERED_MARKER_PREFIX: &str = "paladin-gtk: account_list
 pub const ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX: &str =
     "paladin-gtk: account_list_widget_states=";
 
-/// Name of the per-row [`gio::SimpleActionGroup`] installed on each
-/// row container.
-///
-/// Must match the prefix used by [`build_kebab_menu_model`] for the
-/// `row.rename` / `row.remove` menu targets — otherwise the kebab
-/// items dispatch into the void at activation time. Pinned by
-/// `tests/account_list_logic.rs` so a future rename forces the
-/// action-group install site and the menu-target string into
-/// lockstep.
-pub const ROW_ACTION_GROUP_NAME: &str = "row";
-
-/// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the
-/// `RenameDialog` for the row's account.
-///
-/// Dispatch through [`dispatch_row_action`] routes this to
-/// [`AccountListOutput::OpenRenameDialog`] carrying the row's
-/// [`AccountId`].
-pub const ROW_RENAME_ACTION_NAME: &str = "rename";
-
-/// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the
-/// `RemoveDialog` for the row's account.
-///
-/// Dispatch through [`dispatch_row_action`] routes this to
-/// [`AccountListOutput::OpenRemoveDialog`] carrying the row's
-/// [`AccountId`].
-pub const ROW_REMOVE_ACTION_NAME: &str = "remove";
-
-/// Action name within [`ROW_ACTION_GROUP_NAME`] activated by the
-/// HOTP row's "next" button.
-///
-/// Dispatch through [`dispatch_row_action`] routes this to
-/// [`AccountListOutput::AdvanceHotp`] carrying the row's
-/// [`AccountId`]. `AppModel` consumes the output to spawn the
-/// `Vault::hotp_peek` / `Vault::hotp_advance` worker per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-/// `AccountRowComponent`. TOTP rows hide the button via
-/// [`crate::account_row::next_button_visible`] so the action never
-/// fires for them, but the dispatch table is shared with the kebab
-/// menu so the name is pinned here for parity.
-pub const ROW_NEXT_ACTION_NAME: &str = "next";
-
-/// Action name within [`ROW_ACTION_GROUP_NAME`] activated by the
-/// per-row copy `gtk::Button`.
-///
-/// Dispatch through [`dispatch_row_action`] routes this to
-/// [`AccountListOutput::CopyCode`] carrying the row's [`AccountId`].
-/// `AppModel` consumes the output to write the visible code into
-/// the live `gdk::Clipboard` and (when the user has opted in)
-/// schedules the clipboard auto-clear policy via
-/// [`crate::clipboard_clear::schedule_copy`] per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-/// `AccountRowComponent`. Hidden HOTP rows disable the button
-/// through [`crate::account_row::copy_enabled`], so the action
-/// never fires before a reveal opens.
-pub const ROW_COPY_ACTION_NAME: &str = "copy";
-
 /// Output forwarded from [`AccountListComponent`] up to `AppModel`
 /// in response to a row-level user intent or a search-query change.
 ///
-/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-/// `AccountRowComponent`, the row kebab menu carries Rename… /
-/// Remove… entries whose action targets dispatch through the
-/// per-row [`gio::SimpleActionGroup`] installed by [`bind_row`]. The
-/// activation callback maps the fired action name onto one of these
-/// variants via [`dispatch_row_action`] and forwards it through
-/// `relm4::Sender::output` so `AppModel` can open the corresponding
-/// dialog widget against the row's [`AccountId`].
+/// Per-row activations (Rename… / Remove… kebab entries, copy
+/// button, HOTP "next" button) originate as
+/// [`AccountRowOutput`] inside each row's
+/// [`crate::account_row::AccountRowComponent`]; the parent
+/// [`FactoryVecDeque::forward`] mapper installed by
+/// [`AccountListComponent::init`] converts each
+/// [`AccountRowOutput`] variant to the matching [`AccountListOutput`]
+/// variant below before forwarding to `AppModel`.
 ///
 /// The [`QueryChanged`](AccountListOutput::QueryChanged) variant
 /// is emitted whenever the embedded `gtk::SearchEntry`'s
@@ -253,24 +167,59 @@ pub enum AccountListOutput {
     QueryChanged(String),
 }
 
-/// Dispatch table mapping a row-level action name onto the typed
-/// [`AccountListOutput`] forwarded to `AppModel`.
+/// Compute the per-row dispatch plan for a single
+/// [`AccountListMsg::Tick`] payload.
 ///
-/// Returns [`Some`] for [`ROW_RENAME_ACTION_NAME`],
-/// [`ROW_REMOVE_ACTION_NAME`], [`ROW_NEXT_ACTION_NAME`], and
-/// [`ROW_COPY_ACTION_NAME`]; [`None`] for every other input — the
-/// widget layer installs exactly those four actions on each row, so
-/// an unrecognized name signals a wiring drift (typo in the action
-/// group, stale kebab menu target, …) and stays a silent no-op
-/// rather than crashing the row.
+/// Returns one `(factory_index, RowDisplay)` entry per
+/// `(AccountId, RowDisplay)` in `displays` whose id appears in
+/// `row_indices`. Rows whose id is **not** in `displays` are not in
+/// the output: per the migration contract, the per-tick refresh path
+/// must dispatch only to rows whose code changed, not rebuild every
+/// visible row. Rows whose id has been removed from the visible row
+/// set (e.g. a tick that races a search-filter refresh) are dropped
+/// silently — the cache update still happens in the caller but the
+/// stale id has no factory entry to address.
+///
+/// Pure logic so `tests/account_list_logic.rs::tick_routes_only_to_changed_rows`
+/// can pin the contract without spinning up GTK; the
+/// [`AccountListComponent::update`] handler iterates the plan and
+/// forwards each entry through [`FactoryVecDeque::send`].
 #[must_use]
-pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountListOutput> {
-    match name {
-        ROW_RENAME_ACTION_NAME => Some(AccountListOutput::OpenRenameDialog(id)),
-        ROW_REMOVE_ACTION_NAME => Some(AccountListOutput::OpenRemoveDialog(id)),
-        ROW_NEXT_ACTION_NAME => Some(AccountListOutput::AdvanceHotp(id)),
-        ROW_COPY_ACTION_NAME => Some(AccountListOutput::CopyCode(id)),
-        _ => None,
+pub fn tick_dispatch_plan<S: std::hash::BuildHasher>(
+    displays: &[(AccountId, RowDisplay)],
+    row_indices: &HashMap<AccountId, usize, S>,
+) -> Vec<(usize, RowDisplay)> {
+    displays
+        .iter()
+        .filter_map(|(id, display)| row_indices.get(id).map(|&idx| (idx, display.clone())))
+        .collect()
+}
+
+/// Map an [`AccountRowOutput`] emitted by an
+/// [`crate::account_row::AccountRowComponent`] onto the parent
+/// [`AccountListOutput`] variant forwarded to `AppModel`.
+///
+/// Centralized so the [`FactoryVecDeque::forward`] mapper in
+/// [`AccountListComponent::init`] is a one-liner and the per-row →
+/// per-list dispatch table stays in pure logic. `tests/account_list_logic.rs`
+/// pins the four-arm coverage so a stale row output (or a missing
+/// list output variant) surfaces as a failing test rather than as a
+/// silent no-op kebab item.
+///
+/// Takes [`AccountRowOutput`] by value because relm4's
+/// `FactoryVecDeque::forward(sender, f)` requires `F: Fn(C::Output)
+/// -> Msg`, i.e. an owned argument. The body only reads the inner
+/// `AccountId` (which is `Copy`), so clippy's
+/// `needless_pass_by_value` lint is muted at the function level
+/// rather than at every call site.
+#[must_use]
+#[allow(clippy::needless_pass_by_value)]
+pub fn forward_row_output(output: AccountRowOutput) -> AccountListOutput {
+    match output {
+        AccountRowOutput::RequestRename(id) => AccountListOutput::OpenRenameDialog(id),
+        AccountRowOutput::RequestRemove(id) => AccountListOutput::OpenRemoveDialog(id),
+        AccountRowOutput::RequestCopy(id) => AccountListOutput::CopyCode(id),
+        AccountRowOutput::RequestAdvance(id) => AccountListOutput::AdvanceHotp(id),
     }
 }
 
@@ -531,37 +480,38 @@ pub struct AccountListInit {
 
 /// Widget-bearing list view for the unlocked vault state.
 ///
-/// Owns a `gio::ListStore` of `glib::BoxedAnyObject` items wrapping
-/// [`AccountRowModel`] entries and a `gtk::SignalListItemFactory`
-/// that maps each model onto a per-row widget bundle (display
-/// label, HOTP counter, code label) driven by [`hidden_row_display`].
-/// The factory does not touch the live `Account` or `Code` — it
-/// only reads the already-projected [`AccountRowModel`], so the
-/// row binding is secret-free.
+/// Owns a [`FactoryVecDeque<AccountRowComponent>`] whose parent
+/// widget is a `gtk::ListBox` (mounted inside a
+/// `gtk::ScrolledWindow`). Each [`AccountRowModel`] is pushed as one
+/// persistent `AccountRowComponent` whose widget tree is constructed
+/// once at push time and reused for the row's lifetime. The
+/// migration from the previous `gtk::ListView` +
+/// `gio::ListStore<BoxedAnyObject>` + `gtk::SignalListItemFactory`
+/// setup was driven by the flicker / dropped-click regression that
+/// came out of splicing the store on every tick: each splice fired
+/// `items-changed(0, N, N)` and rebound every visible row mid-frame.
 ///
 /// The component additionally owns the `gtk::SearchBar` hosting a
-/// `gtk::SearchEntry` and the `gtk::SingleSelection` driving row
-/// selection. `current_query` mirrors the entry's text so the parent
-/// can re-feed it via [`AccountListInit::initial_query`] on a
-/// rebuild; `current_selection` mirrors the visible row id for the
-/// same reason. The widget references are cached on `self` so the
-/// [`SimpleComponent::update`] handler can drive
-/// [`AccountListMsg::Refresh`] (splice the store + apply selection)
-/// and [`AccountListMsg::SetSearchModeEnabled`] (toggle the
-/// `search-mode-enabled` property) imperatively without round-tripping
-/// through the relm4 `view!` macro on every refresh.
+/// `gtk::SearchEntry`. Selection lives on the `gtk::ListBox` itself
+/// (`selection_mode = Single`, `select_row(Some(&row))`) rather than
+/// on a `gtk::SingleSelection`, because `FactoryVecDeque` doesn't
+/// stand up a `gio::ListModel`. `current_query` mirrors the entry's
+/// text so the parent can re-feed it via
+/// [`AccountListInit::initial_query`] on a rebuild;
+/// `current_selection` mirrors the visible row id for the same
+/// reason.
 pub struct AccountListComponent {
-    /// Backing `gio::ListStore` of `BoxedAnyObject<AccountRowModel>`.
-    /// Spliced inside [`AccountListMsg::Refresh`] so add / remove /
-    /// rename / settings refresh and search-filter refresh share one
-    /// code path.
-    model: gio::ListStore,
-    /// `gtk::SingleSelection` wrapping [`Self::model`]. Selection is
-    /// reapplied through [`apply_selection`] after every
-    /// [`AccountListMsg::Refresh`] so the user's cursor follows the
-    /// CLI / TUI selection-preservation rule
-    /// ([`selected_row_after_refresh`]).
-    selection: gtk::SingleSelection,
+    /// Factory backing the `gtk::ListBox`. Per-tick TOTP updates
+    /// route through `factory.send(index, AccountRowMsg::Rebind(…))`
+    /// so the row widget tree is never torn down or rebuilt outside
+    /// of an explicit [`AccountListMsg::Refresh`].
+    factory: FactoryVecDeque<AccountRowComponent>,
+    /// `AccountId` → factory index lookup, rebuilt on every
+    /// [`AccountListMsg::Refresh`]. Used by
+    /// [`AccountListMsg::Tick`] to route a per-row
+    /// [`AccountRowMsg::Rebind`] to the correct row without
+    /// iterating the factory.
+    row_indices: HashMap<AccountId, usize>,
     /// `gtk::SearchBar` whose `search-mode-enabled` property is
     /// toggled by [`AccountListMsg::SetSearchModeEnabled`]. The
     /// header-bar search-toggle button (wired in `app/model.rs`)
@@ -569,10 +519,7 @@ pub struct AccountListComponent {
     /// lockstep with the toggle's `active` state.
     search_bar: gtk::SearchBar,
     /// `gtk::SearchEntry` nested inside [`Self::search_bar`]. Its
-    /// `search-changed` signal fires [`AccountListMsg::SetQuery`],
-    /// which the [`SimpleComponent::update`] handler mirrors into
-    /// [`Self::current_query`] and bubbles up as
-    /// [`AccountListOutput::QueryChanged`].
+    /// `search-changed` signal fires [`AccountListMsg::SetQuery`].
     #[allow(dead_code)]
     search_entry: gtk::SearchEntry,
     /// Last query the user typed into [`Self::search_entry`].
@@ -584,27 +531,26 @@ pub struct AccountListComponent {
     /// it back through [`AccountListInit::initial_selection`].
     current_selection: Option<AccountId>,
     /// Most recent row set installed by
-    /// [`AccountListMsg::Refresh`]. Kept on `self` so
-    /// [`AccountListMsg::Tick`] can splice the same rows back into
-    /// [`Self::model`] (which forces the factory to rebind through
-    /// the freshly updated [`Self::live_displays`] cache) without
-    /// asking `AppModel` for a fresh projection.
+    /// [`AccountListMsg::Refresh`]. Kept on `self` so the cache
+    /// pruning on the next refresh can run without re-asking
+    /// `AppModel` for a fresh projection.
     current_rows: Vec<AccountRowModel>,
-    /// Shared cache of live per-row [`RowDisplay`] projections.
-    /// The factory's `connect_bind` callback (in [`build_row_factory`])
-    /// reads through this cache via [`bind_display_for_row`] before
-    /// falling back to [`hidden_row_display`]. The per-tick refresh
-    /// path mutates the cache and then triggers a rebind by
-    /// re-splicing [`Self::current_rows`] into [`Self::model`].
-    live_displays: LiveDisplayCache,
-    /// Shared "is `AppModel` in `UnlockedBusy`?" flag the factory's
-    /// `connect_bind` callback reads through
-    /// [`bind_display_for_row`] so the row's mutating-row affordances
-    /// (copy, "next", kebab) dim while a vault-touching worker is in
-    /// flight per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
-    /// ownership". `AppModel` flips this through
-    /// [`AccountListMsg::SetBusy`].
-    busy_flag: BusyFlag,
+    /// Per-row live [`RowDisplay`] cache. Updated on every
+    /// [`AccountListMsg::Tick`] entry so the next
+    /// [`AccountListMsg::Refresh`] can seed each newly pushed row's
+    /// `initial_display` from the most recently observed visible
+    /// code. The cache stores the *intrinsic* projection (no busy
+    /// mask applied); the row applies the mask on top.
+    live_displays: HashMap<AccountId, RowDisplay>,
+    /// Most recent `AppState::is_busy()` value latched via
+    /// [`AccountListMsg::SetBusy`]. The component fans the value out
+    /// to every row through [`FactoryVecDeque::broadcast`] so each
+    /// `AccountRowComponent` applies the busy mask locally per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// ownership". Kept on `self` so subsequent
+    /// [`AccountListMsg::Refresh`] can seed new rows' `initial_busy`
+    /// without re-asking `AppModel`.
+    busy: bool,
 }
 
 /// Messages handled by [`AccountListComponent`].
@@ -615,8 +561,8 @@ pub struct AccountListComponent {
 ///   [`AccountListOutput::QueryChanged`] so `AppModel` recomputes
 ///   the filtered row set against the live `Vault`.
 /// * [`Refresh`](AccountListMsg::Refresh): sent by `AppModel` after
-///   a vault mutation or a search-filter recomputation. Splices the
-///   `gio::ListStore` with the new row set and reapplies the
+///   a vault mutation or a search-filter recomputation. Clears and
+///   re-pushes the factory with the new row set and reapplies the
 ///   selection so the visible state matches the just-committed
 ///   `Vault`.
 /// * [`SetSearchModeEnabled`](AccountListMsg::SetSearchModeEnabled):
@@ -634,8 +580,8 @@ pub enum AccountListMsg {
         /// Rows to render in vault insertion order. Empty when the
         /// vault has no matching accounts.
         rows: Vec<AccountRowModel>,
-        /// Selection to install on the `gtk::SingleSelection`.
-        /// `None` clears the selection.
+        /// Selection to install on the `gtk::ListBox`. `None` clears
+        /// the selection.
         selection: Option<AccountId>,
     },
     /// Show / hide the `gtk::SearchBar`. Mirrors the header-bar
@@ -647,26 +593,23 @@ pub enum AccountListMsg {
     /// projects the live `(Vault, Store)` pair through
     /// [`crate::ticker::tick`] and forwards the resulting
     /// `Vec<(AccountId, RowDisplay)>` here. The handler updates
-    /// the shared [`AccountListComponent::live_displays`] cache and
-    /// re-splices [`AccountListComponent::current_rows`] back into
-    /// [`AccountListComponent::model`] so the factory rebinds every
-    /// row through the freshly cached displays. Empty payload is a
-    /// benign no-op (e.g. an HOTP-only vault — no TOTP refresh is
-    /// needed).
+    /// [`AccountListComponent::live_displays`] and sends one
+    /// targeted [`AccountRowMsg::Rebind`] per changed row through
+    /// [`FactoryVecDeque::send`]; rows whose code did not change in
+    /// this tick are not contacted, so the widget tree stays
+    /// untouched. Empty payload is a benign no-op (e.g. an
+    /// HOTP-only vault — no TOTP refresh is needed).
     Tick(Vec<(AccountId, RowDisplay)>),
-    /// Latch the parent `AppModel`'s `AppState::is_busy()` state so
-    /// the row factory can dim copy / "next" / kebab while a
-    /// vault-touching worker is in flight per
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    /// Latch the parent `AppModel`'s `AppState::is_busy()` state and
+    /// broadcast it to every row so `AccountRowComponent::SetBusy`
+    /// dims copy / "next" / kebab while a vault-touching worker is
+    /// in flight per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight
+    /// effect ownership".
     ///
     /// `AppModel` sends `SetBusy(true)` on entry into
     /// `UnlockedBusy` and `SetBusy(false)` on the worker return /
-    /// `Locked` / `StartupError` transitions. Re-splicing the row
-    /// store after the flag flips forces the factory to rebind every
-    /// visible row through [`bind_display_for_row`], which applies
-    /// the busy mask via
-    /// [`crate::account_row::apply_busy_mask`]. Idempotent — sending
-    /// the same value twice is a benign no-op (no splice fires).
+    /// `Locked` / `StartupError` transitions. Idempotent — sending
+    /// the same value twice is a benign no-op (no broadcast fires).
     SetBusy(bool),
 }
 
@@ -689,13 +632,7 @@ impl SimpleComponent for AccountListComponent {
             gtk::ScrolledWindow {
                 set_hexpand: true,
                 set_vexpand: true,
-
-                #[wrap(Some)]
-                set_child = &gtk::ListView {
-                    set_model: Some(&selection),
-                    set_factory: Some(&factory),
-                    add_css_class: "navigation-sidebar",
-                },
+                set_child: Some(factory_widget),
             },
         }
     }
@@ -705,21 +642,30 @@ impl SimpleComponent for AccountListComponent {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = gio::ListStore::new::<glib::BoxedAnyObject>();
-        for row in &init.rows {
-            model.append(&glib::BoxedAnyObject::new(row.clone()));
+        let list_box = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::Single)
+            .build();
+        list_box.add_css_class("navigation-sidebar");
+
+        let mut factory = FactoryVecDeque::<AccountRowComponent>::builder()
+            .launch(list_box)
+            .forward(sender.output_sender(), forward_row_output);
+
+        let mut row_indices: HashMap<AccountId, usize> = HashMap::new();
+        {
+            let mut guard = factory.guard();
+            for (idx, row) in init.rows.iter().enumerate() {
+                guard.push_back(AccountRowInit {
+                    account_id: row.id,
+                    initial_display: hidden_row_display(row),
+                    initial_icon_hint: row.icon_hint.clone(),
+                    initial_busy: false,
+                });
+                row_indices.insert(row.id, idx);
+            }
         }
 
-        let selection = gtk::SingleSelection::new(Some(model.clone()));
-        apply_selection(&selection, &init.rows, init.initial_selection);
-
-        let live_displays: LiveDisplayCache = Rc::new(RefCell::new(HashMap::new()));
-        let busy_flag: BusyFlag = Rc::new(Cell::new(false));
-        let factory = build_row_factory(
-            sender.output_sender().clone(),
-            Rc::clone(&live_displays),
-            Rc::clone(&busy_flag),
-        );
+        apply_list_box_selection(factory.widget(), &init.rows, init.initial_selection);
 
         let search_entry = gtk::SearchEntry::builder()
             .placeholder_text("Search accounts")
@@ -740,18 +686,19 @@ impl SimpleComponent for AccountListComponent {
         search_bar.set_child(Some(&search_entry));
         search_bar.connect_entry(&search_entry);
 
+        let factory_widget = factory.widget();
         let widgets = view_output!();
 
         let component = AccountListComponent {
-            model,
-            selection,
+            factory,
+            row_indices,
             search_bar,
             search_entry,
             current_query: init.initial_query,
             current_selection: init.initial_selection,
             current_rows: init.rows,
-            live_displays,
-            busy_flag,
+            live_displays: HashMap::new(),
+            busy: false,
         };
         ComponentParts {
             model: component,
@@ -780,9 +727,27 @@ impl SimpleComponent for AccountListComponent {
                 // the §6 / §7 preservation rule lives in pure logic.
                 let prev = selection.or(self.current_selection);
                 let effective_selection = selected_row_after_refresh(prev, &rows);
-                prune_cache_to_rows(&mut self.live_displays.borrow_mut(), &rows);
-                splice_rows(&self.model, &rows);
-                apply_selection(&self.selection, &rows, effective_selection);
+                prune_cache_to_rows(&mut self.live_displays, &rows);
+                self.row_indices.clear();
+                {
+                    let mut guard = self.factory.guard();
+                    guard.clear();
+                    for (idx, row) in rows.iter().enumerate() {
+                        let initial_display = self
+                            .live_displays
+                            .get(&row.id)
+                            .cloned()
+                            .unwrap_or_else(|| hidden_row_display(row));
+                        guard.push_back(AccountRowInit {
+                            account_id: row.id,
+                            initial_display,
+                            initial_icon_hint: row.icon_hint.clone(),
+                            initial_busy: self.busy,
+                        });
+                        self.row_indices.insert(row.id, idx);
+                    }
+                }
+                apply_list_box_selection(self.factory.widget(), &rows, effective_selection);
                 self.current_selection = effective_selection;
                 self.current_rows = rows;
             }
@@ -793,163 +758,49 @@ impl SimpleComponent for AccountListComponent {
                 if displays.is_empty() {
                     return;
                 }
-                {
-                    let mut cache = self.live_displays.borrow_mut();
-                    for (id, display) in displays {
-                        cache.insert(id, display);
-                    }
+                for (id, display) in &displays {
+                    self.live_displays.insert(*id, display.clone());
                 }
-                // Re-splice with the same rows so the factory
-                // re-binds every visible item through the freshly
-                // updated cache. Selection is preserved through the
-                // same `apply_selection` pass used on
-                // [`AccountListMsg::Refresh`].
-                splice_rows(&self.model, &self.current_rows);
-                apply_selection(&self.selection, &self.current_rows, self.current_selection);
+                for (idx, display) in tick_dispatch_plan(&displays, &self.row_indices) {
+                    self.factory.send(idx, AccountRowMsg::Rebind(display));
+                }
             }
             AccountListMsg::SetBusy(busy) => {
-                if self.busy_flag.get() == busy {
+                if self.busy == busy {
                     return;
                 }
-                self.busy_flag.set(busy);
-                // Re-splice with the same rows so the factory rebinds
-                // every visible item through `bind_display_for_row`,
-                // which now sees the updated busy flag and applies
-                // `apply_busy_mask` to the resulting `RowDisplay`.
-                // Selection survives through the same
-                // `apply_selection` pass used on `Refresh` / `Tick`.
-                splice_rows(&self.model, &self.current_rows);
-                apply_selection(&self.selection, &self.current_rows, self.current_selection);
+                self.busy = busy;
+                self.factory.broadcast(AccountRowMsg::SetBusy(busy));
             }
         }
     }
 }
 
-/// Replace the `gio::ListStore`'s contents with `rows`.
+/// Install `target` as the selected row on the `gtk::ListBox`.
 ///
-/// `gio::ListStore::splice(position, n_removals, additions)` swaps
-/// the entire model in one notify so the `gtk::ListView` emits a
-/// single `items-changed` instead of one per row. Cloning the row
-/// models into fresh `BoxedAnyObject`s keeps the store's elements
-/// owned by the store (no shared references with the parent's
-/// projection).
-fn splice_rows(store: &gio::ListStore, rows: &[AccountRowModel]) {
-    let additions: Vec<glib::Object> = rows
-        .iter()
-        .map(|row| glib::BoxedAnyObject::new(row.clone()).upcast::<glib::Object>())
-        .collect();
-    let n_removals = store.n_items();
-    store.splice(0, n_removals, &additions);
-}
-
-/// Install `target` as the [`gtk::SingleSelection`]'s selected row.
-///
-/// Resolves the row id to its position in `rows`, falling back to
-/// the sentinel `gtk::INVALID_LIST_POSITION` (no selection) when the
-/// id is `None` or not present. The widget layer never picks the
-/// selection itself; the choice flows from
-/// [`selected_row_after_refresh`] / [`AccountListInit::initial_selection`]
-/// so the filter-aware preservation rule stays in pure logic.
-fn apply_selection(
-    selection: &gtk::SingleSelection,
+/// Resolves the row id to its position in `rows`, looks up the
+/// matching `gtk::ListBoxRow` via
+/// [`gtk::ListBox::row_at_index`], and calls
+/// [`gtk::ListBox::select_row`]. Falls back to
+/// [`gtk::ListBox::unselect_all`] when `target` is `None` or not
+/// present. The widget layer never picks the selection itself; the
+/// choice flows from [`selected_row_after_refresh`] /
+/// [`AccountListInit::initial_selection`] so the filter-aware
+/// preservation rule stays in pure logic.
+fn apply_list_box_selection(
+    list_box: &gtk::ListBox,
     rows: &[AccountRowModel],
     target: Option<AccountId>,
 ) {
-    let position = target
-        .and_then(|id| rows.iter().position(|row| row.id == id))
-        .map_or(gtk::INVALID_LIST_POSITION, |idx| {
-            u32::try_from(idx).unwrap_or(gtk::INVALID_LIST_POSITION)
-        });
-    selection.set_selected(position);
-}
-
-/// Build the `gtk::SignalListItemFactory` that maps an
-/// `AccountRowModel` (wrapped in `BoxedAnyObject`) onto the per-row
-/// widget bundle (display label, HOTP counter, code label).
-///
-/// Each row's display is resolved through [`bind_display_for_row`]
-/// against the shared [`LiveDisplayCache`]: per-tick refresh updates
-/// the cache and re-splices the same rows back into the store, which
-/// fires `items-changed` and forces this `connect_bind` callback to
-/// rebind every visible item through the freshly cached displays.
-/// The factory itself never reaches for the live `Account` or
-/// `Code` — it only reads the already-projected [`AccountRowModel`]
-/// plus the shared cache, so the row binding stays secret-free. The
-/// per-row widget bundle expands incrementally; copy / "next" /
-/// kebab affordances per §"Component tree" > `AccountRowComponent`
-/// land in follow-up commits.
-///
-/// `output_sender` is cloned into each row's
-/// [`gio::SimpleActionGroup`] activation closure so kebab Rename… /
-/// Remove… activations route through [`dispatch_row_action`] and
-/// forward typed [`AccountListOutput`] messages to `AppModel`.
-fn build_row_factory(
-    output_sender: relm4::Sender<AccountListOutput>,
-    live_displays: LiveDisplayCache,
-    busy_flag: BusyFlag,
-) -> gtk::SignalListItemFactory {
-    let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, item| {
-        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        list_item.set_child(Some(&build_row_widget()));
-    });
-    factory.connect_bind(move |_, item| {
-        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        let Some(child) = list_item.child() else {
-            return;
-        };
-        let Ok(container) = child.downcast::<gtk::Box>() else {
-            return;
-        };
-        let Some(obj) = list_item.item() else {
-            return;
-        };
-        let Ok(boxed) = obj.downcast::<glib::BoxedAnyObject>() else {
-            return;
-        };
-        let row: std::cell::Ref<AccountRowModel> = boxed.borrow();
-        let cache = live_displays.borrow();
-        let display = bind_display_for_row(cache.get(&row.id), &row, busy_flag.get());
-        bind_row(&container, &display);
-        bind_row_icon(&container, row.icon_hint.as_deref());
-        install_row_action_group(&container, row.id, output_sender.clone());
-    });
-    factory
-}
-
-/// Build the kebab `gio::Menu` shared by every row.
-///
-/// The menu carries two entries per
-/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-/// `AccountRowComponent`:
-///
-/// * "Rename…" — opens `RenameDialog` for the row's account.
-/// * "Remove…" — opens `RemoveDialog` for the row's account.
-///
-/// Each entry binds to a `row.rename` / `row.remove` action that
-/// resolves against the per-row [`gio::SimpleActionGroup`] installed
-/// by [`install_row_action_group`] in the row factory's bind step.
-/// Centralizing the model here means the rows share a single
-/// canonical menu shape and the labels stay in lockstep with the
-/// smoke test.
-///
-/// Public so `tests/account_list_logic.rs` can pin the menu's item
-/// labels and action targets — drift in either would surface as a
-/// failing test rather than as a silent kebab-menu regression.
-#[must_use]
-pub fn build_kebab_menu_model() -> gio::Menu {
-    let menu = gio::Menu::new();
-    menu.append(
-        Some("Rename\u{2026}"),
-        Some(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_RENAME_ACTION_NAME}")),
-    );
-    menu.append(
-        Some("Remove\u{2026}"),
-        Some(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_REMOVE_ACTION_NAME}")),
-    );
-    menu
+    if let Some(id) = target {
+        if let Some(idx) = rows.iter().position(|row| row.id == id) {
+            if let Ok(i32_idx) = i32::try_from(idx) {
+                if let Some(row) = list_box.row_at_index(i32_idx) {
+                    list_box.select_row(Some(&row));
+                    return;
+                }
+            }
+        }
+    }
+    list_box.unselect_all();
 }
