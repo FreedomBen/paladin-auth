@@ -45,7 +45,7 @@ pub const CODE_CALM: Color = Color::Green;
 pub const WARN: Color = Color::Yellow;
 
 /// Color used for the urgent tier — TOTP digits and gauge cells in
-/// the final ~6 % of the rotation window (≤ ~2 s on a 30 s period).
+/// the final 5 seconds of the rotation window.
 pub const URGENT: Color = Color::Red;
 
 /// Color used for the Help overlay's key column. Cyan reads as a
@@ -134,25 +134,74 @@ pub fn selected_row_style() -> Style {
 }
 
 /// Pick a foreground color for TOTP code digits and the period
-/// progress gauge based on how much of the rotation window remains.
+/// progress gauge based on how many seconds remain in the rotation
+/// window.
 ///
-/// The bands are proportional to the period so a 60-second TOTP and
-/// a 30-second TOTP both feel the same: green for the calm first
-/// half, yellow once the second half opens, red in the final ~6 %
-/// (≤ ~2 s on a 30 s period) so the user gets a "copy now" cue.
+/// Thresholds are absolute seconds remaining (matching the GTK
+/// frontend's `progress_urgency` bands in `paladin-gtk`):
+/// `> 15 s` → [`CODE_CALM`], `6..=15 s` → [`WARN`], `<= 5 s` →
+/// [`URGENT`]. A zero `period` falls through to [`CODE_CALM`]
+/// defensively — `paladin_core::validation` rejects a zero period
+/// upstream, so this path never fires in practice.
 #[must_use]
 pub fn code_color(seconds_remaining: u32, period: u32) -> Color {
     if period == 0 {
         return CODE_CALM;
     }
-    // Compare in u64 to avoid overflow on hypothetically large periods.
-    let secs = u64::from(seconds_remaining.min(period));
-    let p = u64::from(period);
-    if secs * 16 <= p {
+    let secs = seconds_remaining.min(period);
+    if secs <= 5 {
         URGENT
-    } else if secs * 2 <= p {
+    } else if secs <= 15 {
         WARN
     } else {
         CODE_CALM
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_color_calm_above_fifteen_seconds() {
+        assert_eq!(code_color(30, 30), CODE_CALM);
+        assert_eq!(code_color(16, 30), CODE_CALM);
+        assert_eq!(code_color(60, 60), CODE_CALM);
+        assert_eq!(code_color(16, 60), CODE_CALM);
+    }
+
+    #[test]
+    fn code_color_warn_between_six_and_fifteen_seconds() {
+        assert_eq!(code_color(15, 30), WARN);
+        assert_eq!(code_color(10, 30), WARN);
+        assert_eq!(code_color(6, 30), WARN);
+        assert_eq!(code_color(15, 60), WARN);
+        assert_eq!(code_color(6, 60), WARN);
+    }
+
+    #[test]
+    fn code_color_urgent_at_or_below_five_seconds() {
+        assert_eq!(code_color(5, 30), URGENT);
+        assert_eq!(code_color(2, 30), URGENT);
+        assert_eq!(code_color(1, 30), URGENT);
+        assert_eq!(code_color(0, 30), URGENT);
+        assert_eq!(code_color(5, 60), URGENT);
+        assert_eq!(code_color(0, 60), URGENT);
+    }
+
+    #[test]
+    fn code_color_clamps_remaining_to_period() {
+        // A defensively over-large remaining should clamp into the
+        // calm band when the period itself exceeds 15 s.
+        assert_eq!(code_color(120, 30), CODE_CALM);
+        // When the period is small enough that the clamped value
+        // lands in the urgent band, urgent wins.
+        assert_eq!(code_color(99, 5), URGENT);
+    }
+
+    #[test]
+    fn code_color_zero_period_returns_calm() {
+        assert_eq!(code_color(0, 0), CODE_CALM);
+        assert_eq!(code_color(30, 0), CODE_CALM);
     }
 }
