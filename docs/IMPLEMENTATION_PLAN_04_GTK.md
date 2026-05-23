@@ -5629,9 +5629,9 @@ below reflects those resolutions.
 - [x] Unit-test: setter fires the `display-changed` signal. (See `tests/row_item_logic.rs`.)
 
 #### Store + selection
-- [ ] Replace `FactoryVecDeque<AccountRowComponent>` with `gio::ListStore::new::<RowItem>()`.
-- [ ] Build `gtk::SingleSelection::new(Some(store))`; bind to `ColumnView::set_model`.
-- [ ] Replace `apply_list_box_selection` with a `SingleSelection::set_selected(position)` helper.
+- [x] Replace `FactoryVecDeque<AccountRowComponent>` with `gio::ListStore::new::<RowItem>()`.
+- [x] Build `gtk::SingleSelection::new(Some(store))`; bind to `ColumnView::set_model`.
+- [x] Replace `apply_list_box_selection` with a `SingleSelection::set_selected(position)` helper (`position_for_account` resolves `Option<AccountId>` to the `u32` store position).
 - [x] Build `splice_diff` helper that, given an old and new `Vec<AccountRowModel>`, computes the minimum (insert, remove) ops against the store keyed by `AccountId` — never `splice(0, N, N)`. Implemented as `column_view::splice_plan` (pure-logic op planner) + `column_view::apply_splice_plan` (driver against a real `gio::ListStore<RowItem>`); see `tests/column_view_logic.rs`.
 
 #### Cell factories
@@ -5649,20 +5649,20 @@ below reflects those resolutions.
 - [ ] Cross-check `docs/DESIGN.md` § listing-order contract — the default (unsorted) view must still equal vault insertion order. Clicking a sortable header is a user-initiated override and does not persist across restarts.
 
 #### Per-tick update path
-- [ ] Rewrite `AccountListMsg::Tick` handler to walk `tick_dispatch_plan`, look up the matching `RowItem` in the store via an `AccountId → position` index, and call `item.set_display(new_display)`.
-- [ ] Verify no `splice` is called from the Tick handler.
+- [x] Rewrite `AccountListMsg::Tick` handler to walk `tick_dispatch_plan`, look up the matching `RowItem` in the store via an `AccountId → position` index, and call `item.set_display(new_display)`. (Implementation walks the store once instead of a per-tick `AccountId → position` map, which is `O(n)` per tick; a map can be reintroduced if profiling demands it.)
+- [x] Verify no `splice` is called from the Tick handler. (`handle_tick` only mutates `RowItem`s in place.)
 - [ ] Stress test: 50 TOTP accounts, 1s tick, observe no flicker / no dropped clicks across 60s.
 
 #### Search / filter
 - [ ] `AppModel` recomputes `filtered_row_models_from_vault(...)`, then asks the live `AccountListComponent` to `splice_diff` the new vec into its store.
-- [ ] Cursor / selection survives a query change as today.
+- [x] Cursor / selection survives a query change as today (`selected_row_after_refresh` + `position_for_account` together preserve the prior cursor across a `Refresh` whose `rows` still contain the selected id).
 
 #### Section headers (via `RowKind::Section`)
 - [x] Add `RowKind { Section(String), Account(AccountSummary) }` on `RowItem`; `RowItem::section(text) -> Self` constructor. *Implementation note*: the `Account` variant is data-less (`RowKind::Account`) because the per-row data lives in the wrapper's `account_id` / `display` / `icon_hint` fields; only the section variant carries text. Also adds `RowItem::kind` / `is_section` / `section_title` accessors used by the cell-factory branch logic.
 - [x] Compute the interleaved row list (section + account rows) inside `AppModel` from `AccountRowModel` per the existing `row_section_header` predicate, gated by the `show-section-headers` GSettings key. Implemented as `column_view::interleave_section_headers` (pure logic, gated by a bool argument); `AppModel` calls it before each `apply_splice_plan`. Diff identity is generalized via `column_view::RowKey { Account(AccountId), Section(String) }` so account-row identity survives a section-toggle rebuild.
-- [ ] `AccountListMsg::SetShowSectionHeaders(bool)` rebuilds the interleaved row list and `splice_diff`s the result into the store. Live selection survives the rebuild because account-row identities are stable across the diff.
-- [ ] In each cell factory's `bind`, call `list_item.set_selectable(false)` when the bound `RowItem` is a section so it cannot become the `SingleSelection` selection.
-- [ ] Cell factories branch on kind: the "Account" cell renders a single full-width label for section rows; all other columns render an empty placeholder for section rows.
+- [x] `AccountListMsg::SetShowSectionHeaders(bool)` rebuilds the interleaved row list and `splice_diff`s the result into the store. Live selection survives the rebuild because account-row identities are stable across the diff.
+- [x] In each cell factory's `bind`, call `list_item.set_selectable(false)` when the bound `RowItem` is a section so it cannot become the `SingleSelection` selection. (`build_account_column_factory` carries the canonical call; the other four factories early-return on `is_section()` so they never bind interactive widgets to section rows.)
+- [x] Cell factories branch on kind: the "Account" cell renders a single full-width label for section rows; all other columns render an empty placeholder for section rows.
 - [ ] Tests: section rows are non-selectable; toggling the `show-section-headers` GSettings key rebuilds the row list without resetting the live account-row selection; section rows render in the correct positions relative to the account rows per the `row_section_header` predicate.
 
 #### Column-header visibility preference
