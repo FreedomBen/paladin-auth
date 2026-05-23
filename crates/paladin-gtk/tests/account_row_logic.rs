@@ -702,59 +702,16 @@ fn project_row_collapses_empty_issuer_to_bare_label() {
 }
 
 // ---------------------------------------------------------------------------
-// AccountRowComponent scaffold (Milestone 7 component-tree wiring)
+// AccountRowOutput dispatch surface (consumed by ColumnView cell factories)
 // ---------------------------------------------------------------------------
 //
-// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
-// "Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
-// Rename / Import / Export / Passphrase / Settings / StartupError)",
-// `AccountRowComponent` is the final entry, joining the eleven
-// already-mounted controllers (`AccountListComponent`,
-// `StartupErrorComponent`, `InitDialogComponent`,
-// `UnlockDialogComponent`, `RenameDialogComponent`,
-// `RemoveDialogComponent`, `AddAccountComponent`,
-// `SettingsComponent`, `ImportDialogComponent`,
-// `ExportDialogComponent`, `PassphraseDialogComponent`) with the
-// same scaffold shape: `<Name>Init` / `<Name>Msg` / `<Name>Output`
-// plus a `relm4::SimpleComponent` impl.
-//
-// `AccountRowComponent` is the one exception: it is a
-// `relm4::factory::FactoryComponent` (not a `SimpleComponent`) so
-// `AccountListComponent` can drive a
-// `FactoryVecDeque<AccountRowComponent>` over a `gtk::ListBox`. Its
-// public scaffold is therefore checked through `FactoryComponent`
-// rather than `SimpleComponent`.
-
-#[test]
-fn account_row_init_round_trips_account_id() {
-    use paladin_core::AccountKindSummary;
-    use paladin_gtk::account_list::hidden_row_display;
-    use paladin_gtk::account_list::AccountRowModel;
-    use paladin_gtk::account_row::AccountRowInit;
-
-    let id = AccountId::new();
-    let model = AccountRowModel {
-        id,
-        display_label: "issuer:label".to_string(),
-        kind: AccountKindSummary::Totp,
-        counter: None,
-        icon_hint: None,
-        issuer: None,
-    };
-    let init = AccountRowInit {
-        account_id: id,
-        initial_display: hidden_row_display(&model),
-        initial_icon_hint: None,
-        initial_busy: false,
-    };
-    assert_eq!(init.account_id, id);
-    assert!(matches!(
-        init.initial_display.kind,
-        AccountKindSummary::Totp
-    ));
-    assert!(!init.initial_busy);
-    assert!(init.initial_icon_hint.is_none());
-}
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` Appendix A §A.8, the
+// per-row widget tree lives in the `gtk::SignalListItemFactory`
+// builders in `crate::column_view`; this module no longer ships a
+// `FactoryComponent`. The [`AccountRowOutput`] enum + the
+// `dispatch_row_action` action-name table survive because the
+// kebab `gio::SimpleActionGroup` installed by
+// `build_kebab_action_group` in `column_view.rs` consumes them.
 
 #[test]
 fn account_row_output_request_rename_carries_account_id() {
@@ -812,55 +769,28 @@ fn account_row_output_request_advance_carries_account_id() {
     }
 }
 
-#[test]
-fn account_row_component_input_and_output_match_dispatch_edges() {
-    use paladin_gtk::account_row::{AccountRowComponent, AccountRowMsg, AccountRowOutput};
-    use relm4::factory::FactoryComponent;
-
-    // Compile-only assertion that ties `AccountRowComponent` to its
-    // associated `Input` / `Output` types as a `FactoryComponent`.
-    // If a future refactor renames `AccountRowMsg` or
-    // `AccountRowOutput`, this test fails at compile time before the
-    // integration build does.
-    fn assert_types<C>()
-    where
-        C: FactoryComponent<Input = AccountRowMsg, Output = AccountRowOutput>,
-    {
-    }
-    assert_types::<AccountRowComponent>();
-}
-
 // ---------------------------------------------------------------------------
-// Row widget construction lives in `paladin_gtk::account_row` per
-// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-// `AccountListComponent`. The `AccountRowComponent`
-// `FactoryComponent::init_widgets` callback owns the per-row
-// `gtk::Box`, the bind walk, the icon theme resolve, and the per-row
-// `gio::SimpleActionGroup` install. These compile-only assertions
-// pin those four helpers to `paladin_gtk::account_row` — a silent
-// move back into `account_list.rs` surfaces as a hard-error import
-// drift rather than as an undetected re-shuffle of widget ownership.
+// Row widget construction lives in the per-column
+// `gtk::SignalListItemFactory` builders in
+// `paladin_gtk::column_view`. These compile-only assertions pin
+// those builders' public surface — a silent move back to
+// `account_row.rs` surfaces as a hard-error import drift rather
+// than as an undetected re-shuffle of widget ownership.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn build_row_widget_is_exposed_from_account_row_module() {
-    let _: fn() -> relm4::gtk::Box = paladin_gtk::account_row::build_row_widget;
-}
+fn column_view_cell_factory_builders_are_exposed() {
+    use paladin_gtk::account_list::AccountListOutput;
+    use relm4::gtk;
+    use relm4::Sender;
 
-#[test]
-fn bind_row_is_exposed_from_account_row_module() {
-    let _: fn(&relm4::gtk::Box, &RowDisplay) = paladin_gtk::account_row::bind_row;
-}
-
-#[test]
-fn bind_row_icon_is_exposed_from_account_row_module() {
-    let _: fn(&relm4::gtk::Box, Option<&str>) = paladin_gtk::account_row::bind_row_icon;
-}
-
-#[test]
-fn install_row_action_group_is_exposed_from_account_row_module() {
-    use paladin_gtk::account_row::AccountRowOutput;
-
-    let _: fn(&relm4::gtk::Box, AccountId, &relm4::Sender<AccountRowOutput>) =
-        paladin_gtk::account_row::install_row_action_group;
+    let _: fn() -> gtk::SignalListItemFactory =
+        paladin_gtk::column_view::build_account_column_factory;
+    let _: fn() -> gtk::SignalListItemFactory = paladin_gtk::column_view::build_time_column_factory;
+    let _: fn(Sender<AccountListOutput>) -> gtk::SignalListItemFactory =
+        paladin_gtk::column_view::build_code_column_factory;
+    let _: fn(Sender<AccountListOutput>) -> gtk::SignalListItemFactory =
+        paladin_gtk::column_view::build_copy_column_factory;
+    let _: fn(Sender<AccountListOutput>) -> gtk::SignalListItemFactory =
+        paladin_gtk::column_view::build_kebab_column_factory;
 }

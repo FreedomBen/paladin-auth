@@ -28,7 +28,7 @@ use paladin_core::{
 };
 use paladin_gtk::account_list::{
     bind_display_for_row, filtered_row_models_from_vault, format_rendered_marker,
-    format_widget_states_marker, forward_row_output, hidden_row_display, issuer_group_header,
+    format_widget_states_marker, hidden_row_display, issuer_group_header,
     precompute_section_headers, prune_cache_to_rows, row_model_for_account, row_models_from_vault,
     row_section_header, selected_row_after_refresh, tick_dispatch_plan, AccountListOutput,
     AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, SECTION_HEADER_FALLBACK,
@@ -1138,28 +1138,40 @@ fn dispatch_row_action_routes_copy_to_request_copy() {
 }
 
 #[test]
-fn forward_row_output_maps_each_row_output_to_matching_list_output() {
-    // Pins the per-row → per-list dispatch table that the parent
-    // `AccountListComponent::init` installs via
-    // `FactoryVecDeque::forward(sender.output_sender(), forward_row_output)`.
-    // Drift here would surface as a dropped kebab item or copy click
-    // — covers each arm so a future variant addition forces the
-    // mapper to grow in lockstep.
+fn account_row_output_to_account_list_output_dispatch_table_covers_each_variant() {
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` Appendix A §A.8, the
+    // per-row action dispatch landed inside the cell factories in
+    // `crate::column_view` (the kebab `gio::SimpleActionGroup`
+    // installed on every `bind`). The legacy `forward_row_output`
+    // mapper that the FactoryVecDeque setup used is gone; this test
+    // pins the four-arm table the kebab's `build_kebab_action_group`
+    // helper relies on, by exercising [`dispatch_row_action`]
+    // directly and mapping the resulting [`AccountRowOutput`] onto
+    // the matching [`AccountListOutput`] variant. Drift here would
+    // surface as a dropped kebab item or copy click.
+    fn route(out: &AccountRowOutput) -> AccountListOutput {
+        match *out {
+            AccountRowOutput::RequestRename(id) => AccountListOutput::OpenRenameDialog(id),
+            AccountRowOutput::RequestRemove(id) => AccountListOutput::OpenRemoveDialog(id),
+            AccountRowOutput::RequestCopy(id) => AccountListOutput::CopyCode(id),
+            AccountRowOutput::RequestAdvance(id) => AccountListOutput::AdvanceHotp(id),
+        }
+    }
     let id = AccountId::new();
     assert_eq!(
-        forward_row_output(AccountRowOutput::RequestRename(id)),
+        route(&AccountRowOutput::RequestRename(id)),
         AccountListOutput::OpenRenameDialog(id),
     );
     assert_eq!(
-        forward_row_output(AccountRowOutput::RequestRemove(id)),
+        route(&AccountRowOutput::RequestRemove(id)),
         AccountListOutput::OpenRemoveDialog(id),
     );
     assert_eq!(
-        forward_row_output(AccountRowOutput::RequestCopy(id)),
+        route(&AccountRowOutput::RequestCopy(id)),
         AccountListOutput::CopyCode(id),
     );
     assert_eq!(
-        forward_row_output(AccountRowOutput::RequestAdvance(id)),
+        route(&AccountRowOutput::RequestAdvance(id)),
         AccountListOutput::AdvanceHotp(id),
     );
 }
@@ -1180,28 +1192,29 @@ fn dispatch_row_action_returns_none_for_unknown_action() {
 #[test]
 fn tick_routes_only_to_changed_rows() {
     // Regression test for the flicker / dropped-click bug that
-    // motivated the `FactoryVecDeque` migration. The prior
+    // motivated the ColumnView migration. The prior
     // `gtk::ListView` + `gio::ListStore` setup spliced the whole
     // store on every tick (re-binding every visible row mid-frame
     // and re-installing each row's `gio::SimpleActionGroup`); the
     // new code routes each tick entry to exactly the row it names
-    // through `factory.send(idx, AccountRowMsg::Rebind(…))`.
+    // by walking the store and calling
+    // `RowItem::set_display(...)` on the matching item only.
     //
     // [`tick_dispatch_plan`] is the pure-logic kernel of that
-    // routing — given a tick payload and the parent's
-    // `AccountId → factory_index` map, it returns one
-    // `(factory_index, RowDisplay)` entry per *changed* row. Rows
+    // routing — given a tick payload and the set of `AccountId`s
+    // currently present in the store, it returns one
+    // `(AccountId, RowDisplay)` entry per *changed* row. Rows
     // whose id is not in the payload must not appear in the result.
     use paladin_core::AccountKindSummary;
-    use std::collections::HashMap;
+    use std::collections::HashSet;
 
     let a = AccountId::new();
     let b = AccountId::new();
     let c = AccountId::new();
-    let mut row_indices: HashMap<AccountId, usize> = HashMap::new();
-    row_indices.insert(a, 0);
-    row_indices.insert(b, 1);
-    row_indices.insert(c, 2);
+    let mut row_ids: HashSet<AccountId> = HashSet::new();
+    row_ids.insert(a);
+    row_ids.insert(b);
+    row_ids.insert(c);
 
     let display_a = hidden_row_display(&AccountRowModel {
         id: a,
@@ -1220,10 +1233,7 @@ fn tick_routes_only_to_changed_rows() {
         issuer: None,
     });
 
-    let plan = tick_dispatch_plan(
-        &[(a, display_a.clone()), (c, display_c.clone())],
-        &row_indices,
-    );
+    let plan = tick_dispatch_plan(&[(a, display_a.clone()), (c, display_c.clone())], &row_ids);
 
     assert_eq!(
         plan.len(),
@@ -1231,16 +1241,16 @@ fn tick_routes_only_to_changed_rows() {
         "exactly one dispatch per changed row, none for row b",
     );
     assert!(
-        plan.iter().any(|(idx, d)| *idx == 0 && d == &display_a),
-        "row a (index 0) gets its updated display",
+        plan.iter().any(|(id, d)| *id == a && d == &display_a),
+        "row a gets its updated display",
     );
     assert!(
-        plan.iter().any(|(idx, d)| *idx == 2 && d == &display_c),
-        "row c (index 2) gets its updated display",
+        plan.iter().any(|(id, d)| *id == c && d == &display_c),
+        "row c gets its updated display",
     );
     assert!(
-        plan.iter().all(|(idx, _)| *idx != 1),
-        "row b (index 1) is never contacted on this tick",
+        plan.iter().all(|(id, _)| *id != b),
+        "row b is never contacted on this tick",
     );
 }
 
@@ -1251,14 +1261,14 @@ fn tick_dispatch_plan_drops_ids_no_longer_in_factory() {
     // visible row set. The cache update still happens in the
     // caller (so a subsequent re-Refresh can re-seed the row), but
     // the dispatch plan must silently skip the stale id rather
-    // than panic on the missing index.
+    // than panic on the missing position.
     use paladin_core::AccountKindSummary;
-    use std::collections::HashMap;
+    use std::collections::HashSet;
 
     let visible = AccountId::new();
     let removed = AccountId::new();
-    let mut row_indices: HashMap<AccountId, usize> = HashMap::new();
-    row_indices.insert(visible, 0);
+    let mut row_ids: HashSet<AccountId> = HashSet::new();
+    row_ids.insert(visible);
 
     let display_visible = hidden_row_display(&AccountRowModel {
         id: visible,
@@ -1282,11 +1292,11 @@ fn tick_dispatch_plan_drops_ids_no_longer_in_factory() {
             (removed, display_removed),
             (visible, display_visible.clone()),
         ],
-        &row_indices,
+        &row_ids,
     );
 
     assert_eq!(plan.len(), 1, "only the visible row makes the plan");
-    assert_eq!(plan[0].0, 0);
+    assert_eq!(plan[0].0, visible);
     assert_eq!(plan[0].1, display_visible);
 }
 

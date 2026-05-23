@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `AccountRowComponent` pure-logic projection for `paladin-gtk`.
+//! Per-row pure-logic projection for `paladin-gtk`.
 //!
 //! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-//! `AccountRowComponent`, each row in `AccountListComponent`'s
-//! `gtk::ListView` shows the `<issuer>:<label>` display string, the
-//! current code (or a hidden placeholder for HOTP rows that have
-//! not been revealed), a TOTP progress indicator or HOTP "next"
-//! button, a copy button, and a kebab menu. This module owns the
-//! pure-logic shadow widgets bind to, so the row-factory routing
-//! rules are exercised in `tests/account_row_logic.rs` without
-//! spinning up GTK / libadwaita.
+//! `AccountRowComponent` and Appendix A §A.8, each row in
+//! `AccountListComponent`'s `gtk::ColumnView` shows the
+//! `<issuer>:<label>` display string, the current code (or a hidden
+//! placeholder for HOTP rows that have not been revealed), a TOTP
+//! progress indicator or HOTP "next" button, a copy button, and a
+//! kebab menu. The widget construction (per-column cell factory
+//! `setup` / `bind` / `unbind` walkers, the per-cell
+//! `gio::SimpleActionGroup`) lives in [`crate::column_view`]; this
+//! module owns the pure-logic shadow those factories bind, so the
+//! row-factory routing rules are exercised in
+//! `tests/account_row_logic.rs` without spinning up GTK /
+//! libadwaita.
 //!
 //! The functions here are widget-free and `(Vault, Store)`-free —
 //! the widget layer threads the live [`Code`] (computed externally
@@ -42,15 +46,9 @@
 //! `Code.counter_used` that produced the visible code
 //! ([`CounterText::Used`]). TOTP rows render no counter.
 
-use relm4::factory::{DynamicIndex, FactoryComponent, FactorySender};
-use relm4::gtk;
 use relm4::gtk::gio;
-use relm4::gtk::prelude::*;
-use relm4::Sender;
 
 use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Code};
-
-use crate::icon_resolution::{resolve_display_icon, PLACEHOLDER_ICON_NAME};
 
 /// Render the row's display-label string.
 ///
@@ -484,76 +482,15 @@ pub const ROW_NEXT_ACTION_NAME: &str = "next";
 /// per-row copy `gtk::Button`.
 pub const ROW_COPY_ACTION_NAME: &str = "copy";
 
-/// Construction parameters for [`AccountRowComponent`].
+/// Per-row activation kind decoded by [`dispatch_row_action`] from
+/// the action name fired by the kebab `gio::MenuModel` or the
+/// inline "next" / copy buttons.
 ///
-/// Carries everything the row needs to render itself for the first
-/// frame without consulting the parent: the stable [`AccountId`] for
-/// its action group, the intrinsic [`RowDisplay`] the parent has
-/// already projected (cache hit or [`crate::account_list::hidden_row_display`]
-/// fallback), the optional icon-hint slug, and the parent's current
-/// busy flag. The row applies the busy mask on top of
-/// `initial_display` itself, so the parent does not have to fork its
-/// projection per row.
-#[derive(Debug, Clone)]
-pub struct AccountRowInit {
-    /// Stable account identifier the row's kebab + copy + "next"
-    /// dispatches carry back up through [`AccountRowOutput`].
-    pub account_id: AccountId,
-    /// Intrinsic per-row display the row binds at mount time, before
-    /// applying the busy mask. Typically the cache hit from the most
-    /// recent [`crate::ticker::tick`] or
-    /// [`crate::account_list::hidden_row_display`] for a row that
-    /// has not yet ticked.
-    pub initial_display: RowDisplay,
-    /// Icon-hint slug from the row's
-    /// [`crate::account_list::AccountRowModel::icon_hint`]. `None` /
-    /// empty / unresolved slugs fall back to
-    /// [`PLACEHOLDER_ICON_NAME`] through [`bind_row_icon`].
-    pub initial_icon_hint: Option<String>,
-    /// Parent's `AppState::is_busy()` value at mount time. The row
-    /// applies the busy mask via [`apply_busy_mask`] on top of
-    /// `initial_display` before binding.
-    pub initial_busy: bool,
-}
-
-/// Messages handled by [`AccountRowComponent`].
-///
-/// `Clone` so [`relm4::factory::FactoryVecDeque::broadcast`] can fan
-/// the same message out to every row (used by
-/// `AccountListComponent` on busy-flag transitions).
-#[derive(Debug, Clone)]
-pub enum AccountRowMsg {
-    /// Replace the intrinsic per-row [`RowDisplay`] with `display`
-    /// and re-bind. Sent by `AccountListComponent` on per-tick TOTP
-    /// refresh, on HOTP reveal start/expiry, and on full-list
-    /// refreshes. The busy mask is re-applied on top inside the row.
-    Rebind(RowDisplay),
-    /// Replace the row's icon-hint slug and re-resolve the icon name
-    /// against the live `gtk::IconTheme`. Sent by
-    /// `AccountListComponent` on full-list refreshes that change a
-    /// row's [`crate::account_list::AccountRowModel::icon_hint`]
-    /// (e.g. a follow-up rename / icon-hint edit). `None` collapses
-    /// to [`PLACEHOLDER_ICON_NAME`] via [`bind_row_icon`].
-    RebindIcon(Option<String>),
-    /// Flip the row's busy flag and re-bind. Sent by
-    /// `AccountListComponent` via
-    /// [`relm4::factory::FactoryVecDeque::broadcast`] on parent
-    /// `UnlockedBusy` entry / exit per
-    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
-    /// ownership". The intrinsic display is preserved so the row
-    /// keeps rendering its visible code while the worker is in
-    /// flight; only copy / "next" / kebab sensitivity dims.
-    SetBusy(bool),
-}
-
-/// Messages emitted by [`AccountRowComponent`] for
-/// `AccountListComponent` to forward up to `AppModel`.
-///
-/// Each variant carries the row's [`AccountId`] so the
-/// `AccountListComponent` `FactoryVecDeque::forward` mapper can route
-/// it onto the matching `AccountListOutput::*` variant
+/// Each variant carries the row's [`AccountId`] so the cell
+/// factories in [`crate::column_view`] can route it onto the
+/// matching [`crate::account_list::AccountListOutput`] variant
 /// (`OpenRenameDialog`, `OpenRemoveDialog`, `CopyCode`,
-/// `AdvanceHotp`).
+/// `AdvanceHotp`) directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountRowOutput {
     /// Row's kebab-menu "Rename…" entry activated.
@@ -610,118 +547,20 @@ pub fn build_kebab_menu_model() -> gio::Menu {
     menu
 }
 
-/// Per-row [`FactoryComponent`] mounted as one
-/// [`relm4::factory::FactoryVecDeque`] entry on the
-/// `AccountListComponent`'s `gtk::ListBox`.
-///
-/// Each instance owns its widget bundle for the row's lifetime;
-/// per-tick TOTP updates, HOTP reveal transitions, full-list
-/// refreshes, and busy-flag changes all route through
-/// [`AccountRowMsg`] without rebuilding the row's widget tree. This
-/// is the contract that fixes the "buttons flicker every tick"
-/// regression that the prior
-/// `gio::ListStore` + `SignalListItemFactory` setup hit on every
-/// `splice` call.
-pub struct AccountRowComponent {
-    account_id: AccountId,
-    intrinsic_display: RowDisplay,
-    icon_hint: Option<String>,
-    busy: bool,
-}
-
-/// Typed widget handle bundle returned by
-/// [`AccountRowComponent::init_widgets`] so subsequent
-/// [`AccountRowComponent::update_view`] calls can re-bind the row
-/// without re-walking the widget tree.
-pub struct AccountRowWidgets {
-    container: gtk::Box,
-}
-
-impl AccountRowComponent {
-    /// Apply the busy mask to the intrinsic display.
-    ///
-    /// Cloning is cheap (a fixed-size struct plus a couple of owned
-    /// `String`s); doing the mask here rather than in
-    /// `AccountListComponent` means the parent never has to fork its
-    /// projection per row when the busy flag flips.
-    fn current_display(&self) -> RowDisplay {
-        let mut display = self.intrinsic_display.clone();
-        apply_busy_mask(&mut display, self.busy);
-        display
-    }
-}
-
-impl FactoryComponent for AccountRowComponent {
-    type ParentWidget = gtk::ListBox;
-    type CommandOutput = ();
-    type Input = AccountRowMsg;
-    type Output = AccountRowOutput;
-    type Init = AccountRowInit;
-    type Root = gtk::ListBoxRow;
-    type Widgets = AccountRowWidgets;
-    type Index = DynamicIndex;
-
-    fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
-        AccountRowComponent {
-            account_id: init.account_id,
-            intrinsic_display: init.initial_display,
-            icon_hint: init.initial_icon_hint,
-            busy: init.initial_busy,
-        }
-    }
-
-    fn init_root(&self) -> Self::Root {
-        gtk::ListBoxRow::builder()
-            .selectable(true)
-            .activatable(true)
-            .build()
-    }
-
-    fn init_widgets(
-        &mut self,
-        _index: &DynamicIndex,
-        root: Self::Root,
-        _returned_widget: &gtk::ListBoxRow,
-        sender: FactorySender<Self>,
-    ) -> Self::Widgets {
-        let container = build_row_widget();
-        root.set_child(Some(&container));
-        bind_row(&container, &self.current_display());
-        bind_row_icon(&container, self.icon_hint.as_deref());
-        install_row_action_group(&container, self.account_id, sender.output_sender());
-        AccountRowWidgets { container }
-    }
-
-    fn update(&mut self, msg: Self::Input, _sender: FactorySender<Self>) {
-        match msg {
-            AccountRowMsg::Rebind(display) => self.intrinsic_display = display,
-            AccountRowMsg::RebindIcon(hint) => self.icon_hint = hint,
-            AccountRowMsg::SetBusy(busy) => self.busy = busy,
-        }
-    }
-
-    fn update_view(&self, widgets: &mut Self::Widgets, _sender: FactorySender<Self>) {
-        bind_row(&widgets.container, &self.current_display());
-        bind_row_icon(&widgets.container, self.icon_hint.as_deref());
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Row body widget construction.
+// Pure-logic helpers consumed by the cell factories in
+// `crate::column_view`.
 //
-// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-// `AccountListComponent`, the `gtk::ListBox` mounted by
-// `AccountListComponent` is driven by a
-// `relm4::factory::FactoryVecDeque<AccountRowComponent>`. The
-// list-level wiring (the `gtk::ListBox`, the factory `forward`
-// mapper from `AccountRowOutput` to `AccountListOutput`, the search
-// bar, the selection plumbing) lives in `account_list.rs`, but the
-// row body — the per-row `gtk::Box`, the bind walk, the icon theme
-// resolve, and the per-row `gio::SimpleActionGroup` install — lives
-// here so the `AccountRowComponent` module is the canonical owner of
-// row body construction. The `FactoryComponent::init_widgets`
-// callback drives these four helpers so all row-widget code shares
-// one source of truth.
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` Appendix A §A.8, the
+// `AccountListComponent` widget tree is a `gtk::ColumnView` driven
+// by a `gio::ListStore<crate::row_item::RowItem>`. The legacy
+// per-row `gtk::Box` builder / bind walker / per-row
+// `gio::SimpleActionGroup` installer have been folded into the
+// per-column `gtk::SignalListItemFactory` builders in
+// `crate::column_view`; the helpers below — kebab menu model,
+// counter formatter, hidden-code placeholder, urgency CSS classes,
+// and the row-action dispatch table — are the shared pure-logic
+// surface those factories consume.
 // ---------------------------------------------------------------------------
 
 /// Placeholder rendered in the code column whenever the row's
@@ -739,277 +578,12 @@ pub const HIDDEN_CODE_PLACEHOLDER: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{20
 /// The HOTP row never distinguishes `Stored` vs `Used` in the
 /// rendered text; the source of the counter is captured in the
 /// projection so future per-row diagnostics can branch on it
-/// without re-reading the row. Re-exported so the `gtk::ColumnView`
-/// cell factories in [`crate::column_view`] share the same
-/// formatter the legacy `bind_row` walker used.
+/// without re-reading the row. Consumed by the `gtk::ColumnView`
+/// cell factories in [`crate::column_view`].
 #[must_use]
 pub fn format_counter_label(counter: CounterText) -> String {
     let n = match counter {
         CounterText::Stored(n) | CounterText::Used(n) => n,
     };
     format!("#{n}")
-}
-
-/// Construct one row's widget bundle.
-///
-/// The container is a horizontal `gtk::Box` whose children are
-/// appended in the order `icon → display label → HOTP counter → code
-/// label → TOTP progress bar → copy button → HOTP next button →
-/// kebab menu`. The label expands to claim the row's free space so the
-/// icon, counter / code labels, and the trailing affordances stay
-/// edge-aligned and the column edges line up across rows. [`bind_row`]
-/// walks the children in this same order to apply the projection.
-///
-/// The TOTP progress bar uses a fixed width and is hidden for HOTP
-/// rows via [`bind_row`]; per-tick refresh updates its `fraction`
-/// from [`progress_fraction`].
-///
-/// The leading `gtk::Image` is seeded with
-/// [`crate::icon_resolution::PLACEHOLDER_ICON_NAME`] so a row that
-/// is mounted before [`bind_row_icon`] resolves the live theme still
-/// shows the freedesktop fallback rather than an empty slot.
-/// [`AccountRowComponent::init_widgets`] re-resolves the icon name
-/// from the row's `AccountRowModel::icon_hint` against the live
-/// `gtk::IconTheme` and calls [`bind_row_icon`] to publish the
-/// result.
-///
-/// The kebab `gtk::MenuButton` carries a `view-more-symbolic` icon,
-/// the `.flat` style class for the row-trailing affordance look, and
-/// a `gio::Menu` model built by [`build_kebab_menu_model`] with the
-/// Rename… / Remove… entries described in
-/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-/// `AccountRowComponent`.
-///
-/// The trailing "next" button is bound to the per-row
-/// `row.next` action (the same action group the kebab menu targets),
-/// so clicks fire [`dispatch_row_action`] →
-/// [`AccountRowOutput::RequestAdvance`] without an extra
-/// `connect_clicked` closure. The parent `AccountListComponent`
-/// forwards that output as `AccountListOutput::AdvanceHotp` via its
-/// `FactoryVecDeque::forward` mapper. HOTP-only visibility is
-/// enforced at bind time by [`bind_row`] reading
-/// [`next_button_visible`]; TOTP rows hide the button outright so
-/// the action is unreachable for them even though the per-row action
-/// group still carries the entry.
-#[must_use]
-pub fn build_row_widget() -> gtk::Box {
-    let container = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .hexpand(true)
-        .build();
-    let icon = gtk::Image::builder()
-        .icon_name(PLACEHOLDER_ICON_NAME)
-        .valign(gtk::Align::Center)
-        .pixel_size(24)
-        .build();
-    let label = gtk::Label::builder()
-        .halign(gtk::Align::Start)
-        .xalign(0.0)
-        .hexpand(true)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .build();
-    let counter = gtk::Label::builder()
-        .halign(gtk::Align::End)
-        .xalign(1.0)
-        .build();
-    counter.add_css_class("dim-label");
-    let code = gtk::Label::builder()
-        .halign(gtk::Align::End)
-        .xalign(1.0)
-        .build();
-    code.add_css_class("numeric");
-    let progress = gtk::ProgressBar::builder()
-        .valign(gtk::Align::Center)
-        .width_request(96)
-        .show_text(false)
-        .build();
-    let copy = gtk::Button::builder()
-        .icon_name("edit-copy-symbolic")
-        .tooltip_text("Copy code")
-        .valign(gtk::Align::Center)
-        .action_name(format!("{ROW_ACTION_GROUP_NAME}.{ROW_COPY_ACTION_NAME}"))
-        .build();
-    copy.add_css_class("flat");
-    let next = gtk::Button::builder()
-        .icon_name("view-refresh-symbolic")
-        .tooltip_text("Reveal next HOTP code")
-        .valign(gtk::Align::Center)
-        .action_name(format!("{ROW_ACTION_GROUP_NAME}.{ROW_NEXT_ACTION_NAME}"))
-        .build();
-    next.add_css_class("flat");
-    let kebab = gtk::MenuButton::builder()
-        .icon_name("view-more-symbolic")
-        .tooltip_text("More actions")
-        .valign(gtk::Align::Center)
-        .menu_model(&build_kebab_menu_model())
-        .build();
-    kebab.add_css_class("flat");
-    container.append(&icon);
-    container.append(&label);
-    container.append(&counter);
-    container.append(&code);
-    container.append(&progress);
-    container.append(&copy);
-    container.append(&next);
-    container.append(&kebab);
-    container
-}
-
-/// Install (or replace) the per-row [`gio::SimpleActionGroup`] that
-/// routes kebab Rename… / Remove…, copy, and HOTP "next" activations
-/// through [`dispatch_row_action`] and out via `output_sender` as
-/// [`AccountRowOutput`].
-///
-/// Called from [`AccountRowComponent::init_widgets`] once per row.
-/// The row's widget tree is owned by the `FactoryVecDeque` entry for
-/// the row's lifetime, so the action group is installed exactly once
-/// per push and never re-installed under the row mid-frame the way
-/// the prior `SignalListItemFactory::connect_bind` setup did.
-pub fn install_row_action_group(
-    container: &gtk::Box,
-    id: AccountId,
-    output_sender: &Sender<AccountRowOutput>,
-) {
-    let actions = gio::SimpleActionGroup::new();
-
-    for action_name in [
-        ROW_RENAME_ACTION_NAME,
-        ROW_REMOVE_ACTION_NAME,
-        ROW_NEXT_ACTION_NAME,
-        ROW_COPY_ACTION_NAME,
-    ] {
-        let action = gio::SimpleAction::new(action_name, None);
-        let sender = output_sender.clone();
-        action.connect_activate(move |_, _| {
-            if let Some(out) = dispatch_row_action(action_name, id) {
-                let _ = sender.send(out);
-            }
-        });
-        actions.add_action(&action);
-    }
-
-    container.insert_action_group(ROW_ACTION_GROUP_NAME, Some(&actions));
-}
-
-/// Bind a [`RowDisplay`] onto the child widgets of a
-/// previously-constructed row container.
-///
-/// The children are reached by walking `first_child` / `next_sibling`
-/// in the same order [`build_row_widget`] appended them so the
-/// factory never has to stash typed widget handles on the row.
-///
-/// * The copy button's sensitive state mirrors
-///   [`RowDisplay::copy_enabled`]: TOTP rows are always sensitive;
-///   HOTP rows are sensitive only while a visible reveal code is in
-///   hand, matching the `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component
-///   tree" > `AccountRowComponent` rule that copying a hidden HOTP
-///   row is disabled. While `AppModel` is `UnlockedBusy`,
-///   [`AccountRowComponent::update_view`] feeds the projection
-///   through [`apply_busy_mask`] before calling [`bind_row`] so this
-///   bit flips off and the row's copy action no longer fires.
-/// * The HOTP "next" button's visibility mirrors
-///   [`RowDisplay::next_button_visible`]: HOTP rows show it (the
-///   user activates it to advance the counter and open a reveal
-///   window); TOTP rows hide it. Its sensitive state mirrors
-///   [`RowDisplay::next_button_enabled`], which is dimmed by
-///   [`apply_busy_mask`] while `UnlockedBusy` so the worker holds
-///   the `(Vault, Store)` pair uncontested per
-///   §"In-flight effect ownership".
-/// * The kebab `MenuButton`'s visibility mirrors
-///   [`RowDisplay::kebab_visible`]: every row exposes the
-///   Rename… / Remove… menu unconditionally. The visibility bind is
-///   kept for parity with the other affordances so a future
-///   per-row override stays a one-line projection change. Its
-///   sensitive state mirrors [`RowDisplay::kebab_enabled`], dimmed
-///   by [`apply_busy_mask`] while `UnlockedBusy`.
-pub fn bind_row(container: &gtk::Box, display: &RowDisplay) {
-    let Some(icon) = container.first_child().and_downcast::<gtk::Image>() else {
-        return;
-    };
-    let Some(label) = icon.next_sibling().and_downcast::<gtk::Label>() else {
-        return;
-    };
-    let Some(counter) = label.next_sibling().and_downcast::<gtk::Label>() else {
-        return;
-    };
-    let Some(code) = counter.next_sibling().and_downcast::<gtk::Label>() else {
-        return;
-    };
-    let Some(progress) = code.next_sibling().and_downcast::<gtk::ProgressBar>() else {
-        return;
-    };
-    let Some(copy) = progress.next_sibling().and_downcast::<gtk::Button>() else {
-        return;
-    };
-    let Some(next) = copy.next_sibling().and_downcast::<gtk::Button>() else {
-        return;
-    };
-    let Some(kebab) = next.next_sibling().and_downcast::<gtk::MenuButton>() else {
-        return;
-    };
-
-    label.set_label(&display.label);
-
-    if let Some(c) = display.counter {
-        counter.set_label(&format_counter_label(c));
-        counter.set_visible(true);
-    } else {
-        counter.set_label("");
-        counter.set_visible(false);
-    }
-
-    let code_text = match &display.code {
-        CodeDisplay::Hidden => HIDDEN_CODE_PLACEHOLDER.to_string(),
-        CodeDisplay::Visible(c) => c.clone(),
-    };
-    code.set_label(&code_text);
-
-    progress.set_visible(display.progress_visible);
-    for class in PROGRESS_URGENCY_CSS_CLASSES {
-        progress.remove_css_class(class);
-    }
-    match display.progress {
-        Some(p) => {
-            progress.set_fraction(progress_fraction(&p));
-            progress.add_css_class(progress_urgency(&p).css_class());
-        }
-        None => progress.set_fraction(0.0),
-    }
-
-    copy.set_sensitive(display.copy_enabled);
-    next.set_visible(display.next_button_visible);
-    next.set_sensitive(display.next_button_enabled);
-    kebab.set_visible(display.kebab_visible);
-    kebab.set_sensitive(display.kebab_enabled);
-}
-
-/// Resolve the row's icon against the live `gtk::IconTheme` and
-/// publish the result onto the leading `gtk::Image` child built by
-/// [`build_row_widget`].
-///
-/// The icon-name decision routes through
-/// [`crate::icon_resolution::resolve_display_icon`] so the
-/// `None` / empty / unresolved-slug fallback to
-/// [`crate::icon_resolution::PLACEHOLDER_ICON_NAME`] matches the
-/// pure-logic contract pinned by `tests/icon_resolution.rs`. The
-/// closure forwarded to `resolve_display_icon` is the live
-/// `gtk::IconTheme::has_icon` membership probe scoped to the
-/// container's display, so distribution / Flatpak theme differences
-/// are respected at bind time without baking a slug allowlist into
-/// `paladin_core`.
-///
-/// Called from the row factory's `connect_bind` callback after
-/// [`bind_row`] so the per-tick rebind path (which re-splices the
-/// same rows into the `gio::ListStore`) keeps the icon in lockstep
-/// with any future `AccountRowModel::icon_hint` change (rename
-/// today; explicit icon-hint edit lands with the manual-edit row in
-/// a follow-up commit).
-pub fn bind_row_icon(container: &gtk::Box, icon_hint: Option<&str>) {
-    let Some(icon_widget) = container.first_child().and_downcast::<gtk::Image>() else {
-        return;
-    };
-    let icon_theme = gtk::IconTheme::for_display(&gtk::prelude::WidgetExt::display(container));
-    let icon_name = resolve_display_icon(icon_hint, |slug| icon_theme.has_icon(slug));
-    icon_widget.set_icon_name(Some(icon_name));
 }

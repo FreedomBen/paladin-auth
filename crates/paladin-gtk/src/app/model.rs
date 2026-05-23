@@ -6905,9 +6905,9 @@ pub fn wire_app_window_search_focus_controller(
 /// automatically picks up its `connect_activate` closure
 /// here, and the dispatch table coverage test
 /// (`dispatch_app_window_action_covers_every_bundled_action_name`)
-/// keeps the two helpers in lockstep. Mirrors
-/// [`crate::account_list::install_row_action_group`] on the
-/// per-row kebab menu side.
+/// keeps the two helpers in lockstep. Mirrors the per-row kebab
+/// menu's `gio::SimpleActionGroup` installed inside
+/// [`crate::column_view::build_kebab_column_factory`].
 ///
 /// If an action name is missing from `group` (e.g. a future
 /// refactor that split the actions across two groups) the
@@ -8069,7 +8069,7 @@ pub fn format_app_placeholder_icon_resource_path() -> &'static str {
 ///
 /// Resolves the `gtk::IconTheme` for `display` and calls
 /// `add_resource_path` with [`format_app_icon_theme_resource_path`]
-/// so subsequent lookups by name (notably the `bind_row_icon`
+/// so subsequent lookups by name (notably the per-row icon-name
 /// fallback to [`crate::icon_resolution::PLACEHOLDER_ICON_NAME`])
 /// discover the bundled SVGs through the standard freedesktop
 /// directory layout. Distributions whose icon theme omits
