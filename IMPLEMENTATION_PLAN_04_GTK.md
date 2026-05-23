@@ -546,6 +546,125 @@ policy decisions route through `paladin-core`.
 theme via `gtk::IconTheme`, falling back to a generic placeholder when the
 slug is `None` or unresolved. The CLI and TUI ignore the field entirely.
 
+## Keyboard shortcuts (per §7)
+
+Every binding listed in DESIGN §7 is sourced from a single pinned helper
+inside `crates/paladin-gtk/src/app/model.rs` (or, where noted,
+`shortcuts_window.rs` / `account_list.rs` / `add_account.rs`) so the menu,
+the `GtkShortcutsWindow`, the `gio::Application::set_accels_for_action`
+wiring, and the manual test plan never drift. The accelerator string column
+shows the literal returned by the helper (GTK accelerator syntax); the
+human-readable form is in DESIGN §7.
+
+### Application-action accelerators
+
+Installed by `wire_app_window_accelerators(&gtk::Application)` from the
+`format_app_window_accelerator_bindings() -> [(&'static str, &'static str); 4]`
+array, which pairs each accelerator string with its fully-qualified
+`gio::SimpleAction` target. Iteration order is held stable for
+`set_accels_for_action` and is intentionally distinct from the
+`format_app_shortcuts_window_entries` display order.
+
+| Accelerator         | Helper                                            | Action target                                | DESIGN §7 row |
+| ------------------- | ------------------------------------------------- | -------------------------------------------- | ------------- |
+| `<Control><Shift>n` | `format_app_add_button_accelerator`               | `format_app_add_button_action`               | Add Account   |
+| `<Control>q`        | `format_app_menu_quit_accelerator`                | `format_app_menu_quit_action`                | Quit          |
+| `<Control>comma`    | `format_app_menu_preferences_accelerator`         | `format_app_menu_preferences_action`         | Preferences   |
+| `<Control>question` | `format_app_menu_keyboard_shortcuts_accelerator`  | `format_app_menu_keyboard_shortcuts_action`  | Keyboard Shortcuts |
+
+### Window-level search-focus controller
+
+Installed by `wire_app_window_search_focus_controller` as a capture-phase
+`gtk::EventControllerKey` on the toplevel `adw::ApplicationWindow`. The
+dispatch table is `dispatch_app_window_search_focus_key(keyval, mods) ->
+Option<AppMsg>`; matches return `AppMsg::FocusSearch` and are consumed,
+non-matches propagate so the `gtk::SearchBar::set_key_capture_widget`
+"type-to-search" path keeps working.
+
+| Accelerator       | Helper                                | Dispatch arm                                                            | DESIGN §7 row |
+| ----------------- | ------------------------------------- | ----------------------------------------------------------------------- | ------------- |
+| `slash <Control>l` | `format_app_search_focus_accelerator` | `Key::slash` (no Ctrl) and `Key::l` / `Key::L` with `CONTROL_MASK`      | `/` or `Ctrl+L`; type-to-search |
+
+### Account-list / search-entry navigation
+
+Installed by `wire_account_list_navigation_controllers` as a paired set of
+capture-phase `gtk::EventControllerKey` instances on the
+`gtk::SearchEntry` and the `gtk::ListBox`. Both dispatch tables reject
+`ALT` / `SUPER` / `HYPER` / `META` chords; `Ctrl+Shift+N` is left to bubble so
+the `<Control><Shift>n` "Add Account" app accelerator still reaches
+`gio::Application::set_accels_for_action`.
+
+| Accelerator                          | Source widget   | Dispatch helper                       | Intent / DESIGN §7 row                                                          |
+| ------------------------------------ | --------------- | ------------------------------------- | ------------------------------------------------------------------------------- |
+| `Down`, `Ctrl+J`, `Ctrl+N`           | `SearchEntry`   | `dispatch_search_entry_to_list_nav`   | Focus first row of the filtered list (no-op when filtered list is empty).       |
+| `Up`, `Ctrl+K`, `Ctrl+P`             | `ListBox`       | `dispatch_list_box_nav` → `Up`        | Previous row; at the first row, return focus to the search entry and re-select. |
+| `Down`, `Ctrl+J`, `Ctrl+N`           | `ListBox`       | `dispatch_list_box_nav` → `Down`      | Next row; no wrap at the last row.                                              |
+| `Home` / `End` / `PageUp` / `PageDown` | `ListBox`     | Untouched — propagate to `gtk::ListBox` | Standard `gtk::ListBox` bindings.                                               |
+
+### Row activation
+
+Enter on the focused row (or a double-click) routes through
+`gtk::ListBox::row-activated` → `AccountListMsg::ActivateRow`, which reads the
+row's kind and visible-code state from
+`AccountListComponent::{current_rows, live_displays}` and dispatches
+`default_row_activation`.
+
+| Trigger                | Row state                                | Outcome                                                                          |
+| ---------------------- | ---------------------------------------- | -------------------------------------------------------------------------------- |
+| `Enter` / double-click | TOTP, or HOTP with a code currently revealed | Emit `AccountListOutput::CopyCode(id)` — same path as the per-row copy button. |
+| `Enter` / double-click | HOTP with the code hidden                | Emit `AccountListOutput::ActivateHotpAndCopy(id)`; `AppModel` latches `pending_copy_after_advance = Some(id)`, re-enters the standard `AdvanceHotp` dispatch, and on `HotpAdvanceWorkerCompleted` fires a follow-up `CopyCode(id)` after `publish_reveal_for`. The latch is cleared on `Locked` / `Quit` via `prune_reveals_if_locked` / `tear_down_for_quit`. |
+
+### Dialog dismissal
+
+`AddAccountComponent` installs a bubble-phase `gtk::EventControllerKey` on
+its dialog root whose dispatch table is
+`dispatch_root_dismiss_key(keyval, mods) -> bool`. A bare `Escape` press
+(no `CTRL` / `ALT` / `SHIFT` / `SUPER` / `HYPER` / `META`) returns `true` and is
+routed to the component's cancel path; chord modifiers and other keys
+propagate untouched so focused entries, dropdowns, and the Save button keep
+their own keyboard handling. The dispatch table is pinned by the
+`dispatch_root_dismiss_key` unit tests. Other dialogs (`InitDialog`,
+`UnlockComponent`, `RemoveDialog`, `RenameDialog`, `ImportDialog`,
+`ExportDialog`, `PassphraseDialog`, `SettingsComponent`, `StartupError`)
+inherit GTK / Adwaita's stock Escape-to-cancel and Enter-to-default-action
+behavior.
+
+### Shortcuts window
+
+The primary menu's "Keyboard Shortcuts" entry opens a
+`gtk::ShortcutsWindow` constructed from
+`format_app_shortcuts_window_xml()` (in `shortcuts_window.rs`), which in
+turn iterates
+`format_app_shortcuts_window_entries() -> [(&'static str, &'static str); 5]`.
+Display order (most-frequent-use flow) is **Add → Search → Preferences →
+Keyboard Shortcuts → Quit**, intentionally distinct from the
+`format_app_window_accelerator_bindings` iteration order. The Search row
+is included here even though it is not a `gio::SimpleAction` accelerator,
+because it is a user-visible window-level binding; both `/` and `<Control>l`
+are listed in the row's single space-separated `accelerator` property so
+`gtk::Builder` renders them side by side.
+
+### Tests
+
+- `tests/startup_probes.rs` pins
+  `format_app_window_accelerator_bindings`,
+  `format_app_shortcuts_window_entries`, and each individual
+  `format_app_*_accelerator` helper against its literal value.
+- `tests/account_list_nav_logic.rs` and `tests/search_focus_logic.rs`
+  exercise `dispatch_search_entry_to_list_nav` and `dispatch_list_box_nav`
+  against every key/modifier combination listed above, including the
+  rejected-chord cases (`ALT` / `SUPER` / `HYPER` / `META` and
+  `Ctrl+Shift+N` bubble-through).
+- `tests/add_account_logic.rs` covers `dispatch_root_dismiss_key`,
+  including the chord-rejection cases.
+- The smoke test (`tests/gtk_smoke.rs`) should grow a check that
+  `wire_app_window_accelerators` installs every binding on the live
+  `gtk::Application` and that the `GtkShortcutsWindow` renders the five
+  expected rows.
+- The manual test plan (`tests/manual/MANUAL_TEST_PLAN.md`) should grow a
+  keyboard-shortcuts pass that walks the table above end-to-end on a
+  running window.
+
 ## Global flags
 
 `--vault <path>` and `--no-color` are accepted (parity with siblings).

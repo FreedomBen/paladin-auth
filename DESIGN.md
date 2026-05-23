@@ -1708,20 +1708,38 @@ opt-in default and the plaintext-vault auto-lock no-op.
 Mutating dialogs use `Vault::mutate_and_save` for the same rollback behavior
 as the TUI.
 
-Keyboard shortcuts: the header-bar `+` button is mirrored by
-`Ctrl+Shift+N` (GNOME-HIG "New X" pattern), the primary menu's Preferences
-entry by `Ctrl+,`, Quit by `Ctrl+Q`, and a "Keyboard Shortcuts" entry
-(between Preferences and About) opens a `GtkShortcutsWindow` listing all
-four bindings via the GNOME-canonical `Ctrl+?` accelerator. Each (action,
-accelerator, label) triple is sourced from a single pinned `format_app_*`
-helper so the menu, the shortcuts-window contents, and the
-`gio::Application::set_accels_for_action` wiring stay in lockstep. Inside
-the account list, the bare arrow keys mirror vim-style `Ctrl+J` / `Ctrl+K`
-and readline-style `Ctrl+N` / `Ctrl+P` row navigation (the single-modifier
-`Ctrl+N` slot is reserved for this navigation, which is why Add uses
-`Ctrl+Shift+N`). Standard GTK/Adwaita affordances (Esc to dismiss dialogs,
-Enter to activate the default button, Tab focus traversal, etc.) apply
-unchanged.
+Keyboard shortcuts. The GTK front-end exposes the following bindings; each
+(action, accelerator, label) triple is sourced from a single pinned
+`format_app_*` helper so the primary menu, the `GtkShortcutsWindow`
+contents, and the `gio::Application::set_accels_for_action` wiring stay in
+lockstep.
+
+| Shortcut          | Scope              | Action                                                                       |
+| ----------------- | ------------------ | ---------------------------------------------------------------------------- |
+| `Ctrl+Shift+N`    | Window             | Open the Add Account dialog (mirrors the header-bar `+`; GNOME-HIG "New X"). |
+| `Ctrl+,`          | Window             | Open Preferences.                                                            |
+| `Ctrl+?`          | Window             | Open the Keyboard Shortcuts window (GNOME-canonical accelerator).            |
+| `Ctrl+Q`          | Window             | Quit.                                                                        |
+| `/` or `Ctrl+L`   | Window             | Reveal the search bar, focus the entry, and select its contents.             |
+| Printable key     | Window             | "Type to search": reveals the search bar and forwards the keystroke.         |
+| `Up` / `Down`     | Account list       | Move selection one row (bare arrows; no wrap).                               |
+| `Ctrl+K` / `Ctrl+J` | Account list     | Vim-style previous / next row (mirrors `Up` / `Down`).                       |
+| `Ctrl+P` / `Ctrl+N` | Account list     | Readline-style previous / next row (mirrors `Up` / `Down`).                  |
+| `Up` / `Ctrl+K` / `Ctrl+P` at first row | Account list | Hands focus back to the search entry and re-selects its contents.            |
+| `Down` / `Ctrl+J` / `Ctrl+N` | Search entry | Hands focus to the first row of the filtered list.                           |
+| `Enter` (or double-click) | TOTP row, or HOTP row with a visible code | Copy the code to the clipboard.                                              |
+| `Enter` (or double-click) | HOTP row with a hidden code | Advance the counter, reveal the new code, then copy it.                      |
+| `Esc`             | Dialog             | Dismiss the dialog (bare press; no Ctrl / Shift / Alt / Super / Hyper / Meta).|
+| `Enter`           | Dialog             | Activate the default button.                                                 |
+| `Tab` / `Shift+Tab` | Window or dialog | Standard GTK focus traversal.                                                |
+
+The single-modifier `Ctrl+N` slot is reserved for readline-style row
+navigation, which is why Add uses `Ctrl+Shift+N`. `Ctrl+K` is intentionally
+not a focus-search accelerator — it doubles as the vim-style "move up"
+mirror inside the list. Bare `j` / `k` / `n` / `p` keep bubbling so the
+type-to-search path keeps working, and arrow keys combined with `Ctrl`
+(`Ctrl+Up` / `Ctrl+Down`) are left to the platform. All other GTK / Adwaita
+affordances apply unchanged.
 
 Icons: `AccountRowComponent` resolves `AccountSummary.icon_hint` against the
 system icon theme via `gtk::IconTheme`, falling back to a generic
