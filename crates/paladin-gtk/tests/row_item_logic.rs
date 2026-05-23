@@ -22,7 +22,7 @@ use std::rc::Rc;
 use paladin_core::{AccountId, AccountKindSummary};
 use paladin_gtk::account_list::{hidden_row_display, AccountRowModel};
 use paladin_gtk::account_row::{CodeDisplay, RowDisplay};
-use paladin_gtk::row_item::{RowItem, ROW_ITEM_DISPLAY_CHANGED_SIGNAL};
+use paladin_gtk::row_item::{RowItem, RowKind, ROW_ITEM_DISPLAY_CHANGED_SIGNAL};
 
 use relm4::gtk::glib::prelude::*;
 
@@ -147,4 +147,38 @@ fn default_row_item_has_no_account_id() {
     assert_eq!(item.account_id(), None);
     assert_eq!(item.icon_hint(), None);
     assert!(!item.busy());
+}
+
+// ---------------------------------------------------------------------------
+// RowKind — section header rows interleaved into the store.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn from_row_model_creates_account_kind() {
+    let model = totp_model();
+    let item = RowItem::from_row_model(&model);
+    assert_eq!(item.kind(), RowKind::Account);
+    assert_eq!(item.section_title(), None);
+}
+
+#[test]
+fn section_constructor_creates_section_kind() {
+    let item = RowItem::section("Acme");
+    assert_eq!(item.kind(), RowKind::Section("Acme".to_string()));
+    assert_eq!(item.section_title(), Some("Acme".to_string()));
+    assert_eq!(item.account_id(), None);
+    assert_eq!(item.icon_hint(), None);
+    assert!(!item.busy());
+}
+
+#[test]
+fn default_row_item_kind_is_account_placeholder() {
+    let item = RowItem::default();
+    assert_eq!(item.kind(), RowKind::Account);
+}
+
+#[test]
+fn is_section_distinguishes_kinds() {
+    assert!(RowItem::section("Other").is_section());
+    assert!(!RowItem::from_row_model(&totp_model()).is_section());
 }

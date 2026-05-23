@@ -34,6 +34,29 @@ use crate::account_row::RowDisplay;
 /// `gio::ListStore`'s row count.
 pub const ROW_ITEM_DISPLAY_CHANGED_SIGNAL: &str = "display-changed";
 
+/// Discriminator for the two row shapes the `gtk::ColumnView`
+/// renders out of the same `gio::ListStore<RowItem>`.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` Appendix A §A.2.4,
+/// section headers are interleaved into the store as `Section`
+/// rows so the shipped `show-section-headers` user preference
+/// survives the migration off `gtk::ListBox::set_header_func`. Cell
+/// factories branch on `kind`: the "Account" column cell renders a
+/// single full-width heading for sections; every other column
+/// renders an empty placeholder. Selection is suppressed for
+/// sections via `list_item.set_selectable(false)` in the bind step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowKind {
+    /// Section header row. The string is the heading text — typically
+    /// the issuer name per
+    /// [`crate::account_list::issuer_group_header`].
+    Section(String),
+    /// Account row. Per-row data lives in the wrapper's
+    /// `account_id` / `display` / `icon_hint` fields; the kind enum
+    /// itself carries nothing because the data is keyed by id.
+    Account,
+}
+
 mod imp {
     use std::cell::{Cell, RefCell};
     use std::sync::OnceLock;
@@ -46,6 +69,7 @@ mod imp {
     use crate::account_row::{CodeDisplay, RowDisplay};
 
     pub struct RowItem {
+        pub(super) kind: RefCell<super::RowKind>,
         pub(super) id: Cell<Option<AccountId>>,
         pub(super) display: RefCell<RowDisplay>,
         pub(super) icon_hint: RefCell<Option<String>>,
@@ -58,10 +82,12 @@ mod imp {
             // no derivable `Default`. Pick a placeholder that the
             // cell factories will visibly recognize as "not yet
             // initialized" (empty label, hidden code, every control
-            // disabled). `RowItem::from_row_model` always replaces
-            // this immediately; the default exists only because
-            // `glib::Object::new` default-constructs the imp.
+            // disabled). `RowItem::from_row_model` / `RowItem::section`
+            // always replace this immediately; the default exists
+            // only because `glib::Object::new` default-constructs the
+            // imp.
             Self {
+                kind: RefCell::new(super::RowKind::Account),
                 id: Cell::new(None),
                 display: RefCell::new(RowDisplay {
                     label: String::new(),
@@ -117,7 +143,8 @@ impl RowItem {
         glib::Object::new()
     }
 
-    /// Construct a `RowItem` from an [`crate::account_list::AccountRowModel`].
+    /// Construct an account-row `RowItem` from an
+    /// [`crate::account_list::AccountRowModel`].
     ///
     /// The display projection is seeded to the
     /// [`crate::account_list::hidden_row_display`] form so the cell
@@ -128,11 +155,54 @@ impl RowItem {
     pub fn from_row_model(model: &crate::account_list::AccountRowModel) -> Self {
         let item: Self = Self::new();
         let imp = item.imp();
+        imp.kind.replace(RowKind::Account);
         imp.id.set(Some(model.id));
         imp.icon_hint.replace(model.icon_hint.clone());
         imp.display
             .replace(crate::account_list::hidden_row_display(model));
         item
+    }
+
+    /// Construct a section-header `RowItem` carrying the given
+    /// heading text.
+    ///
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` Appendix A §A.2.4
+    /// section headers are interleaved into the same store the
+    /// `gtk::ColumnView` reads. Cell factories check
+    /// [`Self::kind`] / [`Self::is_section`] in their `bind` step
+    /// and render the "Account" column's cell as a single full-width
+    /// heading; every other column renders empty for the section.
+    /// `list_item.set_selectable(false)` is called on section rows
+    /// so the `gtk::SingleSelection` cannot land on them.
+    #[must_use]
+    pub fn section(title: impl Into<String>) -> Self {
+        let item: Self = Self::new();
+        let imp = item.imp();
+        imp.kind.replace(RowKind::Section(title.into()));
+        item
+    }
+
+    /// The row's discriminator. Cell factories branch on this to
+    /// pick the section-row vs account-row rendering path.
+    #[must_use]
+    pub fn kind(&self) -> RowKind {
+        self.imp().kind.borrow().clone()
+    }
+
+    /// Convenience: `true` if the row is a [`RowKind::Section`].
+    #[must_use]
+    pub fn is_section(&self) -> bool {
+        matches!(*self.imp().kind.borrow(), RowKind::Section(_))
+    }
+
+    /// The section heading text for a [`RowKind::Section`] row, or
+    /// `None` for [`RowKind::Account`] / default rows.
+    #[must_use]
+    pub fn section_title(&self) -> Option<String> {
+        match &*self.imp().kind.borrow() {
+            RowKind::Section(title) => Some(title.clone()),
+            RowKind::Account => None,
+        }
     }
 
     /// The bound account id, or `None` for a freshly default-constructed

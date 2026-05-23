@@ -5658,8 +5658,8 @@ below reflects those resolutions.
 - [ ] Cursor / selection survives a query change as today.
 
 #### Section headers (via `RowKind::Section`)
-- [ ] Add `RowKind { Section(String), Account(AccountSummary) }` on `RowItem`; `RowItem::section(text) -> Self` constructor.
-- [ ] Compute the interleaved row list (section + account rows) inside `AppModel` from `AccountRowModel` per the existing `row_section_header` predicate, gated by the `show-section-headers` GSettings key.
+- [x] Add `RowKind { Section(String), Account(AccountSummary) }` on `RowItem`; `RowItem::section(text) -> Self` constructor. *Implementation note*: the `Account` variant is data-less (`RowKind::Account`) because the per-row data lives in the wrapper's `account_id` / `display` / `icon_hint` fields; only the section variant carries text. Also adds `RowItem::kind` / `is_section` / `section_title` accessors used by the cell-factory branch logic.
+- [x] Compute the interleaved row list (section + account rows) inside `AppModel` from `AccountRowModel` per the existing `row_section_header` predicate, gated by the `show-section-headers` GSettings key. Implemented as `column_view::interleave_section_headers` (pure logic, gated by a bool argument); `AppModel` calls it before each `apply_splice_plan`. Diff identity is generalized via `column_view::RowKey { Account(AccountId), Section(String) }` so account-row identity survives a section-toggle rebuild.
 - [ ] `AccountListMsg::SetShowSectionHeaders(bool)` rebuilds the interleaved row list and `splice_diff`s the result into the store. Live selection survives the rebuild because account-row identities are stable across the diff.
 - [ ] In each cell factory's `bind`, call `list_item.set_selectable(false)` when the bound `RowItem` is a section so it cannot become the `SingleSelection` selection.
 - [ ] Cell factories branch on kind: the "Account" cell renders a single full-width label for section rows; all other columns render an empty placeholder for section rows.

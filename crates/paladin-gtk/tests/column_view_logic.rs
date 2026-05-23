@@ -15,7 +15,9 @@
 
 use paladin_core::{AccountId, AccountKindSummary};
 use paladin_gtk::account_list::AccountRowModel;
-use paladin_gtk::column_view::{apply_splice_plan, splice_plan, SpliceOp};
+use paladin_gtk::column_view::{
+    apply_splice_plan, interleave_section_headers, splice_plan, InterleavedRow, RowKey, SpliceOp,
+};
 use paladin_gtk::row_item::RowItem;
 
 use relm4::gtk::gio;
@@ -312,4 +314,94 @@ fn apply_populate_from_empty_seeds_full_set() {
     let new: Vec<AccountRowModel> = new_ids.iter().map(|id| model_for(*id, "new")).collect();
     apply_splice_plan(&store, &new);
     assert_eq!(collect_ids(&store), new_ids);
+}
+
+// ---------------------------------------------------------------------------
+// interleave_section_headers — pure logic
+// ---------------------------------------------------------------------------
+
+fn account_model(label: &str, issuer: Option<&str>) -> AccountRowModel {
+    AccountRowModel {
+        id: AccountId::new(),
+        display_label: match issuer {
+            Some(i) if !i.is_empty() => format!("{i}:{label}"),
+            _ => label.to_string(),
+        },
+        kind: AccountKindSummary::Totp,
+        counter: None,
+        icon_hint: None,
+        issuer: issuer.map(str::to_string),
+    }
+}
+
+#[test]
+fn interleave_disabled_returns_only_account_rows() {
+    let rows = vec![
+        account_model("alice", Some("Acme")),
+        account_model("bob", Some("Acme")),
+        account_model("carol", Some("Zenith")),
+    ];
+    let interleaved = interleave_section_headers(&rows, false);
+    assert_eq!(
+        interleaved,
+        vec![
+            InterleavedRow::Account(0),
+            InterleavedRow::Account(1),
+            InterleavedRow::Account(2),
+        ],
+    );
+}
+
+#[test]
+fn interleave_enabled_inserts_section_header_at_each_issuer_change() {
+    let rows = vec![
+        account_model("alice", Some("Acme")),
+        account_model("bob", Some("Acme")),
+        account_model("carol", Some("Zenith")),
+        account_model("dan", None),
+    ];
+    let interleaved = interleave_section_headers(&rows, true);
+    assert_eq!(
+        interleaved,
+        vec![
+            InterleavedRow::Section("Acme".to_string()),
+            InterleavedRow::Account(0),
+            InterleavedRow::Account(1),
+            InterleavedRow::Section("Zenith".to_string()),
+            InterleavedRow::Account(2),
+            InterleavedRow::Section("Other".to_string()),
+            InterleavedRow::Account(3),
+        ],
+    );
+}
+
+#[test]
+fn interleave_empty_input_yields_empty_output() {
+    assert!(interleave_section_headers(&[], true).is_empty());
+    assert!(interleave_section_headers(&[], false).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// splice_plan generalized over RowKey (account ids + section titles).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn splice_plan_handles_mixed_account_and_section_keys() {
+    let id_a = AccountId::new();
+    let id_b = AccountId::new();
+    let old: Vec<RowKey> = vec![
+        RowKey::Section("Acme".to_string()),
+        RowKey::Account(id_a),
+        RowKey::Account(id_b),
+    ];
+    let new: Vec<RowKey> = vec![RowKey::Account(id_a), RowKey::Account(id_b)];
+    // Removing the leading section header is a single 1-item remove.
+    let plan = splice_plan(&old, &new);
+    assert_eq!(
+        plan,
+        vec![SpliceOp::Remove {
+            position: 0,
+            n_remove: 1,
+        }],
+    );
 }

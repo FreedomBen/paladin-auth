@@ -16,15 +16,95 @@
 //! insertion-order contract in `docs/DESIGN.md` rules out — falls
 //! back to a tail rebuild rather than tracking moves.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 use paladin_core::AccountId;
 use relm4::gtk::gio;
 use relm4::gtk::gio::prelude::*;
 use relm4::gtk::glib;
 
-use crate::account_list::AccountRowModel;
-use crate::row_item::RowItem;
+use crate::account_list::{row_section_header, AccountRowModel};
+use crate::row_item::{RowItem, RowKind};
+
+/// Stable identity for a row in the `gtk::ColumnView`'s store.
+///
+/// Account rows are keyed by their `AccountId`; section header rows
+/// are keyed by their heading text (issuer name, which is unique
+/// within the list per the section-grouping contract in
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` Appendix A §A.2.4). The
+/// diff layer in [`splice_plan`] / [`apply_splice_plan`] operates
+/// on this key so a section toggle preserves account-row identity
+/// across the rebuild.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum RowKey {
+    /// Account row keyed by its stable `AccountId`.
+    Account(AccountId),
+    /// Section header row keyed by its heading text.
+    Section(String),
+}
+
+impl RowKey {
+    /// Extract the [`RowKey`] of a live `RowItem` in the store, or
+    /// `None` for a freshly default-constructed item that has not
+    /// yet been seeded.
+    #[must_use]
+    pub fn from_row_item(item: &RowItem) -> Option<Self> {
+        match item.kind() {
+            RowKind::Section(title) => Some(Self::Section(title)),
+            RowKind::Account => item.account_id().map(Self::Account),
+        }
+    }
+}
+
+/// One position in the interleaved (section + account) row sequence.
+///
+/// `Account` carries the index into the source `Vec<AccountRowModel>`
+/// (cheap and stable; the caller resolves it back to the model).
+/// `Section` carries the heading text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterleavedRow {
+    /// A section heading; the inner text is the heading from
+    /// [`crate::account_list::issuer_group_header`].
+    Section(String),
+    /// An account row, indexed by position in the source
+    /// `AccountRowModel` slice.
+    Account(usize),
+}
+
+/// Interleave section headers among account rows for the
+/// `gtk::ColumnView`'s store.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` Appendix A §A.2.4, the
+/// `gtk::ColumnView` migration moves section grouping out of
+/// `gtk::ListBox::set_header_func` and into the model: section
+/// headers become `RowItem`s interleaved with account rows. The
+/// section dispatch rule is the same as the existing
+/// [`row_section_header`] predicate so user-visible grouping is
+/// preserved.
+///
+/// When `show_section_headers` is `false`, returns one
+/// [`InterleavedRow::Account`] per input row in order. When `true`,
+/// emits an [`InterleavedRow::Section`] before each account-row run
+/// whose issuer differs from the previous row.
+#[must_use]
+pub fn interleave_section_headers(
+    rows: &[AccountRowModel],
+    show_section_headers: bool,
+) -> Vec<InterleavedRow> {
+    if !show_section_headers {
+        return (0..rows.len()).map(InterleavedRow::Account).collect();
+    }
+    let mut out = Vec::with_capacity(rows.len() * 2);
+    for (i, row) in rows.iter().enumerate() {
+        let prev = if i == 0 { None } else { Some(&rows[i - 1]) };
+        if let Some(title) = row_section_header(prev, row) {
+            out.push(InterleavedRow::Section(title.to_string()));
+        }
+        out.push(InterleavedRow::Account(i));
+    }
+    out
+}
 
 /// A single `gio::ListStore::splice` operation.
 ///
@@ -67,9 +147,9 @@ pub enum SpliceOp {
 /// the walker keeps it as a defensive guard so the helper stays
 /// total.
 #[must_use]
-pub fn splice_plan(old: &[AccountId], new: &[AccountId]) -> Vec<SpliceOp> {
-    let new_set: std::collections::HashSet<AccountId> = new.iter().copied().collect();
-    let old_set: std::collections::HashSet<AccountId> = old.iter().copied().collect();
+pub fn splice_plan<K: Hash + Eq + Clone>(old: &[K], new: &[K]) -> Vec<SpliceOp> {
+    let new_set: HashSet<K> = new.iter().cloned().collect();
+    let old_set: HashSet<K> = old.iter().cloned().collect();
 
     let mut ops = Vec::new();
     let mut o = 0usize;
