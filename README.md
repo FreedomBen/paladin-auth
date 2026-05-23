@@ -147,8 +147,7 @@ any diff against
 ├── docs/IMPLEMENTATION_PLAN_01_CORE.md
 ├── docs/IMPLEMENTATION_PLAN_02_CLI.md
 ├── docs/IMPLEMENTATION_PLAN_03_TUI.md
-├── docs/IMPLEMENTATION_PLAN_04_GTK.md
-└── docs/               # supplementary notes (e.g. `CORE_DEVIATIONS.md`)
+└── docs/IMPLEMENTATION_PLAN_04_GTK.md
 ```
 
 ## Contributing

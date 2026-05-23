@@ -21,14 +21,16 @@
 The approved design lives in `docs/DESIGN.md`, with staged plans in
 `docs/IMPLEMENTATION_PLAN_01_CORE.md`, `docs/IMPLEMENTATION_PLAN_02_CLI.md`,
 `docs/IMPLEMENTATION_PLAN_03_TUI.md`, and `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
-Follow `docs/DESIGN.md` as the source of truth. The Cargo workspace currently
-contains three members; `paladin-gtk` is deferred to v0.2:
+Follow `docs/DESIGN.md` as the source of truth. The Cargo workspace contains
+four members; `paladin-gtk` targets v0.2 but lands pure-logic scaffolding
+incrementally so the workspace shape and `paladin-core` API contract stay
+aligned:
 
 ```text
 crates/paladin-core/  # shared domain, OTP, storage, crypto, import/export
 crates/paladin-cli/   # `paladin` command
 crates/paladin-tui/   # terminal UI
-crates/paladin-gtk/   # planned GTK4 GUI (v0.2; not yet scaffolded)
+crates/paladin-gtk/   # GTK4 + libadwaita GUI (relm4; v0.2 target)
 xtask/                # dev-tool version pins (dev-tools.toml)
 ```
 
