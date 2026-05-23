@@ -95,7 +95,7 @@ const GAUGE_EMPTY: char = '░';
 /// environment variable both flow here through
 /// [`crate::cli::should_disable_color`]). It gates the accent-colored
 /// border / title, the TOTP-code / period-gauge color tier
-/// (cyan / yellow / red as the rotation window drains), the
+/// (green / yellow / red as the rotation window drains), the
 /// search-match highlight, the HOTP `▸ press n to advance` tint,
 /// the plaintext-mode title chip, and the bottom-line status tints.
 /// Modifiers like bold / dim / reversed survive the gating so the
@@ -332,9 +332,9 @@ fn render_totp_row(
 ///   account): title gets a `(#N)` suffix using
 ///   `reveal.counter_used` — the *pre-advance* counter that
 ///   produced the visible code — and the right-side column shows
-///   the visible code rendered in bold cyan (formatted by
+///   the visible code rendered in bold green (formatted by
 ///   [`format_code_digits`] for parity with TOTP rows). HOTP codes
-///   never time out so they always render in the calm cyan tier.
+///   never time out so they always render in the calm green tier.
 ///
 /// The caller is responsible for filtering `reveal` to the row's
 /// account; passing the reveal slot for a different account would

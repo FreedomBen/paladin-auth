@@ -3312,8 +3312,8 @@ user's terminal theme decides exact hues:
   startup-error screen border + title, and the `StatusLine::Error`
   bottom-row tint.
 - `SUCCESS` (Green) — `StatusLine::Confirmation` bottom-row tint.
-- `CODE_CALM` (Cyan) — TOTP code digits and HOTP revealed-code
-  digits in the calm tier (bold), Help overlay key column (bold).
+- `CODE_CALM` (Green) — TOTP code digits, HOTP revealed-code
+  digits, and the period-gauge fill in the calm tier (bold).
 - `WARN` (Yellow) — TOTP code / period-gauge color in the second
   half of the rotation window, search-hit highlight (bold +
   underlined) on the title column, plaintext-mode chip in the list

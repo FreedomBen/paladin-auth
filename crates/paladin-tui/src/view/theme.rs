@@ -37,7 +37,7 @@ pub const SUCCESS: Color = Color::Green;
 /// Color used to render TOTP code digits when the rotation window
 /// has plenty of time left. Switches to [`WARN`] then [`URGENT`] as
 /// the window drains (see [`code_color`]).
-pub const CODE_CALM: Color = Color::Cyan;
+pub const CODE_CALM: Color = Color::Green;
 
 /// Color used for the warning tier — TOTP digits and gauge cells in
 /// the second half of the rotation window, the plaintext-mode chip,
@@ -137,7 +137,7 @@ pub fn selected_row_style() -> Style {
 /// progress gauge based on how much of the rotation window remains.
 ///
 /// The bands are proportional to the period so a 60-second TOTP and
-/// a 30-second TOTP both feel the same: cyan for the calm first
+/// a 30-second TOTP both feel the same: green for the calm first
 /// half, yellow once the second half opens, red in the final ~6 %
 /// (≤ ~2 s on a 30 s period) so the user gets a "copy now" cue.
 #[must_use]
