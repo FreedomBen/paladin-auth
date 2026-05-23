@@ -13619,33 +13619,16 @@ fn pressing_ctrl_p_with_modal_open_clears_pending_chord_leader() {
 }
 
 #[test]
-fn pressing_ctrl_n_at_top_level_list_focus_does_not_flip_focus() {
-    // `Ctrl-N` / `Ctrl-P` are MODAL-LOCAL aliases for `Tab` /
-    // `Shift-Tab`. With no modal open, they are unbound — they must
-    // not toggle the List ↔ Search focus the way bare `Tab` does.
-    // This guard would trip a regression that lifted the alias to
-    // top level.
+fn pressing_ctrl_n_at_top_level_list_focus_advances_selection_without_flipping_focus() {
+    // `Ctrl-N` / `Ctrl-P` at the top level are readline-style aliases
+    // for `↓` / `↑` per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style
+    // navigation": they move the selection one row but must not flip
+    // the List ↔ Search focus the way bare `Tab` does. With a modal
+    // open they keep their modal-LOCAL meaning as `Tab` / `Shift-Tab`
+    // field-cycling aliases (covered separately).
     let tmp = secure_tempdir();
-    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
-    let a = add_totp_account(&mut vault, &store, "a");
-    let unlocked = AppState::Unlocked {
-        path,
-        vault,
-        store,
-        search_query: String::new(),
-        idle_deadline: None,
-        pending_clipboard_clear: None,
-        hotp_reveal: None,
-        modal: None,
-        selected: Some(a),
-        pending_chord_leader: None,
-        viewport_height: 0,
-        viewport_offset: 0,
-        focus: Focus::List,
-        status_line: None,
-        help_open: false,
-    };
-    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('n')));
+    let (state, [_a, b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('n')));
     assert!(
         effects.is_empty(),
         "top-level `Ctrl-N` must not emit effects"
@@ -13665,8 +13648,8 @@ fn pressing_ctrl_n_at_top_level_list_focus_does_not_flip_focus() {
             assert!(modal.is_none(), "top-level `Ctrl-N` must not open a modal");
             assert_eq!(
                 selected,
-                Some(a),
-                "top-level `Ctrl-N` must not move the list selection"
+                Some(b),
+                "top-level `Ctrl-N` must advance selection one row (mirror of `↓`)"
             );
         }
         other => panic!("expected Unlocked, got {other:?}"),
@@ -13674,28 +13657,16 @@ fn pressing_ctrl_n_at_top_level_list_focus_does_not_flip_focus() {
 }
 
 #[test]
-fn pressing_ctrl_p_at_top_level_list_focus_does_not_flip_focus() {
+fn pressing_ctrl_p_at_top_level_list_focus_retreats_selection_without_flipping_focus() {
     let tmp = secure_tempdir();
-    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
-    let a = add_totp_account(&mut vault, &store, "a");
-    let unlocked = AppState::Unlocked {
-        path,
-        vault,
-        store,
-        search_query: String::new(),
-        idle_deadline: None,
-        pending_clipboard_clear: None,
-        hotp_reveal: None,
-        modal: None,
-        selected: Some(a),
-        pending_chord_leader: None,
-        viewport_height: 0,
-        viewport_offset: 0,
-        focus: Focus::List,
-        status_line: None,
-        help_open: false,
-    };
-    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('p')));
+    let (mut state, [_a, b, c]) = unlocked_with_three_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut selected, ..
+    } = state
+    {
+        *selected = Some(c);
+    }
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('p')));
     assert!(
         effects.is_empty(),
         "top-level `Ctrl-P` must not emit effects"
@@ -13715,8 +13686,8 @@ fn pressing_ctrl_p_at_top_level_list_focus_does_not_flip_focus() {
             assert!(modal.is_none(), "top-level `Ctrl-P` must not open a modal");
             assert_eq!(
                 selected,
-                Some(a),
-                "top-level `Ctrl-P` must not move the list selection"
+                Some(b),
+                "top-level `Ctrl-P` must retreat selection one row (mirror of `↑`)"
             );
         }
         other => panic!("expected Unlocked, got {other:?}"),
@@ -13724,96 +13695,229 @@ fn pressing_ctrl_p_at_top_level_list_focus_does_not_flip_focus() {
 }
 
 #[test]
-fn pressing_ctrl_n_at_top_level_search_focus_does_not_flip_focus() {
-    // `Ctrl-N` on the search bar must not pre-empt `tui-input` and
-    // flip focus back to the list — that would invert the contract
-    // that Ctrl-N is a modal-LOCAL Tab alias. The search-focus
-    // pass-through list explicitly omits `Ctrl-N` / `Ctrl-P`.
+fn pressing_ctrl_n_at_top_level_search_focus_advances_list_selection_without_appending() {
+    // From the search bar, `Ctrl-N` is part of the search-focus
+    // pass-through list (alongside `Ctrl-D` / `Ctrl-U` / `Ctrl-F` /
+    // `Ctrl-B`) per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style
+    // navigation": it moves the list selection without being
+    // consumed by `tui-input` as a printable character. Search query
+    // and focus survive.
     let tmp = secure_tempdir();
-    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
-    let a = add_totp_account(&mut vault, &store, "a");
-    let unlocked = AppState::Unlocked {
-        path,
-        vault,
-        store,
-        search_query: String::from("a"),
-        idle_deadline: None,
-        pending_clipboard_clear: None,
-        hotp_reveal: None,
-        modal: None,
-        selected: Some(a),
-        pending_chord_leader: None,
-        viewport_height: 0,
-        viewport_offset: 0,
-        focus: Focus::Search,
-        status_line: None,
-        help_open: false,
-    };
+    let (mut state, [a, b, _c]) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut selected, ..
+    } = state
+    {
+        *selected = Some(a);
+    }
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('n')));
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            focus,
+            modal,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(b),
+                "Ctrl-N while Focus::Search must advance the list selection one row"
+            );
+            assert_eq!(
+                search_query, "",
+                "Ctrl-N must not append to the search field"
+            );
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "Ctrl-N must not flip search focus to list"
+            );
+            assert!(modal.is_none());
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_p_at_top_level_search_focus_retreats_list_selection_without_appending() {
+    let tmp = secure_tempdir();
+    let (mut state, [_a, b, c]) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut selected, ..
+    } = state
+    {
+        *selected = Some(c);
+    }
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('p')));
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            focus,
+            modal,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(b),
+                "Ctrl-P while Focus::Search must retreat the list selection one row"
+            );
+            assert_eq!(
+                search_query, "",
+                "Ctrl-P must not append to the search field"
+            );
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "Ctrl-P must not flip search focus to list"
+            );
+            assert!(modal.is_none());
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_n_clamps_to_last_row_when_already_at_end() {
+    // Mirror of `pressing_down_arrow_clamps_to_last_when_at_end`: at
+    // the tail of the filtered set, `Ctrl-N` is a silent no-op
+    // (selection stays put, no effects).
+    let tmp = secure_tempdir();
+    let (mut state, [_a, _b, c]) = unlocked_with_three_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut selected, ..
+    } = state
+    {
+        *selected = Some(c);
+    }
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('n')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(c),
+            "Ctrl-N at the tail must clamp to the last row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_p_clamps_to_first_row_when_already_at_start() {
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('p')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(a),
+            "Ctrl-P at the head must clamp to the first row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_n_with_empty_vault_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('n')));
     assert!(effects.is_empty());
     match state {
-        AppState::Unlocked {
-            focus,
-            search_query,
-            modal,
-            ..
-        } => {
-            assert_eq!(
-                focus,
-                Focus::Search,
-                "top-level `Ctrl-N` must not flip search focus to list"
-            );
-            assert_eq!(
-                search_query, "a",
-                "top-level `Ctrl-N` must not mutate the search query"
-            );
-            assert!(modal.is_none());
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
 
 #[test]
-fn pressing_ctrl_p_at_top_level_search_focus_does_not_flip_focus() {
+fn pressing_ctrl_p_with_empty_vault_is_silent_no_op() {
     let tmp = secure_tempdir();
-    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
-    let a = add_totp_account(&mut vault, &store, "a");
-    let unlocked = AppState::Unlocked {
-        path,
-        vault,
-        store,
-        search_query: String::from("a"),
-        idle_deadline: None,
-        pending_clipboard_clear: None,
-        hotp_reveal: None,
-        modal: None,
-        selected: Some(a),
-        pending_chord_leader: None,
-        viewport_height: 0,
-        viewport_offset: 0,
-        focus: Focus::Search,
-        status_line: None,
-        help_open: false,
-    };
+    let unlocked = fresh_plaintext_unlocked(&tmp);
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('p')));
     assert!(effects.is_empty());
     match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_n_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(ctrl(KeyCode::Char('n')), "Ctrl-N");
+}
+
+#[test]
+fn pressing_ctrl_p_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(ctrl(KeyCode::Char('p')), "Ctrl-P");
+}
+
+#[test]
+fn pressing_ctrl_n_clears_pending_chord_leader() {
+    // Mirror of `pressing_ctrl_d_clears_pending_chord_leader`: any
+    // bare-Ctrl chord that moves the selection must also clear an
+    // in-flight `g` / `z` chord leader before the step runs.
+    let tmp = secure_tempdir();
+    let (state, [_a, b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('n')));
+    match state {
         AppState::Unlocked {
-            focus,
-            search_query,
-            modal,
+            selected,
+            pending_chord_leader,
             ..
         } => {
             assert_eq!(
-                focus,
-                Focus::Search,
-                "top-level `Ctrl-P` must not flip search focus to list"
+                pending_chord_leader, None,
+                "Ctrl-N must clear pending chord leader"
             );
             assert_eq!(
-                search_query, "a",
-                "top-level `Ctrl-P` must not mutate the search query"
+                selected,
+                Some(b),
+                "Ctrl-N must still advance after clearing the chord"
             );
-            assert!(modal.is_none());
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_p_clears_pending_chord_leader() {
+    let tmp = secure_tempdir();
+    let (mut state, [_a, b, c]) = unlocked_with_three_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut selected, ..
+    } = state
+    {
+        *selected = Some(c);
+    }
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('p')));
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                pending_chord_leader, None,
+                "Ctrl-P must clear pending chord leader"
+            );
+            // The leader is dropped before the chord can commit, so
+            // Ctrl-P takes its own one-row step from `c` → `b`
+            // rather than the `gg` chord's first-row jump to `a`.
+            assert_eq!(
+                selected,
+                Some(b),
+                "Ctrl-P must still retreat after clearing the chord"
+            );
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }

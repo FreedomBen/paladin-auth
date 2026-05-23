@@ -53,7 +53,7 @@ pub struct Keybinding {
 /// (`Esc` / `q` / `Ctrl-C`) sit at the very bottom.
 pub const KEYBINDINGS: &[Keybinding] = &[
     Keybinding {
-        keys: "↑ ↓ / j k",
+        keys: "↑ ↓ / j k / Ctrl-P Ctrl-N",
         action: "Move selection up / down",
     },
     Keybinding {
@@ -107,10 +107,6 @@ pub const KEYBINDINGS: &[Keybinding] = &[
     Keybinding {
         keys: "Tab / Shift-Tab",
         action: "Cycle focus between search bar and list",
-    },
-    Keybinding {
-        keys: "Ctrl-N / Ctrl-P",
-        action: "In modals: next / previous control",
     },
     Keybinding {
         keys: "p",

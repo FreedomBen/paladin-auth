@@ -1475,31 +1475,31 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
     {
-        // `Ctrl-F` / `Ctrl-B` are the vim mirrors of `PgDn` / `PgUp`
-        // and `Ctrl-D` / `Ctrl-U` are the vim half-page bindings
-        // (move by `viewport_height / 2` rows, integer division)
-        // when no modal is open. All four route through the same
-        // [`move_selection`] path, so `viewport_height = 0` and the
-        // empty filtered set stay silent no-ops, and the chord
-        // leader is cleared before the page step runs. The
-        // half-page variants additionally no-op on
-        // `viewport_height = 1` (half = 0). Strict equality on
-        // `KeyModifiers::CONTROL` keeps Ctrl-Shift-* / Ctrl-Alt-*
-        // out (mirroring the existing `Ctrl-Shift-G is unbound`
-        // convention) — only the bare Ctrl chord engages. With a
-        // modal open, these keys mirror the modal-routing no-op of
-        // `PgDn` / `PgUp`. `Ctrl-N` / `Ctrl-P` are the modal-LOCAL
-        // aliases of `Tab` / `Shift-Tab` per
+        // `Ctrl-F` / `Ctrl-B` are the vim mirrors of `PgDn` / `PgUp`,
+        // `Ctrl-D` / `Ctrl-U` are the vim half-page bindings (move
+        // by `viewport_height / 2` rows, integer division), and
+        // `Ctrl-N` / `Ctrl-P` are the readline-style next / previous
+        // row aliases for `↓` / `↑` — all when no modal is open.
+        // Every binding routes through the same [`move_selection`]
+        // path, so `viewport_height = 0` and the empty filtered set
+        // stay silent no-ops, and the chord leader is cleared before
+        // the page step runs. The half-page variants additionally
+        // no-op on `viewport_height = 1` (half = 0). Strict equality
+        // on `KeyModifiers::CONTROL` keeps Ctrl-Shift-* /
+        // Ctrl-Alt-* out (mirroring the existing `Ctrl-Shift-G is
+        // unbound` convention) — only the bare Ctrl chord engages.
+        // With a modal open, page / half-page chords mirror the
+        // modal-routing no-op of `PgDn` / `PgUp`, while `Ctrl-N` /
+        // `Ctrl-P` keep their modal-LOCAL meaning as `Tab` /
+        // `Shift-Tab` aliases per
         // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation":
-        // they are unbound at the top level (silent no-ops in this
-        // branch so they cannot flip List ↔ Search focus) and, with
-        // a modal open, they produce the same observable no-op as
-        // `Tab` / `Shift-Tab` produce against the modal trap — when
-        // modal payloads grow focusable fields, both pairs must
-        // dispatch through the same modal-local focus-cycling
-        // handler. All other Ctrl/Alt-modifier presses are unbound
-        // at this slice but still clear any pending chord state —
-        // chord commitment requires a bare second press.
+        // they fall through to the modal-focus-routing branch
+        // below — when modal payloads grow focusable fields, both
+        // pairs dispatch through the same modal-local
+        // focus-cycling handler. All other Ctrl/Alt-modifier
+        // presses are unbound at this slice but still clear any
+        // pending chord state — chord commitment requires a bare
+        // second press.
         *pending_chord_leader = None;
         if let Some(step) = ctrl_chord_list_step(modal.is_some(), key) {
             return move_selection(state, step);
@@ -1649,16 +1649,16 @@ fn route_unlocked_char_kbd(mut state: AppState, c: char) -> (AppState, Vec<Effec
 /// Resolve a bare-Ctrl chord into its list-navigation step, or `None`
 /// when the chord is unbound at the current modal state.
 ///
-/// `Ctrl-F` / `Ctrl-B` mirror `PgDn` / `PgUp` and `Ctrl-D` / `Ctrl-U`
-/// are the vim half-page bindings per
+/// `Ctrl-F` / `Ctrl-B` mirror `PgDn` / `PgUp`, `Ctrl-D` / `Ctrl-U`
+/// are the vim half-page bindings, and `Ctrl-N` / `Ctrl-P` are the
+/// readline-style next / previous row aliases for `↓` / `↑` per
 /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation". They only
 /// fire when no modal is open (modals trap focus) and the modifier
 /// set equals `KeyModifiers::CONTROL` exactly — Ctrl-Shift-* /
 /// Ctrl-Alt-* stay unbound, matching the `Ctrl-Shift-G is unbound`
-/// convention. `Ctrl-N` / `Ctrl-P` (modal-local Tab / Shift-Tab
-/// aliases) are deliberately excluded so they cannot leak into the
-/// list view; with a modal open they observe through the modal-trap
-/// path.
+/// convention. With a modal open, `Ctrl-N` / `Ctrl-P` keep their
+/// modal-LOCAL meaning as `Tab` / `Shift-Tab` aliases by falling
+/// through to the modal-focus-routing branch in the caller.
 fn ctrl_chord_list_step(modal_open: bool, key: &KeyEvent) -> Option<ListStep> {
     if modal_open || key.modifiers != KeyModifiers::CONTROL {
         return None;
@@ -1668,6 +1668,8 @@ fn ctrl_chord_list_step(modal_open: bool, key: &KeyEvent) -> Option<ListStep> {
         KeyCode::Char('b') => Some(ListStep::PageUp),
         KeyCode::Char('d') => Some(ListStep::HalfPageDown),
         KeyCode::Char('u') => Some(ListStep::HalfPageUp),
+        KeyCode::Char('n') => Some(ListStep::Down),
+        KeyCode::Char('p') => Some(ListStep::Up),
         _ => None,
     }
 }
@@ -3088,12 +3090,12 @@ fn recenter_viewport(mut state: AppState) -> (AppState, Vec<Effect>) {
 /// the same direction. `search_query` is untouched so an active
 /// query survives the swap. Modal-open is filtered out by the
 /// modal-trap guard in [`reduce_unlocked_input`] before this helper
-/// is reached — and `Ctrl-N` / `Ctrl-P` are the modal-LOCAL aliases
-/// of `Tab` / `Shift-Tab`, so they never reach this helper either
-/// (they fall through the Ctrl branch as silent no-ops at the top
-/// level and through the modal trap when a modal is open). Once
-/// modal payloads grow focusable fields, both pairs must dispatch
-/// through the same modal-local focus-cycling handler.
+/// is reached — and `Ctrl-N` / `Ctrl-P` never reach this helper:
+/// at the top level they bind to list navigation (`↓` / `↑`) via
+/// [`ctrl_chord_list_step`], and with a modal open they cycle
+/// modal-local focus as `Tab` / `Shift-Tab` aliases. Once modal
+/// payloads grow focusable fields, both pairs must dispatch through
+/// the same modal-local focus-cycling handler.
 fn toggle_unlocked_focus(mut state: AppState) -> (AppState, Vec<Effect>) {
     if let AppState::Unlocked { focus, .. } = &mut state {
         *focus = match *focus {

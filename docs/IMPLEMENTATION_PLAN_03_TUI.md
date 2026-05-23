@@ -317,9 +317,14 @@ button or the modal's default confirm action, `Space` toggles the focused
 checkbox / toggle, `←` /
 `→` change segmented selectors, and `↑` / `↓` adjust spinners or move within
 multi-line field groups. `Ctrl-N` / `Ctrl-P` are field-navigation
-aliases only; spinner increment / decrement stays bound to `↑` /
-`↓`, and they have no effect on a post-success counts panel
-(which has no fields to focus and closes only on `Esc`). Text fields consume printable characters and standard
+aliases inside modals only; spinner increment / decrement stays bound
+to `↑` / `↓`, and they have no effect on a post-success counts panel
+(which has no fields to focus and closes only on `Esc`). At the top
+level (no modal open) `Ctrl-N` / `Ctrl-P` mean readline-style next /
+previous row in the account list, not field cycling — they share the
+list-navigation pass-through with `Ctrl-D` / `Ctrl-U` so they work
+from both List and Search focus without being consumed by the search
+field. Text fields consume printable characters and standard
 editing keys. `Esc` cancels the modal and discards pending modal-local edits
 unless the modal is showing a post-success counts panel, where `Esc` simply
 closes it.
@@ -640,6 +645,7 @@ reaches the primary-file commit point with durability still uncertain:
 | `PgUp` `PgDn` / `Ctrl-B` `Ctrl-F`  | Page up / page down by viewport height (vim-style `Ctrl-B` / `Ctrl-F`)                                |
 | `Home` `End` / `gg` `G`            | Jump to first / last row of the filtered set (vim-style `gg` two-press chord and `G`)                 |
 | `Ctrl-U` `Ctrl-D`                  | Half-page up / down (vim-style)                                                                       |
+| `Ctrl-P` `Ctrl-N`                  | Previous / next row (readline-style mirrors of `↑` / `↓`)                                             |
 | `zz`                               | Recenter viewport on selected row (vim-style two-press chord)                                         |
 | `Enter`                            | Copy selected code (TOTP: current; HOTP: visible only)                                                |
 | `n`                                | HOTP next-code (advances + reveals `HOTP_REVEAL_SECS`)                                                |
@@ -650,7 +656,7 @@ reaches the primary-file commit point with durability still uncertain:
 | `e`                                | Open Export modal                                                                                     |
 | `/`                                | Focus search bar                                                                                      |
 | `Tab` `Shift-Tab`                  | Cycle focus between search bar and list (preserves active query when leaving search)                  |
-| `Ctrl-N` `Ctrl-P`                  | In modals: next / previous control (aliases for `Tab` / `Shift-Tab`); no effect outside modals        |
+| `Ctrl-N` `Ctrl-P`                  | In modals: next / previous control (aliases for `Tab` / `Shift-Tab`); outside modals: see list-navigation row above |
 | `p`                                | Open Passphrase modal                                                                                 |
 | `s`                                | Open Settings modal                                                                                   |
 | `?`                                | Open Help overlay (lists all keybindings); `Esc` closes                                               |
@@ -672,8 +678,8 @@ end-to-end.
 - [x] Every keybinding maps to the expected state transition.
 - [x] Search filter narrows the visible list in place.
 - [x] Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
-  `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and
-  `Home` / `End`.
+  `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`,
+  `Ctrl-P` / `Ctrl-N`, and `Home` / `End`.
 - [x] Modal open / close transitions for every modal.
 - [x] HOTP `n` triggers a `HotpAdvance` effect.
 - [x] `AppEvent::EffectResult(...)` is the only path by which effect
@@ -727,8 +733,8 @@ end-to-end.
   the matching second press, and cleared by any non-matching key,
   focus change, modal open, `Esc`, or auto-lock.
 - [x] Search-focus pass-through routes `PgUp` / `PgDn` / `Home` / `End`
-  / `Ctrl-B` / `Ctrl-F` / `Ctrl-D` / `Ctrl-U` to the list before
-  `tui-input` sees them.
+  / `Ctrl-B` / `Ctrl-F` / `Ctrl-D` / `Ctrl-U` / `Ctrl-N` / `Ctrl-P`
+  to the list before `tui-input` sees them.
 - [x] Bare-letter vim keys (`j`, `k`, `g`, `G`, `z`) are consumed by the
   search field as text input and never trigger chord state from the
   search field.
@@ -736,13 +742,17 @@ end-to-end.
   chords is a silent no-op.
 - [x] `Ctrl-N` / `Ctrl-P` inside modals advance / retreat focus the
   same as `Tab` / `Shift-Tab` — for every modal variant, symmetry
-  with `Tab` / `Shift-Tab` is locked in, and at the top level the
-  pair is unbound so they cannot leak into List ↔ Search focus
-  cycling. *(Add modal Manual-mode focus cycle covered by
+  with `Tab` / `Shift-Tab` is locked in. At the top level (no modal
+  open) the same chords bind to readline-style list navigation
+  (mirrors of `↓` / `↑`) rather than to focus cycling, so they
+  cannot leak into List ↔ Search focus toggling. *(Add modal
+  Manual-mode focus cycle covered by
   `tab_in_add_modal_manual_mode_advances_focus_through_all_fields_with_wrap`
   and its `BackTab` / `Ctrl-N` / `Ctrl-P` siblings; Uri / Qr modes
   treat the same keys as silent no-ops so `manual_focus` stays
-  sticky.)*
+  sticky. Top-level list-nav coverage lands in
+  `pressing_ctrl_{n,p}_at_top_level_{list,search}_focus_*` plus
+  empty-vault / empty-filtered-set / chord-clear / clamp siblings.)*
 - [x] `Ctrl-N` / `Ctrl-P` inside modals have no effect on a
   post-success counts panel — lands alongside the counts panel
   payload (Add / Import / Export). *(Add modal covered now that
@@ -3420,8 +3430,11 @@ terminal theme and survives `--no-color`.
   non-matching key, focus change to search, modal open, `Esc`, or
   auto-lock. Add `Ctrl-B` / `Ctrl-F` to the search-focus
   pass-through list alongside the existing `Ctrl-D` / `Ctrl-U` /
-  `PgUp` / `PgDn` / `Home` / `End`. Add `Ctrl-N` / `Ctrl-P` as
-  modal-local `Tab` / `Shift-Tab` aliases.
+  `PgUp` / `PgDn` / `Home` / `End`. `Ctrl-N` / `Ctrl-P` serve two
+  scopes: inside modals they are `Tab` / `Shift-Tab` field-cycling
+  aliases, and at the top level they are readline-style next /
+  previous row mirrors of `↓` / `↑` that share the search-focus
+  pass-through with the half-page / page chords.
 - [x] Implement add / remove / rename / import / export / passphrase / settings modals
   with persistence through `Vault::mutate_and_save` where the core owns
   rollback. Source the `passphrase remove` warning from

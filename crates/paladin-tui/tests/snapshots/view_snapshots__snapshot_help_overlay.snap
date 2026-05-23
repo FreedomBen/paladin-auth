@@ -5,7 +5,7 @@ expression: "render_to_text(&state, snapshot_now(), 80, 30)"
 ┌┌ Help — keybindings ────────────────────────────────────────────────────────┐┐
 ││ Read-only — keys are listed for reference.                                 ││
 ││                                                                            ││
-││ ↑ ↓ / j k                    Move selection up / down                      ││
+││ ↑ ↓ / j k / Ctrl-P Ctrl-N    Move selection up / down                      ││
 ││ PgUp PgDn / Ctrl-B Ctrl-F    Page up / down by viewport height             ││
 ││ Home End / gg G              Jump to first / last row of filtered set      ││
 ││ Ctrl-U Ctrl-D                Half-page up / down                           ││
@@ -19,7 +19,6 @@ expression: "render_to_text(&state, snapshot_now(), 80, 30)"
 ││ e                            Open Export modal                             ││
 ││ /                            Focus search bar                              ││
 ││ Tab / Shift-Tab              Cycle focus between search bar and list       ││
-││ Ctrl-N / Ctrl-P              In modals: next / previous control            ││
 ││ p                            Open Passphrase modal                         ││
 ││ s                            Open Settings modal                           ││
 ││ ?                            Open Help overlay                             ││
@@ -31,4 +30,5 @@ expression: "render_to_text(&state, snapshot_now(), 80, 30)"
 ││                              (otherwise a typed passphrase character)      ││
 ││ Ctrl-C                       Quit (any screen)                             ││
 ││                                 Esc closes                                 ││
-└└────────────────────────────────────────────────────────────────────────────┘┘
+│└────────────────────────────────────────────────────────────────────────────┘│
+└──────────────────────────────────────────────────────────────────────────────┘
