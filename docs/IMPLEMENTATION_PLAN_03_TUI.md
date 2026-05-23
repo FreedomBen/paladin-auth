@@ -3491,12 +3491,30 @@ terminal theme and survives `--no-color`.
 - [x] Implement clipboard wrapper (arboard reads/writes), QR image
   import from clipboard bytes, and only-if-unchanged auto-clear via
   `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::should_clear`.
-  *(Adapter primitives live in `crates/paladin-tui/src/clipboard.rs`:
-  `read_text` / `write_text` already routed through `arboard` for both
-  production and `test-hooks` builds. This slice adds the third
-  primitive — `read_image() -> Result<ClipboardImage, ImageReadError>`
-  — that wraps `arboard::Clipboard::get_image()` and re-shapes the
-  result into the adapter-owned `ClipboardImage { width, height, rgba }`
+  *(Adapter primitives live in `crates/paladin-tui/src/clipboard.rs`
+  as methods on a long-lived [`ClipboardSession`] —
+  `read_text(&mut self) -> Result<String, ()>` /
+  `write_text(&mut self, &str) -> Result<(), ()>` /
+  `read_image(&mut self) -> Result<ClipboardImage, ImageReadError>` —
+  that lazily initialize one cached `arboard::Clipboard` and reuse it
+  for every read / write over the lifetime of the
+  `paladin-tui` process. The executor borrows the session as `&mut`
+  through `crate::app::dispatch::dispatch` (which `crate::app::run::run_event_loop`
+  constructs once and threads in alongside the `mpsc` sender). Reusing
+  one `arboard::Clipboard` instance fixes two related problems that the
+  earlier "construct-drop per call" shape exhibited on Linux X11:
+  clipboard managers (clipman, parcellite, gpaste, …) could miss the
+  contents because the X11 selection owner went away within
+  milliseconds of `set_text`; and `arboard` 3.x in `debug_assertions`
+  builds prints `"Clipboard was dropped very quickly after writing …"`
+  to stderr when the `Clipboard` is dropped < 100 ms after a write
+  *and* stderr is a TTY (which it always is under the TUI), mangling
+  the alternate-screen render. A session-scoped instance keeps the
+  X11 selection alive for the duration of the app and pushes the
+  `Clipboard` drop past the 100 ms threshold so neither failure mode
+  is reachable in normal operation. The third primitive `read_image`
+  wraps `arboard::Clipboard::get_image()` and re-shapes the result
+  into the adapter-owned `ClipboardImage { width, height, rgba }`
   type so the `arboard` dependency does not leak through the adapter
   boundary. Errors collapse to a two-variant `ImageReadError`
   (`NoImage` from `arboard::Error::ContentNotAvailable`,

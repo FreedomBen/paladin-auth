@@ -92,10 +92,24 @@ where
     // (see the module-level docs).
     let _input = spawn_input(tx.clone());
     let _ticker = spawn_ticker(tx.clone());
+    // One long-lived `ClipboardSession` per run; effects share it via
+    // `dispatch` so the cached `arboard::Clipboard` is reused across
+    // copy / clear / QR-import calls. See `crate::clipboard` module
+    // docs for why a per-call session would leak the X11 selection
+    // and trigger `arboard`'s debug-build "dropped too quickly"
+    // warning on stderr (which mangles the alternate-screen render).
+    let mut clipboard = crate::clipboard::ClipboardSession::new();
     // `dispatch` borrows the original sender to route effect
     // results back through the same channel; the receiver is
     // consumed as we return.
-    dispatch(initial_state, &rx, &tx, render, initial_wall_clock)
+    dispatch(
+        initial_state,
+        &rx,
+        &tx,
+        &mut clipboard,
+        render,
+        initial_wall_clock,
+    )
 }
 
 /// Run the event loop under a [`TerminalGuard`] that owns raw mode

@@ -94,6 +94,7 @@ fn dispatch_renders_initial_state_before_processing_events() {
         initial,
         &rx,
         &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
         move |state, wc| {
             renders_clone.borrow_mut().push((tag(state), wc));
         },
@@ -131,6 +132,7 @@ fn dispatch_returns_when_reducer_emits_effect_quit() {
         missing("/tmp/v.bin"),
         &rx,
         &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
         |_, _| {},
         SystemTime::UNIX_EPOCH,
     );
@@ -160,6 +162,7 @@ fn dispatch_returns_when_producer_channel_disconnects() {
             missing("/tmp/v.bin"),
             &rx,
             &dummy_tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
             |_, _| {},
             SystemTime::UNIX_EPOCH,
         );
@@ -193,6 +196,7 @@ fn dispatch_threads_latest_tick_wall_clock_into_render() {
         missing("/tmp/v.bin"),
         &rx,
         &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
         move |_, wc| {
             renders_clone.borrow_mut().push(wc);
         },
@@ -232,6 +236,7 @@ fn dispatch_renders_once_per_non_quit_event_then_exits_without_post_quit_render(
         missing("/tmp/v.bin"),
         &rx,
         &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
         move |_, _| {
             *count_clone.borrow_mut() += 1;
         },
@@ -265,6 +270,7 @@ fn dispatch_renders_state_after_reducer_applies_event() {
         missing("/tmp/v.bin"),
         &rx,
         &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
         move |state, _| {
             *last_tag_clone.borrow_mut() = Some(tag(state));
         },

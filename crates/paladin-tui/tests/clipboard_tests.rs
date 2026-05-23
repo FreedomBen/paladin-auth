@@ -1231,7 +1231,9 @@ mod executor_only_if_unchanged {
         with_dryrun("1", || {
             seed_test_clipboard("");
             assert!(
-                paladin_tui::clipboard::write_text("abc123").is_ok(),
+                paladin_tui::clipboard::ClipboardSession::new()
+                    .write_text("abc123")
+                    .is_ok(),
                 "PALADIN_CLIPBOARD_DRYRUN=1 must accept writes via the fake"
             );
             assert_eq!(
@@ -1240,7 +1242,7 @@ mod executor_only_if_unchanged {
                 "DRYRUN write must land in the in-process fake clipboard"
             );
             assert_eq!(
-                paladin_tui::clipboard::read_text(),
+                paladin_tui::clipboard::ClipboardSession::new().read_text(),
                 Ok("abc123".to_string()),
                 "DRYRUN read must return the same bytes the fake holds"
             );
@@ -1251,12 +1253,12 @@ mod executor_only_if_unchanged {
     fn dryrun_adapter_fail_mode_returns_err_for_both_read_and_write() {
         with_dryrun("fail", || {
             assert_eq!(
-                paladin_tui::clipboard::write_text("ignored"),
+                paladin_tui::clipboard::ClipboardSession::new().write_text("ignored"),
                 Err(()),
                 "PALADIN_CLIPBOARD_DRYRUN=fail must surface a write error"
             );
             assert_eq!(
-                paladin_tui::clipboard::read_text(),
+                paladin_tui::clipboard::ClipboardSession::new().read_text(),
                 Err(()),
                 "PALADIN_CLIPBOARD_DRYRUN=fail must surface a read error"
             );
@@ -1278,6 +1280,7 @@ mod executor_only_if_unchanged {
                 },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             assert_eq!(outcome, EffectOutcome::Continue);
             assert!(
@@ -1312,6 +1315,7 @@ mod executor_only_if_unchanged {
                 },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             assert_eq!(outcome, EffectOutcome::Continue);
             assert!(
@@ -1347,6 +1351,7 @@ mod executor_only_if_unchanged {
                 },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             assert_eq!(outcome, EffectOutcome::Continue);
             assert_eq!(
@@ -1375,6 +1380,7 @@ mod executor_only_if_unchanged {
                 },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             assert_eq!(outcome, EffectOutcome::Continue);
             assert!(rx.try_recv().is_err());
@@ -1407,8 +1413,8 @@ mod executor_only_if_unchanged {
 #[cfg(feature = "test-hooks")]
 mod adapter_read_image {
     use paladin_tui::clipboard::{
-        clear_test_clipboard_image, read_image, seed_test_clipboard_image, test_clipboard_lock,
-        ClipboardImage, ImageReadError,
+        clear_test_clipboard_image, seed_test_clipboard_image, test_clipboard_lock, ClipboardImage,
+        ImageReadError,
     };
 
     /// Run `body` with `PALADIN_CLIPBOARD_DRYRUN=mode`, the process-wide
@@ -1429,7 +1435,7 @@ mod adapter_read_image {
             // 2x1 RGBA8 image — 8 bytes — opaque red then opaque blue.
             let rgba: Vec<u8> = vec![255, 0, 0, 255, 0, 0, 255, 255];
             seed_test_clipboard_image(2, 1, rgba.clone());
-            match read_image() {
+            match paladin_tui::clipboard::ClipboardSession::new().read_image() {
                 Ok(ClipboardImage {
                     width,
                     height,
@@ -1449,7 +1455,7 @@ mod adapter_read_image {
         with_dryrun_image("1", || {
             clear_test_clipboard_image();
             assert_eq!(
-                read_image(),
+                paladin_tui::clipboard::ClipboardSession::new().read_image(),
                 Err(ImageReadError::NoImage),
                 "DRYRUN=1 without a seeded image must surface NoImage"
             );
@@ -1460,7 +1466,7 @@ mod adapter_read_image {
     fn dryrun_image_fail_mode_returns_decode_failure() {
         with_dryrun_image("fail", || {
             assert_eq!(
-                read_image(),
+                paladin_tui::clipboard::ClipboardSession::new().read_image(),
                 Err(ImageReadError::DecodeFailure),
                 "DRYRUN=fail must surface DecodeFailure so the executor \
                  reaches the QrImportFailure::ImageDecodeFailure branch"
@@ -1476,7 +1482,7 @@ mod adapter_read_image {
         with_dryrun_image("1", || {
             seed_test_clipboard_image(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]);
             seed_test_clipboard_image(1, 1, vec![9, 9, 9, 9]);
-            match read_image() {
+            match paladin_tui::clipboard::ClipboardSession::new().read_image() {
                 Ok(ClipboardImage {
                     width,
                     height,
@@ -1495,10 +1501,15 @@ mod adapter_read_image {
     fn dryrun_image_clear_seed_returns_no_image_on_subsequent_read() {
         with_dryrun_image("1", || {
             seed_test_clipboard_image(1, 1, vec![1, 2, 3, 4]);
-            assert!(read_image().is_ok(), "sanity: seed should succeed");
+            assert!(
+                paladin_tui::clipboard::ClipboardSession::new()
+                    .read_image()
+                    .is_ok(),
+                "sanity: seed should succeed"
+            );
             clear_test_clipboard_image();
             assert_eq!(
-                read_image(),
+                paladin_tui::clipboard::ClipboardSession::new().read_image(),
                 Err(ImageReadError::NoImage),
                 "after clear, the fake clipboard image must report NoImage"
             );

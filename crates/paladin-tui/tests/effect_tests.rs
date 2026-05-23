@@ -129,7 +129,12 @@ fn add_totp_account(vault: &mut Vault, store: &Store, label: &str) -> AccountId 
 fn execute_quit_returns_quit_and_sends_no_event() {
     let (tx, rx) = mpsc::channel::<AppEvent>();
     let mut state = dummy_state();
-    let outcome = execute(Effect::Quit, &mut state, &tx);
+    let outcome = execute(
+        Effect::Quit,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Quit);
     assert!(
         rx.try_recv().is_err(),
@@ -159,7 +164,12 @@ fn execute_unlock_with_correct_passphrase_sends_unlock_ok() {
     // sample rather than some default-constructed instant.
     let before = Instant::now();
     let mut state = dummy_state();
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     let after = Instant::now();
     assert_eq!(outcome, EffectOutcome::Continue);
 
@@ -200,7 +210,12 @@ fn execute_unlock_with_wrong_passphrase_sends_decrypt_failed() {
     };
 
     let mut state = dummy_state();
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("event should be sent");
@@ -232,7 +247,12 @@ fn execute_unlock_against_create_vault_sends_vault_missing() {
     };
 
     let mut state = dummy_state();
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("event should be sent");
@@ -258,7 +278,12 @@ fn execute_unlock_against_plaintext_vault_sends_wrong_vault_lock() {
     };
 
     let mut state = dummy_state();
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("event should be sent");
@@ -294,7 +319,12 @@ fn execute_unlock_with_dropped_receiver_does_not_panic() {
     };
 
     let mut state = dummy_state();
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(
         outcome,
         EffectOutcome::Continue,
@@ -325,7 +355,12 @@ fn execute_rename_with_valid_label_renames_account_and_sends_ok() {
         new_label: "github-personal".to_string(),
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -402,7 +437,12 @@ fn execute_rename_with_same_label_still_bumps_updated_at() {
         new_label: "github".to_string(),
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -444,7 +484,12 @@ fn execute_rename_with_unknown_account_id_sends_account_not_found_err() {
         new_label: "whatever".to_string(),
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -488,7 +533,12 @@ fn execute_rename_on_non_unlocked_state_is_silently_dropped() {
         new_label: "anything".to_string(),
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
     assert!(
         rx.try_recv().is_err(),
@@ -512,7 +562,12 @@ fn execute_rename_with_mismatched_path_is_silently_dropped() {
         new_label: "renamed".to_string(),
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
     assert!(
         rx.try_recv().is_err(),
@@ -545,7 +600,12 @@ fn execute_rename_with_dropped_receiver_does_not_panic() {
         new_label: "renamed".to_string(),
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     // The rename still took effect in memory (the executor does not
@@ -581,7 +641,12 @@ fn execute_remove_with_existing_account_removes_and_sends_ok_with_label() {
         account_id: id,
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -645,7 +710,12 @@ fn execute_remove_with_unknown_account_id_sends_account_not_found_err() {
         account_id: bogus,
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -688,7 +758,12 @@ fn execute_remove_on_non_unlocked_state_is_silently_dropped() {
         account_id: AccountId::new(),
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
     assert!(
         rx.try_recv().is_err(),
@@ -711,7 +786,12 @@ fn execute_remove_with_mismatched_path_is_silently_dropped() {
         account_id: id,
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
     assert!(
         rx.try_recv().is_err(),
@@ -743,7 +823,12 @@ fn execute_remove_with_dropped_receiver_does_not_panic() {
         account_id: id,
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     // The remove still took effect in memory (the executor does not
@@ -804,7 +889,12 @@ fn execute_remove_carries_issuer_joined_display_label() {
         account_id: id,
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -842,7 +932,12 @@ fn execute_apply_settings_with_single_patch_applies_and_sends_ok() {
         patches: vec![SettingPatch::AutoLockEnabled(true)],
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -896,7 +991,12 @@ fn execute_apply_settings_with_multiple_patches_applies_atomically_and_sends_ok(
         ],
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -949,7 +1049,12 @@ fn execute_apply_settings_with_out_of_range_patch_returns_validation_error() {
         patches: vec![SettingPatch::AutoLockTimeoutSecs(0)],
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -982,7 +1087,12 @@ fn execute_apply_settings_on_non_unlocked_state_is_silently_dropped() {
         patches: vec![SettingPatch::AutoLockEnabled(true)],
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
     assert!(
         rx.try_recv().is_err(),
@@ -1002,7 +1112,12 @@ fn execute_apply_settings_with_mismatched_path_is_silently_dropped() {
         patches: vec![SettingPatch::AutoLockEnabled(true)],
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
     assert!(
         rx.try_recv().is_err(),
@@ -1033,7 +1148,12 @@ fn execute_apply_settings_with_dropped_receiver_does_not_panic() {
 
     // The mutate-and-save still ran (vault carries the new value);
     // the send into a dropped channel is swallowed without panic.
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
     match &state {
         AppState::Unlocked { vault, .. } => {
@@ -1104,7 +1224,12 @@ fn execute_add_with_duplicate_emits_duplicate_failure_and_does_not_mutate_vault(
         icon_hint_text: String::new(),
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -1207,7 +1332,12 @@ fn execute_add_from_uri_with_duplicate_emits_duplicate_failure_and_does_not_muta
         uri,
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -1275,7 +1405,12 @@ fn execute_add_from_uri_with_invalid_uri_emits_validation_failure() {
         uri,
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -1353,7 +1488,12 @@ fn execute_add_anyway_inserts_validated_account_with_fresh_id_and_persists() {
         validated: Box::new(validated),
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -1448,7 +1588,12 @@ fn execute_add_anyway_with_mismatched_path_is_silently_dropped() {
         validated: Box::new(validated),
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
     assert!(
         rx.try_recv().is_err(),
@@ -1518,7 +1663,12 @@ fn execute_add_with_no_duplicate_inserts_validated_account_and_persists() {
         icon_hint_text: String::new(),
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -1601,7 +1751,12 @@ fn execute_add_from_uri_with_no_duplicate_inserts_validated_account_and_persists
         uri,
     };
 
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -1707,7 +1862,12 @@ fn execute_import_with_auto_format_routes_through_import_from_file_for_otpauth_p
         conflict: ImportConflict::Skip,
         paladin_passphrase: None,
     };
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -1798,7 +1958,12 @@ fn execute_import_with_missing_source_file_emits_io_error_failure_and_leaves_vau
         conflict: ImportConflict::Skip,
         paladin_passphrase: None,
     };
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -1871,7 +2036,12 @@ fn execute_import_with_mismatched_path_is_silently_dropped() {
         conflict: ImportConflict::Skip,
         paladin_passphrase: None,
     };
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
     assert!(
         rx.try_recv().is_err(),
@@ -1953,7 +2123,12 @@ fn execute_import_with_forced_aegis_format_routes_through_import_from_file_for_a
         conflict: ImportConflict::Skip,
         paladin_passphrase: None,
     };
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -2048,7 +2223,12 @@ fn execute_import_with_forced_format_mismatch_returns_unsupported_import_format_
         conflict: ImportConflict::Skip,
         paladin_passphrase: None,
     };
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -2179,7 +2359,12 @@ fn execute_import_with_skip_conflict_over_colliding_account_records_skip_and_lea
         conflict: ImportConflict::Skip,
         paladin_passphrase: None,
     };
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -2260,7 +2445,12 @@ fn execute_import_with_replace_conflict_over_colliding_account_preserves_id_and_
         conflict: ImportConflict::Replace,
         paladin_passphrase: None,
     };
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -2342,7 +2532,12 @@ fn execute_import_with_append_conflict_over_colliding_account_inserts_fresh_id_a
         conflict: ImportConflict::Append,
         paladin_passphrase: None,
     };
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -2495,7 +2690,14 @@ mod import_save_not_committed {
             conflict: ImportConflict::Skip,
             paladin_passphrase: None,
         };
-        let outcome = with_pre_commit_fault(|| execute(effect, &mut state, &tx));
+        let outcome = with_pre_commit_fault(|| {
+            execute(
+                effect,
+                &mut state,
+                &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
+            )
+        });
 
         assert_eq!(outcome, EffectOutcome::Continue);
         let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -2613,7 +2815,12 @@ fn execute_export_with_plaintext_format_routes_through_otpauth_list_and_writes_v
         format: ExportFormat::Plaintext,
         passphrase: None,
     };
-    let outcome = execute(effect, &mut state, &tx);
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -2738,7 +2945,15 @@ fn execute_export_with_encrypted_format_routes_through_export_encrypted_and_writ
         format: ExportFormat::Encrypted,
         passphrase: Some(SecretString::from(bundle_passphrase.to_string())),
     };
-    assert_eq!(execute(effect, &mut state, &tx), EffectOutcome::Continue);
+    assert_eq!(
+        execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new()
+        ),
+        EffectOutcome::Continue
+    );
 
     match rx.try_recv().expect("an AppEvent should be sent") {
         AppEvent::EffectResult(EffectResult::Export { result: Ok(()) }) => {}
@@ -2924,6 +3139,7 @@ mod add_from_clipboard_qr {
                 Effect::AddFromClipboardQr { path: path.clone() },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             assert_eq!(outcome, EffectOutcome::Continue);
 
@@ -3006,6 +3222,7 @@ mod add_from_clipboard_qr {
                 Effect::AddFromClipboardQr { path: path.clone() },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             assert_eq!(outcome, EffectOutcome::Continue);
 
@@ -3073,6 +3290,7 @@ mod add_from_clipboard_qr {
                 Effect::AddFromClipboardQr { path: path.clone() },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             assert_eq!(outcome, EffectOutcome::Continue);
 
@@ -3143,6 +3361,7 @@ mod add_from_clipboard_qr {
                 Effect::AddFromClipboardQr { path: path.clone() },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             assert_eq!(outcome, EffectOutcome::Continue);
 
@@ -3239,6 +3458,7 @@ mod add_from_clipboard_qr {
                 Effect::AddFromClipboardQr { path: path.clone() },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             assert_eq!(outcome, EffectOutcome::Continue);
 
@@ -3310,6 +3530,7 @@ mod add_from_clipboard_qr {
                 Effect::AddFromClipboardQr { path: other_path },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             assert_eq!(outcome, EffectOutcome::Continue);
             assert!(
@@ -3343,6 +3564,7 @@ mod add_from_clipboard_qr {
                 Effect::AddFromClipboardQr { path: path.clone() },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             assert_eq!(outcome, EffectOutcome::Continue);
             assert!(
@@ -3391,6 +3613,7 @@ mod add_from_clipboard_qr {
                 Effect::AddFromClipboardQr { path: path.clone() },
                 &mut state,
                 &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             let evt = rx.try_recv().expect("first AppEvent");
             match evt {
@@ -3412,6 +3635,7 @@ mod add_from_clipboard_qr {
                 Effect::AddFromClipboardQr { path: path.clone() },
                 &mut state,
                 &tx2,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
             );
             let evt2 = rx2.try_recv().expect("second AppEvent");
             match evt2 {
@@ -3586,7 +3810,12 @@ mod copy_code {
             };
 
             let before = Instant::now();
-            let outcome = execute(effect, &mut state, &tx);
+            let outcome = execute(
+                effect,
+                &mut state,
+                &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
+            );
             let after = Instant::now();
             assert_eq!(outcome, EffectOutcome::Continue);
 
@@ -3641,7 +3870,12 @@ mod copy_code {
                 path: path.clone(),
                 account_id: id,
             };
-            let outcome = execute(effect, &mut state, &tx);
+            let outcome = execute(
+                effect,
+                &mut state,
+                &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
+            );
             assert_eq!(outcome, EffectOutcome::Continue);
 
             let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -3687,7 +3921,12 @@ mod copy_code {
                 path: path.clone(),
                 account_id: id,
             };
-            let outcome = execute(effect, &mut state, &tx);
+            let outcome = execute(
+                effect,
+                &mut state,
+                &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
+            );
             assert_eq!(outcome, EffectOutcome::Continue);
 
             let evt = rx.try_recv().expect("an AppEvent should be sent");
@@ -3721,7 +3960,12 @@ mod copy_code {
                 path: PathBuf::from("/some/other/vault.bin"),
                 account_id: id,
             };
-            let outcome = execute(effect, &mut state, &tx);
+            let outcome = execute(
+                effect,
+                &mut state,
+                &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
+            );
             assert_eq!(outcome, EffectOutcome::Continue);
             assert!(
                 rx.try_recv().is_err(),
@@ -3748,7 +3992,12 @@ mod copy_code {
                 path: PathBuf::from("/dev/null/dummy-vault.bin"),
                 account_id: AccountId::new(),
             };
-            let outcome = execute(effect, &mut state, &tx);
+            let outcome = execute(
+                effect,
+                &mut state,
+                &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
+            );
             assert_eq!(outcome, EffectOutcome::Continue);
             assert!(
                 rx.try_recv().is_err(),
@@ -3779,7 +4028,12 @@ mod copy_code {
                 path: path.clone(),
                 account_id: id,
             };
-            let outcome = execute(effect, &mut state, &tx);
+            let outcome = execute(
+                effect,
+                &mut state,
+                &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
+            );
             assert_eq!(outcome, EffectOutcome::Continue);
             assert!(
                 rx.try_recv().is_err(),
@@ -3810,7 +4064,12 @@ mod copy_code {
                 path: path.clone(),
                 account_id: AccountId::new(),
             };
-            let outcome = execute(effect, &mut state, &tx);
+            let outcome = execute(
+                effect,
+                &mut state,
+                &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
+            );
             assert_eq!(outcome, EffectOutcome::Continue);
             assert!(
                 rx.try_recv().is_err(),
@@ -3840,7 +4099,12 @@ mod copy_code {
                 path: path.clone(),
                 account_id: id,
             };
-            let outcome = execute(effect, &mut state, &tx);
+            let outcome = execute(
+                effect,
+                &mut state,
+                &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
+            );
             assert_eq!(outcome, EffectOutcome::Continue);
         });
     }

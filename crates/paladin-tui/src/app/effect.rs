@@ -71,7 +71,12 @@ pub enum EffectOutcome {
 // the dispatcher is cleaner than further splitting it into per-variant
 // trampolines.
 #[allow(clippy::too_many_lines)]
-pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) -> EffectOutcome {
+pub fn execute(
+    effect: Effect,
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+    clipboard: &mut crate::clipboard::ClipboardSession,
+) -> EffectOutcome {
     match effect {
         Effect::Quit => EffectOutcome::Quit,
         Effect::Unlock { path, passphrase } => {
@@ -123,9 +128,9 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             // No `AppEvent` is sent back: clipboard wipe is fire-and-
             // forget at this layer.
             let _ = sender;
-            if let Ok(current) = crate::clipboard::read_text() {
+            if let Ok(current) = clipboard.read_text() {
                 if ClipboardClearPolicy::should_clear(&value, current.as_bytes()) {
-                    let _ = crate::clipboard::write_text("");
+                    let _ = clipboard.write_text("");
                 }
             }
             EffectOutcome::Continue
@@ -207,7 +212,7 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
                 },
             };
 
-            let write_result = crate::clipboard::write_text(code_str.as_str());
+            let write_result = clipboard.write_text(code_str.as_str());
             // Sample `completed_at` immediately after the write so
             // the reducer's `ClipboardClearPolicy::schedule` rebases
             // the auto-clear deadline off the actual copy time.
@@ -352,7 +357,9 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
         Effect::AddAnyway { path, validated } => {
             execute_add_anyway(&path, *validated, state, sender)
         }
-        Effect::AddFromClipboardQr { path } => execute_add_from_clipboard_qr(&path, state, sender),
+        Effect::AddFromClipboardQr { path } => {
+            execute_add_from_clipboard_qr(&path, state, sender, clipboard)
+        }
         Effect::Import {
             path,
             source_path,
@@ -789,6 +796,7 @@ fn execute_add_from_clipboard_qr(
     path: &std::path::Path,
     state: &mut AppState,
     sender: &Sender<AppEvent>,
+    clipboard: &mut crate::clipboard::ClipboardSession,
 ) -> EffectOutcome {
     let AppState::Unlocked {
         path: state_path,
@@ -803,7 +811,7 @@ fn execute_add_from_clipboard_qr(
         return EffectOutcome::Continue;
     }
 
-    let image = match crate::clipboard::read_image() {
+    let image = match clipboard.read_image() {
         Ok(img) => img,
         Err(crate::clipboard::ImageReadError::NoImage) => {
             let _ = sender.send(AppEvent::EffectResult(EffectResult::QrImport {

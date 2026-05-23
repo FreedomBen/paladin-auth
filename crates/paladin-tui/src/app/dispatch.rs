@@ -29,6 +29,7 @@ use crate::app::effect::{execute, EffectOutcome};
 use crate::app::event::AppEvent;
 use crate::app::reducer::reduce;
 use crate::app::state::AppState;
+use crate::clipboard::ClipboardSession;
 
 /// Run the event dispatch loop until an effect returns
 /// [`EffectOutcome::Quit`] or the producer side of `rx` disconnects.
@@ -59,6 +60,12 @@ use crate::app::state::AppState;
 /// uses the loop's return to tear down the terminal promptly, and a
 /// trailing draw call would race the alternate-screen restoration.
 ///
+/// `clipboard` is the long-lived [`ClipboardSession`] owned by
+/// [`crate::app::run::run_event_loop`]; effects that touch the OS
+/// clipboard borrow it as `&mut` for the duration of the call so
+/// the cached `arboard::Clipboard` is reused across the app's
+/// lifetime (see `crate::clipboard` module docs).
+///
 /// The function consumes `initial_state` and returns the final
 /// `AppState` so callers can observe what the loop terminated on.
 /// Production callers discard it; tests inspect it.
@@ -66,6 +73,7 @@ pub fn dispatch<R>(
     initial_state: AppState,
     rx: &Receiver<AppEvent>,
     tx: &Sender<AppEvent>,
+    clipboard: &mut ClipboardSession,
     mut render: R,
     initial_wall_clock: SystemTime,
 ) -> AppState
@@ -86,7 +94,7 @@ where
         state = new_state;
         let mut quit = false;
         for effect in effects {
-            if execute(effect, &mut state, tx) == EffectOutcome::Quit {
+            if execute(effect, &mut state, tx, clipboard) == EffectOutcome::Quit {
                 quit = true;
             }
         }
