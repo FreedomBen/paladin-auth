@@ -739,6 +739,7 @@ fn account_row_init_round_trips_account_id() {
         kind: AccountKindSummary::Totp,
         counter: None,
         icon_hint: None,
+        issuer: None,
     };
     let init = AccountRowInit {
         account_id: id,

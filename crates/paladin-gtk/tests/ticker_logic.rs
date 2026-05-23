@@ -63,6 +63,7 @@ fn totp_row(label: &str) -> AccountRowModel {
         kind: AccountKindSummary::Totp,
         counter: None,
         icon_hint: None,
+        issuer: None,
     }
 }
 
@@ -73,6 +74,7 @@ fn hotp_row(label: &str, counter: u64) -> AccountRowModel {
         kind: AccountKindSummary::Hotp,
         counter: Some(counter),
         icon_hint: None,
+        issuer: None,
     }
 }
 
@@ -416,6 +418,7 @@ fn totp_row_for(id: AccountId, label: &str) -> AccountRowModel {
         kind: AccountKindSummary::Totp,
         counter: None,
         icon_hint: None,
+        issuer: None,
     }
 }
 
@@ -426,6 +429,7 @@ fn hotp_row_for(id: AccountId, label: &str, counter: u64) -> AccountRowModel {
         kind: AccountKindSummary::Hotp,
         counter: Some(counter),
         icon_hint: None,
+        issuer: None,
     }
 }
 

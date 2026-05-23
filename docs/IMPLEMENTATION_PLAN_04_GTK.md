@@ -193,6 +193,29 @@ inclusion.
   rebind every visible row through `SignalListItemFactory::connect_bind`,
   which re-installed the row's `gio::SimpleActionGroup` mid-frame and
   intermittently dropped pointer events.
+
+  Section headers. The `gtk::ListBox` carries a
+  `set_header_func` that groups consecutive rows by
+  `AccountSummary.issuer`: the first row of each issuer-run gets a
+  small inline `gtk::Label` header above it (issuer text verbatim;
+  the `"Other"` literal for `None` / empty issuer), and subsequent
+  rows in the same run have no header. Vault insertion order is
+  preserved — rows are never reordered for grouping, so a vault that
+  interleaves two issuers shows two headers for the same issuer
+  text. The decision is driven by two pure-logic helpers in
+  `account_list.rs` (`issuer_group_header(model)` for the displayed
+  text and `row_section_header(prev, current)` for the
+  show-or-not decision) so the dispatch table is testable without
+  GTK; the `set_header_func` closure looks up the row models in
+  `current_rows` by `gtk::ListBoxRow::index` and binds a fresh
+  `gtk::Label` (CSS class `dim-label`, leading margin matching the
+  row icon) only when the helper returns `Some`. `AccountRowModel`
+  carries an `issuer: Option<String>` field projected from
+  `AccountSummary.issuer` with the `summary_display_label`
+  rule applied (i.e. `Some("")` collapses to `None`) so grouping
+  and display stay in lockstep with the row's
+  `<issuer>:<label>` body.
+
   Search uses a `gtk::SearchEntry` hosted inside a `gtk::SearchBar`
   whose `search-mode-enabled` is bound to the header bar's
   search-toggle button (see "libadwaita usage" below). The bar's
@@ -1169,6 +1192,16 @@ These run without a display server. Each lives under
   for `tests/gtk_smoke.rs` assertions.
 - [x] Row action dispatch carries the selected account ID for Rename
   and Remove without touching the vault.
+- [ ] `issuer_group_header` returns the issuer string verbatim for
+  rows whose `AccountRowModel.issuer` is `Some(non_empty)`, and the
+  `"Other"` literal for `None` (parity with the `summary_display_label`
+  collapse rule, so `Some("")` projects to `None` at the
+  `row_models_from_vault` boundary and lands in the same bucket).
+- [ ] `row_section_header` returns `Some(header)` for the first row
+  of the list and for any row whose issuer differs from the
+  previous row; `None` for runs of consecutive rows that share an
+  issuer. Decision is on the projected `Option<String>` issuer (so
+  `Some("")` is treated identically to `None`).
 
 #### `tests/account_row_logic.rs`
 

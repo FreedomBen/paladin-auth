@@ -22,7 +22,9 @@
 //!   refreshes (add / remove / rename / search) clear and re-push
 //!   the factory through one code path on `AccountListMsg::Refresh`.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use relm4::factory::FactoryVecDeque;
 use relm4::gtk;
@@ -291,6 +293,14 @@ pub struct AccountRowModel {
     /// empty, or unresolved slugs. CLI / TUI ignore this field per
     /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Icons".
     pub icon_hint: Option<String>,
+    /// Issuer projected from `AccountSummary.issuer` with the
+    /// [`crate::account_row::summary_display_label`] collapse rule
+    /// applied: `Some(non_empty)` is preserved verbatim; `None` and
+    /// `Some("")` both project to `None` so the row groups under the
+    /// same "Other" bucket the display label already implies. Drives
+    /// the `gtk::ListBox::set_header_func` grouping via
+    /// [`issuer_group_header`] / [`row_section_header`].
+    pub issuer: Option<String>,
 }
 
 /// Project every account in `vault` into an [`AccountRowModel`].
@@ -310,6 +320,7 @@ pub fn row_models_from_vault(vault: &Vault) -> Vec<AccountRowModel> {
             kind: summary.kind,
             counter: summary.counter,
             icon_hint: summary.icon_hint.clone(),
+            issuer: project_issuer(summary.issuer.as_deref()),
         })
         .collect()
 }
@@ -338,7 +349,173 @@ pub fn row_model_for_account(vault: &Vault, id: AccountId) -> Option<AccountRowM
             kind: summary.kind,
             counter: summary.counter,
             icon_hint: summary.icon_hint.clone(),
+            issuer: project_issuer(summary.issuer.as_deref()),
         })
+}
+
+/// Header text used in place of an issuer for rows whose
+/// `AccountRowModel.issuer` is `None`.
+///
+/// Pinned as a `pub const` so the §"Component tree" >
+/// `AccountListComponent` > "Section headers" wording stays
+/// consistent across the widget binding, the
+/// `row_section_header` dispatch table, and the integration tests
+/// in `tests/account_list_logic.rs`. Future locale work (DESIGN
+/// §13) should swap this for a translated string in one place.
+pub const SECTION_HEADER_FALLBACK: &str = "Other";
+
+/// Apply the [`crate::account_row::summary_display_label`] collapse
+/// rule to a raw issuer string projected off
+/// `AccountSummary.issuer`: `Some(non_empty)` round-trips verbatim;
+/// `None` and `Some("")` both collapse to `None`.
+///
+/// Pulled out so the bulk and single-row projections feed
+/// [`AccountRowModel::issuer`] through the same rule the row's
+/// display label already follows, keeping grouping and the
+/// `<issuer>:<label>` body in lockstep.
+fn project_issuer(issuer: Option<&str>) -> Option<String> {
+    issuer.filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+/// Display text for the section header above the first row of an
+/// issuer group.
+///
+/// Returns the issuer string verbatim for rows whose
+/// `AccountRowModel.issuer` is `Some(non_empty)`, and
+/// [`SECTION_HEADER_FALLBACK`] (`"Other"`) for rows whose issuer is
+/// `None`. Defensive against a hand-built `Some("")` (which
+/// [`row_models_from_vault`] / [`row_model_for_account`] collapse to
+/// `None` before this helper sees them): the empty string is
+/// treated as `None` so a future projection path that forgets the
+/// collapse cannot silently render a blank header.
+///
+/// Pure logic so `tests/account_list_logic.rs` pins the dispatch
+/// table without spinning up GTK.
+#[must_use]
+pub fn issuer_group_header(model: &AccountRowModel) -> &str {
+    model
+        .issuer
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(SECTION_HEADER_FALLBACK)
+}
+
+/// Decide whether the `gtk::ListBox::set_header_func` closure
+/// should attach a section header above `current`.
+///
+/// Returns `Some(header_text)` when `current` starts a new issuer
+/// run — i.e. `prev` is `None` (this is the first row in the list)
+/// or `prev`'s issuer differs from `current`'s — and `None` when
+/// `current` continues an existing run. The header text is
+/// [`issuer_group_header(current)`][issuer_group_header].
+///
+/// Equality is computed on the collapsed `Option<&str>` (so
+/// `Some("")` and `None` group together, matching the projection
+/// rule applied at the
+/// [`row_models_from_vault`] / [`row_model_for_account`] boundary).
+/// No case folding: `"GitHub"` and `"github"` form separate runs so
+/// the user fixes drift by renaming, rather than the GUI silently
+/// normalizing case.
+///
+/// Pure logic so the widget layer never duplicates the decision
+/// table. The widget closure looks up `prev` / `current` in
+/// `AccountListComponent::current_rows` by
+/// `gtk::ListBoxRow::index` and binds a fresh `gtk::Label` only
+/// when this helper returns `Some`.
+#[must_use]
+pub fn row_section_header<'a>(
+    prev: Option<&AccountRowModel>,
+    current: &'a AccountRowModel,
+) -> Option<&'a str> {
+    let curr_issuer = current.issuer.as_deref().filter(|s| !s.is_empty());
+    match prev {
+        None => Some(issuer_group_header(current)),
+        Some(prev_model) => {
+            let prev_issuer = prev_model.issuer.as_deref().filter(|s| !s.is_empty());
+            if prev_issuer == curr_issuer {
+                None
+            } else {
+                Some(issuer_group_header(current))
+            }
+        }
+    }
+}
+
+/// Precompute the [`gtk::ListBox::set_header_func`] dispatch table
+/// for the current row set.
+///
+/// Returns a `Vec<Option<String>>` of the same length as `rows`,
+/// where the entry at index `i` is `Some(header_text)` when row `i`
+/// starts a new issuer run, and `None` when it continues the
+/// previous run. Built by feeding each `(rows[i - 1], rows[i])`
+/// pair through [`row_section_header`] (with `rows[-1]` treated as
+/// `None` for the first row).
+///
+/// Materializing the table once per [`AccountListMsg::Refresh`]
+/// means the `set_header_func` closure becomes a constant-time
+/// `Vec` lookup keyed by `gtk::ListBoxRow::index` — GTK can invoke
+/// the closure many times per layout pass, so we never want to
+/// re-walk the row list on each call.
+#[must_use]
+pub fn precompute_section_headers(rows: &[AccountRowModel]) -> Vec<Option<String>> {
+    rows.iter()
+        .enumerate()
+        .map(|(idx, current)| {
+            let prev = if idx == 0 { None } else { rows.get(idx - 1) };
+            row_section_header(prev, current).map(str::to_string)
+        })
+        .collect()
+}
+
+/// Build the `gtk::Label` widget the
+/// [`gtk::ListBox::set_header_func`] closure attaches to a row that
+/// starts a new issuer group.
+///
+/// The label is styled with the libadwaita `dim-label` and `heading`
+/// CSS classes so it reads as a subdued section heading without
+/// competing with the row's `<issuer>:<label>` body, and carries
+/// leading margin that lines up with the row's icon column.
+///
+/// Pulled out as its own helper so the widget appearance lives in
+/// one place: future tweaks (different CSS class, additional
+/// margin, switching to an `Adw` widget) only touch this function.
+fn build_section_header_label(text: &str) -> gtk::Label {
+    let label = gtk::Label::builder().label(text).xalign(0.0).build();
+    label.add_css_class("dim-label");
+    label.add_css_class("heading");
+    label.set_margin_top(6);
+    label.set_margin_bottom(2);
+    label.set_margin_start(12);
+    label.set_margin_end(12);
+    label
+}
+
+/// Install the [`gtk::ListBox::set_header_func`] closure that reads
+/// from a shared [`Rc<RefCell<Vec<Option<String>>>>`] dispatch
+/// table.
+///
+/// The closure is called by GTK with `(row, _before)` whenever the
+/// list relayouts; it looks up the precomputed header text by
+/// `gtk::ListBoxRow::index` and attaches a fresh
+/// [`build_section_header_label`] when the table entry is
+/// `Some(text)`. Out-of-range indices and `None` entries clear the
+/// row's header. The closure clones `headers` so the caller does
+/// not need to retain a handle to it; the `AccountListComponent`
+/// keeps its own `Rc` clone so subsequent
+/// [`AccountListMsg::Refresh`] handlers can swap the table contents
+/// without re-installing the closure.
+fn install_section_header_func(list_box: &gtk::ListBox, headers: Rc<RefCell<Vec<Option<String>>>>) {
+    list_box.set_header_func(move |row, _before| {
+        let Ok(idx) = usize::try_from(row.index()) else {
+            row.set_header(gtk::Widget::NONE);
+            return;
+        };
+        let header_text = headers.borrow().get(idx).and_then(Clone::clone);
+        match header_text {
+            Some(text) => row.set_header(Some(&build_section_header_label(&text))),
+            None => row.set_header(gtk::Widget::NONE),
+        }
+    });
 }
 
 /// Project every account in `vault` whose `<issuer>:<label>` match
@@ -744,6 +921,15 @@ pub struct AccountListComponent {
     /// [`AccountListMsg::Refresh`] can seed new rows' `initial_busy`
     /// without re-asking `AppModel`.
     busy: bool,
+    /// Precomputed [`gtk::ListBox::set_header_func`] dispatch table,
+    /// shared with the closure installed by
+    /// [`install_section_header_func`]. The entry at index `i` is
+    /// the header text to attach above row `i` (or `None` for rows
+    /// that continue an existing issuer run). [`AccountListMsg::Refresh`]
+    /// rewrites the inner `Vec` via [`precompute_section_headers`]
+    /// then asks the list box to invalidate its headers so the
+    /// closure re-reads the table without being re-installed.
+    section_headers: Rc<RefCell<Vec<Option<String>>>>,
 }
 
 /// Messages handled by [`AccountListComponent`].
@@ -884,6 +1070,9 @@ impl SimpleComponent for AccountListComponent {
             }
         }
 
+        let section_headers = Rc::new(RefCell::new(precompute_section_headers(&init.rows)));
+        install_section_header_func(factory.widget(), Rc::clone(&section_headers));
+
         apply_list_box_selection(factory.widget(), &init.rows, init.initial_selection);
 
         let search_entry = gtk::SearchEntry::builder()
@@ -964,6 +1153,7 @@ impl SimpleComponent for AccountListComponent {
             current_rows: init.rows,
             live_displays: HashMap::new(),
             busy: false,
+            section_headers,
         };
         ComponentParts {
             model: component,
@@ -1014,6 +1204,8 @@ impl SimpleComponent for AccountListComponent {
                 }
                 apply_list_box_selection(self.factory.widget(), &rows, effective_selection);
                 self.current_selection = effective_selection;
+                *self.section_headers.borrow_mut() = precompute_section_headers(&rows);
+                self.factory.widget().invalidate_headers();
                 self.current_rows = rows;
             }
             AccountListMsg::SetSearchModeEnabled(enabled) => {

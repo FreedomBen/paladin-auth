@@ -28,9 +28,10 @@ use paladin_core::{
 };
 use paladin_gtk::account_list::{
     bind_display_for_row, filtered_row_models_from_vault, format_rendered_marker,
-    format_widget_states_marker, forward_row_output, hidden_row_display, prune_cache_to_rows,
-    row_model_for_account, row_models_from_vault, selected_row_after_refresh, tick_dispatch_plan,
-    AccountListOutput, AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX,
+    format_widget_states_marker, forward_row_output, hidden_row_display, issuer_group_header,
+    precompute_section_headers, prune_cache_to_rows, row_model_for_account, row_models_from_vault,
+    row_section_header, selected_row_after_refresh, tick_dispatch_plan, AccountListOutput,
+    AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, SECTION_HEADER_FALLBACK,
 };
 use paladin_gtk::account_row::{
     build_kebab_menu_model, dispatch_row_action, AccountRowOutput, CodeDisplay, CounterText,
@@ -789,6 +790,7 @@ fn hidden_row_display_totp_renders_hidden_code_and_no_counter() {
         kind: AccountKindSummary::Totp,
         counter: None,
         icon_hint: None,
+        issuer: None,
     };
     let expected = RowDisplay {
         label: "Acme:alice".to_string(),
@@ -814,6 +816,7 @@ fn hidden_row_display_hotp_renders_stored_counter_and_disabled_copy() {
         kind: AccountKindSummary::Hotp,
         counter: Some(7),
         icon_hint: None,
+        issuer: None,
     };
     let expected = RowDisplay {
         label: "solo".to_string(),
@@ -842,6 +845,7 @@ fn hidden_row_display_hotp_with_missing_counter_defaults_to_zero() {
         kind: AccountKindSummary::Hotp,
         counter: None,
         icon_hint: None,
+        issuer: None,
     };
     let display = hidden_row_display(&model);
     assert_eq!(display.counter, Some(CounterText::Stored(0)));
@@ -1205,6 +1209,7 @@ fn tick_routes_only_to_changed_rows() {
         kind: AccountKindSummary::Totp,
         counter: None,
         icon_hint: None,
+        issuer: None,
     });
     let display_c = hidden_row_display(&AccountRowModel {
         id: c,
@@ -1212,6 +1217,7 @@ fn tick_routes_only_to_changed_rows() {
         kind: AccountKindSummary::Totp,
         counter: None,
         icon_hint: None,
+        issuer: None,
     });
 
     let plan = tick_dispatch_plan(
@@ -1260,6 +1266,7 @@ fn tick_dispatch_plan_drops_ids_no_longer_in_factory() {
         kind: AccountKindSummary::Totp,
         counter: None,
         icon_hint: None,
+        issuer: None,
     });
     let display_removed = hidden_row_display(&AccountRowModel {
         id: removed,
@@ -1267,6 +1274,7 @@ fn tick_dispatch_plan_drops_ids_no_longer_in_factory() {
         kind: AccountKindSummary::Totp,
         counter: None,
         icon_hint: None,
+        issuer: None,
     });
 
     let plan = tick_dispatch_plan(
@@ -1543,6 +1551,7 @@ fn totp_model_for(id: AccountId, label: &str) -> AccountRowModel {
         kind: AccountKindSummary::Totp,
         counter: None,
         icon_hint: None,
+        issuer: None,
     }
 }
 
@@ -1553,6 +1562,22 @@ fn hotp_model_for(id: AccountId, label: &str, counter: u64) -> AccountRowModel {
         kind: AccountKindSummary::Hotp,
         counter: Some(counter),
         icon_hint: None,
+        issuer: None,
+    }
+}
+
+fn totp_model_with_issuer(
+    id: AccountId,
+    display_label: &str,
+    issuer: Option<&str>,
+) -> AccountRowModel {
+    AccountRowModel {
+        id,
+        display_label: display_label.to_string(),
+        kind: AccountKindSummary::Totp,
+        counter: None,
+        icon_hint: None,
+        issuer: issuer.map(str::to_string),
     }
 }
 
@@ -1804,4 +1829,236 @@ fn prune_cache_to_rows_empty_cache_no_op() {
         std::collections::HashMap::new();
     prune_cache_to_rows(&mut cache, &rows);
     assert!(cache.is_empty(), "no entries to prune is a benign no-op");
+}
+
+// ---------------------------------------------------------------------------
+// Section headers (`issuer_group_header`, `row_section_header`)
+// ---------------------------------------------------------------------------
+//
+// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// `AccountListComponent` > "Section headers" pins the grouping rule:
+// the `gtk::ListBox::set_header_func` closure attaches a small inline
+// `gtk::Label` above the first row of each consecutive issuer-run.
+// The two helpers below own the dispatch table; the widget layer
+// only renders the `Option<&str>` they return.
+
+#[test]
+fn account_row_model_carries_issuer_field_from_vault_projection() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    add_totp(&mut vault, &store, None, "solo");
+
+    let rows = row_models_from_vault(&vault);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[0].issuer.as_deref(),
+        Some("GitHub"),
+        "issuer threads through the projection unchanged",
+    );
+    assert_eq!(
+        rows[1].issuer, None,
+        "missing issuer stays None on the projected row",
+    );
+}
+
+#[test]
+fn account_row_model_collapses_empty_issuer_to_none() {
+    // `summary_display_label` collapses `Some("")` to the bare label so
+    // the row never carries a `:label` colon (parity with the CLI / TUI).
+    // The `issuer` field follows the same rule so the grouping helper
+    // never has to special-case the empty string.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    add_totp(&mut vault, &store, Some(""), "alice");
+
+    let rows = row_models_from_vault(&vault);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].issuer, None,
+        "empty issuer collapses to None so it joins the Other bucket",
+    );
+}
+
+#[test]
+fn row_model_for_account_carries_issuer_field() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_totp(&mut vault, &store, Some("Acme"), "alice");
+
+    let model = row_model_for_account(&vault, id).expect("model present");
+    assert_eq!(model.issuer.as_deref(), Some("Acme"));
+}
+
+#[test]
+fn issuer_group_header_returns_issuer_text_for_present_issuer() {
+    let id = AccountId::new();
+    let model = totp_model_with_issuer(id, "GitHub:ben", Some("GitHub"));
+    assert_eq!(issuer_group_header(&model), "GitHub");
+}
+
+#[test]
+fn issuer_group_header_returns_other_literal_for_missing_issuer() {
+    let id = AccountId::new();
+    let model = totp_model_with_issuer(id, "solo", None);
+    assert_eq!(issuer_group_header(&model), SECTION_HEADER_FALLBACK);
+    assert_eq!(
+        SECTION_HEADER_FALLBACK, "Other",
+        "fallback literal stays in sync with DESIGN §7 wording",
+    );
+}
+
+#[test]
+fn issuer_group_header_treats_empty_issuer_as_other_defensively() {
+    // `row_models_from_vault` collapses `Some("")` to `None` before
+    // building `AccountRowModel`, so this case should not occur in
+    // practice — but the helper stays defensive so a hand-rolled
+    // model in a future test (or a future projection path that
+    // forgets the collapse) does not silently render a blank header.
+    let id = AccountId::new();
+    let model = totp_model_with_issuer(id, "alice", Some(""));
+    assert_eq!(issuer_group_header(&model), SECTION_HEADER_FALLBACK);
+}
+
+#[test]
+fn row_section_header_emits_header_for_first_row() {
+    let id = AccountId::new();
+    let row = totp_model_with_issuer(id, "GitHub:ben", Some("GitHub"));
+    assert_eq!(row_section_header(None, &row), Some("GitHub"));
+}
+
+#[test]
+fn row_section_header_emits_other_for_first_row_with_no_issuer() {
+    let id = AccountId::new();
+    let row = totp_model_with_issuer(id, "solo", None);
+    assert_eq!(
+        row_section_header(None, &row),
+        Some(SECTION_HEADER_FALLBACK)
+    );
+}
+
+#[test]
+fn row_section_header_returns_none_for_consecutive_same_issuer() {
+    let prev = totp_model_with_issuer(AccountId::new(), "Acme:alice", Some("Acme"));
+    let curr = totp_model_with_issuer(AccountId::new(), "Acme:bob", Some("Acme"));
+    assert_eq!(
+        row_section_header(Some(&prev), &curr),
+        None,
+        "same-issuer run continues without a header",
+    );
+}
+
+#[test]
+fn row_section_header_returns_header_on_issuer_change() {
+    let prev = totp_model_with_issuer(AccountId::new(), "Acme:alice", Some("Acme"));
+    let curr = totp_model_with_issuer(AccountId::new(), "GitHub:ben", Some("GitHub"));
+    assert_eq!(
+        row_section_header(Some(&prev), &curr),
+        Some("GitHub"),
+        "transition to a new issuer surfaces the new group's header",
+    );
+}
+
+#[test]
+fn row_section_header_groups_consecutive_none_issuers_together() {
+    // Two consecutive issuer-less rows should not each get their own
+    // "Other" header — they share one run.
+    let prev = totp_model_with_issuer(AccountId::new(), "alice", None);
+    let curr = totp_model_with_issuer(AccountId::new(), "bob", None);
+    assert_eq!(row_section_header(Some(&prev), &curr), None);
+}
+
+#[test]
+fn row_section_header_emits_other_after_named_issuer_to_none_transition() {
+    let prev = totp_model_with_issuer(AccountId::new(), "Acme:alice", Some("Acme"));
+    let curr = totp_model_with_issuer(AccountId::new(), "solo", None);
+    assert_eq!(
+        row_section_header(Some(&prev), &curr),
+        Some(SECTION_HEADER_FALLBACK),
+    );
+}
+
+#[test]
+fn row_section_header_emits_named_after_none_to_named_transition() {
+    let prev = totp_model_with_issuer(AccountId::new(), "solo", None);
+    let curr = totp_model_with_issuer(AccountId::new(), "GitHub:ben", Some("GitHub"));
+    assert_eq!(row_section_header(Some(&prev), &curr), Some("GitHub"));
+}
+
+#[test]
+fn row_section_header_treats_some_empty_as_none_for_grouping() {
+    // Defensive: even if a hand-built model leaks `Some("")` past the
+    // projection collapse, it must share the "Other" bucket with the
+    // genuine `None` case so the grouping helper and
+    // `issuer_group_header` stay in lockstep.
+    let prev = totp_model_with_issuer(AccountId::new(), "alice", None);
+    let curr = totp_model_with_issuer(AccountId::new(), "bob", Some(""));
+    assert_eq!(
+        row_section_header(Some(&prev), &curr),
+        None,
+        "Some(\"\") groups with None instead of starting a new Other run",
+    );
+}
+
+#[test]
+fn precompute_section_headers_returns_one_entry_per_row() {
+    let rows = vec![
+        totp_model_with_issuer(AccountId::new(), "Acme:alice", Some("Acme")),
+        totp_model_with_issuer(AccountId::new(), "Acme:bob", Some("Acme")),
+        totp_model_with_issuer(AccountId::new(), "GitHub:ben", Some("GitHub")),
+        totp_model_with_issuer(AccountId::new(), "solo", None),
+        totp_model_with_issuer(AccountId::new(), "another-solo", None),
+    ];
+    let headers = precompute_section_headers(&rows);
+    assert_eq!(
+        headers,
+        vec![
+            Some("Acme".to_string()),
+            None,
+            Some("GitHub".to_string()),
+            Some(SECTION_HEADER_FALLBACK.to_string()),
+            None,
+        ],
+        "headers fire only on issuer-run transitions; first row always starts a run",
+    );
+}
+
+#[test]
+fn precompute_section_headers_empty_rows_returns_empty_vec() {
+    let headers = precompute_section_headers(&[]);
+    assert!(
+        headers.is_empty(),
+        "empty row set produces no header table entries",
+    );
+}
+
+#[test]
+fn precompute_section_headers_single_row_emits_one_header() {
+    let rows = vec![totp_model_with_issuer(
+        AccountId::new(),
+        "Acme:alice",
+        Some("Acme"),
+    )];
+    assert_eq!(
+        precompute_section_headers(&rows),
+        vec![Some("Acme".to_string())],
+        "the sole row counts as the first row of a new run",
+    );
+}
+
+#[test]
+fn row_section_header_treats_distinct_casings_as_distinct_issuers() {
+    // Case-sensitive grouping: "GitHub" and "github" do not merge.
+    // This matches the spike's "preserve insertion order, group
+    // consecutive runs" contract — the user fixes drift by renaming
+    // rather than the GUI silently normalizing case.
+    let prev = totp_model_with_issuer(AccountId::new(), "GitHub:ben", Some("GitHub"));
+    let curr = totp_model_with_issuer(AccountId::new(), "github:alice", Some("github"));
+    assert_eq!(row_section_header(Some(&prev), &curr), Some("github"));
 }

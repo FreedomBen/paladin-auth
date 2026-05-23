@@ -1664,6 +1664,12 @@ Library: **Relm4** on **GTK4**. Component tree:
 - `UnlockComponent` — passphrase entry, shown only when the vault is encrypted.
   Skipped entirely for plaintext vaults.
 - `AccountListComponent` — `gtk::ListView` with a custom row factory.
+  Rows are grouped by `AccountSummary.issuer`: each run of consecutive
+  rows that share an issuer gets a small inline header above its first
+  row (issuer text verbatim; the literal `Other` for rows whose issuer
+  is `None` / empty). Vault insertion order is preserved — rows are
+  never reordered for grouping, so a vault that interleaves issuers
+  surfaces multiple headers for the same issuer text.
 - `AccountRowComponent` — label, code, progress (TOTP) / "next" button (HOTP),
   copy button. HOTP rows hide their code until the user activates "next"
   (advances counter and saves); after the shared
