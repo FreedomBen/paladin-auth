@@ -34,10 +34,9 @@ use relm4::prelude::*;
 use paladin_core::{select_after_filter, AccountId, AccountKindSummary, Vault};
 
 use crate::account_row::{
-    apply_busy_mask, build_column_header_strip, copy_enabled, kebab_enabled, kebab_visible,
-    next_button_enabled, next_button_visible, progress_visible, summary_display_label,
-    AccountRowComponent, AccountRowInit, AccountRowMsg, AccountRowOutput, CodeDisplay,
-    ColumnSizeGroups, CounterText, RowDisplay,
+    apply_busy_mask, copy_enabled, kebab_enabled, kebab_visible, next_button_enabled,
+    next_button_visible, progress_visible, summary_display_label, AccountRowComponent,
+    AccountRowInit, AccountRowMsg, AccountRowOutput, CodeDisplay, CounterText, RowDisplay,
 };
 use crate::search::filtered_account_ids;
 
@@ -863,15 +862,6 @@ pub struct AccountListInit {
     /// updates from the `SettingsComponent` toggle flow through
     /// [`AccountListMsg::SetShowSectionHeaders`].
     pub show_section_headers: bool,
-    /// Initial value of the per-user `show-column-headers`
-    /// `GSettings` key. When `false`, the column-header strip
-    /// constructed by
-    /// [`crate::account_row::build_column_header_strip`] is hidden;
-    /// when `true`, it sits above the `gtk::ScrolledWindow` and
-    /// labels the "Account" and "Code" columns. Live updates from
-    /// the `SettingsComponent` toggle flow through
-    /// [`AccountListMsg::SetShowColumnHeaders`].
-    pub show_column_headers: bool,
 }
 
 /// Widget-bearing list view for the unlocked vault state.
@@ -964,17 +954,6 @@ pub struct AccountListComponent {
     /// and asks the list box to invalidate its headers so the
     /// closure re-runs against the new value.
     show_section_headers: Rc<Cell<bool>>,
-    /// Per-column [`gtk::SizeGroup`] bundle the row factory and the
-    /// [`Self::column_header_strip`] share so the header cells stay
-    /// aligned with the row cells underneath.  Cloned cheaply into
-    /// every [`AccountRowInit`] pushed by
-    /// [`AccountListMsg::Refresh`].
-    column_size_groups: ColumnSizeGroups,
-    /// The column-header strip mounted above the
-    /// `gtk::ScrolledWindow`. Held on `self` so
-    /// [`AccountListMsg::SetShowColumnHeaders`] can toggle its
-    /// visibility without re-walking the widget tree.
-    column_header_strip: gtk::Box,
 }
 
 /// Messages handled by [`AccountListComponent`].
@@ -1071,15 +1050,6 @@ pub enum AccountListMsg {
     /// Idempotent — sending the same value twice is a benign
     /// no-op (no `invalidate_headers` call fires).
     SetShowSectionHeaders(bool),
-    /// Live update for the per-user `show-column-headers`
-    /// `GSettings` key. `AppModel` connects
-    /// `changed::show-column-headers` on its `gio::Settings` clone
-    /// and dispatches this message so a toggle from the
-    /// `SettingsComponent` dialog reveals / hides the
-    /// column-header strip without rebuilding the list.
-    ///
-    /// Idempotent — sending the same value twice is a benign no-op.
-    SetShowColumnHeaders(bool),
 }
 
 #[allow(missing_docs)]
@@ -1097,7 +1067,6 @@ impl SimpleComponent for AccountListComponent {
             set_vexpand: true,
 
             append: &search_bar,
-            append: &column_header_strip,
 
             gtk::ScrolledWindow {
                 set_hexpand: true,
@@ -1117,10 +1086,6 @@ impl SimpleComponent for AccountListComponent {
             .build();
         list_box.add_css_class("navigation-sidebar");
 
-        let column_size_groups = ColumnSizeGroups::new();
-        let column_header_strip = build_column_header_strip(&column_size_groups);
-        column_header_strip.set_visible(init.show_column_headers);
-
         let mut factory = FactoryVecDeque::<AccountRowComponent>::builder()
             .launch(list_box)
             .forward(sender.output_sender(), forward_row_output);
@@ -1134,7 +1099,6 @@ impl SimpleComponent for AccountListComponent {
                     initial_display: hidden_row_display(row),
                     initial_icon_hint: row.icon_hint.clone(),
                     initial_busy: false,
-                    column_size_groups: column_size_groups.clone(),
                 });
                 row_indices.insert(row.id, idx);
             }
@@ -1230,8 +1194,6 @@ impl SimpleComponent for AccountListComponent {
             busy: false,
             section_headers,
             show_section_headers,
-            column_size_groups,
-            column_header_strip,
         };
         ComponentParts {
             model: component,
@@ -1276,7 +1238,6 @@ impl SimpleComponent for AccountListComponent {
                             initial_display,
                             initial_icon_hint: row.icon_hint.clone(),
                             initial_busy: self.busy,
-                            column_size_groups: self.column_size_groups.clone(),
                         });
                         self.row_indices.insert(row.id, idx);
                     }
@@ -1334,12 +1295,6 @@ impl SimpleComponent for AccountListComponent {
                 }
                 self.show_section_headers.set(enabled);
                 self.factory.widget().invalidate_headers();
-            }
-            AccountListMsg::SetShowColumnHeaders(enabled) => {
-                if self.column_header_strip.is_visible() == enabled {
-                    return;
-                }
-                self.column_header_strip.set_visible(enabled);
             }
         }
     }

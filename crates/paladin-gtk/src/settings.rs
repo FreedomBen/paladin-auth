@@ -531,20 +531,6 @@ pub fn format_settings_dialog_section_headers_row_subtitle() -> &'static str {
     "Group consecutive accounts by issuer with a small heading. Off by default."
 }
 
-/// Title rendered on the column-headers `AdwSwitchRow` in the
-/// Display group.  Verb-led wording matches the sibling rows.
-#[must_use]
-pub fn format_settings_dialog_column_headers_row_title() -> &'static str {
-    "Show column headers"
-}
-
-/// Subtitle rendered on the column-headers `AdwSwitchRow`.  Calls
-/// out what the strip labels and that it is on by default.
-#[must_use]
-pub fn format_settings_dialog_column_headers_row_subtitle() -> &'static str {
-    "Label the account-list columns with a small strip above the list. On by default."
-}
-
 /// Fixed `(lower, upper, step_increment)` tuple the widget hands
 /// to `gtk::Adjustment::new` for the auto-lock seconds
 /// `AdwSpinRow` per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
@@ -2160,19 +2146,6 @@ impl SimpleComponent for SettingsComponent {
                             );
                         },
                     },
-
-                    #[name = "show_column_headers_row"]
-                    add = &adw::SwitchRow {
-                        set_title: format_settings_dialog_column_headers_row_title(),
-                        set_subtitle: format_settings_dialog_column_headers_row_subtitle(),
-                        set_active: crate::gsettings::show_column_headers(&model.app_settings),
-                        connect_active_notify[app_settings_for_column_toggle] => move |row| {
-                            let _ = crate::gsettings::set_show_column_headers(
-                                &app_settings_for_column_toggle,
-                                row.is_active(),
-                            );
-                        },
-                    },
                 },
 
                 add = &adw::PreferencesGroup {
@@ -2251,11 +2224,6 @@ impl SimpleComponent for SettingsComponent {
         // macro's `connect_active_notify[app_settings_for_toggle]`
         // capture has a sibling binding to clone into the closure.
         let app_settings_for_toggle = model.app_settings.clone();
-        // Mirrored clone for the column-headers `SwitchRow` so the
-        // two `connect_active_notify` closures own independent
-        // `gio::Settings` clones (they share the same backing
-        // GObject — the clones just keep the borrow-checker happy).
-        let app_settings_for_column_toggle = model.app_settings.clone();
         let widgets = view_output!();
         // Forward the dialog's intrinsic close signal (Escape /
         // window close button) as `SettingsDialogOutput::Close` so

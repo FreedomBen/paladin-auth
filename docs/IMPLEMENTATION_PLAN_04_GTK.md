@@ -28,7 +28,7 @@ crates/paladin-gtk/
 ├── build.rs               # gresource bundle (icons, *.ui, *.css) + glib-compile-schemas → OUT_DIR/schemas/
 ├── data/
 │   ├── paladin-gtk.gresource.xml
-│   ├── org.tamx.Paladin.Gui.gschema.xml  # per-user GSettings schema (show-section-headers, show-column-headers, …); installs to /usr/share/glib-2.0/schemas/
+│   ├── org.tamx.Paladin.Gui.gschema.xml  # per-user GSettings schema (show-section-headers, …); installs to /usr/share/glib-2.0/schemas/
 │   ├── ui/                # *.ui templates
 │   ├── icons/             # app icon + fallbacks
 │   ├── metainfo/          # AppStream metadata; file is named `<app-id>.metainfo.xml` (`org.tamx.Paladin.Gui.metainfo.xml`) so Flathub's reproducible-build check matches; installs to `/usr/share/metainfo/<app-id>.metainfo.xml`
@@ -56,7 +56,7 @@ crates/paladin-gtk/
 │   │   └── settings.rs        # SettingsComponent (toggles + spinners)
 │   ├── clipboard.rs       # gdk::Clipboard plumbing driving paladin_core::policy::clipboard_clear::ClipboardClearPolicy
 │   ├── auto_lock.rs       # GLib idle/timeout plumbing driving paladin_core::policy::auto_lock::IdlePolicy (encrypted-only; plaintext no-op)
-│   ├── gsettings.rs       # per-user gio::Settings access for the show-section-headers and show-column-headers schema keys (and any future GUI-only prefs)
+│   ├── gsettings.rs       # per-user gio::Settings access for the show-section-headers schema key (and any future GUI-only prefs)
 │   ├── hotp_reveal.rs     # per-row reveal window via paladin_core::policy::hotp_reveal::deadline (uses paladin_core::HOTP_REVEAL_SECS)
 │   ├── icons.rs           # gtk::IconTheme lookup against AccountSummary.icon_hint
 │   ├── secret_fields.rs   # extract/clear passphrase + manual-secret entries
@@ -248,42 +248,6 @@ inclusion.
   `crate::gsettings` module is the only place that knows about
   schema ids / key names; callers go through `app_settings()`,
   `show_section_headers()`, and `set_show_section_headers()`.
-
-  Column headers (per-user, opt-out). A single non-scrolling
-  header strip mounted above the `gtk::ScrolledWindow` labels the
-  visible columns of the row template — currently the "Account"
-  and "Code" cells; the icon / counter / progress / copy / next /
-  kebab cells are spacers carrying no text.  Alignment with the
-  rows is guaranteed by a bundle of per-column `gtk::SizeGroup`s
-  ([`account_row::ColumnSizeGroups`]) — every row registers its
-  eight children with the matching members of the bundle via
-  [`account_row::register_row_size_groups`], and the header strip
-  built by [`account_row::build_column_header_strip`] does the
-  same for its own cells, so the widest cell in any column drives
-  the column's width on both the header and every row.
-
-  Whether the strip is visible is gated by the per-user
-  `show-column-headers` boolean GSettings key (same schema id as
-  `show-section-headers`), default `true`.  The initial value
-  flows through `AccountListInit::show_column_headers`; live
-  toggles route through
-  `AccountListMsg::SetShowColumnHeaders(bool)`, which flips the
-  strip's `visible` property in place — no row rebuild.  `AppModel`
-  connects `changed::show-column-headers` to dispatch
-  `AppMsg::ShowColumnHeadersChanged(bool)`, mirroring the
-  `show-section-headers` plumbing.
-
-  The Preferences dialog's `Display` group gains a second
-  `AdwSwitchRow` (`Show column headers`) bound to
-  `crate::gsettings::{show_column_headers,
-  set_show_column_headers}`.  Pure-string title accessors
-  ([`format_settings_dialog_column_headers_row_title`],
-  [`format_settings_dialog_column_headers_row_subtitle`],
-  [`account_row::format_account_column_title`],
-  [`account_row::format_code_column_title`]) pin the wording so
-  unit tests in `tests/settings_logic.rs` and
-  `tests/account_row_logic.rs` can assert it without constructing
-  widgets.
 
   Search uses a `gtk::SearchEntry` hosted inside a `gtk::SearchBar`
   whose `search-mode-enabled` is bound to the header bar's
@@ -1281,19 +1245,6 @@ These run without a display server. Each lives under
   runtime.
 - [ ] Default value of `show-section-headers` is `false` (per
   DESIGN §7).
-- [x] `build.rs`-compiled gschema also declares the
-  `show-column-headers` key under the same schema id.
-- [x] Default value of `show-column-headers` is `true`.
-- [x] Memory-backend round-trip + `changed::show-column-headers`
-  signal-fired test (in
-  `crates/paladin-gtk/tests/gsettings_logic.rs`).
-- [x] `AccountListComponent` mounts the column-header strip above
-  the `gtk::ScrolledWindow` and toggles its visibility via
-  `AccountListMsg::SetShowColumnHeaders`.
-- [x] `Preferences → Display` group exposes a `Show column
-  headers` `AdwSwitchRow` bound to
-  `crate::gsettings::{show_column_headers,
-  set_show_column_headers}`.
 - [ ] Round-trip through a memory-backed `gio::Settings`:
   `set_boolean(true) → boolean() == true → set_boolean(false) →
   boolean() == false`.

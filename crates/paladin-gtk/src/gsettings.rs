@@ -42,16 +42,6 @@ pub const SCHEMA_ID: &str = "org.tamx.Paladin.Gui";
 /// dispatch table the `header_func` consults.
 pub const SHOW_SECTION_HEADERS_KEY: &str = "show-section-headers";
 
-/// `show-column-headers` key name as declared in the gschema.
-///
-/// Controls whether the unlocked account list renders a single
-/// non-scrolling header strip above the list that labels the
-/// visible columns (currently “Account” and “Code”).  See
-/// `crates/paladin-gtk/src/account_row.rs` for the per-column
-/// `gtk::SizeGroup`s that keep the header cells aligned with the
-/// row cells underneath.
-pub const SHOW_COLUMN_HEADERS_KEY: &str = "show-column-headers";
-
 /// Build-time path to the directory containing the compiled
 /// gschemas (`gschemas.compiled`).  Set by `build.rs`.
 const BUILD_TIME_SCHEMA_DIR: &str = env!("PALADIN_GTK_SCHEMA_DIR");
@@ -111,25 +101,6 @@ pub fn set_show_section_headers(
     value: bool,
 ) -> Result<(), gio::glib::error::BoolError> {
     settings.set_boolean(SHOW_SECTION_HEADERS_KEY, value)
-}
-
-/// Read the [`SHOW_COLUMN_HEADERS_KEY`] boolean.
-#[must_use]
-pub fn show_column_headers(settings: &gio::Settings) -> bool {
-    settings.boolean(SHOW_COLUMN_HEADERS_KEY)
-}
-
-/// Write the [`SHOW_COLUMN_HEADERS_KEY`] boolean.
-///
-/// Mirrors [`set_show_section_headers`]; surface the
-/// `gio::glib::error::BoolError` to the caller rather than
-/// swallowing it so a widget that toggled but did not stick
-/// becomes a visible failure instead of silent drift.
-pub fn set_show_column_headers(
-    settings: &gio::Settings,
-    value: bool,
-) -> Result<(), gio::glib::error::BoolError> {
-    settings.set_boolean(SHOW_COLUMN_HEADERS_KEY, value)
 }
 
 fn lookup_build_time_schema() -> Option<gio::SettingsSchema> {
