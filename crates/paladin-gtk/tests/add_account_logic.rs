@@ -11624,3 +11624,74 @@ fn route_qr_clipboard_loaded_signature_takes_qr_preflight_result() {
     }
     assert_signature(route_qr_clipboard_loaded);
 }
+
+// ── Escape-dismiss helper ───────────────────────────────────
+//
+// `dispatch_root_dismiss_key` is the pure-logic dispatcher for
+// the bubble-phase `gtk::EventControllerKey` attached to the
+// `AddAccountComponent` root by `wire_dismiss_controller`. It
+// returns `true` only for an unmodified Escape press, so the
+// focused entry / dropdown / Save button keeps first crack at
+// any chorded shortcut and only a bare Escape bubbles up into a
+// dismiss. Pinning the dispatch table here keeps the wiring
+// honest without a display server.
+
+#[test]
+fn dispatch_root_dismiss_bare_escape_returns_true() {
+    use paladin_gtk::add_account::dispatch_root_dismiss_key;
+    use relm4::gtk::gdk;
+    assert!(dispatch_root_dismiss_key(
+        gdk::Key::Escape,
+        gdk::ModifierType::empty()
+    ));
+}
+
+#[test]
+fn dispatch_root_dismiss_escape_with_caps_lock_still_dismisses() {
+    use paladin_gtk::add_account::dispatch_root_dismiss_key;
+    use relm4::gtk::gdk;
+    // Caps Lock is a toggle bit, not a held chord modifier, so
+    // Escape with Caps Lock on still dismisses.
+    assert!(dispatch_root_dismiss_key(
+        gdk::Key::Escape,
+        gdk::ModifierType::LOCK_MASK
+    ));
+}
+
+#[test]
+fn dispatch_root_dismiss_escape_with_chord_modifier_does_not_dismiss() {
+    use paladin_gtk::add_account::dispatch_root_dismiss_key;
+    use relm4::gtk::gdk;
+    for mods in [
+        gdk::ModifierType::CONTROL_MASK,
+        gdk::ModifierType::ALT_MASK,
+        gdk::ModifierType::SHIFT_MASK,
+        gdk::ModifierType::SUPER_MASK,
+        gdk::ModifierType::HYPER_MASK,
+        gdk::ModifierType::META_MASK,
+    ] {
+        assert!(
+            !dispatch_root_dismiss_key(gdk::Key::Escape, mods),
+            "Escape + {mods:?} must not dismiss — leave the chord to the focused widget",
+        );
+    }
+}
+
+#[test]
+fn dispatch_root_dismiss_other_keys_do_not_dismiss() {
+    use paladin_gtk::add_account::dispatch_root_dismiss_key;
+    use relm4::gtk::gdk;
+    for keyval in [
+        gdk::Key::Return,
+        gdk::Key::Tab,
+        gdk::Key::a,
+        gdk::Key::Down,
+        gdk::Key::Up,
+        gdk::Key::space,
+    ] {
+        assert!(
+            !dispatch_root_dismiss_key(keyval, gdk::ModifierType::empty()),
+            "{keyval:?} must not trigger root-dismiss",
+        );
+    }
+}

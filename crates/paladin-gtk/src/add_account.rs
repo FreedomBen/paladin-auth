@@ -4358,6 +4358,66 @@ pub struct AddAccountComponent {
     root_box: gtk::Box,
 }
 
+/// Pure-logic key dispatcher for the bubble-phase
+/// `gtk::EventControllerKey` attached to the dialog root by
+/// [`wire_dismiss_controller`].
+///
+/// Returns `true` only for a bare Escape press — any chord
+/// modifier (CTRL / ALT / SHIFT / SUPER / HYPER / META) or any
+/// other key propagates untouched so the focused entry,
+/// dropdown, or Save button keeps its own keyboard handling.
+/// Caps Lock is treated as a toggle bit rather than a held
+/// modifier, so Escape still dismisses with Caps Lock on.
+///
+/// Pure logic so the dispatch table can be pinned by unit tests
+/// without a display server. Mirrors
+/// [`crate::account_list::dispatch_search_entry_to_list_nav`].
+#[must_use]
+pub fn dispatch_root_dismiss_key(keyval: gtk::gdk::Key, mods: gtk::gdk::ModifierType) -> bool {
+    let disallowed = gtk::gdk::ModifierType::CONTROL_MASK
+        | gtk::gdk::ModifierType::ALT_MASK
+        | gtk::gdk::ModifierType::SHIFT_MASK
+        | gtk::gdk::ModifierType::SUPER_MASK
+        | gtk::gdk::ModifierType::HYPER_MASK
+        | gtk::gdk::ModifierType::META_MASK;
+    if mods.intersects(disallowed) {
+        return false;
+    }
+    matches!(keyval, gtk::gdk::Key::Escape)
+}
+
+/// Install a bubble-phase [`gtk::EventControllerKey`] on the
+/// dialog root that posts [`AddAccountMsg::Cancel`] when the
+/// user presses a bare Escape.
+///
+/// Bubble (default) phase means focused child widgets see the
+/// key event first; only an unconsumed press bubbles up to this
+/// dispatcher. That keeps Escape from being stolen out from
+/// under any sub-control that might want to handle it locally
+/// (e.g. a future inline-error dismissal) while still making the
+/// dialog dismissable from any focused widget.
+///
+/// Routing `AddAccountMsg::Cancel` matches the existing Cancel
+/// button (`cancel_button.connect_clicked` in the view! macro),
+/// so the secret-buffer wipe and `AddAccountOutput::Cancel`
+/// forwarding flow through `apply_msg`'s single Cancel arm
+/// regardless of dismissal source.
+///
+/// Pure side-effect helper: the controller is owned by the
+/// widget tree so callers don't need to retain a handle.
+fn wire_dismiss_controller(root: &gtk::Box, sender: &ComponentSender<AddAccountComponent>) {
+    let controller = gtk::EventControllerKey::new();
+    let dismiss_sender = sender.clone();
+    controller.connect_key_pressed(move |_, keyval, _, mods| {
+        if dispatch_root_dismiss_key(keyval, mods) {
+            dismiss_sender.input(AddAccountMsg::Cancel);
+            return gtk::glib::Propagation::Stop;
+        }
+        gtk::glib::Propagation::Proceed
+    });
+    root.add_controller(controller);
+}
+
 #[allow(missing_docs)]
 #[relm4::component(pub)]
 impl SimpleComponent for AddAccountComponent {
@@ -4867,6 +4927,13 @@ impl SimpleComponent for AddAccountComponent {
             root_box,
         };
         let widgets = view_output!();
+        // Wire the Escape-dismiss key controller after
+        // `view_output!()` so the root widget tree is realized
+        // and the focused-child-first bubble phase has a parent
+        // to bubble into. Matches the Cancel button's
+        // `AddAccountMsg::Cancel` dispatch so the wipe / forward
+        // path is single-sourced through `apply_msg`.
+        wire_dismiss_controller(&model.root_box, &sender);
         ComponentParts { model, widgets }
     }
 

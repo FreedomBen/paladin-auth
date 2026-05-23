@@ -365,6 +365,14 @@ inclusion.
   of that same path. Successful manual, URI, and QR additions run the
   insertions inside
   `Vault::mutate_and_save`.
+  A bubble-phase `gtk::EventControllerKey` on the dialog root routes a
+  bare Escape press (no CTRL / ALT / SHIFT / SUPER / HYPER / META) through
+  `AddAccountMsg::Cancel`, dismissing the dialog through the same
+  secret-wipe / `AddAccountOutput::Cancel` path as the Cancel button.
+  Chord modifiers and other keys propagate untouched so focused entries,
+  dropdowns, and the Save button keep their own keyboard handling. The
+  dispatch table is pinned by `dispatch_root_dismiss_key` unit tests so
+  the wiring stays honest without a display server.
 - `RemoveDialog` — confirmation gate before calling `Vault::remove` inside
   `Vault::mutate_and_save`. Save errors surface inline.
 - `RenameDialog` — single `AdwEntryRow` pre-populated with the
@@ -1123,6 +1131,11 @@ These run without a display server. Each lives under
 - [x] Post-effect routing maps `save_durability_unconfirmed` to
   keep-with-warning and all pre-commit / validation failures to
   inline failure.
+- [x] `dispatch_root_dismiss_key` returns `true` only for a bare
+  Escape press; any chord modifier (CTRL / ALT / SHIFT / SUPER /
+  HYPER / META) or any other key propagates untouched. Caps Lock
+  is a toggle bit, not a held modifier, so it does not block
+  dismiss.
 
 #### `tests/rename_dialog_logic.rs`
 
