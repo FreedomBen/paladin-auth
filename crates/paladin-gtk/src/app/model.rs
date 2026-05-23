@@ -618,7 +618,8 @@ pub enum AppMsg {
     SearchToggled(bool),
     /// Posted by the window-level `EventControllerKey` installed by
     /// [`wire_app_window_search_focus_controller`] when the user
-    /// presses `/` or `Ctrl+K` and no focused entry has consumed the
+    /// presses `/`, `Ctrl+K`, or `Ctrl+L` and no focused entry has
+    /// consumed the
     /// keystroke. The update arm emits
     /// [`AccountListMsg::FocusSearch`] on the live
     /// [`AccountListComponent`] controller so the embedded
@@ -1578,8 +1579,9 @@ impl SimpleComponent for AppModel {
         // stays a single iteration over the pinned source of truth.
         wire_app_window_accelerators(&relm4::main_application());
 
-        // Install the `/` and `Ctrl+K` capture-phase controller so
-        // either accelerator posts `AppMsg::FocusSearch`, which
+        // Install the `/`, `Ctrl+K`, and `Ctrl+L` capture-phase
+        // controller so any of the accelerators posts
+        // `AppMsg::FocusSearch`, which
         // reveals the `AccountListComponent`'s `gtk::SearchBar` and
         // grabs focus on its `gtk::SearchEntry`. The controller
         // stays attached across state transitions; the
@@ -1984,7 +1986,7 @@ impl SimpleComponent for AppModel {
                 // owned `gtk::SearchBar`'s `search-mode-enabled`
                 // flipped (driven by either the type-to-search
                 // `set_key_capture_widget` capture, the
-                // `/` / `Ctrl+K` accelerator's
+                // `/` / `Ctrl+K` / `Ctrl+L` accelerator's
                 // `AccountListMsg::FocusSearch`, or the bar's own
                 // close button). Mirror the new state onto the
                 // header-bar toggle so its `active` state stays in
@@ -2039,7 +2041,8 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::FocusSearch => {
-                // The window-level `/` / `Ctrl+K` capture-phase
+                // The window-level `/` / `Ctrl+K` / `Ctrl+L`
+                // capture-phase
                 // controller installed by
                 // `wire_app_window_search_focus_controller` matched.
                 // Drive the live `AccountListComponent` to reveal
@@ -5058,13 +5061,13 @@ pub fn format_app_search_button_tooltip() -> &'static str {
 /// "focus search" keystroke surfaced in
 /// [`crate::shortcuts_window::format_app_shortcuts_window_entries`].
 ///
-/// Returns `"slash <Control>k"` — the two accelerators the
-/// `EventControllerKey` installed by
+/// Returns `"slash <Control>k <Control>l"` — the three accelerators
+/// the `EventControllerKey` installed by
 /// [`wire_app_window_search_focus_controller`] dispatches through
 /// [`dispatch_app_window_search_focus_key`] into
 /// [`AppMsg::FocusSearch`]. `GtkShortcutsShortcut.accelerator`
-/// accepts a space-separated list, so listing both here renders
-/// one row that shows both bindings together — matching how the
+/// accepts a space-separated list, so listing all three here renders
+/// one row that shows every binding together — matching how the
 /// helper itself treats them as interchangeable focus shortcuts.
 ///
 /// Distinct from [`format_app_window_accelerator_bindings`]
@@ -5080,7 +5083,7 @@ pub fn format_app_search_button_tooltip() -> &'static str {
 /// Pure — returns a `'static str` without allocating.
 #[must_use]
 pub fn format_app_search_focus_accelerator() -> &'static str {
-    "slash <Control>k"
+    "slash <Control>k <Control>l"
 }
 
 /// Human-readable label the `GtkShortcutsWindow` row for the
@@ -6651,8 +6654,9 @@ pub fn wire_app_window_idle_controllers(
 /// `AccountListComponent`'s `gtk::SearchBar`.
 ///
 /// Returns [`Some(AppMsg::FocusSearch)`][AppMsg::FocusSearch] when
-/// `keyval` matches the `/` (`gdk::Key::slash`) or `Ctrl+K`
-/// (`gdk::Key::k` / `gdk::Key::K` with `CONTROL_MASK`) accelerator,
+/// `keyval` matches the `/` (`gdk::Key::slash`), `Ctrl+K`
+/// (`gdk::Key::k` / `gdk::Key::K` with `CONTROL_MASK`), or `Ctrl+L`
+/// (`gdk::Key::l` / `gdk::Key::L` with `CONTROL_MASK`) accelerator,
 /// rejecting any press that also carries `ALT_MASK` / `SUPER_MASK`
 /// / `HYPER_MASK` / `META_MASK` (those compound chords are reserved
 /// for other shortcuts). The `/` arm rejects `CONTROL_MASK` too so
@@ -6684,15 +6688,17 @@ pub fn dispatch_app_window_search_focus_key(
     let ctrl = mods.contains(gtk::gdk::ModifierType::CONTROL_MASK);
     match keyval {
         gtk::gdk::Key::slash if !ctrl => Some(AppMsg::FocusSearch),
-        gtk::gdk::Key::k | gtk::gdk::Key::K if ctrl => Some(AppMsg::FocusSearch),
+        gtk::gdk::Key::k | gtk::gdk::Key::K | gtk::gdk::Key::l | gtk::gdk::Key::L if ctrl => {
+            Some(AppMsg::FocusSearch)
+        }
         _ => None,
     }
 }
 
-/// Attach the window-level `/` and `Ctrl+K` capture-phase
+/// Attach the window-level `/`, `Ctrl+K`, and `Ctrl+L` capture-phase
 /// `gtk::EventControllerKey` that posts
-/// [`AppMsg::FocusSearch`] whenever the user hits either
-/// accelerator without a focused entry first consuming the press.
+/// [`AppMsg::FocusSearch`] whenever the user hits any of the
+/// accelerators without a focused entry first consuming the press.
 ///
 /// Installs a single [`gtk::EventControllerKey`] on `window` at
 /// [`gtk::PropagationPhase::Capture`] so the closure fires before

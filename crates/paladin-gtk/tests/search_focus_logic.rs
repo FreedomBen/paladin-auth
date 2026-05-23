@@ -2,15 +2,15 @@
 
 //! Pure-logic coverage for `app::model::dispatch_app_window_search_focus_key`,
 //! the keyval / modifier dispatch table behind the window-level
-//! `/` and `Ctrl+K` accelerator that focuses the
+//! `/`, `Ctrl+K`, and `Ctrl+L` accelerator that focuses the
 //! `AccountListComponent`'s `gtk::SearchBar`.
 //!
 //! `IMPLEMENTATION_PLAN_04_GTK.md` §"Keyboard Shortcuts" pins the
 //! type-to-search and focus-search wiring: any printable keypress
 //! on the toplevel window reveals the bar via
 //! `gtk::SearchBar::set_key_capture_widget`, and the dedicated
-//! `/` / `Ctrl+K` accelerator additionally grabs focus on the
-//! `gtk::SearchEntry` without inserting the keystroke into the
+//! `/` / `Ctrl+K` / `Ctrl+L` accelerators additionally grab focus on
+//! the `gtk::SearchEntry` without inserting the keystroke into the
 //! entry's text buffer. These tests exercise the dispatch table
 //! directly so the assertions run without a display server.
 
@@ -81,6 +81,42 @@ fn control_plus_k_with_alt_does_not_dispatch() {
     assert!(
         msg.is_none(),
         "Ctrl+Alt+K is a different compound chord; do not steal it",
+    );
+}
+
+#[test]
+fn lowercase_l_with_control_dispatches_focus_search() {
+    let msg = dispatch_app_window_search_focus_key(gdk::Key::l, gdk::ModifierType::CONTROL_MASK);
+    assert!(matches!(msg, Some(AppMsg::FocusSearch)));
+}
+
+#[test]
+fn uppercase_l_with_control_dispatches_focus_search() {
+    let msg = dispatch_app_window_search_focus_key(gdk::Key::L, gdk::ModifierType::CONTROL_MASK);
+    assert!(
+        matches!(msg, Some(AppMsg::FocusSearch)),
+        "Ctrl+Shift+L (which delivers the uppercase keyval) must also match",
+    );
+}
+
+#[test]
+fn lowercase_l_without_control_does_not_dispatch() {
+    let msg = dispatch_app_window_search_focus_key(gdk::Key::l, gdk::ModifierType::empty());
+    assert!(
+        msg.is_none(),
+        "bare `l` must not steal the typing-to-search path",
+    );
+}
+
+#[test]
+fn control_plus_l_with_alt_does_not_dispatch() {
+    let msg = dispatch_app_window_search_focus_key(
+        gdk::Key::l,
+        gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK,
+    );
+    assert!(
+        msg.is_none(),
+        "Ctrl+Alt+L is a different compound chord; do not steal it",
     );
 }
 

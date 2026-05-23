@@ -202,11 +202,16 @@ inclusion.
   keystroke into the embedded `gtk::SearchEntry` ("type to search"
   parity with stock GNOME apps like Files). A dedicated window-level
   `EventControllerKey` (`wire_app_window_search_focus_controller`,
-  capture-phase) intercepts `/` and `Ctrl+K` first and posts
-  `AppMsg::FocusSearch`, which emits `AccountListMsg::FocusSearch` to
-  reveal the bar and grab focus on the entry without inserting the
+  capture-phase) intercepts `/`, `Ctrl+K`, and `Ctrl+L` first and
+  posts `AppMsg::FocusSearch`, which emits
+  `AccountListMsg::FocusSearch` to reveal the bar, grab focus on the
+  entry, and select the entry's full contents (via
+  `gtk::Editable::select_region(0, -1)`) without inserting the
   keystroke into the entry's buffer — matching the GitHub / GNOME
-  Files convention. The bar's `notify::search-mode-enabled` round-
+  Files convention. Selecting on focus means typing immediately
+  replaces any prior query, while an arrow key or pointer click
+  clears the selection and moves the caret per default
+  `gtk::Editable` behavior. The bar's `notify::search-mode-enabled` round-
   trips back through `AccountListOutput::SearchModeChanged(bool)` so
   the header-bar toggle button mirrors bar-initiated reveals (type-
   to-search, focus shortcut, the bar's own close button) in addition
@@ -3694,16 +3699,21 @@ sign-off.
     cached `search_button.set_active(active)` only on a real
     change, so the toggle / notify round-trip settles in one
     cycle.)
-  - [x] Wire the `/` and `Ctrl+K` window-level focus-search
-    accelerator. A capture-phase `gtk::EventControllerKey` attached
-    to the `adw::ApplicationWindow` runs before the
+  - [x] Wire the `/`, `Ctrl+K`, and `Ctrl+L` window-level
+    focus-search accelerator. A capture-phase
+    `gtk::EventControllerKey` attached to the
+    `adw::ApplicationWindow` runs before the
     `set_key_capture_widget` controller and posts
     `AppMsg::FocusSearch` on a match, returning
     `Propagation::Stop` so the keystroke is not also inserted into
     the `gtk::SearchEntry`. `AppMsg::FocusSearch` emits
     `AccountListMsg::FocusSearch` on the live controller, which
-    sets `search_mode = true` and calls `search_entry.grab_focus()`.
-    The dispatch is silently dropped when
+    sets `search_mode = true`, calls `search_entry.grab_focus()`,
+    and then `search_entry.select_region(0, -1)` so the entry's
+    full contents are selected — typing immediately replaces the
+    prior query, while an arrow key or pointer click clears the
+    selection and moves the caret per default `gtk::Editable`
+    behavior. The dispatch is silently dropped when
     `AppModel::account_list` is `None`. The focus-search shortcut
     is **not** registered through
     `format_app_window_accelerator_bindings` (which drives
@@ -3717,8 +3727,8 @@ sign-off.
     `format_app_search_focus_label`, and the dispatch unit tests in
     `tests/search_focus_logic.rs`. The
     `format_app_shortcuts_window_entries` row at index 1
-    surfaces the `slash <Control>k` accelerator pair in the
-    `GtkShortcutsWindow`.)
+    surfaces the `slash <Control>k <Control>l` accelerator triplet
+    in the `GtkShortcutsWindow`.)
   - [x] Add the primary `gtk::MenuButton` driven by a `gio::Menu`
     with the fixed entries Import…, Export…, Passphrase…,
     Preferences, About Paladin, Quit.

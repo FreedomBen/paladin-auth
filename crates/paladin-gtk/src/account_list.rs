@@ -171,7 +171,8 @@ pub enum AccountListOutput {
     /// header-bar search-toggle `gtk::ToggleButton` — necessary
     /// because the bar can flip itself open via
     /// `set_key_capture_widget` (type-to-search) or
-    /// [`AccountListMsg::FocusSearch`] (`/` / `Ctrl+K`), independent
+    /// [`AccountListMsg::FocusSearch`] (`/` / `Ctrl+K` / `Ctrl+L`),
+    /// independent
     /// of the toggle click. The toggle's `active` is idempotent on
     /// re-assign so the round-trip (toggle click →
     /// `AppMsg::SearchToggled` → `AccountListMsg::SetSearchModeEnabled`
@@ -610,10 +611,14 @@ pub enum AccountListMsg {
     SetSearchModeEnabled(bool),
     /// Reveal the `gtk::SearchBar` and move keyboard focus onto the
     /// embedded `gtk::SearchEntry`. Posted by `AppModel` in response
-    /// to the window-level `/` or `Ctrl+K` accelerator so the user
-    /// can start refining the search query without first reaching
-    /// for the mouse or the header-bar toggle. Existing query text
-    /// is preserved (the user may have already typed something).
+    /// to the window-level `/`, `Ctrl+K`, or `Ctrl+L` accelerator so
+    /// the user can start refining the search query without first
+    /// reaching for the mouse or the header-bar toggle. Existing
+    /// query text is preserved (the user may have already typed
+    /// something) but the entry's full contents are selected on
+    /// focus so typing immediately replaces the prior query — an
+    /// arrow key or pointer click clears the selection and moves
+    /// the caret per default `gtk::Editable` behavior.
     FocusSearch,
     /// Per-tick TOTP refresh from the [`crate::ticker`] driver.
     ///
@@ -808,6 +813,12 @@ impl SimpleComponent for AccountListComponent {
             AccountListMsg::FocusSearch => {
                 self.search_bar.set_search_mode(true);
                 self.search_entry.grab_focus();
+                // Select the entry's full contents so typing
+                // immediately replaces any prior query; an arrow
+                // key or pointer click clears the selection and
+                // moves the caret per default `gtk::Editable`
+                // behavior. `-1` is the "to end" sentinel.
+                self.search_entry.select_region(0, -1);
             }
             AccountListMsg::Tick(displays) => {
                 if displays.is_empty() {
