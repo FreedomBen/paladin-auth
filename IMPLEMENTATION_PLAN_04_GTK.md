@@ -202,16 +202,67 @@ inclusion.
   keystroke into the embedded `gtk::SearchEntry` ("type to search"
   parity with stock GNOME apps like Files). A dedicated window-level
   `EventControllerKey` (`wire_app_window_search_focus_controller`,
-  capture-phase) intercepts `/`, `Ctrl+K`, and `Ctrl+L` first and
-  posts `AppMsg::FocusSearch`, which emits
-  `AccountListMsg::FocusSearch` to reveal the bar, grab focus on the
-  entry, and select the entry's full contents (via
+  capture-phase) intercepts `/` and `Ctrl+L` first and posts
+  `AppMsg::FocusSearch`, which emits `AccountListMsg::FocusSearch`
+  to reveal the bar, grab focus on the entry, and select the
+  entry's full contents (via
   `gtk::Editable::select_region(0, -1)`) without inserting the
   keystroke into the entry's buffer — matching the GitHub / GNOME
   Files convention. Selecting on focus means typing immediately
   replaces any prior query, while an arrow key or pointer click
   clears the selection and moves the caret per default
-  `gtk::Editable` behavior. The bar's `notify::search-mode-enabled` round-
+  `gtk::Editable` behavior. Ctrl+K is intentionally **not** a
+  focus-search accelerator — it doubles as the vim-style "move up"
+  mirror inside the account list (see
+  `wire_account_list_navigation_controllers` below).
+
+  Cross-widget arrow-key navigation between the search entry and
+  the list rows is wired through a pair of capture-phase
+  `gtk::EventControllerKey` instances installed by
+  `wire_account_list_navigation_controllers`:
+
+  * On the `gtk::SearchEntry`: Down (or Ctrl+J — vim-style
+    `dispatch_search_entry_to_list_nav`) hands keyboard focus to
+    the first row of the `gtk::ListBox` and selects it. When the
+    filtered list is empty the press propagates as a benign no-op.
+  * On the `gtk::ListBox`: Up / Ctrl+K (`ListNavIntent::Up`)
+    moves the selection / focus one row earlier; at the first
+    row it instead hands focus back to the search entry and
+    re-selects its full contents so the user can replace-on-type.
+    Down / Ctrl+J (`ListNavIntent::Down`) moves the selection /
+    focus one row later, stopping at the last row (no wrap).
+    Home / End / PageUp / PageDown — and every key outside the
+    `dispatch_list_box_nav` table — propagate untouched so
+    `gtk::ListBox`'s built-in bindings keep working.
+
+  Both controllers reject ALT / SUPER / HYPER / META compound
+  chords and leave arrow keys combined with CONTROL alone
+  (`Ctrl+Up` / `Ctrl+Down` are different platform shortcuts).
+  Bare `j` / `k` are left to bubble so the `set_key_capture_widget`
+  "type to search" path keeps working.
+
+  Enter on the focused row (or a double-click) routes through
+  `gtk::ListBox::row-activated` → `AccountListMsg::ActivateRow`,
+  which reads the row's kind from `AccountListComponent::current_rows`
+  and its visible-code state from `AccountListComponent::live_displays`
+  and dispatches `default_row_activation`:
+
+  * TOTP rows and HOTP rows with a visible code emit
+    `AccountListOutput::CopyCode(id)` — the same path the per-row
+    copy `gtk::Button` uses.
+  * HOTP rows whose code is hidden emit
+    `AccountListOutput::ActivateHotpAndCopy(id)`. `AppModel`
+    latches `pending_copy_after_advance = Some(id)` and re-enters
+    the standard `AdvanceHotp` dispatch (busy gate, effect
+    ownership, worker spawn). On
+    `HotpAdvanceWorkerCompleted` the latch fires a follow-up
+    `CopyCode(id)` after `publish_reveal_for` so the freshly
+    revealed code lands on the clipboard through the same
+    `prepare_copy_bytes` / `gdk::Clipboard::set_text` /
+    `schedule_copy` pipeline. The latch is cleared on `Locked` /
+    `Quit` transitions via `prune_reveals_if_locked` /
+    `tear_down_for_quit` for parity with `reveal_windows` /
+    `pending_clipboard`. The bar's `notify::search-mode-enabled` round-
   trips back through `AccountListOutput::SearchModeChanged(bool)` so
   the header-bar toggle button mirrors bar-initiated reveals (type-
   to-search, focus shortcut, the bar's own close button) in addition
@@ -3699,10 +3750,9 @@ sign-off.
     cached `search_button.set_active(active)` only on a real
     change, so the toggle / notify round-trip settles in one
     cycle.)
-  - [x] Wire the `/`, `Ctrl+K`, and `Ctrl+L` window-level
-    focus-search accelerator. A capture-phase
-    `gtk::EventControllerKey` attached to the
-    `adw::ApplicationWindow` runs before the
+  - [x] Wire the `/` and `Ctrl+L` window-level focus-search
+    accelerator. A capture-phase `gtk::EventControllerKey`
+    attached to the `adw::ApplicationWindow` runs before the
     `set_key_capture_widget` controller and posts
     `AppMsg::FocusSearch` on a match, returning
     `Propagation::Stop` so the keystroke is not also inserted into
@@ -3713,10 +3763,12 @@ sign-off.
     full contents are selected — typing immediately replaces the
     prior query, while an arrow key or pointer click clears the
     selection and moves the caret per default `gtk::Editable`
-    behavior. The dispatch is silently dropped when
-    `AppModel::account_list` is `None`. The focus-search shortcut
-    is **not** registered through
-    `format_app_window_accelerator_bindings` (which drives
+    behavior. Ctrl+K is intentionally **not** matched here so it
+    can serve as the vim-style "move up" mirror inside the account
+    list (see the cross-widget-nav checklist item below). The
+    dispatch is silently dropped when `AppModel::account_list` is
+    `None`. The focus-search shortcut is **not** registered
+    through `format_app_window_accelerator_bindings` (which drives
     `gio::Application::set_accels_for_action`) because it lives
     behind a window-level `EventControllerKey` so a focused entry
     gets first crack at the keystroke and inline `/`-typing into
@@ -3727,8 +3779,55 @@ sign-off.
     `format_app_search_focus_label`, and the dispatch unit tests in
     `tests/search_focus_logic.rs`. The
     `format_app_shortcuts_window_entries` row at index 1
-    surfaces the `slash <Control>k <Control>l` accelerator triplet
-    in the `GtkShortcutsWindow`.)
+    surfaces the `slash <Control>l` accelerator pair in the
+    `GtkShortcutsWindow`.)
+  - [x] Wire the cross-widget arrow-key navigation between the
+    `gtk::SearchEntry` and the account-list `gtk::ListBox`. A pair
+    of capture-phase `gtk::EventControllerKey` instances installed
+    by `wire_account_list_navigation_controllers` route Down /
+    Ctrl+J on the search entry to "focus + select first row"; Up /
+    Ctrl+K on the first row to "focus + select-all search entry";
+    Up / Down on any other row to one-row movement; and Ctrl+K /
+    Ctrl+J on any row as the vim-style mirror of the bare arrow
+    keys. Bare `j` / `k` are left to bubble so the
+    `set_key_capture_widget` "type to search" path keeps working;
+    Home / End / PageUp / PageDown propagate untouched so
+    `gtk::ListBox`'s built-in bindings keep working. Compound
+    chords carrying ALT / SUPER / HYPER / META are rejected, and
+    arrow keys combined with CONTROL are left alone.
+    (Pinned by `dispatch_search_entry_to_list_nav`,
+    `dispatch_list_box_nav` / `ListNavIntent`, the widget binding
+    `wire_account_list_navigation_controllers`, and the dispatch
+    unit tests in `tests/account_list_nav_logic.rs`.)
+  - [x] Wire Enter (and double-click) on the focused
+    `gtk::ListBoxRow` to the default row action via
+    `gtk::ListBox::row-activated` → `AccountListMsg::ActivateRow(idx)`
+    → `default_row_activation(kind, has_visible_code, id)`. TOTP
+    rows and HOTP rows with a visible code emit
+    `AccountListOutput::CopyCode(id)` (same path as the per-row
+    copy button); HOTP rows whose code is hidden emit
+    `AccountListOutput::ActivateHotpAndCopy(id)`. `AppModel`
+    handles `ActivateHotpAndCopy` by latching
+    `pending_copy_after_advance = Some(id)` and re-entering the
+    standard `AdvanceHotp` dispatch so the busy gate, effect
+    ownership, worker spawn, and `HotpAdvanceWorkerCompleted`
+    reveal pipeline run through one code path. On worker
+    completion the latch fires a follow-up `CopyCode(id)` through
+    `sender.input` so the freshly revealed code lands on the
+    clipboard via the same `prepare_copy_bytes` /
+    `gdk::Clipboard::set_text` / `schedule_copy` pipeline the
+    per-row copy button uses. If the advance fails (durability
+    unconfirmed, defensive typed error) `reveal_windows` does not
+    gain a visible code, so `prepare_copy_bytes` returns `None`
+    and the follow-up `CopyCode` becomes a benign no-op. The
+    latch is cleared by `prune_reveals_if_locked` and
+    `tear_down_for_quit` alongside `reveal_windows` /
+    `pending_clipboard`.
+    (Pinned by `default_row_activation`, the new
+    `AccountListMsg::ActivateRow` variant + the
+    `AccountListOutput::ActivateHotpAndCopy` variant, and the
+    `default_row_activation` unit tests at the bottom of
+    `tests/account_list_nav_logic.rs`.)
   - [x] Add the primary `gtk::MenuButton` driven by a `gio::Menu`
     with the fixed entries Import…, Export…, Passphrase…,
     Preferences, About Paladin, Quit.

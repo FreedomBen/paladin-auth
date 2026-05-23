@@ -160,6 +160,22 @@ pub enum AccountListOutput {
     /// button via [`crate::account_row::copy_enabled`], so this
     /// variant never fires before a reveal opens.
     CopyCode(AccountId),
+    /// User pressed Enter on an un-revealed HOTP row (the row had
+    /// no visible code at activation time). Emitted by
+    /// [`default_row_activation`] for that one specific case;
+    /// every other Enter-activation surface (TOTP rows, revealed
+    /// HOTP rows) lands on [`Self::CopyCode`] instead.
+    ///
+    /// `AppModel` handles it by latching
+    /// [`crate::app::model::AppModel::pending_copy_after_advance`]
+    /// to the activated `AccountId` and dispatching the existing
+    /// [`Self::AdvanceHotp`] path. The
+    /// [`crate::app::model::AppMsg::HotpAdvanceWorkerCompleted`]
+    /// handler reads the latch after publishing the reveal and
+    /// re-dispatches a follow-up [`Self::CopyCode`], so the
+    /// clipboard write lands through the same pipeline the per-row
+    /// copy button uses.
+    ActivateHotpAndCopy(AccountId),
     /// User changed the search-bar query. `AppModel` recomputes the
     /// filtered row set against the live `Vault` and sends a
     /// matching [`AccountListMsg::Refresh`] back so the
@@ -171,8 +187,7 @@ pub enum AccountListOutput {
     /// header-bar search-toggle `gtk::ToggleButton` — necessary
     /// because the bar can flip itself open via
     /// `set_key_capture_widget` (type-to-search) or
-    /// [`AccountListMsg::FocusSearch`] (`/` / `Ctrl+K` / `Ctrl+L`),
-    /// independent
+    /// [`AccountListMsg::FocusSearch`] (`/` / `Ctrl+L`), independent
     /// of the toggle click. The toggle's `active` is idempotent on
     /// re-assign so the round-trip (toggle click →
     /// `AppMsg::SearchToggled` → `AccountListMsg::SetSearchModeEnabled`
@@ -463,6 +478,138 @@ pub fn format_widget_states_marker(displays: &[RowDisplay]) -> String {
     )
 }
 
+/// Decide which [`AccountListOutput`] a row-activation (Enter on
+/// the focused list row, or any other surface routed through
+/// [`AccountListMsg::ActivateRow`]) should emit.
+///
+/// * TOTP rows always emit [`AccountListOutput::CopyCode`] — the
+///   code is intrinsically derivable from the wall clock, so
+///   "copy the current code" is the unambiguous default action.
+/// * HOTP rows with a visible code in hand (within the reveal
+///   window — `has_visible_code == true`) also emit
+///   [`AccountListOutput::CopyCode`]: Enter copies what the user
+///   can already see, matching the per-row copy button.
+/// * HOTP rows whose code is hidden emit
+///   [`AccountListOutput::ActivateHotpAndCopy`]: Enter advances
+///   the counter and copies the freshly revealed code in one
+///   step. `AppModel` latches the follow-up copy through
+///   [`crate::app::model::AppModel::pending_copy_after_advance`]
+///   and re-dispatches a [`AccountListOutput::CopyCode`] after
+///   the advance worker reports the reveal.
+///
+/// Pure logic so unit tests can pin the decision table without a
+/// display server. The caller (the
+/// `list_box.connect_row_activated` closure in the
+/// `AccountListComponent` widget binding) reads `kind` from
+/// [`AccountRowModel::kind`] and `has_visible_code` from the live
+/// cache (`AccountListComponent::live_displays`).
+#[must_use]
+pub fn default_row_activation(
+    kind: AccountKindSummary,
+    has_visible_code: bool,
+    id: AccountId,
+) -> AccountListOutput {
+    match (kind, has_visible_code) {
+        (AccountKindSummary::Totp, _) | (AccountKindSummary::Hotp, true) => {
+            AccountListOutput::CopyCode(id)
+        }
+        (AccountKindSummary::Hotp, false) => AccountListOutput::ActivateHotpAndCopy(id),
+    }
+}
+
+/// Navigation intent decoded from a keyboard event inside the
+/// account-list controller stack.
+///
+/// Returned by [`dispatch_list_box_nav`] to abstract over the
+/// equivalent ways the user can request "move one row up" or
+/// "move one row down": the literal arrow keys, and the vim-style
+/// Ctrl+K / Ctrl+J mirrors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListNavIntent {
+    /// Move one row earlier in the list (or, at the first row,
+    /// hand focus back to the search entry with its query
+    /// selected for replace-on-type).
+    Up,
+    /// Move one row later in the list (no wrap at the last row).
+    Down,
+}
+
+/// Pure-logic key dispatcher for the `gtk::SearchEntry` capture-phase
+/// controller installed by
+/// [`wire_account_list_navigation_controllers`].
+///
+/// Returns `true` when `keyval` / `mods` describes a request to
+/// hand keyboard focus from the search entry to the first row of
+/// the account list — namely the bare Down arrow or Ctrl+J. Any
+/// press carrying ALT / SUPER / HYPER / META is rejected (those
+/// compound chords are reserved for other shortcuts), and bare `j`
+/// returns `false` so the user can still type a literal "j" into
+/// the query. The Down arrow with `CONTROL_MASK` also returns
+/// `false` so `Ctrl+Down` (a different conventional shortcut on
+/// some platforms) is not stolen.
+///
+/// Pure logic so unit tests can pin the dispatch table without
+/// spinning up a display server.
+#[must_use]
+pub fn dispatch_search_entry_to_list_nav(
+    keyval: gtk::gdk::Key,
+    mods: gtk::gdk::ModifierType,
+) -> bool {
+    let disallowed = gtk::gdk::ModifierType::ALT_MASK
+        | gtk::gdk::ModifierType::SUPER_MASK
+        | gtk::gdk::ModifierType::HYPER_MASK
+        | gtk::gdk::ModifierType::META_MASK;
+    if mods.intersects(disallowed) {
+        return false;
+    }
+    let ctrl = mods.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+    match keyval {
+        gtk::gdk::Key::Down if !ctrl => true,
+        gtk::gdk::Key::j | gtk::gdk::Key::J if ctrl => true,
+        _ => false,
+    }
+}
+
+/// Pure-logic key dispatcher for the `gtk::ListBox` capture-phase
+/// controller installed by
+/// [`wire_account_list_navigation_controllers`].
+///
+/// Returns [`Some(ListNavIntent::Up)`][ListNavIntent::Up] for the
+/// bare Up arrow or Ctrl+K, and
+/// [`Some(ListNavIntent::Down)`][ListNavIntent::Down] for the bare
+/// Down arrow or Ctrl+J. Any press carrying ALT / SUPER / HYPER /
+/// META is rejected, as are arrow-key presses combined with
+/// CONTROL (`Ctrl+Up` / `Ctrl+Down` are different shortcuts on some
+/// platforms and must not be stolen). Bare `j` / `k` return `None`
+/// so they keep the typing-to-search path open at the window-level
+/// `set_key_capture_widget`. Returns `None` for everything else,
+/// letting `gtk::ListBox`'s built-in `Home` / `End` / `Page_Up` /
+/// `Page_Down` bindings keep working.
+///
+/// Pure logic so unit tests can pin the dispatch table without
+/// spinning up a display server.
+#[must_use]
+pub fn dispatch_list_box_nav(
+    keyval: gtk::gdk::Key,
+    mods: gtk::gdk::ModifierType,
+) -> Option<ListNavIntent> {
+    let disallowed = gtk::gdk::ModifierType::ALT_MASK
+        | gtk::gdk::ModifierType::SUPER_MASK
+        | gtk::gdk::ModifierType::HYPER_MASK
+        | gtk::gdk::ModifierType::META_MASK;
+    if mods.intersects(disallowed) {
+        return None;
+    }
+    let ctrl = mods.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+    match keyval {
+        gtk::gdk::Key::Up if !ctrl => Some(ListNavIntent::Up),
+        gtk::gdk::Key::Down if !ctrl => Some(ListNavIntent::Down),
+        gtk::gdk::Key::k | gtk::gdk::Key::K if ctrl => Some(ListNavIntent::Up),
+        gtk::gdk::Key::j | gtk::gdk::Key::J if ctrl => Some(ListNavIntent::Down),
+        _ => None,
+    }
+}
+
 /// Construction parameters for [`AccountListComponent`].
 #[derive(Debug, Clone)]
 pub struct AccountListInit {
@@ -611,15 +758,30 @@ pub enum AccountListMsg {
     SetSearchModeEnabled(bool),
     /// Reveal the `gtk::SearchBar` and move keyboard focus onto the
     /// embedded `gtk::SearchEntry`. Posted by `AppModel` in response
-    /// to the window-level `/`, `Ctrl+K`, or `Ctrl+L` accelerator so
-    /// the user can start refining the search query without first
-    /// reaching for the mouse or the header-bar toggle. Existing
-    /// query text is preserved (the user may have already typed
-    /// something) but the entry's full contents are selected on
-    /// focus so typing immediately replaces the prior query — an
-    /// arrow key or pointer click clears the selection and moves
-    /// the caret per default `gtk::Editable` behavior.
+    /// to the window-level `/` or `Ctrl+L` accelerator (and also by
+    /// the up-arrow / Ctrl+K edge handler in
+    /// [`wire_account_list_navigation_controllers`]) so the user
+    /// can start refining the search query without first reaching
+    /// for the mouse or the header-bar toggle. Existing query text
+    /// is preserved (the user may have already typed something) but
+    /// the entry's full contents are selected on focus so typing
+    /// immediately replaces the prior query — an arrow key or
+    /// pointer click clears the selection and moves the caret per
+    /// default `gtk::Editable` behavior.
     FocusSearch,
+    /// User activated the `gtk::ListBoxRow` at the given factory
+    /// index — Enter on the focused row, or a double-click. Posted
+    /// by the `list_box.connect_row_activated` closure installed in
+    /// [`AccountListComponent::init`]. The handler looks up
+    /// [`AccountListComponent::current_rows`] for the row's
+    /// `AccountId` / kind and
+    /// [`AccountListComponent::live_displays`] for the visible-code
+    /// state, then routes through [`default_row_activation`] to
+    /// emit the matching [`AccountListOutput`] (`CopyCode` for TOTP
+    /// rows and revealed HOTP rows; `ActivateHotpAndCopy` for
+    /// un-revealed HOTP rows). Out-of-range indices are a benign
+    /// no-op (defensive against a stray dispatch racing a refresh).
+    ActivateRow(usize),
     /// Per-tick TOTP refresh from the [`crate::ticker`] driver.
     ///
     /// `AppModel`'s per-tick `glib::timeout_add_local` callback
@@ -710,6 +872,28 @@ impl SimpleComponent for AccountListComponent {
         search_entry.connect_search_changed(move |entry| {
             let text: String = entry.text().into();
             let _ = entry_input.send(AccountListMsg::SetQuery(text));
+        });
+
+        // Wire the cross-widget arrow-key navigation pair so Down /
+        // Ctrl+J hands focus from the search entry into the first
+        // row, Up / Ctrl+K at the first row hands focus back to the
+        // entry (with its query selected for replace-on-type), and
+        // Ctrl+J / Ctrl+K mirror the bare arrow keys inside the list.
+        wire_account_list_navigation_controllers(&search_entry, factory.widget());
+
+        // Enter on the focused `gtk::ListBoxRow` (or a double-click)
+        // fires `gtk::ListBox::row-activated`. The closure forwards
+        // the row's factory index back through
+        // `AccountListMsg::ActivateRow`, which resolves the row's
+        // kind + visible-code state and emits the matching
+        // `AccountListOutput::CopyCode` /
+        // `AccountListOutput::ActivateHotpAndCopy` per
+        // `default_row_activation`.
+        let activate_input = sender.input_sender().clone();
+        factory.widget().connect_row_activated(move |_, row| {
+            if let Ok(idx) = usize::try_from(row.index()) {
+                let _ = activate_input.send(AccountListMsg::ActivateRow(idx));
+            }
         });
 
         let search_bar = gtk::SearchBar::builder()
@@ -820,6 +1004,16 @@ impl SimpleComponent for AccountListComponent {
                 // behavior. `-1` is the "to end" sentinel.
                 self.search_entry.select_region(0, -1);
             }
+            AccountListMsg::ActivateRow(idx) => {
+                if let Some(row) = self.current_rows.get(idx) {
+                    let has_visible_code = self
+                        .live_displays
+                        .get(&row.id)
+                        .is_some_and(|d| matches!(d.code, CodeDisplay::Visible(_)));
+                    let output = default_row_activation(row.kind, has_visible_code, row.id);
+                    let _ = sender.output(output);
+                }
+            }
             AccountListMsg::Tick(displays) => {
                 if displays.is_empty() {
                     return;
@@ -869,4 +1063,100 @@ fn apply_list_box_selection(
         }
     }
     list_box.unselect_all();
+}
+
+/// Install the capture-phase `gtk::EventControllerKey` pair that
+/// implements cross-widget arrow-key navigation between the
+/// `gtk::SearchEntry` and the account-list `gtk::ListBox`.
+///
+/// Two controllers cover four cases:
+///
+/// * On `search_entry`: pressing Down (or Ctrl+J) hands keyboard
+///   focus to the first row of `list_box` (selecting it in the
+///   process). When the filtered list is empty the press is
+///   propagated so it remains a benign no-op.
+/// * On `list_box`: pressing Up (or Ctrl+K) while the focused row
+///   is the first row hands focus back to `search_entry` and calls
+///   [`gtk::Editable::select_region(0, -1)`][gtk::EditableExt::select_region]
+///   so typing immediately replaces the prior query (matching the
+///   `/` / Ctrl+L focus-search behavior). Up at any other row
+///   moves the selection / focus one row earlier. Down (or
+///   Ctrl+J) moves one row later, stopping at the last row.
+///
+/// Both controllers run at
+/// [`gtk::PropagationPhase::Capture`] so they fire before
+/// `gtk::ListBox`'s built-in Up / Down bindings (and before any
+/// per-row controller installed by the factory), ensuring a
+/// uniform navigation contract. Bare `j` / `k` are intentionally
+/// left to bubble so the window-level "type to search" capture
+/// installed by [`gtk::SearchBar::set_key_capture_widget`] still
+/// receives them. `Home` / `End` / `Page_Up` / `Page_Down` — and every key
+/// outside the dispatch tables in [`dispatch_search_entry_to_list_nav`]
+/// and [`dispatch_list_box_nav`] — propagate untouched so
+/// `gtk::ListBox`'s built-in behaviors keep working.
+///
+/// Pure side-effect helper. The closures clone `search_entry` /
+/// `list_box` so the caller does not need to retain handles to
+/// the controllers themselves.
+fn wire_account_list_navigation_controllers(
+    search_entry: &gtk::SearchEntry,
+    list_box: &gtk::ListBox,
+) {
+    let list_box_for_entry = list_box.clone();
+    let entry_ctrl = gtk::EventControllerKey::new();
+    entry_ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
+    entry_ctrl.connect_key_pressed(move |_, keyval, _, mods| {
+        if dispatch_search_entry_to_list_nav(keyval, mods) {
+            if let Some(first_row) = list_box_for_entry.row_at_index(0) {
+                list_box_for_entry.select_row(Some(&first_row));
+                first_row.grab_focus();
+                return gtk::glib::Propagation::Stop;
+            }
+        }
+        gtk::glib::Propagation::Proceed
+    });
+    search_entry.add_controller(entry_ctrl);
+
+    let search_entry_for_list = search_entry.clone();
+    let list_box_for_list = list_box.clone();
+    let list_ctrl = gtk::EventControllerKey::new();
+    list_ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
+    list_ctrl.connect_key_pressed(move |_, keyval, _, mods| {
+        let Some(intent) = dispatch_list_box_nav(keyval, mods) else {
+            return gtk::glib::Propagation::Proceed;
+        };
+        let current_idx = list_box_for_list.selected_row().map(|r| r.index());
+        match intent {
+            ListNavIntent::Up => match current_idx {
+                Some(0) => {
+                    search_entry_for_list.grab_focus();
+                    search_entry_for_list.select_region(0, -1);
+                    gtk::glib::Propagation::Stop
+                }
+                Some(idx) if idx > 0 => {
+                    if let Some(target) = list_box_for_list.row_at_index(idx - 1) {
+                        list_box_for_list.select_row(Some(&target));
+                        target.grab_focus();
+                    }
+                    gtk::glib::Propagation::Stop
+                }
+                _ => {
+                    if let Some(first) = list_box_for_list.row_at_index(0) {
+                        list_box_for_list.select_row(Some(&first));
+                        first.grab_focus();
+                    }
+                    gtk::glib::Propagation::Stop
+                }
+            },
+            ListNavIntent::Down => {
+                let target_idx = current_idx.map_or(0, |i| i + 1);
+                if let Some(target) = list_box_for_list.row_at_index(target_idx) {
+                    list_box_for_list.select_row(Some(&target));
+                    target.grab_focus();
+                }
+                gtk::glib::Propagation::Stop
+            }
+        }
+    });
+    list_box.add_controller(list_ctrl);
 }

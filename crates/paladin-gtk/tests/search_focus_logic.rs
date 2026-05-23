@@ -2,17 +2,21 @@
 
 //! Pure-logic coverage for `app::model::dispatch_app_window_search_focus_key`,
 //! the keyval / modifier dispatch table behind the window-level
-//! `/`, `Ctrl+K`, and `Ctrl+L` accelerator that focuses the
+//! `/` and `Ctrl+L` accelerator that focuses the
 //! `AccountListComponent`'s `gtk::SearchBar`.
 //!
 //! `IMPLEMENTATION_PLAN_04_GTK.md` §"Keyboard Shortcuts" pins the
 //! type-to-search and focus-search wiring: any printable keypress
 //! on the toplevel window reveals the bar via
 //! `gtk::SearchBar::set_key_capture_widget`, and the dedicated
-//! `/` / `Ctrl+K` / `Ctrl+L` accelerators additionally grab focus on
-//! the `gtk::SearchEntry` without inserting the keystroke into the
-//! entry's text buffer. These tests exercise the dispatch table
-//! directly so the assertions run without a display server.
+//! `/` / `Ctrl+L` accelerators additionally grab focus on the
+//! `gtk::SearchEntry` without inserting the keystroke into the
+//! entry's text buffer. `Ctrl+K` is intentionally absent here: it
+//! doubles as the vim-style "move up" mirror for the account list
+//! and is handled by `account_list::dispatch_list_box_nav`, so the
+//! window-level dispatcher must return `None` for it. These tests
+//! exercise the dispatch table directly so the assertions run
+//! without a display server.
 
 use paladin_gtk::app::model::{dispatch_app_window_search_focus_key, AppMsg};
 use relm4::gtk::gdk;
@@ -49,17 +53,20 @@ fn slash_with_alt_modifier_does_not_dispatch() {
 }
 
 #[test]
-fn lowercase_k_with_control_dispatches_focus_search() {
+fn lowercase_k_with_control_does_not_dispatch() {
     let msg = dispatch_app_window_search_focus_key(gdk::Key::k, gdk::ModifierType::CONTROL_MASK);
-    assert!(matches!(msg, Some(AppMsg::FocusSearch)));
+    assert!(
+        msg.is_none(),
+        "Ctrl+K must NOT focus search — it is the vim-style \"move up\" mirror for the account list",
+    );
 }
 
 #[test]
-fn uppercase_k_with_control_dispatches_focus_search() {
+fn uppercase_k_with_control_does_not_dispatch() {
     let msg = dispatch_app_window_search_focus_key(gdk::Key::K, gdk::ModifierType::CONTROL_MASK);
     assert!(
-        matches!(msg, Some(AppMsg::FocusSearch)),
-        "Ctrl+Shift+K (which delivers the uppercase keyval) must also match",
+        msg.is_none(),
+        "Ctrl+Shift+K (uppercase keyval) must NOT focus search either",
     );
 }
 

@@ -381,6 +381,27 @@ pub struct AppModel {
     /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
     /// `AccountRowComponent` copy button.
     pending_clipboard: Option<PendingClipboardClear>,
+    /// One-shot follow-up handle: when the user activates an
+    /// un-revealed HOTP row via Enter (the
+    /// [`AccountListOutput::ActivateHotpAndCopy`] path), this slot
+    /// is set to the activated `AccountId` and the existing
+    /// [`AccountListOutput::AdvanceHotp`] dispatch is re-entered
+    /// to drive the advance worker. On
+    /// [`AppMsg::HotpAdvanceWorkerCompleted`] the
+    /// [`crate::hotp_reveal::publish_reveal_for`] update fires
+    /// first to populate the live display, and then — when this
+    /// slot is `Some(id)` matching the just-completed account — a
+    /// follow-up [`AccountListOutput::CopyCode`] is dispatched and
+    /// the slot is cleared so the reveal's clipboard payload is
+    /// written through the same `prepare_copy_bytes` /
+    /// `gdk::Clipboard::set_text` /
+    /// [`crate::clipboard_clear::schedule_copy`] pipeline the
+    /// per-row copy button uses. Click-on-"next" advances bypass
+    /// this slot entirely (the button keeps its existing
+    /// advance-without-copy semantic). Cleared on `Locked` /
+    /// `Quit` transitions for parity with [`Self::reveal_windows`]
+    /// and [`Self::pending_clipboard`].
+    pending_copy_after_advance: Option<paladin_core::AccountId>,
     /// Last `AppState::is_busy()` value dispatched to the live
     /// [`AccountListComponent`] via [`AccountListMsg::SetBusy`].
     ///
@@ -559,6 +580,10 @@ impl std::fmt::Debug for AppModel {
                 "pending_clipboard",
                 &self.pending_clipboard.as_ref().map(|_| "<armed>"),
             )
+            .field(
+                "pending_copy_after_advance",
+                &self.pending_copy_after_advance,
+            )
             .field("last_account_list_busy", &self.last_account_list_busy)
             .field("last_add_dialog_busy", &self.last_add_dialog_busy)
             .field("last_rename_dialog_busy", &self.last_rename_dialog_busy)
@@ -618,8 +643,8 @@ pub enum AppMsg {
     SearchToggled(bool),
     /// Posted by the window-level `EventControllerKey` installed by
     /// [`wire_app_window_search_focus_controller`] when the user
-    /// presses `/`, `Ctrl+K`, or `Ctrl+L` and no focused entry has
-    /// consumed the
+    /// presses `/` or `Ctrl+L` and no focused entry has consumed
+    /// the
     /// keystroke. The update arm emits
     /// [`AccountListMsg::FocusSearch`] on the live
     /// [`AccountListComponent`] controller so the embedded
@@ -1579,9 +1604,8 @@ impl SimpleComponent for AppModel {
         // stays a single iteration over the pinned source of truth.
         wire_app_window_accelerators(&relm4::main_application());
 
-        // Install the `/`, `Ctrl+K`, and `Ctrl+L` capture-phase
-        // controller so any of the accelerators posts
-        // `AppMsg::FocusSearch`, which
+        // Install the `/` and `Ctrl+L` capture-phase controller so
+        // either accelerator posts `AppMsg::FocusSearch`, which
         // reveals the `AccountListComponent`'s `gtk::SearchBar` and
         // grabs focus on its `gtk::SearchEntry`. The controller
         // stays attached across state transitions; the
@@ -1665,6 +1689,7 @@ impl SimpleComponent for AppModel {
             search_button: widgets.search_button.clone(),
             window: root.clone(),
             pending_clipboard: None,
+            pending_copy_after_advance: None,
             last_account_list_busy: false,
             last_add_dialog_busy: false,
             last_rename_dialog_busy: false,
@@ -1870,6 +1895,32 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
+            AppMsg::AccountListAction(AccountListOutput::ActivateHotpAndCopy(id)) => {
+                // User pressed Enter on an un-revealed HOTP row.
+                // Latch the follow-up copy through
+                // `pending_copy_after_advance` and re-enter the
+                // standard `AdvanceHotp` dispatch so the busy gate,
+                // effect-ownership tracking, worker spawn, and
+                // `HotpAdvanceWorkerCompleted` reveal pipeline all
+                // run through one code path. On worker completion
+                // the latch fires a follow-up `CopyCode(id)` which
+                // routes through the same `prepare_copy_bytes` /
+                // `gdk::Clipboard::set_text` / `schedule_copy`
+                // pipeline the per-row copy button uses. If the
+                // advance fails (durability unconfirmed, defensive
+                // typed error) `reveal_windows` does not gain a
+                // visible code, so the follow-up `CopyCode` becomes
+                // a benign no-op via `prepare_copy_bytes` returning
+                // `None`. If a deferred lock / quit drains during
+                // `apply_effect_completion_outcome`,
+                // `prune_reveals_if_locked` clears the latch before
+                // we read it, so a post-lock state never spuriously
+                // copies.
+                self.pending_copy_after_advance = Some(id);
+                sender.input(AppMsg::AccountListAction(AccountListOutput::AdvanceHotp(
+                    id,
+                )));
+            }
             AppMsg::AccountListAction(AccountListOutput::AdvanceHotp(id)) => {
                 // HOTP row "next" button → `Vault::hotp_peek` +
                 // `Vault::hotp_advance` worker per
@@ -1986,7 +2037,7 @@ impl SimpleComponent for AppModel {
                 // owned `gtk::SearchBar`'s `search-mode-enabled`
                 // flipped (driven by either the type-to-search
                 // `set_key_capture_widget` capture, the
-                // `/` / `Ctrl+K` / `Ctrl+L` accelerator's
+                // `/` / `Ctrl+L` accelerator's
                 // `AccountListMsg::FocusSearch`, or the bar's own
                 // close button). Mirror the new state onto the
                 // header-bar toggle so its `active` state stays in
@@ -2041,8 +2092,7 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::FocusSearch => {
-                // The window-level `/` / `Ctrl+K` / `Ctrl+L`
-                // capture-phase
+                // The window-level `/` / `Ctrl+L` capture-phase
                 // controller installed by
                 // `wire_app_window_search_focus_controller` matched.
                 // Drive the live `AccountListComponent` to reveal
@@ -3806,6 +3856,21 @@ impl SimpleComponent for AppModel {
                 let effect = apply_advance_decision(&mut self.reveal_windows, decision);
                 self.publish_reveal_for(account_id, effect);
                 self.apply_effect_completion_outcome(post, &sender);
+                // Drain the Enter-activation latch (see
+                // `pending_copy_after_advance`). A deferred lock /
+                // quit drained by `apply_effect_completion_outcome`
+                // would have cleared the latch via
+                // `prune_reveals_if_locked` already, so reaching
+                // here with `Some(id)` matching `account_id` means
+                // the post-lock state is still `Unlocked` and the
+                // follow-up `CopyCode` is safe to dispatch through
+                // the standard pipeline.
+                if self.pending_copy_after_advance == Some(account_id) {
+                    self.pending_copy_after_advance = None;
+                    sender.input(AppMsg::AccountListAction(AccountListOutput::CopyCode(
+                        account_id,
+                    )));
+                }
             }
             AppMsg::AddWorkerCompleted(completion) => {
                 // Worker-outcome dispatch. Mirrors
@@ -4186,6 +4251,7 @@ impl AppModel {
         }
         self.reveal_windows.clear();
         self.pending_clipboard = None;
+        self.pending_copy_after_advance = None;
         self.idle_source.disarm();
     }
 
@@ -4268,6 +4334,7 @@ impl AppModel {
         }
         self.reveal_windows.clear();
         self.pending_clipboard = None;
+        self.pending_copy_after_advance = None;
         self.idle_source.disarm();
 
         let path = self
@@ -4303,6 +4370,7 @@ impl AppModel {
         if !unlocked {
             self.reveal_windows.clear();
             self.pending_clipboard = None;
+            self.pending_copy_after_advance = None;
         }
     }
 }
@@ -5061,14 +5129,16 @@ pub fn format_app_search_button_tooltip() -> &'static str {
 /// "focus search" keystroke surfaced in
 /// [`crate::shortcuts_window::format_app_shortcuts_window_entries`].
 ///
-/// Returns `"slash <Control>k <Control>l"` — the three accelerators
-/// the `EventControllerKey` installed by
+/// Returns `"slash <Control>l"` — the two accelerators the
+/// `EventControllerKey` installed by
 /// [`wire_app_window_search_focus_controller`] dispatches through
 /// [`dispatch_app_window_search_focus_key`] into
 /// [`AppMsg::FocusSearch`]. `GtkShortcutsShortcut.accelerator`
-/// accepts a space-separated list, so listing all three here renders
-/// one row that shows every binding together — matching how the
-/// helper itself treats them as interchangeable focus shortcuts.
+/// accepts a space-separated list, so listing both here renders one
+/// row that shows the bindings together — matching how the helper
+/// itself treats them as interchangeable focus shortcuts. Ctrl+K is
+/// excluded so it can serve as the vim-style "move up" mirror in
+/// the account list.
 ///
 /// Distinct from [`format_app_window_accelerator_bindings`]
 /// because the focus-search shortcut is not a
@@ -5083,7 +5153,7 @@ pub fn format_app_search_button_tooltip() -> &'static str {
 /// Pure — returns a `'static str` without allocating.
 #[must_use]
 pub fn format_app_search_focus_accelerator() -> &'static str {
-    "slash <Control>k <Control>l"
+    "slash <Control>l"
 }
 
 /// Human-readable label the `GtkShortcutsWindow` row for the
@@ -6654,8 +6724,7 @@ pub fn wire_app_window_idle_controllers(
 /// `AccountListComponent`'s `gtk::SearchBar`.
 ///
 /// Returns [`Some(AppMsg::FocusSearch)`][AppMsg::FocusSearch] when
-/// `keyval` matches the `/` (`gdk::Key::slash`), `Ctrl+K`
-/// (`gdk::Key::k` / `gdk::Key::K` with `CONTROL_MASK`), or `Ctrl+L`
+/// `keyval` matches the `/` (`gdk::Key::slash`) or `Ctrl+L`
 /// (`gdk::Key::l` / `gdk::Key::L` with `CONTROL_MASK`) accelerator,
 /// rejecting any press that also carries `ALT_MASK` / `SUPER_MASK`
 /// / `HYPER_MASK` / `META_MASK` (those compound chords are reserved
@@ -6666,6 +6735,14 @@ pub fn wire_app_window_idle_controllers(
 /// [`gtk::glib::Propagation::Proceed`] in that case so the press
 /// continues to the entry / list / `set_key_capture_widget` capture
 /// surfaces.
+///
+/// `Ctrl+K` is deliberately **not** matched here: it doubles as the
+/// vim-style "move cursor up" mirror for the account list (see
+/// [`crate::account_list::dispatch_list_box_nav`]). Leaving it free
+/// at the window level lets focused list rows handle it through the
+/// `AccountListComponent`'s own capture-phase navigation controller,
+/// and lets the search-bar's `set_key_capture_widget` forward the
+/// keystroke when no list-related widget has consumed it.
 ///
 /// Pure logic so the unit tests can pin the accelerator coverage
 /// without spinning up a `gtk::EventControllerKey` (or a display
@@ -6688,17 +6765,15 @@ pub fn dispatch_app_window_search_focus_key(
     let ctrl = mods.contains(gtk::gdk::ModifierType::CONTROL_MASK);
     match keyval {
         gtk::gdk::Key::slash if !ctrl => Some(AppMsg::FocusSearch),
-        gtk::gdk::Key::k | gtk::gdk::Key::K | gtk::gdk::Key::l | gtk::gdk::Key::L if ctrl => {
-            Some(AppMsg::FocusSearch)
-        }
+        gtk::gdk::Key::l | gtk::gdk::Key::L if ctrl => Some(AppMsg::FocusSearch),
         _ => None,
     }
 }
 
-/// Attach the window-level `/`, `Ctrl+K`, and `Ctrl+L` capture-phase
+/// Attach the window-level `/` and `Ctrl+L` capture-phase
 /// `gtk::EventControllerKey` that posts
-/// [`AppMsg::FocusSearch`] whenever the user hits any of the
-/// accelerators without a focused entry first consuming the press.
+/// [`AppMsg::FocusSearch`] whenever the user hits either
+/// accelerator without a focused entry first consuming the press.
 ///
 /// Installs a single [`gtk::EventControllerKey`] on `window` at
 /// [`gtk::PropagationPhase::Capture`] so the closure fires before
