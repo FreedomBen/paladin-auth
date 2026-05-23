@@ -42,6 +42,15 @@ pub const SCHEMA_ID: &str = "org.tamx.Paladin.Gui";
 /// dispatch table the `header_func` consults.
 pub const SHOW_SECTION_HEADERS_KEY: &str = "show-section-headers";
 
+/// `show-column-headers` key name as declared in the gschema.
+///
+/// Controls whether the unlocked account list shows the
+/// `gtk::ColumnView` header strip (Account / Code / Time / Copy /
+/// Menu).  Default `true` — see
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §A.4 "Column-header
+/// visibility preference" for the rationale.
+pub const SHOW_COLUMN_HEADERS_KEY: &str = "show-column-headers";
+
 /// Build-time path to the directory containing the compiled
 /// gschemas (`gschemas.compiled`).  Set by `build.rs`.
 const BUILD_TIME_SCHEMA_DIR: &str = env!("PALADIN_GTK_SCHEMA_DIR");
@@ -101,6 +110,25 @@ pub fn set_show_section_headers(
     value: bool,
 ) -> Result<(), gio::glib::error::BoolError> {
     settings.set_boolean(SHOW_SECTION_HEADERS_KEY, value)
+}
+
+/// Read the [`SHOW_COLUMN_HEADERS_KEY`] boolean.
+#[must_use]
+pub fn show_column_headers(settings: &gio::Settings) -> bool {
+    settings.boolean(SHOW_COLUMN_HEADERS_KEY)
+}
+
+/// Write the [`SHOW_COLUMN_HEADERS_KEY`] boolean.
+///
+/// Mirrors [`set_show_section_headers`]: callers must surface any
+/// failure rather than silently swallowing it — a write that does
+/// not stick leaves the visible widget out of sync with the
+/// persisted value.
+pub fn set_show_column_headers(
+    settings: &gio::Settings,
+    value: bool,
+) -> Result<(), gio::glib::error::BoolError> {
+    settings.set_boolean(SHOW_COLUMN_HEADERS_KEY, value)
 }
 
 fn lookup_build_time_schema() -> Option<gio::SettingsSchema> {

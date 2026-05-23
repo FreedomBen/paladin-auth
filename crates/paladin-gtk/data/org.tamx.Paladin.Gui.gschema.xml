@@ -26,5 +26,16 @@
         the list stays compact.
       </description>
     </key>
+    <key name="show-column-headers" type="b">
+      <default>true</default>
+      <summary>Show account list column headers</summary>
+      <description>
+        When enabled, the account list shows the column header strip
+        (Account / Code / Time / Copy / Menu) at the top of the
+        list.  Enabled by default so the ColumnView shape is
+        labelled out of the box; users who prefer a compact list
+        can hide it from the Display preferences group.
+      </description>
+    </key>
   </schema>
 </schemalist>

@@ -15,11 +15,58 @@
 //! that is the path the in-process `paladin_gtk::gsettings::app_settings`
 //! consults first.
 
-use paladin_gtk::gsettings::{SCHEMA_ID, SHOW_SECTION_HEADERS_KEY};
+use paladin_gtk::gsettings::{SCHEMA_ID, SHOW_COLUMN_HEADERS_KEY, SHOW_SECTION_HEADERS_KEY};
 use relm4::gtk::gio;
 use relm4::gtk::gio::prelude::*;
+use relm4::gtk::glib;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const BUILD_TIME_SCHEMA_DIR: &str = env!("PALADIN_GTK_SCHEMA_DIR");
+
+/// Drain the supplied `glib::MainContext` so any queued
+/// `notify::` / `changed::` signal emissions from a preceding
+/// `gio::Settings::set_*` call run before the assertion checks
+/// them.  Without this the `connect_changed` closure may not
+/// have observed the write yet — `gio::Settings` dispatches its
+/// signals via the main context that was thread-default at
+/// construction time, not synchronously from `set_boolean`.
+fn drain(ctx: &glib::MainContext) {
+    while ctx.iteration(false) {}
+}
+
+/// Serializes the `changed_signal_fires_for_*_write` tests.
+/// `gio::Settings` dispatches `changed::` signals via the shared
+/// thread-default `glib::MainContext` (`MainContext::default()`).
+/// When two of those tests run in parallel each pushes its own
+/// `MainContext` onto the thread default in different threads, but
+/// the underlying `GLib` mutex on the global default context can
+/// drop emissions for the contender that lost the race.  Serializing
+/// the two signal tests through a single mutex makes the contract
+/// deterministic.  Mirrors the `SCHEDULE_LOCK` pattern in
+/// `tests/clipboard_clear_logic.rs`.
+static SIGNAL_LOCK: Mutex<()> = Mutex::new(());
+
+fn signal_lock() -> MutexGuard<'static, ()> {
+    SIGNAL_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Run `body` inside an owned `glib::MainContext` so any
+/// `gio::Settings` constructed inside dispatches its `changed::`
+/// signals onto that context instead of the shared default.
+/// Drains the context once `body` returns so queued emissions
+/// fire before the assertion checks them.
+fn with_owned_context<F>(body: F)
+where
+    F: FnOnce(&gio::Settings),
+{
+    let ctx = glib::MainContext::new();
+    ctx.with_thread_default(|| {
+        let settings = memory_backed_settings();
+        body(&settings);
+        drain(&ctx);
+    })
+    .expect("nested with_thread_default");
+}
 
 fn build_time_schema() -> gio::SettingsSchema {
     let source = gio::SettingsSchemaSource::from_directory(BUILD_TIME_SCHEMA_DIR, None, false)
@@ -77,6 +124,98 @@ fn show_section_headers_round_trip_via_memory_backend() {
 }
 
 #[test]
+fn schema_carries_show_column_headers_key() {
+    let schema = build_time_schema();
+    assert!(
+        schema.has_key(SHOW_COLUMN_HEADERS_KEY),
+        "the gschema must declare `{SHOW_COLUMN_HEADERS_KEY}` so \
+         `paladin_gtk::gsettings::show_column_headers` resolves",
+    );
+}
+
+#[test]
+fn show_column_headers_default_is_true() {
+    // Default-on is the contract pinned in IMPLEMENTATION_PLAN_04
+    // §A.4 (Column-header visibility): column headers are visible
+    // out of the box because the ColumnView shape only makes
+    // sense with labelled columns; users can hide them via the
+    // Display preferences group.
+    let settings = memory_backed_settings();
+    assert!(
+        settings.boolean(SHOW_COLUMN_HEADERS_KEY),
+        "column headers default to true per IMPLEMENTATION_PLAN_04 §A.4",
+    );
+}
+
+#[test]
+fn show_column_headers_round_trip_via_memory_backend() {
+    let settings = memory_backed_settings();
+    settings
+        .set_boolean(SHOW_COLUMN_HEADERS_KEY, false)
+        .expect("write the show-column-headers key");
+    assert!(
+        !settings.boolean(SHOW_COLUMN_HEADERS_KEY),
+        "writing false and re-reading should return false",
+    );
+    settings
+        .set_boolean(SHOW_COLUMN_HEADERS_KEY, true)
+        .expect("write the show-column-headers key back to true");
+    assert!(
+        settings.boolean(SHOW_COLUMN_HEADERS_KEY),
+        "writing true and re-reading should return true",
+    );
+}
+
+#[test]
+fn changed_signal_fires_for_show_column_headers_write() {
+    // Mirrors the `show-section-headers` contract: AppModel
+    // registers a `changed::show-column-headers` handler so a
+    // toggle from SettingsComponent dispatches a refresh to
+    // AccountListComponent.  Pin the contract that a write
+    // actually fires the signal so wiring does not silently
+    // no-op if either the key name or the gschema id drifts.
+    let _guard = signal_lock();
+    let fired: std::rc::Rc<std::cell::Cell<bool>> = std::rc::Rc::new(std::cell::Cell::new(false));
+    let fired_for_closure = std::rc::Rc::clone(&fired);
+    with_owned_context(|settings| {
+        settings.connect_changed(Some(SHOW_COLUMN_HEADERS_KEY), move |_, _| {
+            fired_for_closure.set(true);
+        });
+        settings
+            .set_boolean(SHOW_COLUMN_HEADERS_KEY, false)
+            .expect("write the show-column-headers key");
+    });
+    assert!(
+        fired.get(),
+        "writing the key must fire the `changed::{SHOW_COLUMN_HEADERS_KEY}` signal",
+    );
+}
+
+#[test]
+fn helper_round_trip_for_show_column_headers() {
+    // The typed helpers `show_column_headers` / `set_show_column_headers`
+    // are what the production wiring calls; pin a round-trip so a
+    // refactor of those wrappers does not silently break the
+    // contract that reads see the most-recent write.
+    use paladin_gtk::gsettings::{set_show_column_headers, show_column_headers};
+    let settings = memory_backed_settings();
+    assert!(
+        show_column_headers(&settings),
+        "default read via helper must be true",
+    );
+    set_show_column_headers(&settings, false).expect("helper write");
+    assert!(
+        !show_column_headers(&settings),
+        "helper read after a false write must be false",
+    );
+    set_show_column_headers(&settings, true).expect("helper write back");
+    assert!(
+        show_column_headers(&settings),
+        "helper read after a true write must be true",
+    );
+}
+
+#[test]
 fn changed_signal_fires_for_show_section_headers_write() {
     // The AppModel registers a `changed::show-section-headers`
     // handler on its `gio::Settings` clone so a toggle from
@@ -84,15 +223,17 @@ fn changed_signal_fires_for_show_section_headers_write() {
     // Pin the contract that a write actually fires the signal so
     // that wiring does not silently no-op if either the key name
     // or the gschema id drifts.
-    let settings = memory_backed_settings();
+    let _guard = signal_lock();
     let fired: std::rc::Rc<std::cell::Cell<bool>> = std::rc::Rc::new(std::cell::Cell::new(false));
     let fired_for_closure = std::rc::Rc::clone(&fired);
-    settings.connect_changed(Some(SHOW_SECTION_HEADERS_KEY), move |_, _| {
-        fired_for_closure.set(true);
+    with_owned_context(|settings| {
+        settings.connect_changed(Some(SHOW_SECTION_HEADERS_KEY), move |_, _| {
+            fired_for_closure.set(true);
+        });
+        settings
+            .set_boolean(SHOW_SECTION_HEADERS_KEY, true)
+            .expect("write the show-section-headers key");
     });
-    settings
-        .set_boolean(SHOW_SECTION_HEADERS_KEY, true)
-        .expect("write the show-section-headers key");
     assert!(
         fired.get(),
         "writing the key must fire the `changed::{SHOW_SECTION_HEADERS_KEY}` signal",
