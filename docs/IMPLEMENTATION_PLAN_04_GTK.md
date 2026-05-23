@@ -5756,3 +5756,122 @@ familiar with relm4 and GObject subclassing in Rust, **plus**
 ~1 day of manual QA against a populated vault (50+ accounts, TOTP +
 HOTP mix, active search, busy state, sort toggling, both prefs
 flipped through every combination).
+
+### A.8 Foundation landed 2026-05-23 — integration still pending
+
+Pure-logic + cell-factory foundation for the ColumnView migration
+has been merged in five commits ahead of the
+`AccountListComponent` widget rewrite, so the rewrite can consume
+ready-made helpers instead of inventing them inline:
+
+| Commit | Subject | Lands |
+|---|---|---|
+| 59f457b | Introduce `RowItem` GObject for ColumnView migration | `row_item.rs` + 6 tests |
+| ba8a66f | Add splice_diff helpers for the ColumnView store | `column_view.rs` (plan + apply) + 16 tests |
+| c6f5f66 | Add `RowKind`, interleave helper, and generic splice key | `RowKind` on `RowItem`, `RowKey`, `interleave_section_headers`, generic `splice_plan<K>` + 4 tests |
+| 83f0ec7 | Add cell factory builders for the ColumnView migration | 5 cell factories (`build_account_column_factory`, …, `build_kebab_column_factory`), `apply_interleaved_splice_plan`, `any_totp` |
+
+Total: ~870 lines of new Rust (`row_item.rs` + `column_view.rs`) +
+30 new tests, all green; `cargo clippy --workspace --all-targets
+-- -D warnings` clean. No change to `account_list.rs`,
+`account_row.rs`, `app/model.rs`, or any existing widget code —
+the foundation is purely additive.
+
+**Remaining work** for the next session, in the order the rewrite
+should land:
+
+1. **Rewrite `AccountListComponent`** in `account_list.rs`:
+   replace the `FactoryVecDeque<AccountRowComponent>` +
+   `gtk::ListBox` with a `gio::ListStore<RowItem>` +
+   `gtk::ColumnView` + `gtk::SingleSelection`. Construct the five
+   columns by calling the factory builders shipped in `column_view.rs`.
+   Wire the existing message variants (`Refresh`, `Tick`,
+   `SetBusy`, `SetShowSectionHeaders`, `SetSearchModeEnabled`,
+   `FocusSearch`, `ActivateRow`, `SetQuery`) onto the new widget
+   tree:
+   - `Refresh` calls `column_view::apply_interleaved_splice_plan(store, rows, show_section_headers)`,
+     re-applies the selection through `SingleSelection::set_selected`,
+     and toggles the Time column visibility via `column_view::any_totp(rows)`.
+   - `Tick` walks `tick_dispatch_plan`'s output and calls
+     `RowItem::set_display` on the matching items in the store —
+     **never** `store.splice(...)`.
+   - `SetShowSectionHeaders` re-calls
+     `apply_interleaved_splice_plan` with the new flag; account
+     rows survive because `RowKey::Account` is stable across the
+     diff.
+   - `SetBusy` walks the store and calls `RowItem::set_busy`
+     instead of broadcasting through `FactoryVecDeque::broadcast`.
+   - `ActivateRow(position)` resolves the store position to a
+     `RowItem`, ignores section rows (defensive — they are
+     `set_selectable(false)`), then routes through
+     `default_row_activation` against the live `RowItem.display()`'s
+     `code` variant.
+2. **Delete the `FactoryComponent` machinery** from
+   `account_row.rs`: `AccountRowComponent`, `AccountRowInit`,
+   `AccountRowMsg`, `AccountRowWidgets`, `build_row_widget`,
+   `bind_row`, `install_row_action_group`, `bind_row_icon`. Keep
+   `AccountRowOutput`, `dispatch_row_action`,
+   `format_counter_label`, `build_kebab_menu_model`, the
+   `ROW_*_ACTION_NAME` constants, `HIDDEN_CODE_PLACEHOLDER`,
+   `PROGRESS_URGENCY_CSS_CLASSES`, and all pure projection helpers
+   — `column_view.rs`'s cell factories consume them. (Or delete
+   `AccountRowOutput`/`dispatch_row_action` too if every consumer
+   moves off them — see step 4's test update.)
+3. **Rewire `app/model.rs`**: drop the
+   `crate::account_list::forward_row_output` import (it disappears
+   with `AccountRowOutput`); `AccountListComponent::forward(…)`
+   now passes `AccountListOutput` through identity. No other
+   visible API on `AppModel` changes.
+4. **Update tests**:
+   - `tests/account_list_logic.rs`: tests that bind to
+     `AccountRowComponent` directly retarget at the new factory
+     builders. Selection / search / busy-mask broadcast tests stay
+     structurally similar but call into `gio::ListStore::n_items`
+     / `SingleSelection::selected` instead of `ListBox`.
+   - `tests/account_row_logic.rs`: pure projection helper tests
+     (`project_row`, `code_display`, …) stay. Widget-bind tests
+     (`build_row_widget_is_exposed_from_account_row_module`,
+     `bind_row_is_exposed_from_account_row_module`,
+     `bind_row_icon_is_exposed_from_account_row_module`,
+     `install_row_action_group_is_exposed_from_account_row_module`,
+     and the `AccountRowComponent` scaffold test) delete with the
+     widget helpers themselves.
+   - `tests/gtk_smoke.rs`: `format_widget_states_marker` may
+     change shape — verify the smoke test's grep target still
+     fires when the new ColumnView mounts.
+5. **Sortable Account column** (§A.4 "Sortable columns"): attach a
+   `gtk::Sorter` to the "Account" column's `gtk::ColumnViewColumn`
+   that sorts by `(issuer, label)` case-insensitive. Default
+   unsorted preserves the vault insertion-order contract.
+6. **Column-header visibility preference** (§A.4
+   "Column-header visibility"): new `show-column-headers` key in
+   `data/org.tamx.Paladin.Gui.gschema.xml`, helpers in
+   `gsettings.rs`, `AppMsg::ShowColumnHeadersChanged(bool)`,
+   `AccountListMsg::SetShowColumnHeaders(bool)` that toggles
+   `gtk::ColumnView::set_show_column_separators` (or hides each
+   `ColumnViewColumn::set_header_widget` to suppress the header
+   strip entirely), and a preferences row in `settings.rs`.
+7. **Promote this appendix** into the body of the plan, rewrite
+   §"Component tree" > `AccountListComponent` to describe the
+   ColumnView shape, and update `docs/DESIGN.md` if any
+   user-visible behavior shifts beyond the new preferences.
+8. **CI gates**: regenerate `crates/paladin-core/public-api.txt`
+   if the public surface changed (it didn't yet — the foundation
+   is additive, but the rewrite will), then re-confirm `cargo
+   fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+   `cargo test --workspace --all-targets`, `cargo deny check`,
+   `cargo audit`.
+
+The cell factories in `column_view.rs` are the riskiest piece of
+the integration: cells are recycled by the
+`gtk::SignalListItemFactory`, so the per-bind closures (HOTP
+"next" click, copy click, kebab `gio::SimpleActionGroup`
+installation) must close over the *current* `RowItem`'s
+`AccountId`, not a stale one. The shipped code re-installs all
+three on every `bind` and disconnects them on `unbind` via a
+shared `Rc<RefCell<HashMap>>` keyed by `gtk::ListItem` pointer.
+The §A.5 row "Cell recycling breaks per-row action group
+identity" remains the test target the integration should hit: a
+test that scrolls a 50-row list back and forth and asserts that
+every row's Copy / Rename / Next dispatches the bound row's id,
+not a leaked one.
