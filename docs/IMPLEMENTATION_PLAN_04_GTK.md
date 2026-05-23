@@ -5382,16 +5382,17 @@ section just pins which Adwaita class fills each role.
 
 ---
 
-## Appendix A — Archived plan: column headers via `gtk::ColumnView`
+## Appendix A — Planned: column headers via `gtk::ColumnView`
 
-Status: **archived (not implemented)**. Captured 2026-05-23 after
-the SizeGroup-aligned header strip (commit `f6e9288`, the
+Status: **planned, not yet implemented**. Captured 2026-05-23
+after the SizeGroup-aligned header strip (commit `f6e9288`, the
 lowest-cost path to column headers) was reverted in commit
-`93aa48f`. Preserved here as the heavier alternative we may revisit
-if column headers come back on the roadmap and we decide a true
-columnar widget is worth the rewrite cost. The active plan above
-does **not** currently describe column headers — the revert dropped
-that section along with the implementation.
+`93aa48f` in favor of the heavier `gtk::ColumnView` rewrite this
+appendix describes. This appendix is the working spec for that
+rewrite; it will be promoted into the body of the plan once
+implementation begins. The active plan above does **not** yet
+describe column headers — the revert dropped that section along
+with the implementation, and this appendix is the next iteration.
 
 This appendix covers replacing the unlocked-vault list view's
 `gtk::ListBox` + `relm4::factory::FactoryVecDeque` with a
@@ -5410,9 +5411,8 @@ The attempted Option 1 (a pinned `gtk::Box` header strip above the
 `ScrolledWindow`, widths aligned via per-column `gtk::SizeGroup`)
 was the lowest-disruption path to column headers — it landed in
 `f6e9288` and was reverted in `93aa48f` after the three shortcomings
-below outweighed the gain. They remain the reasons a real
-`gtk::ColumnView` would be preferable if column headers come back
-on the roadmap:
+below outweighed the gain. They are the reasons we're committing
+to a real `gtk::ColumnView` rewrite next:
 
 1. **Header widths are best-effort, not authoritative.** A SizeGroup
    gives every member the maximum of all members' preferred widths.
@@ -5530,28 +5530,30 @@ changed by Add / Remove / search-filter — not by ticks.
 #### A.2.4 Section grouping (issuer headers between rows)
 
 `gtk::ColumnView` has no `set_header_func` equivalent for in-list
-section headers — those are a `ListBox`-only feature. Two paths:
+section headers — those are a `ListBox`-only feature. To preserve
+the existing `show-section-headers` user preference (currently
+shipped and toggleable), section headers are rendered as styled
+`RowItem`s interleaved into the store:
 
-1. **Drop in-list section headers** when ColumnView lands. The
-   `show-section-headers` preference becomes a no-op (or is
-   removed). This is the simplest path and may be acceptable: real
-   column headers arguably subsume the visual grouping benefit.
-2. **Render group rows as styled `RowItem`s.** Add a `kind: enum
-   RowKind { Section(String), Account(AccountSummary) }` field to
-   `RowItem`. The "Account" cell factory branches on kind: section
-   rows render as a single-cell heading spanning all columns; account
-   rows render the existing icon+label. Per-column factories for
-   non-account cells render empty for section rows. Selectability
-   is suppressed by calling `list_item.set_selectable(false)` in
-   each cell factory's `bind` step when the bound `RowItem` is a
-   section. (Note: `gtk::SelectionFilterModel` is **not** the right
-   widget here — it presents the currently-selected items of an
-   upstream model, it does not gate which items may be selected.
-   For coarser control a custom `gtk::SelectionModel` subclass
-   wrapping `gtk::SingleSelection` is the alternative.)
-
-Default is Path 1. Flip to Path 2 only if preserving issuer
-grouping is judged worth the extra row-model complexity.
+* Add a `kind: enum RowKind { Section(String), Account(AccountSummary) }`
+  field to `RowItem`. The "Account" cell factory branches on
+  `kind`: section rows render as a single-cell heading spanning all
+  columns; account rows render the existing icon+label. Per-column
+  factories for non-account cells render empty for section rows.
+* Selectability is suppressed by calling
+  `list_item.set_selectable(false)` in each cell factory's `bind`
+  step when the bound `RowItem` is a section.
+  (`gtk::SelectionFilterModel` is **not** the right widget here —
+  it presents the currently-selected items of an upstream model,
+  it does not gate which items may be selected. For coarser
+  control, wrap `gtk::SingleSelection` in a custom
+  `gtk::SelectionModel` subclass that returns `false` from
+  `is_selected` for section positions.)
+* `AppModel` computes the interleaved row list (section + account
+  rows) from `AccountRowModel` using the existing
+  `row_section_header` predicate, gated by the
+  `show-section-headers` GSettings key. Toggling the key rebuilds
+  the row list without resetting the live selection.
 
 #### A.2.5 Per-tick update path
 
@@ -5599,13 +5601,13 @@ goes through a per-row `gio::SimpleActionGroup` named
 
 | File | Change |
 |---|---|
-| `crates/paladin-gtk/src/account_list.rs` | Substantial rewrite. `gtk::ListBox` → `gtk::ColumnView`. `FactoryVecDeque<AccountRowComponent>` → `gio::ListStore<RowItem>` + `gtk::SignalListItemFactory` per column. Selection moves to `gtk::SingleSelection`. The in-list section-header dispatch table (`precompute_section_headers`, `install_section_header_func`, `build_section_header_label`, `row_section_header`, `issuer_group_header`) either deletes (Path 1) or migrates to `RowKind::Section` rendering (Path 2). |
+| `crates/paladin-gtk/src/account_list.rs` | Substantial rewrite. `gtk::ListBox` → `gtk::ColumnView`. `FactoryVecDeque<AccountRowComponent>` → `gio::ListStore<RowItem>` + `gtk::SignalListItemFactory` per column. Selection moves to `gtk::SingleSelection`. The in-list section-header dispatch table (`precompute_section_headers`, `install_section_header_func`, `build_section_header_label`) is replaced by `RowKind::Section` interleaving in `AppModel`; the pure predicate helpers (`row_section_header`, `issuer_group_header`) survive and feed the interleaver. |
 | `crates/paladin-gtk/src/account_row.rs` | The factory-component machinery (`AccountRowComponent`, `AccountRowInit`, `AccountRowMsg`, `AccountRowOutput`, `AccountRowWidgets`, `build_row_widget`, `bind_row`, `install_row_action_group`) is **deleted**. The pure projection helpers (`project_row`, `progress_display`, `progress_urgency`, `code_display`, `counter_display`, `apply_busy_mask`, `next_button_visible`, `progress_visible`, `kebab_visible`, `copy_enabled`) survive — the ColumnView cell factories consume the same `RowDisplay` values. |
 | **new** `crates/paladin-gtk/src/row_item.rs` | `RowItem` `GObject` subclass + `glib::Properties` derive macro + `set_display` mutator. |
 | **new** `crates/paladin-gtk/src/column_view.rs` (or fold into `account_list.rs`) | Cell factory builders: `build_account_column_factory`, `build_code_column_factory`, `build_time_column_factory`, `build_copy_column_factory`, `build_kebab_column_factory`. Each returns a `gtk::SignalListItemFactory` whose `setup` builds the cell widget tree and whose `bind` reads from the `RowItem`'s properties. |
-| `crates/paladin-gtk/src/app/model.rs` | `AccountListInit` field names change (`rows: Vec<AccountRowModel>` → unchanged), `initial_selection` semantics unchanged. `AppMsg::ShowSectionHeadersChanged` becomes either a no-op (Path 1) or remains wired to the ColumnView model (Path 2). Per-tick dispatch helpers (`tick_dispatch_plan`, `forward_row_output`) need re-routing since `AccountRowOutput` no longer exists — actions emit `AccountListOutput` directly from the cell-factory closures. |
-| `crates/paladin-gtk/src/data/org.tamx.Paladin.Gui.gschema.xml` | `show-column-headers` key — required if we make column-header visibility opt-out. Otherwise headers are always shown by `gtk::ColumnView` (the natural default). |
-| `crates/paladin-gtk/src/settings.rs` | Preferences row for `show-column-headers` (if added). Section-headers row is removed or re-purposed depending on the Path 1/2 decision. |
+| `crates/paladin-gtk/src/app/model.rs` | `AccountListInit` field names change (`rows: Vec<AccountRowModel>` → unchanged), `initial_selection` semantics unchanged. `AppMsg::ShowSectionHeadersChanged` is rewired to rebuild the interleaved row list and `splice_diff` it into the store. New `AppMsg::ShowColumnHeadersChanged(bool)` mirrors that signal for the new `show-column-headers` key. Per-tick dispatch helpers (`tick_dispatch_plan`, `forward_row_output`) need re-routing since `AccountRowOutput` no longer exists — actions emit `AccountListOutput` directly from the cell-factory closures. |
+| `crates/paladin-gtk/src/data/org.tamx.Paladin.Gui.gschema.xml` | Add `show-column-headers` key (default `true`); the existing `show-section-headers` key stays. |
+| `crates/paladin-gtk/src/settings.rs` | Add a preferences row for `show-column-headers` alongside the existing `show-section-headers` row (Display group, title/subtitle helper fns mirroring the section-headers row). |
 | `crates/paladin-gtk/tests/account_list_logic.rs` | Tests that bind directly to `AccountRowComponent` re-target to the new factory builders. Selection / search / busy-mask broadcast tests stay structurally similar but call into ColumnView APIs (`SingleSelection::selected`, `gio::ListStore::n_items`). |
 | `crates/paladin-gtk/tests/account_row_logic.rs` | Pure projection helpers (`project_row` et al.) stay; widget-bind tests delete with `bind_row`. |
 | This document (`docs/IMPLEMENTATION_PLAN_04_GTK.md`) | Rewrite §"Component tree" → describe ColumnView. Update §"libadwaita usage" if the row's CSS classes change. Note the section-header decision. Promote this appendix into the body of the plan. |
@@ -5613,12 +5615,11 @@ goes through a per-row `gio::SimpleActionGroup` named
 
 ### A.4 Implementation checklist
 
-Track progress against this list when the rewrite begins.
-
-#### Foundation
-- [ ] Decide section-headers Path 1 (drop) vs Path 2 (preserve via `RowKind::Section`). Default Path 1.
-- [ ] Decide whether column-header visibility is gated (`show-column-headers` GSettings) or always shown. Default always shown.
-- [ ] Decide whether to keep the "Time" column visible on HOTP-only vaults. Default hide.
+Track progress against this list when the rewrite begins. The five
+foundational decisions (section headers, column-header visibility,
+sortable columns, HOTP "next" placement, Time-column visibility)
+are recorded in §A.6 and need no further deliberation; the checklist
+below reflects those resolutions.
 
 #### `RowItem` GObject
 - [ ] Define `RowItem` in `crates/paladin-gtk/src/row_item.rs` with `id`, `display`, `icon_hint`, `busy` properties.
@@ -5639,7 +5640,13 @@ Track progress against this list when the rewrite begins.
 - [ ] `build_time_column_factory` — `gtk::ProgressBar` (width_request 96); bind to `display.progress_fraction` + urgency CSS class.
 - [ ] `build_copy_column_factory` — `gtk::Button` "edit-copy-symbolic"; activate emits `AccountListOutput::CopyCode(item.id())`. Sensitive bound to `display.copy_enabled`.
 - [ ] `build_kebab_column_factory` — `gtk::MenuButton` "view-more-symbolic"; menu model built once at setup time; per-cell action group rebound on each `bind` so the closures capture the current item's `AccountId`.
-- [ ] HOTP "next" affordance: decide whether it stays inline in the "Code" cell (so it's adjacent to the code, like today) or moves to its own ColumnView column. Recommend inline.
+- [ ] HOTP "next" affordance: rendered inline in the "Code" cell, immediately adjacent to the code label (matches today's layout). Visibility bound to `display.next_button_visible`; `connect_clicked` closure emits `AccountListOutput::AdvanceHotp(item.id())`.
+- [ ] Hide the "Time" column entirely when no live row has a TOTP kind (gate on `tick_dispatch_plan.is_empty()`-style predicate against the current store). Re-show it when the next Add or Refresh adds a TOTP row.
+
+#### Sortable columns
+- [ ] Attach a `gtk::Sorter` to the "Account" column that sorts by `(issuer, label)` case-insensitive. Clicking the column header toggles sort direction; default is unsorted (preserves vault insertion order from `docs/DESIGN.md`).
+- [ ] Code, Time, Copy, and Kebab columns are non-sortable (live-changing values or action affordances).
+- [ ] Cross-check `docs/DESIGN.md` § listing-order contract — the default (unsorted) view must still equal vault insertion order. Clicking a sortable header is a user-initiated override and does not persist across restarts.
 
 #### Per-tick update path
 - [ ] Rewrite `AccountListMsg::Tick` handler to walk `tick_dispatch_plan`, look up the matching `RowItem` in the store via an `AccountId → position` index, and call `item.set_display(new_display)`.
@@ -5650,24 +5657,20 @@ Track progress against this list when the rewrite begins.
 - [ ] `AppModel` recomputes `filtered_row_models_from_vault(...)`, then asks the live `AccountListComponent` to `splice_diff` the new vec into its store.
 - [ ] Cursor / selection survives a query change as today.
 
-#### Section headers (Path 1)
-- [ ] Delete `precompute_section_headers`, `install_section_header_func`, `build_section_header_label`, `row_section_header`, `issuer_group_header`.
-- [ ] Delete `show-section-headers` schema key (and its tests, preferences row, AppMsg variant, signal wiring).
-- [ ] Note the user-facing removal in `docs/DESIGN.md` and this plan.
+#### Section headers (via `RowKind::Section`)
+- [ ] Add `RowKind { Section(String), Account(AccountSummary) }` on `RowItem`; `RowItem::section(text) -> Self` constructor.
+- [ ] Compute the interleaved row list (section + account rows) inside `AppModel` from `AccountRowModel` per the existing `row_section_header` predicate, gated by the `show-section-headers` GSettings key.
+- [ ] `AccountListMsg::SetShowSectionHeaders(bool)` rebuilds the interleaved row list and `splice_diff`s the result into the store. Live selection survives the rebuild because account-row identities are stable across the diff.
+- [ ] In each cell factory's `bind`, call `list_item.set_selectable(false)` when the bound `RowItem` is a section so it cannot become the `SingleSelection` selection.
+- [ ] Cell factories branch on kind: the "Account" cell renders a single full-width label for section rows; all other columns render an empty placeholder for section rows.
+- [ ] Tests: section rows are non-selectable; toggling the `show-section-headers` GSettings key rebuilds the row list without resetting the live account-row selection; section rows render in the correct positions relative to the account rows per the `row_section_header` predicate.
 
-#### Section headers (Path 2 — alternative)
-- [ ] Add `RowKind` enum on `RowItem`; `RowItem::section(text) -> Self`.
-- [ ] Compute the interleaved row list (section + account rows) inside `AppModel` from `AccountRowModel` per the existing `row_section_header` predicate, gated by `show-section-headers`.
-- [ ] In each cell factory's `bind`, call `list_item.set_selectable(false)` when the bound `RowItem` is a section so it cannot become the `SingleSelection` selection. (`gtk::SelectionFilterModel` is the wrong widget — see §A.2.4. If finer control is needed, wrap `SingleSelection` in a custom `SelectionModel` subclass that returns `false` from `is_selected` for section positions.)
-- [ ] Cell factories branch on kind: section row renders a single full-width label, all other columns render empty.
-- [ ] Tests: section rows are non-selectable; toggling the GSettings rebuilds the row list without resetting the live selection.
-
-#### Preferences (if column-header visibility is gated)
-- [ ] `show-column-headers` schema key, default `true`.
-- [ ] `crate::gsettings::{show_column_headers, set_show_column_headers, SHOW_COLUMN_HEADERS_KEY}`.
-- [ ] `AppMsg::ShowColumnHeadersChanged(bool)` + `changed::show-column-headers` signal wiring.
-- [ ] `AccountListMsg::SetShowColumnHeaders(bool)` → `column_view.set_show_column_separators(...)` and individual column `set_visible(false)` toggles on the header widgets (ColumnView itself can hide all headers via `set_show_column_separators` + ad-hoc CSS, or per-column via `set_visible` on the column header widget).
-- [ ] Preferences row in `settings.rs` Display group with title/subtitle helper fns.
+#### Column-header visibility preference
+- [ ] `show-column-headers` schema key in `org.tamx.Paladin.Gui.gschema.xml`, default `true`.
+- [ ] `crate::gsettings::{show_column_headers, set_show_column_headers, SHOW_COLUMN_HEADERS_KEY}` mirroring the existing `show_section_headers` helpers.
+- [ ] `AppMsg::ShowColumnHeadersChanged(bool)` + `changed::show-column-headers` signal wiring mirroring `show-section-headers`.
+- [ ] `AccountListMsg::SetShowColumnHeaders(bool)` → toggle visibility on each `gtk::ColumnViewColumn` header widget (or use `column_view.set_show_column_separators(false)` + CSS to hide the whole header strip, whichever produces the cleaner look in libadwaita).
+- [ ] Preferences row in `settings.rs` Display group with title/subtitle helper fns, alongside the existing `show-section-headers` row.
 
 #### Docs sync
 - [ ] This plan (`docs/IMPLEMENTATION_PLAN_04_GTK.md`) — rewrite §"Component tree" to describe the ColumnView + RowItem + factories. Update the "we migrated away from ListView once" rationale with the new flicker-free contract. Promote this appendix into the body.
@@ -5686,34 +5689,70 @@ Track progress against this list when the rewrite begins.
 | Risk | Probability | Impact | Mitigation |
 |---|---|---|---|
 | Per-tick `splice` regression returns dropped-click bug | Medium | High | Enforce in code review and add a regression test asserting `store.n_items()` is unchanged across a Tick. |
-| Section-header removal upsets users who turned the pref on | Low | Medium | Path 2 preserves the feature; otherwise call it out in release notes. |
 | Cell recycling breaks per-row action group identity | Medium | Medium | Bind action groups inside cell-factory `bind`, not `setup`; tests cover Copy + Rename through 100 sequential rebinds. |
-| HOTP "next" button placement gets awkward | Low | Low | Inline it in the "Code" cell; matches today's visual layout. |
+| `RowKind::Section` rows become selectable through a missed `set_selectable(false)` branch | Low | Medium | Test that arrow-key navigation skips section rows and that `SingleSelection::selected_position` never points at a `Section` `RowItem`. |
+| Sortable "Account" column unintentionally overrides vault insertion order at startup | Low | Medium | Initial sorter state is `None` (no column active); test that `n_items()` and per-position `RowItem.id` after construction equal the input `Vec<AccountRowModel>` order. |
 | Search filter performance under ColumnView differs | Low | Low | The `splice_diff` helper holds n_items steady across query changes by id-matching. |
 | `cargo public-api` snapshot churn | Certain | Low | Regenerate the snapshot and review the diff carefully. |
 | `gtk::ColumnView` styling drift from libadwaita "navigation-sidebar" look | Medium | Low | Apply `add_css_class("rich-list")` or the libadwaita "boxed-list" classes that match the rest of the app. |
 
-### A.6 Decision points (must resolve before reviving)
+### A.6 Resolved decisions (2026-05-23)
 
-1. **Section headers**: drop them (Path 1) or preserve them as styled section rows (Path 2)?
-2. **Column-header visibility**: always shown, or gated by a per-user `show-column-headers` GSettings key (mirroring `show-section-headers`)?
-3. **Sortable columns**: enabled by default per column, or deferred to a post-v0.2 pass? `ColumnView` makes this nearly free, but cross-cuts with the vault-insertion-order contract in `docs/DESIGN.md`.
-4. **HOTP "next" button placement**: inline in the "Code" cell (recommended, matches today) or its own column?
-5. **"Time" column visibility on HOTP-only vaults**: hide the entire column (recommended) or render it empty?
+1. **Section headers**: **preserved** via `RowKind::Section` rows
+   interleaved into the store (the "Path 2" alternative described in
+   §A.2.4). Keeps the shipped `show-section-headers` user preference
+   working and avoids a user-facing regression.
+2. **Column-header visibility**: **gated** by a new per-user
+   `show-column-headers` GSettings key, defaulting to `true` and
+   mirroring the existing `show-section-headers` plumbing
+   (gschema, helpers in `gsettings.rs`, `AppMsg` variant, settings
+   row).
+3. **Sortable columns**: **enabled by default** on the columns
+   where sorting is semantically meaningful (today: the "Account"
+   column). Code and Time columns are non-sortable because their
+   values change live; Copy and Kebab columns are action affordances
+   with no sort axis. Default state is unsorted, preserving the
+   vault insertion-order contract in `docs/DESIGN.md`; clicking a
+   header is an opt-in user action that does not persist across
+   restarts.
+4. **HOTP "next" button placement**: **inline in the "Code" cell**,
+   immediately adjacent to the code label. Matches today's layout
+   and keeps the related controls visually grouped.
+5. **"Time" column visibility on HOTP-only vaults**: **hidden
+   entirely** when no live row has a TOTP kind. Re-shown when the
+   next Add or Refresh introduces a TOTP row.
 
-Each of these defaults to the conservative answer above; flip any of them in a post-v0.2 decision pass if requirements change.
+These are the assumptions baked into §A.3, §A.4, and §A.7. Flip
+any of them in a post-v0.2 decision pass only if requirements
+change.
 
 ### A.7 Estimated scope
 
-Rough sizing for a single-engineer pass, assuming Path 1 + always-shown headers + inline HOTP-next + hidden Time column for HOTP-only:
+Rough sizing for a single-engineer pass under the §A.6 resolutions
+(`RowKind::Section` interleaving + gated column-header visibility +
+sortable "Account" column + inline HOTP-next + hidden Time column
+on HOTP-only vaults):
 
-* ~600–800 lines of new Rust across `row_item.rs`, the ColumnView builders, and the rewired `account_list.rs`.
-* ~400–500 lines deleted from `account_row.rs` (the factory machinery).
-* ~6–8 new tests in `account_list_logic.rs`; ~4–6 tests deleted that bound to factory internals.
-* This plan: 1–2 sections rewritten when the appendix is promoted into the body.
+* ~700–900 lines of new Rust across `row_item.rs`, the ColumnView
+  builders, the `RowKind`/interleaver machinery in `AppModel`, the
+  new `show-column-headers` plumbing, and the rewired
+  `account_list.rs`. (Higher than a Path-1 build by the ~100–150
+  lines that `RowKind` + interleaver + selectability gating add.)
+* ~400–500 lines deleted from `account_row.rs` (the factory
+  machinery).
+* ~8–10 new tests in `account_list_logic.rs` (selection skip past
+  section rows, `show-section-headers` toggle preserving live
+  selection, `show-column-headers` toggle, sortable Account column
+  toggle preserving id-ordering on Reset, hidden Time column on
+  HOTP-only); ~4–6 tests deleted that bound to factory internals.
+* This plan: 1–2 sections rewritten when the appendix is promoted
+  into the body. `docs/DESIGN.md` may need a short paragraph on
+  column-header / sortable-column behavior, but no normative change
+  to the listing-order contract.
 * `cargo public-api` snapshot regenerated.
 
-Realistic effort: **3–5 days** of focused work for a developer
+Realistic effort: **4–6 days** of focused work for a developer
 familiar with relm4 and GObject subclassing in Rust, **plus**
 ~1 day of manual QA against a populated vault (50+ accounts, TOTP +
-HOTP mix, active search, busy state, etc.).
+HOTP mix, active search, busy state, sort toggling, both prefs
+flipped through every combination).
