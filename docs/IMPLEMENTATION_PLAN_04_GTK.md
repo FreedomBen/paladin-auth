@@ -5622,17 +5622,17 @@ are recorded in §A.6 and need no further deliberation; the checklist
 below reflects those resolutions.
 
 #### `RowItem` GObject
-- [ ] Define `RowItem` in `crates/paladin-gtk/src/row_item.rs` with `id`, `display`, `icon_hint`, `busy` properties.
-- [ ] Wire `glib::Properties` derive (Rust GObject crate) and the per-property setters.
-- [ ] Add `RowItem::from_row_model(&AccountRowModel) -> Self`.
-- [ ] Add `RowItem::set_display(&self, RowDisplay)` and verify it fires `notify::display`.
-- [ ] Unit-test: setter fires the `notify::display` signal.
+- [x] Define `RowItem` in `crates/paladin-gtk/src/row_item.rs` with `id`, `display`, `icon_hint`, `busy` properties.
+- [x] Wire `glib::Properties` derive (Rust GObject crate) and the per-property setters. *Implementation note*: `RowDisplay` carries non-`Value` shapes (`CodeDisplay`, `ProgressDisplay`, `AccountKindSummary`) so the per-property derive isn't a clean fit for the full projection. The implementation keeps the same observable contract via a custom `display-changed` signal (`ROW_ITEM_DISPLAY_CHANGED_SIGNAL`) that fires on every `set_display` / `set_busy` mutation; cell factories will `connect_local` to that name in their `bind` step. The four documented fields are exposed as plain Rust getters / setters on the wrapper.
+- [x] Add `RowItem::from_row_model(&AccountRowModel) -> Self`.
+- [x] Add `RowItem::set_display(&self, RowDisplay)` and verify it fires the change signal (now `display-changed`, see note above).
+- [x] Unit-test: setter fires the `display-changed` signal. (See `tests/row_item_logic.rs`.)
 
 #### Store + selection
 - [ ] Replace `FactoryVecDeque<AccountRowComponent>` with `gio::ListStore::new::<RowItem>()`.
 - [ ] Build `gtk::SingleSelection::new(Some(store))`; bind to `ColumnView::set_model`.
 - [ ] Replace `apply_list_box_selection` with a `SingleSelection::set_selected(position)` helper.
-- [ ] Build `splice_diff` helper that, given an old and new `Vec<AccountRowModel>`, computes the minimum (insert, remove) ops against the store keyed by `AccountId` — never `splice(0, N, N)`.
+- [x] Build `splice_diff` helper that, given an old and new `Vec<AccountRowModel>`, computes the minimum (insert, remove) ops against the store keyed by `AccountId` — never `splice(0, N, N)`. Implemented as `column_view::splice_plan` (pure-logic op planner) + `column_view::apply_splice_plan` (driver against a real `gio::ListStore<RowItem>`); see `tests/column_view_logic.rs`.
 
 #### Cell factories
 - [ ] `build_account_column_factory` — icon (24px) + ellipsized label (hexpand).

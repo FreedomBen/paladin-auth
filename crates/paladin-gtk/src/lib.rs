@@ -27,6 +27,7 @@ pub mod auto_lock;
 pub mod cli;
 pub mod clipboard;
 pub mod clipboard_clear;
+pub mod column_view;
 pub mod effect_ownership;
 pub mod export_dialog;
 pub mod gsettings;
