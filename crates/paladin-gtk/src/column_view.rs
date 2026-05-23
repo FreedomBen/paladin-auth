@@ -588,9 +588,7 @@ pub fn build_code_column_factory(sender: Sender<AccountListOutput>) -> gtk::Sign
         let Some(container) = list_item.child().and_downcast::<gtk::Box>() else {
             return;
         };
-        let Some(next_button) =
-            container.last_child().and_downcast::<gtk::Button>()
-        else {
+        let Some(next_button) = container.last_child().and_downcast::<gtk::Button>() else {
             return;
         };
 
