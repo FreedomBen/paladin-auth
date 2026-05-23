@@ -41,6 +41,7 @@ pub mod rename_dialog;
 pub mod search;
 pub mod secret_fields;
 pub mod settings;
+pub mod shortcuts_window;
 pub mod startup_error;
 pub mod ticker;
 pub mod unlock_dialog;

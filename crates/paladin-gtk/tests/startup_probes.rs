@@ -1347,7 +1347,8 @@ fn format_app_menu_quit_action_returns_app_quit() {
     // `format_app_menu_export_action`,
     // `format_app_menu_passphrase_action`,
     // `format_app_menu_preferences_action`,
-    // `format_app_menu_about_action`); together they pin all six
+    // `format_app_menu_keyboard_shortcuts_action`,
+    // `format_app_menu_about_action`); together they pin all seven
     // primary-menu entries' action targets against a single
     // source of truth, paired with the matching `_label`
     // helpers.
@@ -1391,7 +1392,7 @@ fn format_app_action_group_name_returns_app() {
     // from a single source of truth.
     //
     // Pure — returns a `'static str` without allocating.
-    // Companion of the six primary-menu action-target helpers
+    // Companion of the seven primary-menu action-target helpers
     // (`format_app_menu_import_action`, …,
     // `format_app_menu_quit_action`); together they pin the
     // group prefix and every entry's action target against a
@@ -1822,8 +1823,9 @@ fn format_app_menu_quit_action_name_returns_quit() {
     // `format_app_menu_export_action_name`,
     // `format_app_menu_passphrase_action_name`,
     // `format_app_menu_preferences_action_name`,
+    // `format_app_menu_keyboard_shortcuts_action_name`,
     // `format_app_menu_about_action_name`); together they pin
-    // all six primary-menu entries' bare SimpleAction names
+    // all seven primary-menu entries' bare SimpleAction names
     // against a single source of truth, paired with the matching
     // `_action` and `_label` helpers.
     use paladin_gtk::app::model::format_app_menu_quit_action_name;
@@ -1929,17 +1931,199 @@ fn format_app_menu_quit_accelerator_is_non_empty_and_well_formed() {
 }
 
 #[test]
+fn format_app_menu_keyboard_shortcuts_label_returns_keyboard_shortcuts() {
+    // The `AppModel`'s primary `gio::Menu` "Keyboard Shortcuts"
+    // entry's label is populated from this helper. The wording
+    // (`"Keyboard Shortcuts"`) names the surface the entry opens
+    // (the `gtk::ShortcutsWindow` built by
+    // `shortcuts_window::build_app_shortcuts_window`) and uses the
+    // bare label — no trailing horizontal-ellipsis — because the
+    // shortcuts window is informational rather than a request for
+    // input (same convention as `Preferences` and `About`).
+    use paladin_gtk::app::model::format_app_menu_keyboard_shortcuts_label;
+
+    assert_eq!(
+        format_app_menu_keyboard_shortcuts_label(),
+        "Keyboard Shortcuts",
+        "primary menu Keyboard Shortcuts entry uses the GNOME-canonical bare label (no ellipsis)",
+    );
+}
+
+#[test]
+fn format_app_menu_keyboard_shortcuts_label_does_not_carry_ellipsis() {
+    // The shortcuts window is informational, so the GNOME-HIG
+    // ellipsis convention (reserved for entries that collect
+    // further input before committing) does not apply. Pinning a
+    // no-ellipsis invariant alongside the full-string assertion
+    // guards against an accidental rename that would drift back
+    // to an older HIG style.
+    use paladin_gtk::app::model::format_app_menu_keyboard_shortcuts_label;
+
+    let label = format_app_menu_keyboard_shortcuts_label();
+    assert!(
+        !label.ends_with('\u{2026}'),
+        "Keyboard Shortcuts menu label must not end with the horizontal-ellipsis character (U+2026); got {label:?}",
+    );
+    assert!(
+        !label.ends_with("..."),
+        "Keyboard Shortcuts menu label must not end with three ASCII periods either; got {label:?}",
+    );
+}
+
+#[test]
+fn format_app_menu_keyboard_shortcuts_action_returns_app_shortcuts() {
+    // The `AppModel`'s primary `gio::Menu` "Keyboard Shortcuts"
+    // entry's `detailed_action_name` is populated from this
+    // helper. The wording (`"app.shortcuts"`) is the fully-
+    // qualified action target the `gio::Menu` resolves against
+    // the application's `app` action group, parallel to
+    // `app.preferences` / `app.about` / `app.quit`.
+    use paladin_gtk::app::model::format_app_menu_keyboard_shortcuts_action;
+
+    assert_eq!(
+        format_app_menu_keyboard_shortcuts_action(),
+        "app.shortcuts",
+        "primary menu Keyboard Shortcuts entry uses the `app.shortcuts` action target so the menu resolves against the bundled SimpleActionGroup",
+    );
+}
+
+#[test]
+fn format_app_menu_keyboard_shortcuts_action_uses_app_group_prefix() {
+    // Defense-in-depth: the action target must start with the
+    // shared `app.` group prefix returned by
+    // `format_app_action_group_name`. Catches a future rename of
+    // the helper or the prefix that would otherwise silently
+    // unbind the menu activation.
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_menu_keyboard_shortcuts_action,
+    };
+
+    let prefix = format!("{}.", format_app_action_group_name());
+    let action = format_app_menu_keyboard_shortcuts_action();
+    assert!(
+        action.starts_with(&prefix),
+        "Keyboard Shortcuts action target {action:?} must start with the shared group prefix {prefix:?}",
+    );
+}
+
+#[test]
+fn format_app_menu_keyboard_shortcuts_action_name_returns_shortcuts() {
+    // The widget binding hands this bare name to
+    // `gio::SimpleAction::new(name, None)` so the action joins
+    // the bundled `app` action group. The wording
+    // (`"shortcuts"`) is the bare single-word name parallel to
+    // `"preferences"`, `"about"`, and `"quit"` — chosen over the
+    // GTK-canonical `"show-help-overlay"` so this entry stays
+    // uniform with the rest of the primary menu.
+    use paladin_gtk::app::model::format_app_menu_keyboard_shortcuts_action_name;
+
+    assert_eq!(
+        format_app_menu_keyboard_shortcuts_action_name(),
+        "shortcuts",
+        "Keyboard Shortcuts bare action name must be the single-word `shortcuts`",
+    );
+}
+
+#[test]
+fn format_app_menu_keyboard_shortcuts_action_name_has_no_separator_or_whitespace() {
+    // The bare name is consumed by `gio::SimpleAction::new`,
+    // which treats embedded `.` as a group/action separator and
+    // would reject whitespace. Guard against a future rename
+    // that accidentally spelled the bare name with the prefix or
+    // surrounding whitespace.
+    use paladin_gtk::app::model::format_app_menu_keyboard_shortcuts_action_name;
+
+    let bare = format_app_menu_keyboard_shortcuts_action_name();
+    assert!(
+        !bare.contains('.'),
+        "bare action name {bare:?} must not embed the `<group>.<action>` separator",
+    );
+    assert!(
+        !bare.chars().any(char::is_whitespace),
+        "bare action name {bare:?} must not contain whitespace",
+    );
+    assert!(!bare.is_empty(), "bare action name must be non-empty");
+}
+
+#[test]
+fn format_app_menu_keyboard_shortcuts_action_name_round_trips_with_group_and_target() {
+    // Cross-check: joining the shared group prefix with the bare
+    // name must reproduce the fully-qualified action target.
+    // Catches a future rename of any one of the three helpers
+    // without updating its siblings.
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_menu_keyboard_shortcuts_action,
+        format_app_menu_keyboard_shortcuts_action_name,
+    };
+
+    let group = format_app_action_group_name();
+    let bare = format_app_menu_keyboard_shortcuts_action_name();
+    let full = format_app_menu_keyboard_shortcuts_action();
+    assert_eq!(
+        format!("{group}.{bare}"),
+        full,
+        "`<group>.<action_name>` join must reproduce the fully-qualified Keyboard Shortcuts action target",
+    );
+}
+
+#[test]
+fn format_app_menu_keyboard_shortcuts_accelerator_returns_control_question() {
+    // The widget binding hands this accelerator string to
+    // `gio::Application::set_accels_for_action("app.shortcuts",
+    // &["<Control>question"])`. The `<Control>question` spelling
+    // is the GNOME-HIG canonical "show keyboard shortcuts"
+    // shortcut every modern GNOME app uses; the bare `question`
+    // keysym (lowercase, gtk's bare key name for `?`) matches
+    // `gtk::accelerator_parse`'s recognised spelling.
+    use paladin_gtk::app::model::format_app_menu_keyboard_shortcuts_accelerator;
+
+    assert_eq!(
+        format_app_menu_keyboard_shortcuts_accelerator(),
+        "<Control>question",
+        "Keyboard Shortcuts accelerator must be the GNOME-canonical `<Control>question`",
+    );
+}
+
+#[test]
+fn format_app_menu_keyboard_shortcuts_accelerator_is_non_empty_and_well_formed() {
+    // Defensive: the accelerator string is consumed by
+    // `gio::Application::set_accels_for_action`, which accepts
+    // any non-empty gtk-rs accelerator spelling. An accidental
+    // empty string or whitespace-leading entry would silently
+    // unbind the shortcut at runtime — guard against that drift
+    // here so the `<Ctrl>?` shortcut stays wired. Mirrors the
+    // structural assertions on
+    // `format_app_menu_quit_accelerator_is_non_empty_and_well_formed`.
+    use paladin_gtk::app::model::format_app_menu_keyboard_shortcuts_accelerator;
+
+    let accel = format_app_menu_keyboard_shortcuts_accelerator();
+    assert!(
+        !accel.is_empty(),
+        "accelerator must be non-empty; got {accel:?}",
+    );
+    assert!(
+        !accel.starts_with(' ') && !accel.ends_with(' '),
+        "accelerator must not have leading or trailing whitespace; got {accel:?}",
+    );
+    assert!(
+        accel.contains('<') && accel.contains('>'),
+        "accelerator must use the `<Modifier>key` form; got {accel:?}",
+    );
+}
+
+#[test]
 fn every_primary_menu_action_name_round_trips_with_group_and_target() {
     // Final cross-check: for every primary-menu entry the
     // `<group>.<action_name>` join from the two helpers must
     // reproduce the fully-qualified `_action` target. Catches a
-    // future rename of any one of the eighteen helpers without
+    // future rename of any one of the per-entry helpers without
     // updating its siblings.
     use paladin_gtk::app::model::{
         format_app_action_group_name, format_app_menu_about_action,
         format_app_menu_about_action_name, format_app_menu_export_action,
         format_app_menu_export_action_name, format_app_menu_import_action,
-        format_app_menu_import_action_name, format_app_menu_passphrase_action,
+        format_app_menu_import_action_name, format_app_menu_keyboard_shortcuts_action,
+        format_app_menu_keyboard_shortcuts_action_name, format_app_menu_passphrase_action,
         format_app_menu_passphrase_action_name, format_app_menu_preferences_action,
         format_app_menu_preferences_action_name, format_app_menu_quit_action,
         format_app_menu_quit_action_name,
@@ -1966,6 +2150,11 @@ fn every_primary_menu_action_name_round_trips_with_group_and_target() {
             "Preferences",
             format_app_menu_preferences_action_name(),
             format_app_menu_preferences_action(),
+        ),
+        (
+            "Keyboard Shortcuts",
+            format_app_menu_keyboard_shortcuts_action_name(),
+            format_app_menu_keyboard_shortcuts_action(),
         ),
         (
             "About",
@@ -2136,16 +2325,17 @@ fn format_app_add_button_accelerator_returns_control_n() {
 }
 
 #[test]
-fn format_app_window_accelerator_bindings_returns_three_pinned_pairs_in_order() {
+fn format_app_window_accelerator_bindings_returns_four_pinned_pairs_in_order() {
     // The application-window wiring iterates this array against
     // `gio::Application::set_accels_for_action(target, &[accel])`
-    // for every pinned keyboard surface (Add, Quit, Preferences).
-    // The order matches the pinned-accelerator helper sequence
-    // (`format_app_add_button_accelerator`,
+    // for every pinned keyboard surface (Add, Quit, Preferences,
+    // Keyboard Shortcuts). The order matches the pinned-accelerator
+    // helper sequence (`format_app_add_button_accelerator`,
     //  `format_app_menu_quit_accelerator`,
-    //  `format_app_menu_preferences_accelerator`) and each pair
-    // sources its two slots from the matching `_accelerator` and
-    // `_action` helpers so a future rename of any one helper
+    //  `format_app_menu_preferences_accelerator`,
+    //  `format_app_menu_keyboard_shortcuts_accelerator`) and each
+    // pair sources its two slots from the matching `_accelerator`
+    // and `_action` helpers so a future rename of any one helper
     // propagates through the bindings instead of drifting per-
     // entry.
     //
@@ -2153,11 +2343,12 @@ fn format_app_window_accelerator_bindings_returns_three_pinned_pairs_in_order() 
     // `for (accel, target) in
     //  format_app_window_accelerator_bindings()` loop, so the
     // wiring stays a single iteration over the pinned source of
-    // truth instead of three hand-spelled
+    // truth instead of four hand-spelled
     // `set_accels_for_action` calls that could silently drift in
     // order or coverage.
     use paladin_gtk::app::model::{
         format_app_add_button_accelerator, format_app_add_button_action,
+        format_app_menu_keyboard_shortcuts_accelerator, format_app_menu_keyboard_shortcuts_action,
         format_app_menu_preferences_accelerator, format_app_menu_preferences_action,
         format_app_menu_quit_accelerator, format_app_menu_quit_action,
         format_app_window_accelerator_bindings,
@@ -2166,8 +2357,8 @@ fn format_app_window_accelerator_bindings_returns_three_pinned_pairs_in_order() 
     let bindings = format_app_window_accelerator_bindings();
     assert_eq!(
         bindings.len(),
-        3,
-        "the three pinned keyboard surfaces (Add, Quit, Preferences) form the entire accelerator surface today",
+        4,
+        "the four pinned keyboard surfaces (Add, Quit, Preferences, Keyboard Shortcuts) form the entire accelerator surface today",
     );
     assert_eq!(
         bindings[0],
@@ -2193,6 +2384,14 @@ fn format_app_window_accelerator_bindings_returns_three_pinned_pairs_in_order() 
         ),
         "third binding must be the Preferences menu entry's `<Control>comma` -> `app.preferences`",
     );
+    assert_eq!(
+        bindings[3],
+        (
+            format_app_menu_keyboard_shortcuts_accelerator(),
+            format_app_menu_keyboard_shortcuts_action()
+        ),
+        "fourth binding must be the Keyboard Shortcuts menu entry's `<Control>question` -> `app.shortcuts`",
+    );
 }
 
 #[test]
@@ -2201,8 +2400,9 @@ fn format_app_window_accelerator_bindings_targets_are_distinct() {
     // binding for the same target, so a duplicated target slot
     // in the bindings array would silently lose the earlier
     // accelerator without surfacing a compile-time error. Guard
-    // against that drift here so the three pinned accelerator
-    // surfaces (Add, Quit, Preferences) stay disjoint.
+    // against that drift here so the four pinned accelerator
+    // surfaces (Add, Quit, Preferences, Keyboard Shortcuts) stay
+    // disjoint.
     use paladin_gtk::app::model::format_app_window_accelerator_bindings;
 
     let bindings = format_app_window_accelerator_bindings();
@@ -2342,19 +2542,20 @@ fn format_app_add_button_accelerator_is_non_empty_and_well_formed() {
 }
 
 #[test]
-fn format_app_primary_menu_entries_returns_six_entries_in_pinned_order() {
+fn format_app_primary_menu_entries_returns_seven_entries_in_pinned_order() {
     // The `AppModel`'s primary `gio::Menu` is built by appending
     // each entry's (label, detailed-action-name) pair in the
     // §"libadwaita usage" sequence: Import, Export, Passphrase,
-    // Preferences, About Paladin, Quit. This helper returns the
-    // six pairs in order so the widget binding does not need to
-    // hand-spell each `menu.append(...)` call against the
-    // individual `format_app_menu_*_label` / `_action` helpers,
-    // keeping the menu structure pinned to a single source of
-    // truth.
+    // Preferences, Keyboard Shortcuts, About Paladin, Quit. This
+    // helper returns the seven pairs in order so the widget
+    // binding does not need to hand-spell each `menu.append(...)`
+    // call against the individual `format_app_menu_*_label` /
+    // `_action` helpers, keeping the menu structure pinned to a
+    // single source of truth.
     use paladin_gtk::app::model::{
         format_app_menu_about_action, format_app_menu_about_label, format_app_menu_export_action,
         format_app_menu_export_label, format_app_menu_import_action, format_app_menu_import_label,
+        format_app_menu_keyboard_shortcuts_action, format_app_menu_keyboard_shortcuts_label,
         format_app_menu_passphrase_action, format_app_menu_passphrase_label,
         format_app_menu_preferences_action, format_app_menu_preferences_label,
         format_app_menu_quit_action, format_app_menu_quit_label, format_app_primary_menu_entries,
@@ -2363,12 +2564,12 @@ fn format_app_primary_menu_entries_returns_six_entries_in_pinned_order() {
     let entries = format_app_primary_menu_entries();
     assert_eq!(
         entries.len(),
-        6,
-        "primary menu must carry exactly six entries; got {}",
+        7,
+        "primary menu must carry exactly seven entries; got {}",
         entries.len(),
     );
 
-    let expected: [(&'static str, &'static str); 6] = [
+    let expected: [(&'static str, &'static str); 7] = [
         (
             format_app_menu_import_label(),
             format_app_menu_import_action(),
@@ -2386,6 +2587,10 @@ fn format_app_primary_menu_entries_returns_six_entries_in_pinned_order() {
             format_app_menu_preferences_action(),
         ),
         (
+            format_app_menu_keyboard_shortcuts_label(),
+            format_app_menu_keyboard_shortcuts_action(),
+        ),
+        (
             format_app_menu_about_label(),
             format_app_menu_about_action(),
         ),
@@ -2393,7 +2598,7 @@ fn format_app_primary_menu_entries_returns_six_entries_in_pinned_order() {
     ];
     assert_eq!(
         entries, expected,
-        "primary menu entries must follow the pinned §\"libadwaita usage\" sequence (Import, Export, Passphrase, Preferences, About, Quit) and pair each label with its fully-qualified action target",
+        "primary menu entries must follow the pinned §\"libadwaita usage\" sequence (Import, Export, Passphrase, Preferences, Keyboard Shortcuts, About, Quit) and pair each label with its fully-qualified action target",
     );
 }
 
@@ -2796,18 +3001,18 @@ fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
 }
 
 #[test]
-fn format_app_window_action_names_lists_the_six_primary_menu_entries_then_add() {
+fn format_app_window_action_names_lists_the_seven_primary_menu_entries_then_add() {
     // Per §"libadwaita usage" and §"Component tree": the
-    // application's `app` action group bundles the six
+    // application's `app` action group bundles the seven
     // primary-menu bare action names (Import, Export,
-    // Passphrase, Preferences, About, Quit) with the
-    // header-bar `+` button's bare Add action name. This
-    // helper returns all seven names in a fixed-size array so
-    // the widget binding can iterate without allocating a
+    // Passphrase, Preferences, Keyboard Shortcuts, About, Quit)
+    // with the header-bar `+` button's bare Add action name.
+    // This helper returns all eight names in a fixed-size array
+    // so the widget binding can iterate without allocating a
     // `Vec` per `init` call. The pinned order keeps the menu
     // entries first (matching the §"libadwaita usage" sequence)
     // and appends Add at the end so callers walking the array
-    // can stop at index 5 for menu-only loops and the full
+    // can stop at index 6 for menu-only loops and the full
     // length for action-group loops.
     use paladin_gtk::app::model::{
         format_app_add_button_action_name, format_app_primary_menu_action_names,
@@ -2877,6 +3082,30 @@ fn dispatch_app_window_action_routes_about_to_open_about_dialog() {
     assert!(
         matches!(msg, Some(AppMsg::OpenAboutDialog)),
         "dispatch_app_window_action must route the about bare action name to AppMsg::OpenAboutDialog; got {msg:?}",
+    );
+}
+
+#[test]
+fn dispatch_app_window_action_routes_keyboard_shortcuts_to_open_keyboard_shortcuts() {
+    // Per `DESIGN.md` §7 and `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"Keyboard Shortcuts window": the application menu's
+    // "Keyboard Shortcuts" entry and the `<Control>question`
+    // accelerator both activate the bare action name
+    // `format_app_menu_keyboard_shortcuts_action_name()` =
+    // `"shortcuts"`, which the dispatch table routes to
+    // `AppMsg::OpenKeyboardShortcuts`. The handler then builds and
+    // presents a fresh `gtk::ShortcutsWindow` via
+    // `shortcuts_window::build_app_shortcuts_window`. Keyboard
+    // Shortcuts is always enabled, so this dispatch can arrive in
+    // every `AppState`.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_menu_keyboard_shortcuts_action_name, AppMsg,
+    };
+
+    let msg = dispatch_app_window_action(format_app_menu_keyboard_shortcuts_action_name());
+    assert!(
+        matches!(msg, Some(AppMsg::OpenKeyboardShortcuts)),
+        "dispatch_app_window_action must route the keyboard-shortcuts bare action name to AppMsg::OpenKeyboardShortcuts; got {msg:?}",
     );
 }
 
@@ -3861,16 +4090,16 @@ fn build_app_primary_action_group_registers_every_action_name_with_pinned_sensit
 fn build_app_primary_action_group_disables_mutating_actions_in_non_unlocked_states() {
     // Defense-in-depth: the four mutating actions (Import,
     // Export, Passphrase, Preferences) must be disabled in every
-    // state except `Unlocked` per §"libadwaita usage". About and
-    // Quit stay enabled everywhere. Catches a future bundling
-    // change that accidentally inverted the sensitivity rule for
-    // any of the six actions.
+    // state except `Unlocked` per §"libadwaita usage". Keyboard
+    // Shortcuts, About, and Quit stay enabled everywhere. Catches
+    // a future bundling change that accidentally inverted the
+    // sensitivity rule for any of the seven actions.
     use libadwaita::prelude::*;
     use paladin_gtk::app::model::{
         build_app_primary_action_group, format_app_menu_about_action_name,
         format_app_menu_export_action_name, format_app_menu_import_action_name,
-        format_app_menu_passphrase_action_name, format_app_menu_preferences_action_name,
-        format_app_menu_quit_action_name,
+        format_app_menu_keyboard_shortcuts_action_name, format_app_menu_passphrase_action_name,
+        format_app_menu_preferences_action_name, format_app_menu_quit_action_name,
     };
     use paladin_gtk::app::state::AppState;
 
@@ -3894,6 +4123,7 @@ fn build_app_primary_action_group_disables_mutating_actions_in_non_unlocked_stat
         );
     }
     for always_enabled in [
+        format_app_menu_keyboard_shortcuts_action_name(),
         format_app_menu_about_action_name(),
         format_app_menu_quit_action_name(),
     ] {
@@ -3909,28 +4139,28 @@ fn build_app_primary_action_group_disables_mutating_actions_in_non_unlocked_stat
 }
 
 #[test]
-fn format_app_primary_menu_action_names_returns_six_bare_names_in_pinned_order() {
+fn format_app_primary_menu_action_names_returns_seven_bare_names_in_pinned_order() {
     // Companion to `format_app_primary_menu_entries`: the widget
     // binding registers a `gio::SimpleAction` for each primary-
     // menu entry on the application's `app` action group. This
-    // helper returns the six bare action names in the §"libadwaita
-    // usage" sequence (Import, Export, Passphrase, Preferences,
-    // About, Quit), parallel to `format_app_primary_menu_entries`,
-    // so the SimpleAction-registration loop and the
-    // `gio::Menu::append` loop iterate over a single pinned
-    // source of truth.
+    // helper returns the seven bare action names in the
+    // §"libadwaita usage" sequence (Import, Export, Passphrase,
+    // Preferences, Keyboard Shortcuts, About, Quit), parallel to
+    // `format_app_primary_menu_entries`, so the SimpleAction-
+    // registration loop and the `gio::Menu::append` loop iterate
+    // over a single pinned source of truth.
     use paladin_gtk::app::model::{
         format_app_menu_about_action_name, format_app_menu_export_action_name,
-        format_app_menu_import_action_name, format_app_menu_passphrase_action_name,
-        format_app_menu_preferences_action_name, format_app_menu_quit_action_name,
-        format_app_primary_menu_action_names,
+        format_app_menu_import_action_name, format_app_menu_keyboard_shortcuts_action_name,
+        format_app_menu_passphrase_action_name, format_app_menu_preferences_action_name,
+        format_app_menu_quit_action_name, format_app_primary_menu_action_names,
     };
 
     let names = format_app_primary_menu_action_names();
     assert_eq!(
         names.len(),
-        6,
-        "primary menu must register exactly six SimpleActions; got {}",
+        7,
+        "primary menu must register exactly seven SimpleActions; got {}",
         names.len(),
     );
     assert_eq!(
@@ -3940,10 +4170,11 @@ fn format_app_primary_menu_action_names_returns_six_bare_names_in_pinned_order()
             format_app_menu_export_action_name(),
             format_app_menu_passphrase_action_name(),
             format_app_menu_preferences_action_name(),
+            format_app_menu_keyboard_shortcuts_action_name(),
             format_app_menu_about_action_name(),
             format_app_menu_quit_action_name(),
         ],
-        "primary menu bare action names must follow the pinned §\"libadwaita usage\" sequence (Import, Export, Passphrase, Preferences, About, Quit)",
+        "primary menu bare action names must follow the pinned §\"libadwaita usage\" sequence (Import, Export, Passphrase, Preferences, Keyboard Shortcuts, About, Quit)",
     );
 }
 
@@ -3992,8 +4223,8 @@ fn format_app_primary_menu_action_sensitivities_disables_mutating_entries_off_un
     // Preferences entries are disabled when `AppModel` is not in
     // `Unlocked` (so they are off in `Missing` / `Locked` /
     // `StartupError`) and disabled while `UnlockedBusy` is active
-    // per §"In-flight effect ownership"; About and Quit stay
-    // enabled in every state.
+    // per §"In-flight effect ownership"; Keyboard Shortcuts, About,
+    // and Quit stay enabled in every state.
     use std::path::PathBuf;
 
     use paladin_gtk::app::model::format_app_primary_menu_action_sensitivities;
@@ -4015,7 +4246,11 @@ fn format_app_primary_menu_action_sensitivities_disables_mutating_entries_off_un
         },
     ] {
         let sens = format_app_primary_menu_action_sensitivities(&state);
-        assert_eq!(sens.len(), 6, "primary menu must carry exactly six entries");
+        assert_eq!(
+            sens.len(),
+            7,
+            "primary menu must carry exactly seven entries"
+        );
         assert!(
             !sens[0],
             "Import must be disabled for state={state:?} (allows_mutating_menu == false)",
@@ -4034,10 +4269,14 @@ fn format_app_primary_menu_action_sensitivities_disables_mutating_entries_off_un
         );
         assert!(
             sens[4],
-            "About must stay enabled for state={state:?} per §\"libadwaita usage\"",
+            "Keyboard Shortcuts must stay enabled for state={state:?} per §\"libadwaita usage\"",
         );
         assert!(
             sens[5],
+            "About must stay enabled for state={state:?} per §\"libadwaita usage\"",
+        );
+        assert!(
+            sens[6],
             "Quit must stay enabled for state={state:?} per §\"libadwaita usage\"",
         );
     }
@@ -4055,7 +4294,7 @@ fn format_app_primary_menu_action_sensitivities_enables_mutating_entries_on_unlo
     };
     let sens = format_app_primary_menu_action_sensitivities(&state);
     assert_eq!(
-        sens, [true; 6],
+        sens, [true; 7],
         "every primary menu entry must be enabled when AppState is Unlocked",
     );
 }
@@ -5691,13 +5930,13 @@ fn format_app_about_dialog_program_name_matches_format_app_window_title() {
 fn format_app_action_group_name_is_prefix_of_format_app_add_button_action() {
     // Companion to
     // `format_app_action_group_name_is_prefix_of_every_primary_menu_action`:
-    // that test verifies the six primary-menu action targets start
-    // with `format_app_action_group_name() + "."`; this assertion
-    // extends the coverage to the seventh action on the bundled
-    // group — the header-bar `+` button's `app.add` target — so a
-    // future rename of `format_app_action_group_name` lands as a
-    // failing test for every action target on the bundled group,
-    // not just the menu six.
+    // that test verifies the seven primary-menu action targets
+    // start with `format_app_action_group_name() + "."`; this
+    // assertion extends the coverage to the eighth action on the
+    // bundled group — the header-bar `+` button's `app.add` target
+    // — so a future rename of `format_app_action_group_name` lands
+    // as a failing test for every action target on the bundled
+    // group, not just the menu seven.
     //
     // `format_app_add_button_action_uses_app_group_prefix` already
     // pins the `"app."` literal at the source level, but that
@@ -5714,7 +5953,7 @@ fn format_app_action_group_name_is_prefix_of_format_app_add_button_action() {
     let action = format_app_add_button_action();
     assert!(
         action.starts_with(&prefix),
-        "header-bar + button action target {action:?} must start with the shared group prefix {prefix:?} so the bundled application action group resolves it alongside the six primary-menu entries",
+        "header-bar + button action target {action:?} must start with the shared group prefix {prefix:?} so the bundled application action group resolves it alongside the seven primary-menu entries",
     );
     let bare = &action[prefix.len()..];
     assert!(
@@ -5810,15 +6049,15 @@ fn format_app_primary_menu_entries_labels_are_distinct() {
     // Defense-in-depth sibling of
     // `format_app_header_bar_button_tooltips_are_distinct` and
     // `format_app_header_bar_button_icon_names_are_distinct`: the
-    // six primary-menu entries returned by
+    // seven primary-menu entries returned by
     // `format_app_primary_menu_entries` (Import…, Export…,
-    // Passphrase…, Preferences, About Paladin, Quit) each carry a
-    // visible label that the libadwaita primary `gio::Menu`
-    // renders as a row in the dropdown. The per-helper
+    // Passphrase…, Preferences, Keyboard Shortcuts, About Paladin,
+    // Quit) each carry a visible label that the libadwaita primary
+    // `gio::Menu` renders as a row in the dropdown. The per-helper
     // `format_app_menu_*_label_returns_*` tests pin each label to
     // its expected wording individually, but a future refactor
     // that accidentally copy-pasted the wrong sibling helper into
-    // one of the six slots of `format_app_primary_menu_entries`
+    // one of the seven slots of `format_app_primary_menu_entries`
     // would leave the per-helper assertions intact while
     // rendering two identical rows in the primary menu — a
     // regression that surfaces as a duplicated entry on hover but
@@ -5839,7 +6078,7 @@ fn format_app_primary_menu_entries_labels_are_distinct() {
     assert_eq!(
         before_dedup,
         labels.len(),
-        "the six primary-menu entry labels must be distinct (entries: {entries:?}); a duplicate would render two identical rows in the primary menu and collapse one of the six action slots into an unreachable duplicate",
+        "the seven primary-menu entry labels must be distinct (entries: {entries:?}); a duplicate would render two identical rows in the primary menu and collapse one of the seven action slots into an unreachable duplicate",
     );
 }
 
@@ -5857,7 +6096,7 @@ fn format_app_primary_menu_entries_actions_are_distinct() {
     // `format_app_menu_*_action_returns_app_*` tests pin each
     // action target to its expected wording individually, but a
     // future refactor that accidentally copy-pasted the wrong
-    // sibling helper into one of the six slots of
+    // sibling helper into one of the seven slots of
     // `format_app_primary_menu_entries` would leave the per-helper
     // assertions intact while wiring two visible menu rows to the
     // same `gio::SimpleAction` — a regression that surfaces only
@@ -5878,18 +6117,19 @@ fn format_app_primary_menu_entries_actions_are_distinct() {
     assert_eq!(
         before_dedup,
         actions.len(),
-        "the six primary-menu entry action targets must be distinct (entries: {entries:?}); a duplicate would route two visible menu rows to the same gio::SimpleAction and dispatch the same AppMsg from both, collapsing one of the six menu actions into an unreachable duplicate",
+        "the seven primary-menu entry action targets must be distinct (entries: {entries:?}); a duplicate would route two visible menu rows to the same gio::SimpleAction and dispatch the same AppMsg from both, collapsing one of the seven menu actions into an unreachable duplicate",
     );
 }
 
 #[test]
 fn format_app_window_action_names_are_distinct() {
     // Defense-in-depth: `format_app_window_action_names` returns
-    // the seven bare action names that
+    // the eight bare action names that
     // `build_app_primary_action_group` registers on the bundled
-    // `gio::SimpleActionGroup` — the six primary-menu actions
-    // (`import`, `export`, `passphrase`, `preferences`, `about`,
-    // `quit`) plus the header-bar `+` button's `add` action.
+    // `gio::SimpleActionGroup` — the seven primary-menu actions
+    // (`import`, `export`, `passphrase`, `preferences`,
+    // `shortcuts`, `about`, `quit`) plus the header-bar `+`
+    // button's `add` action.
     // Each name becomes a `gio::SimpleAction` keyed by that bare
     // name inside the group; registering two actions with the
     // same name on the same `SimpleActionGroup` is a silent
@@ -5897,14 +6137,14 @@ fn format_app_window_action_names_are_distinct() {
     // collapsing two surface entries into a single dispatched
     // `AppMsg`. The pairwise sibling tests
     // `format_app_primary_menu_entries_actions_are_distinct`
-    // (which guards the six menu actions only via their fully-
+    // (which guards the seven menu actions only via their fully-
     // qualified `app.*` targets) and the
-    // `format_app_window_action_names_lists_the_six_primary_menu_entries_then_add`
+    // `format_app_window_action_names_lists_the_seven_primary_menu_entries_then_add`
     // ordering test (which pins the slot layout) leave a gap
     // where the Add action's bare name could collide with one of
-    // the six menu bare names — a regression that would silently
+    // the seven menu bare names — a regression that would silently
     // overwrite the Add `SimpleAction` registration. Mirroring
-    // the `_are_distinct` pattern at the seven-name layer closes
+    // the `_are_distinct` pattern at the eight-name layer closes
     // that gap so the drift surfaces as a failing test rather
     // than as an Add button that silently fires the wrong
     // `AppMsg`.
@@ -5918,7 +6158,7 @@ fn format_app_window_action_names_are_distinct() {
     assert_eq!(
         before_dedup,
         deduped.len(),
-        "the seven bare action names returned by format_app_window_action_names must be distinct (names: {names:?}); a duplicate would silently overwrite one of the gio::SimpleAction registrations on the bundled SimpleActionGroup at build time and collapse two visible surface entries into a single dispatched AppMsg",
+        "the eight bare action names returned by format_app_window_action_names must be distinct (names: {names:?}); a duplicate would silently overwrite one of the gio::SimpleAction registrations on the bundled SimpleActionGroup at build time and collapse two visible surface entries into a single dispatched AppMsg",
     );
 }
 
@@ -6592,9 +6832,10 @@ fn format_app_primary_menu_entries_labels_are_single_line_without_surrounding_wh
     //
     // The assertion walks every (label, action) pair returned
     // by `format_app_primary_menu_entries` so a regression in
-    // any of the six entries (Import / Export / Passphrase /
-    // Preferences / About / Quit) fails with a message that
-    // names the offending entry's action target. Mirrors the
+    // any of the seven entries (Import / Export / Passphrase /
+    // Preferences / Keyboard Shortcuts / About / Quit) fails
+    // with a message that names the offending entry's action
+    // target. Mirrors the
     // recent `format_app_header_bar_button_tooltips_are_single_line_without_surrounding_whitespace`
     // and `format_app_header_bar_button_icon_names_are_valid_icon_theme_keys`
     // siblings on the header-bar side.
@@ -6840,8 +7081,8 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
 fn format_app_window_action_names_use_ascii_lowercase_only() {
     // Defense-in-depth sibling of
     // `format_app_window_action_names_are_distinct` (which pins
-    // pairwise distinctness of the seven bare action names) and
-    // `format_app_window_action_names_lists_the_six_primary_menu_entries_then_add`
+    // pairwise distinctness of the eight bare action names) and
+    // `format_app_window_action_names_lists_the_seven_primary_menu_entries_then_add`
     // (which pins the slot layout). Those companions catch the
     // duplicate-name and wrong-order regressions but leave the
     // case-folding edge case ungated.
@@ -7069,7 +7310,7 @@ fn format_app_primary_menu_action_names_are_distinct() {
     // (visible label side) companions on the entry-pair array.
     //
     // The bundled `format_app_primary_menu_action_names` array
-    // returns the six bare action names the widget binding hands
+    // returns the seven bare action names the widget binding hands
     // to `gio::SimpleAction::new(name, None)` per
     // §"libadwaita usage". Two bare names collapsing onto the same
     // string — e.g. a rename that left both `"import"` and

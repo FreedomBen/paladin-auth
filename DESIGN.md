@@ -1708,6 +1708,17 @@ opt-in default and the plaintext-vault auto-lock no-op.
 Mutating dialogs use `Vault::mutate_and_save` for the same rollback behavior
 as the TUI.
 
+Keyboard shortcuts: the header-bar `+` button is mirrored by `Ctrl+N`, the
+primary menu's Preferences entry by `Ctrl+,`, Quit by `Ctrl+Q`, and a
+"Keyboard Shortcuts" entry (between Preferences and About) opens a
+`GtkShortcutsWindow` listing all four bindings via the GNOME-canonical
+`Ctrl+?` accelerator. Each (action, accelerator, label) triple is sourced
+from a single pinned `format_app_*` helper so the menu, the shortcuts-window
+contents, and the `gio::Application::set_accels_for_action` wiring stay in
+lockstep. No other paladin-specific accelerators are wired; standard
+GTK/Adwaita affordances (Esc to dismiss dialogs, Enter to activate the
+default button, Tab focus traversal, etc.) apply unchanged.
+
 Icons: `AccountRowComponent` resolves `AccountSummary.icon_hint` against the
 system icon theme via `gtk::IconTheme`, falling back to a generic
 placeholder when the slug is `None` or unresolved. The CLI and TUI

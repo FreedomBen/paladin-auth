@@ -641,6 +641,22 @@ pub enum AppMsg {
     /// the cached `AppState`, or any dialog controller, so the
     /// dispatch is benign in every state.
     OpenAboutDialog,
+    /// Posted by the application menu's "Keyboard Shortcuts"
+    /// entry's `connect_activate` handler or by the
+    /// `<Control>question` accelerator. Mounts the
+    /// [`gtk::ShortcutsWindow`] built by
+    /// [`crate::shortcuts_window::build_app_shortcuts_window`]
+    /// parented at the active [`adw::ApplicationWindow`] so the
+    /// window overlays the main window per `DESIGN.md` §7.
+    ///
+    /// Keyboard Shortcuts is always enabled —
+    /// `format_app_menu_keyboard_shortcuts_action`'s sensitivity
+    /// rule is `true` in every state — so this dispatch can arrive
+    /// in `Missing` / `Locked` / `Unlocked` / `UnlockedBusy` /
+    /// `StartupError`. The handler is non-mutating: it does not
+    /// touch the vault, the cached `AppState`, or any dialog
+    /// controller, so the dispatch is benign in every state.
+    OpenKeyboardShortcuts,
     /// Posted by the application menu's Preferences entry's
     /// `connect_activate` handler. Mounts the
     /// [`SettingsComponent`](crate::settings) — an
@@ -2086,6 +2102,25 @@ impl SimpleComponent for AppModel {
                 // the active `adw::ApplicationWindow`
                 // automatically when given any descendant.
                 build_app_about_dialog().present(Some(&self.content));
+            }
+            AppMsg::OpenKeyboardShortcuts => {
+                // Application menu "Keyboard Shortcuts"
+                // activation (or `<Control>question` accelerator).
+                // Build a fresh `gtk::ShortcutsWindow` via the
+                // pinned `shortcuts_window::build_app_shortcuts_window`
+                // helper and present it parented at the content
+                // tree's toplevel. Unlike `adw::Dialog::present`,
+                // `gtk::Window::present` does not walk the widget
+                // tree on its own, so the transient-for parent is
+                // resolved from `self.content.root()` and applied
+                // explicitly before presenting.
+                let window = crate::shortcuts_window::build_app_shortcuts_window();
+                let parent = self
+                    .content
+                    .root()
+                    .and_then(|r| r.downcast::<gtk::Window>().ok());
+                window.set_transient_for(parent.as_ref());
+                window.present();
             }
             AppMsg::OpenPreferencesDialog => {
                 // Application menu "Preferences" activation. Mount a
@@ -5088,6 +5123,37 @@ pub fn format_app_menu_preferences_label() -> &'static str {
 }
 
 /// Fixed label the widget hands to the primary `gio::Menu`'s
+/// "Keyboard Shortcuts" entry.
+///
+/// Returns the static label `"Keyboard Shortcuts"` — the wording
+/// for the menu entry that opens the `gtk::ShortcutsWindow`
+/// constructed by
+/// [`crate::shortcuts_window::build_app_shortcuts_window`] per
+/// `DESIGN.md` §7 and `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Keyboard Shortcuts window". Sits between Preferences and
+/// About in the primary menu, matching the GNOME HIG sequence
+/// (Preferences → Keyboard Shortcuts → About → Quit) used by
+/// every other modern GNOME app. The wording is the GNOME-canonical
+/// "Keyboard Shortcuts" rather than the older "Shortcuts" so the
+/// affordance is unambiguous to assistive-tech users.
+///
+/// The same string is reused by
+/// [`crate::shortcuts_window::format_app_shortcuts_window_entries`]
+/// as the `GtkShortcutsShortcut` title for the self-referential
+/// `Ctrl+?` row, so the menu wording and the shortcuts-window row
+/// label can never drift apart.
+///
+/// Pure — returns a `'static str` without allocating. No trailing
+/// ellipsis: the shortcuts window is an informational surface
+/// rather than a request for input, same reasoning as
+/// [`format_app_menu_preferences_label`] and
+/// [`format_app_menu_about_label`].
+#[must_use]
+pub fn format_app_menu_keyboard_shortcuts_label() -> &'static str {
+    "Keyboard Shortcuts"
+}
+
+/// Fixed label the widget hands to the primary `gio::Menu`'s
 /// "About Paladin" entry.
 ///
 /// Returns the static label `"About Paladin"` — the wording for
@@ -5133,7 +5199,8 @@ pub fn format_app_menu_about_label() -> &'static str {
 /// sibling of the primary-menu-label set
 /// ([`format_app_menu_import_label`], [`format_app_menu_export_label`],
 /// [`format_app_menu_passphrase_label`], [`format_app_menu_preferences_label`],
-/// [`format_app_menu_about_label`]); together they pin all six
+/// [`format_app_menu_keyboard_shortcuts_label`],
+/// [`format_app_menu_about_label`]); together they pin all seven
 /// primary-menu entry labels against a single source of truth.
 #[must_use]
 pub fn format_app_menu_quit_label() -> &'static str {
@@ -5228,6 +5295,34 @@ pub fn format_app_menu_preferences_action() -> &'static str {
 }
 
 /// Fully-qualified `detailed_action_name` the widget hands to the
+/// primary `gio::Menu`'s "Keyboard Shortcuts" entry.
+///
+/// Returns the static action target `"app.shortcuts"` — the
+/// fully-qualified target the `gio::Menu` resolves against the
+/// `gio::ApplicationWindow`'s `app` action group. The matching
+/// `gio::SimpleAction` (`"shortcuts"`) is registered on the
+/// application's action group and dispatches
+/// [`AppMsg::OpenKeyboardShortcuts`] through
+/// [`dispatch_app_window_action`]; the resulting handler builds and
+/// presents a fresh `gtk::ShortcutsWindow` via
+/// [`crate::shortcuts_window::build_app_shortcuts_window`]. The
+/// `"app."` prefix names the group; `"shortcuts"` names the action
+/// — a bare single-word name parallel to `"preferences"` /
+/// `"about"` / `"quit"` rather than the GTK-canonical
+/// `"win.show-help-overlay"` so the menu, accelerator, and
+/// sensitivity plumbing stays uniform with the other six primary-
+/// menu entries.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_app_menu_keyboard_shortcuts_label`] on the menu-entry-
+/// contract side; together they pin both halves (visible label +
+/// action target) against a single source of truth.
+#[must_use]
+pub fn format_app_menu_keyboard_shortcuts_action() -> &'static str {
+    "app.shortcuts"
+}
+
+/// Fully-qualified `detailed_action_name` the widget hands to the
 /// primary `gio::Menu`'s "About Paladin" entry.
 ///
 /// Returns the static action target `"app.about"` — the
@@ -5264,7 +5359,8 @@ pub fn format_app_menu_about_action() -> &'static str {
 /// sibling of the primary-menu action-target set
 /// ([`format_app_menu_import_action`], [`format_app_menu_export_action`],
 /// [`format_app_menu_passphrase_action`], [`format_app_menu_preferences_action`],
-/// [`format_app_menu_about_action`]); together they pin all six
+/// [`format_app_menu_keyboard_shortcuts_action`],
+/// [`format_app_menu_about_action`]); together they pin all seven
 /// primary-menu entries' action targets against a single source
 /// of truth, paired with the matching `_label` helpers.
 #[must_use]
@@ -5396,6 +5492,65 @@ pub fn format_app_menu_preferences_accelerator() -> &'static str {
     "<Control>comma"
 }
 
+/// Bare `GLib` action name the primary `gio::Menu`'s "Keyboard
+/// Shortcuts" entry binds via
+/// [`format_app_menu_keyboard_shortcuts_action`].
+///
+/// Returns the static action name `"shortcuts"` — the name passed
+/// to `gio::SimpleAction::new(..., None)` when the matching
+/// action is registered on the application's `app` action group.
+/// The fully-qualified `detailed_action_name` `"app.shortcuts"`
+/// spelled by [`format_app_menu_keyboard_shortcuts_action`] is the
+/// [`format_app_action_group_name`] group prefix joined to this
+/// bare name via the `<group>.<action>` separator. The bare name
+/// is the single-word `"shortcuts"` rather than the GTK-canonical
+/// `"show-help-overlay"` so this entry stays uniform with the
+/// other single-word bare names (`"preferences"`, `"about"`,
+/// `"quit"`).
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_app_menu_keyboard_shortcuts_action`] on the fully-
+/// qualified target side and
+/// [`format_app_menu_keyboard_shortcuts_label`] on the visible-
+/// label side; together they pin all three halves of the menu-
+/// entry contract against a single source of truth.
+#[must_use]
+pub fn format_app_menu_keyboard_shortcuts_action_name() -> &'static str {
+    "shortcuts"
+}
+
+/// Keyboard accelerator the primary menu's "Keyboard Shortcuts"
+/// entry is wired to per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Keyboard Shortcuts window" and the GNOME HIG keyboard
+/// conventions.
+///
+/// Returns the gtk-rs accelerator spelling `"<Control>question"` —
+/// the canonical "show keyboard shortcuts" shortcut GNOME
+/// applications register via
+/// `gio::Application::set_accels_for_action("app.shortcuts",
+/// &["<Control>question"])`. `Ctrl+?` is the GNOME-HIG-recommended
+/// binding for opening a `GtkShortcutsWindow`; using the bare
+/// `question` keysym (lowercase, gtk's bare key name for `?`)
+/// rather than `<Control><Shift>slash` matches the spelling every
+/// other GNOME app uses and is what `gtk::accelerator_parse`
+/// recognises directly.
+///
+/// Mirrors the [`format_app_add_button_accelerator`] /
+/// [`format_app_menu_preferences_accelerator`] /
+/// [`format_app_menu_quit_accelerator`] siblings on the other
+/// pinned-accelerator surfaces.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_app_menu_keyboard_shortcuts_action`] (fully-qualified
+/// action target) and
+/// [`format_app_menu_keyboard_shortcuts_action_name`] (bare action
+/// name); together they pin the action target, its bare name, and
+/// its keyboard accelerator against a single source of truth.
+#[must_use]
+pub fn format_app_menu_keyboard_shortcuts_accelerator() -> &'static str {
+    "<Control>question"
+}
+
 /// Bare `GLib` action name the primary `gio::Menu`'s "About
 /// Paladin" entry binds via [`format_app_menu_about_action`].
 ///
@@ -5440,8 +5595,9 @@ pub fn format_app_menu_about_action_name() -> &'static str {
 /// [`format_app_menu_export_action_name`],
 /// [`format_app_menu_passphrase_action_name`],
 /// [`format_app_menu_preferences_action_name`],
+/// [`format_app_menu_keyboard_shortcuts_action_name`],
 /// [`format_app_menu_about_action_name`]); together they pin
-/// all six primary-menu entries' bare `SimpleAction` names
+/// all seven primary-menu entries' bare `SimpleAction` names
 /// against a single source of truth, paired with the matching
 /// `_action` and `_label` helpers.
 #[must_use]
@@ -5565,18 +5721,20 @@ pub fn format_app_add_button_accelerator() -> &'static str {
 /// per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
 /// "Primary menu" / "Header bar > Add".
 ///
-/// Returns the three pinned accelerator surfaces in pinned
+/// Returns the four pinned accelerator surfaces in pinned
 /// order: Add (`<Control>n` → `app.add`), Quit (`<Control>q` →
-/// `app.quit`), and Preferences (`<Control>comma` →
-/// `app.preferences`). Each pair sources its accelerator from
-/// the matching `format_app_*_accelerator` helper and its action
-/// target from the matching `format_app_*_action` helper so the
-/// table cannot drift away from either source of truth on a
-/// future rename. The widget binding consumes this array via
+/// `app.quit`), Preferences (`<Control>comma` →
+/// `app.preferences`), and Keyboard Shortcuts
+/// (`<Control>question` → `app.shortcuts`). Each pair sources
+/// its accelerator from the matching `format_app_*_accelerator`
+/// helper and its action target from the matching
+/// `format_app_*_action` helper so the table cannot drift away
+/// from either source of truth on a future rename. The widget
+/// binding consumes this array via
 /// `for (accel, target) in format_app_window_accelerator_bindings()
 /// { app.set_accels_for_action(target, &[accel]); }` so the
 /// accelerator wiring stays a single iteration over the pinned
-/// source of truth instead of three hand-spelled calls that
+/// source of truth instead of four hand-spelled calls that
 /// could silently drift in order or coverage.
 ///
 /// Pure — returns a small fixed-size array of `'static` string
@@ -5586,7 +5744,7 @@ pub fn format_app_add_button_accelerator() -> &'static str {
 /// for every keyboard-reachable surface in the application
 /// window against a single source of truth.
 #[must_use]
-pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str); 3] {
+pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str); 4] {
     [
         (
             format_app_add_button_accelerator(),
@@ -5600,6 +5758,10 @@ pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str)
             format_app_menu_preferences_accelerator(),
             format_app_menu_preferences_action(),
         ),
+        (
+            format_app_menu_keyboard_shortcuts_accelerator(),
+            format_app_menu_keyboard_shortcuts_action(),
+        ),
     ]
 }
 
@@ -5609,11 +5771,11 @@ pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str)
 ///
 /// Iterates [`format_app_window_accelerator_bindings`] (the
 /// `(accelerator, fully-qualified action target)` pairs for
-/// Add, Quit, and Preferences) and calls
+/// Add, Quit, Preferences, and Keyboard Shortcuts) and calls
 /// `gio::Application::set_accels_for_action(target, &[accel])`
 /// per pair so the menu and button activations share their
 /// keyboard surfaces against a single source of truth instead
-/// of three hand-spelled `set_accels_for_action` calls that
+/// of four hand-spelled `set_accels_for_action` calls that
 /// could silently drift in order or coverage.
 ///
 /// The widget binding calls this helper inside `init` once the
@@ -5643,23 +5805,23 @@ pub fn wire_app_window_accelerators(app: &gtk::Application) {
 
 /// Ordered `(label, detailed_action_name)` pairs the `AppModel`'s
 /// primary `gio::Menu` appends in the §"libadwaita usage"
-/// sequence (Import, Export, Passphrase, Preferences, About,
-/// Quit).
+/// sequence (Import, Export, Passphrase, Preferences, Keyboard
+/// Shortcuts, About, Quit).
 ///
-/// Returns the same six pairs the per-entry helpers
+/// Returns the same seven pairs the per-entry helpers
 /// ([`format_app_menu_import_label`] / [`format_app_menu_import_action`]
 /// through [`format_app_menu_quit_label`] / [`format_app_menu_quit_action`])
 /// already spell individually. The widget binding consumes this
 /// array via `gio::Menu::append(Some(label), Some(action))` so
 /// the menu construction stays a single `for`-loop over a
-/// pinned source of truth instead of six hand-spelled
+/// pinned source of truth instead of seven hand-spelled
 /// `menu.append(...)` calls that could silently drift in order
 /// or coverage.
 ///
 /// Pure — returns a small fixed-size array of `'static` string
 /// pairs without allocating.
 #[must_use]
-pub fn format_app_primary_menu_entries() -> [(&'static str, &'static str); 6] {
+pub fn format_app_primary_menu_entries() -> [(&'static str, &'static str); 7] {
     [
         (
             format_app_menu_import_label(),
@@ -5676,6 +5838,10 @@ pub fn format_app_primary_menu_entries() -> [(&'static str, &'static str); 6] {
         (
             format_app_menu_preferences_label(),
             format_app_menu_preferences_action(),
+        ),
+        (
+            format_app_menu_keyboard_shortcuts_label(),
+            format_app_menu_keyboard_shortcuts_action(),
         ),
         (
             format_app_menu_about_label(),
@@ -5724,13 +5890,14 @@ pub fn build_app_primary_menu_model() -> gtk::gio::Menu {
 /// Ordered bare `gio::SimpleAction` names the application's `app`
 /// action group registers for the primary menu entries.
 ///
-/// Returns the six bare action names in the §"libadwaita usage"
-/// sequence (Import, Export, Passphrase, Preferences, About,
-/// Quit) — parallel to [`format_app_primary_menu_entries`] —
-/// so the widget binding can iterate this array to call
-/// `gio::SimpleAction::new(name, None)` alongside the
-/// matching `gio::Menu::append` loop. Both arrays share a
-/// pinned source of truth, and the parallel coverage tests in
+/// Returns the seven bare action names in the §"libadwaita usage"
+/// sequence (Import, Export, Passphrase, Preferences, Keyboard
+/// Shortcuts, About, Quit) — parallel to
+/// [`format_app_primary_menu_entries`] — so the widget binding
+/// can iterate this array to call
+/// `gio::SimpleAction::new(name, None)` alongside the matching
+/// `gio::Menu::append` loop. Both arrays share a pinned source
+/// of truth, and the parallel coverage tests in
 /// `tests/startup_probes.rs` cross-check that joining each name
 /// with the shared [`format_app_action_group_name`] prefix
 /// reproduces the fully-qualified action target in the matching
@@ -5739,12 +5906,13 @@ pub fn build_app_primary_menu_model() -> gtk::gio::Menu {
 /// Pure — returns a small fixed-size array of `'static` strings
 /// without allocating.
 #[must_use]
-pub fn format_app_primary_menu_action_names() -> [&'static str; 6] {
+pub fn format_app_primary_menu_action_names() -> [&'static str; 7] {
     [
         format_app_menu_import_action_name(),
         format_app_menu_export_action_name(),
         format_app_menu_passphrase_action_name(),
         format_app_menu_preferences_action_name(),
+        format_app_menu_keyboard_shortcuts_action_name(),
         format_app_menu_about_action_name(),
         format_app_menu_quit_action_name(),
     ]
@@ -5754,15 +5922,17 @@ pub fn format_app_primary_menu_action_names() -> [&'static str; 6] {
 /// [`format_app_primary_menu_entries`] and
 /// [`format_app_primary_menu_action_names`].
 ///
-/// Returns a `[bool; 6]` array whose slots match the §"libadwaita
+/// Returns a `[bool; 7]` array whose slots match the §"libadwaita
 /// usage" sequence (Import, Export, Passphrase, Preferences,
-/// About, Quit). The four mutating entries
+/// Keyboard Shortcuts, About, Quit). The four mutating entries
 /// (Import / Export / Passphrase / Preferences) read their
 /// sensitivity from [`AppState::allows_mutating_menu`] so they
 /// are enabled only when `AppModel` is in
 /// [`AppState::Unlocked`] (disabled in `Missing` / `Locked` /
-/// `UnlockedBusy` / `StartupError`). About and Quit stay enabled
-/// in every state per §"libadwaita usage".
+/// `UnlockedBusy` / `StartupError`). Keyboard Shortcuts, About,
+/// and Quit stay enabled in every state per §"libadwaita usage" —
+/// the shortcuts window is purely informational and the GNOME HIG
+/// expects the affordance to be reachable from every state.
 ///
 /// The widget binding consumes this array alongside
 /// [`format_app_primary_menu_action_names`] to keep each
@@ -5774,13 +5944,14 @@ pub fn format_app_primary_menu_action_names() -> [&'static str; 6] {
 /// Pure — returns a small fixed-size array of `bool` without
 /// allocating.
 #[must_use]
-pub fn format_app_primary_menu_action_sensitivities(state: &AppState) -> [bool; 6] {
+pub fn format_app_primary_menu_action_sensitivities(state: &AppState) -> [bool; 7] {
     let mutating = state.allows_mutating_menu();
     [
         mutating, // Import
         mutating, // Export
         mutating, // Passphrase
         mutating, // Preferences
+        true,     // Keyboard Shortcuts
         true,     // About
         true,     // Quit
     ]
@@ -5847,9 +6018,9 @@ pub fn build_app_primary_action_group(state: &AppState) -> gtk::gio::SimpleActio
 /// [`format_app_primary_menu_action_sensitivities`] to an
 /// existing primary [`gtk::gio::SimpleActionGroup`].
 ///
-/// Walks the six bare action names in the §"libadwaita usage"
-/// sequence (Import, Export, Passphrase, Preferences, About,
-/// Quit) and applies
+/// Walks the seven bare action names in the §"libadwaita usage"
+/// sequence (Import, Export, Passphrase, Preferences, Keyboard
+/// Shortcuts, About, Quit) and applies
 /// [`gtk::gio::SimpleAction::set_enabled`] to each matching
 /// action looked up against `group`. The widget binding calls
 /// this helper from [`AppMsg`] state-transition arms
@@ -5858,8 +6029,8 @@ pub fn build_app_primary_action_group(state: &AppState) -> gtk::gio::SimpleActio
 /// [`AppState::StartupError`]) so the mutating affordances
 /// (Import, Export, Passphrase, Preferences) toggle off
 /// whenever `AppModel` leaves [`AppState::Unlocked`] without
-/// re-creating the group. About and Quit stay enabled
-/// everywhere per §"libadwaita usage".
+/// re-creating the group. Keyboard Shortcuts, About, and Quit
+/// stay enabled everywhere per §"libadwaita usage".
 ///
 /// Mirrors [`build_app_primary_action_group`] on the runtime-
 /// update side; together they pin every primary-menu
@@ -6415,11 +6586,11 @@ pub fn wire_app_window_action_activations(
 /// application's `app` action group built by
 /// [`build_app_window_action_group`].
 ///
-/// Bundles the six primary-menu bare action names returned by
+/// Bundles the seven primary-menu bare action names returned by
 /// [`format_app_primary_menu_action_names`] (Import, Export,
-/// Passphrase, Preferences, About, Quit) with the header-bar
-/// `+` button's bare action name returned by
-/// [`format_app_add_button_action_name`] into a fixed-size
+/// Passphrase, Preferences, Keyboard Shortcuts, About, Quit)
+/// with the header-bar `+` button's bare action name returned
+/// by [`format_app_add_button_action_name`] into a fixed-size
 /// array so the widget binding can iterate every action on
 /// the bundled group without allocating a `Vec` per `init`
 /// call.
@@ -6427,14 +6598,14 @@ pub fn wire_app_window_action_activations(
 /// The pinned order keeps the menu entries first (matching
 /// the §"libadwaita usage" sequence) and appends Add at the
 /// end so callers that only care about the menu can take
-/// `&names[..6]` while the full array covers the entire
+/// `&names[..7]` while the full array covers the entire
 /// action surface for `connect_activate` wiring and runtime
 /// sensitivity updates.
 ///
 /// Pure — returns an owned array of `&'static str` without
 /// allocating.
 #[must_use]
-pub fn format_app_window_action_names() -> [&'static str; 7] {
+pub fn format_app_window_action_names() -> [&'static str; 8] {
     let menu = format_app_primary_menu_action_names();
     [
         menu[0],
@@ -6443,6 +6614,7 @@ pub fn format_app_window_action_names() -> [&'static str; 7] {
         menu[3],
         menu[4],
         menu[5],
+        menu[6],
         format_app_add_button_action_name(),
     ]
 }
@@ -6457,14 +6629,13 @@ pub fn format_app_window_action_names() -> [&'static str; 7] {
 /// [`AppMsg`] variants so the widget binding's
 /// `connect_activate` handlers share one source of truth.
 ///
-/// The mapping today covers the header-bar `+` button's Add
-/// action and the always-enabled menu entries (About, Quit);
-/// the mutating menu entries (Import, Export, Passphrase,
-/// Preferences) land in follow-up commits alongside their
-/// widget-bearing dialog components. Returns `None` for any
-/// unknown action name so a stray activation from a future
-/// refactor that introduced an action name not yet covered
-/// here stays a benign no-op rather than a panic — the
+/// The mapping covers the header-bar `+` button's Add action,
+/// the always-enabled menu entries (Keyboard Shortcuts, About,
+/// Quit), and the mutating menu entries (Import, Export,
+/// Passphrase, Preferences). Returns `None` for any unknown
+/// action name so a stray activation from a future refactor
+/// that introduced an action name not yet covered here stays
+/// a benign no-op rather than a panic — the
 /// [`crate::account_list::dispatch_row_action`] sibling uses
 /// the same `Option` shape so both consumers can fold
 /// `if let Some(msg) = …` into their `connect_activate`
@@ -6479,6 +6650,9 @@ pub fn dispatch_app_window_action(name: &str) -> Option<AppMsg> {
     }
     if name == format_app_menu_about_action_name() {
         return Some(AppMsg::OpenAboutDialog);
+    }
+    if name == format_app_menu_keyboard_shortcuts_action_name() {
+        return Some(AppMsg::OpenKeyboardShortcuts);
     }
     if name == format_app_menu_export_action_name() {
         return Some(AppMsg::OpenExportDialog);
