@@ -653,10 +653,20 @@ fn compute_tick_displays_carries_full_row_display_shape() {
     assert_eq!(displays.len(), 1);
     let (_, display) = &displays[0];
 
+    // `compute_tick_displays` projects the upcoming TOTP via
+    // `Vault::totp_next_code` on the same `now` sample as the
+    // current code; pin the contract by asserting `Some(_)` on
+    // TOTP rows rather than computing the expected digits inline
+    // (mirrors the `code:` cloning pattern below).
+    assert!(
+        display.next_code.is_some(),
+        "compute_tick_displays must populate `next_code` for TOTP rows; got None",
+    );
     let expected = RowDisplay {
         label: "Acme:alice".to_string(),
         kind: AccountKindSummary::Totp,
         code: display.code.clone(),
+        next_code: display.next_code.clone(),
         counter: None,
         copy_enabled: true,
         next_button_visible: false,

@@ -381,6 +381,29 @@ pub fn code_display(_kind: AccountKindSummary, visible_code: Option<&Code>) -> C
     }
 }
 
+/// Project the per-row "next code" string fed into
+/// [`RowDisplay::next_code`].
+///
+/// TOTP rows: `Some(code)` ⇒ `Some(code.code.clone())` (raw
+/// digits; the cell factory wraps it in the `↪ ` prefix and the
+/// `numeric dim-label` styling).  `None` ⇒ `None`.
+///
+/// HOTP rows: always `None`.  HOTP advance is event-driven; there
+/// is no "upcoming" code to surface, and the Next cell renders an
+/// inert empty string for HOTP rows per
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` "Next-code column
+/// implementation" → Visibility.
+///
+/// Pure logic so the projection invariants stay testable without
+/// spinning up a `gtk::ColumnView`.
+#[must_use]
+pub fn next_code_display(kind: AccountKindSummary, next_code: Option<&Code>) -> Option<String> {
+    match (kind, next_code) {
+        (AccountKindSummary::Totp, Some(code)) => Some(code.code.clone()),
+        (AccountKindSummary::Totp, None) | (AccountKindSummary::Hotp, _) => None,
+    }
+}
+
 /// Bundle of every projection a row factory needs to bind a single
 /// row's widgets.
 ///
@@ -401,6 +424,13 @@ pub struct RowDisplay {
     pub kind: AccountKindSummary,
     /// Result of [`code_display`].
     pub code: CodeDisplay,
+    /// Result of [`next_code_display`]. `Some(digits)` on TOTP rows
+    /// once the per-tick `Vault::totp_next_code` call lands; `None`
+    /// before the first tick and always `None` on HOTP / section
+    /// rows.  The widget layer prefixes the displayed text with
+    /// `↪ ` and toggles the cell's click affordance off when this is
+    /// `None`.
+    pub next_code: Option<String>,
     /// Result of [`counter_display`].
     pub counter: Option<CounterText>,
     /// Result of [`copy_enabled`]; dimmed by [`apply_busy_mask`] while
@@ -441,12 +471,17 @@ pub struct RowDisplay {
 /// `UnlockedBusy` gating contract from `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"In-flight effect ownership" stays a single hook.
 #[must_use]
-pub fn project_row(summary: &AccountSummary, visible_code: Option<&Code>) -> RowDisplay {
+pub fn project_row(
+    summary: &AccountSummary,
+    visible_code: Option<&Code>,
+    next_code: Option<&Code>,
+) -> RowDisplay {
     let has_visible_code = visible_code.is_some();
     RowDisplay {
         label: summary_display_label(summary),
         kind: summary.kind,
         code: code_display(summary.kind, visible_code),
+        next_code: next_code_display(summary.kind, next_code),
         counter: counter_display(summary, visible_code),
         copy_enabled: copy_enabled(summary.kind, has_visible_code),
         next_button_visible: next_button_visible(summary.kind),

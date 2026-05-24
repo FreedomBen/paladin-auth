@@ -454,7 +454,7 @@ fn kebab_enabled_always_on() {
 fn apply_busy_mask_busy_true_clears_all_three_enabled_flags() {
     let s = hotp_summary("bob", Some("Acme"), 6);
     let code = hotp_code("999000", 5);
-    let mut row = project_row(&s, Some(&code));
+    let mut row = project_row(&s, Some(&code), None);
     apply_busy_mask(&mut row, true);
     assert!(!row.copy_enabled);
     assert!(!row.next_button_enabled);
@@ -465,7 +465,7 @@ fn apply_busy_mask_busy_true_clears_all_three_enabled_flags() {
 fn apply_busy_mask_busy_false_is_noop() {
     let s = hotp_summary("bob", Some("Acme"), 6);
     let code = hotp_code("999000", 5);
-    let row = project_row(&s, Some(&code));
+    let row = project_row(&s, Some(&code), None);
     let mut masked = row.clone();
     apply_busy_mask(&mut masked, false);
     assert_eq!(masked, row);
@@ -478,7 +478,7 @@ fn apply_busy_mask_preserves_visibility_and_progress() {
     // the worker is in flight so the user sees what's still on screen.
     let s = totp_summary("alice", Some("Acme"));
     let code = totp_code("111222", 18);
-    let original = project_row(&s, Some(&code));
+    let original = project_row(&s, Some(&code), None);
     let mut masked = original.clone();
     apply_busy_mask(&mut masked, true);
     assert_eq!(masked.label, original.label);
@@ -497,7 +497,7 @@ fn apply_busy_mask_busy_true_dims_totp_kebab_too() {
     // their kebab + copy controls must still be dimmed while busy.
     let s = totp_summary("alice", Some("Acme"));
     let code = totp_code("111222", 18);
-    let mut row = project_row(&s, Some(&code));
+    let mut row = project_row(&s, Some(&code), None);
     apply_busy_mask(&mut row, true);
     assert!(!row.copy_enabled);
     assert!(!row.next_button_enabled);
@@ -509,7 +509,7 @@ fn apply_busy_mask_busy_true_dims_hidden_hotp_row() {
     // Hidden HOTP rows already have `copy_enabled = false`; busy still
     // forces `next_button_enabled = false` and `kebab_enabled = false`.
     let s = hotp_summary("bob", None, 0);
-    let mut row = project_row(&s, None);
+    let mut row = project_row(&s, None, None);
     apply_busy_mask(&mut row, true);
     assert!(!row.copy_enabled);
     assert!(!row.next_button_enabled);
@@ -625,6 +625,72 @@ fn code_display_totp_without_visible_code_is_hidden_defensively() {
 }
 
 // ---------------------------------------------------------------------------
+// `next_code_display` — `Vault::totp_next_code` → `RowDisplay::next_code`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn next_code_display_totp_with_some_returns_raw_digits() {
+    // TOTP + Some(code) ⇒ Some(code.code.clone()).  Stored raw —
+    // the cell factory in `column_view.rs` applies the `↪ ` prefix
+    // and the `numeric dim-label` styling.
+    use paladin_gtk::account_row::next_code_display;
+    let code = totp_code("987654", 12);
+    assert_eq!(
+        next_code_display(AccountKindSummary::Totp, Some(&code)),
+        Some("987654".to_string()),
+    );
+}
+
+#[test]
+fn next_code_display_totp_with_none_returns_none() {
+    // Before the first `Vault::totp_next_code` lands the projection
+    // answers `None`; the cell factory then renders an empty string.
+    use paladin_gtk::account_row::next_code_display;
+    assert_eq!(next_code_display(AccountKindSummary::Totp, None), None);
+}
+
+#[test]
+fn next_code_display_hotp_with_any_input_returns_none() {
+    // HOTP rows never carry an "upcoming" code — even if a caller
+    // passes a populated `Code` (e.g. the live reveal cache), the
+    // projection answers `None` so the Next cell stays empty and
+    // inert per the §"Next-code column implementation" visibility
+    // contract.
+    use paladin_gtk::account_row::next_code_display;
+    let hotp = hotp_code("000001", 1);
+    assert_eq!(next_code_display(AccountKindSummary::Hotp, None), None);
+    assert_eq!(
+        next_code_display(AccountKindSummary::Hotp, Some(&hotp)),
+        None
+    );
+}
+
+#[test]
+fn project_row_totp_passes_next_code_through_to_row_display() {
+    // Pin the contract that the new third parameter to `project_row`
+    // routes through to `RowDisplay::next_code` rather than being
+    // silently dropped; covers the wiring the ticker depends on
+    // when populating the Next column.
+    let s = totp_summary("alice", Some("Acme"));
+    let current = totp_code("111222", 18);
+    let upcoming = totp_code("333444", 30);
+    let row = project_row(&s, Some(&current), Some(&upcoming));
+    assert_eq!(row.next_code, Some("333444".to_string()));
+}
+
+#[test]
+fn project_row_hotp_drops_next_code_input() {
+    // HOTP `project_row` must `None` out the next-code projection
+    // even when a caller accidentally passes `Some(_)` (defensive —
+    // mirrors `next_code_display_hotp_with_any_input_returns_none`).
+    let s = hotp_summary("bob", Some("Acme"), 7);
+    let visible = hotp_code("999888", 7);
+    let upcoming = totp_code("000111", 30);
+    let row = project_row(&s, Some(&visible), Some(&upcoming));
+    assert_eq!(row.next_code, None);
+}
+
+// ---------------------------------------------------------------------------
 // `project_row` — bundles every projection together
 // ---------------------------------------------------------------------------
 
@@ -632,11 +698,12 @@ fn code_display_totp_without_visible_code_is_hidden_defensively() {
 fn project_row_totp_with_visible_code() {
     let s = totp_summary("alice", Some("Acme"));
     let code = totp_code("111222", 18);
-    let row = project_row(&s, Some(&code));
+    let row = project_row(&s, Some(&code), None);
     let expected = RowDisplay {
         label: "Acme:alice".to_string(),
         kind: AccountKindSummary::Totp,
         code: CodeDisplay::Visible("111222".to_string()),
+        next_code: None,
         counter: None,
         copy_enabled: true,
         next_button_visible: false,
@@ -655,11 +722,12 @@ fn project_row_totp_with_visible_code() {
 #[test]
 fn project_row_hotp_hidden() {
     let s = hotp_summary("bob", None, 5);
-    let row = project_row(&s, None);
+    let row = project_row(&s, None, None);
     let expected = RowDisplay {
         label: "bob".to_string(),
         kind: AccountKindSummary::Hotp,
         code: CodeDisplay::Hidden,
+        next_code: None,
         counter: Some(CounterText::Stored(5)),
         copy_enabled: false,
         next_button_visible: true,
@@ -676,11 +744,12 @@ fn project_row_hotp_hidden() {
 fn project_row_hotp_revealed() {
     let s = hotp_summary("bob", Some("Acme"), 6);
     let code = hotp_code("999000", 5);
-    let row = project_row(&s, Some(&code));
+    let row = project_row(&s, Some(&code), None);
     let expected = RowDisplay {
         label: "Acme:bob".to_string(),
         kind: AccountKindSummary::Hotp,
         code: CodeDisplay::Visible("999000".to_string()),
+        next_code: None,
         counter: Some(CounterText::Used(5)),
         copy_enabled: true,
         next_button_visible: true,
@@ -697,7 +766,7 @@ fn project_row_hotp_revealed() {
 fn project_row_collapses_empty_issuer_to_bare_label() {
     let s = totp_summary("alice", Some(""));
     let code = totp_code("000111", 7);
-    let row = project_row(&s, Some(&code));
+    let row = project_row(&s, Some(&code), None);
     assert_eq!(row.label, "alice");
 }
 

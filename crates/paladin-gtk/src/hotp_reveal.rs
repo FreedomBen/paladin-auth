@@ -449,7 +449,11 @@ pub fn row_display_for_reveal(summary: &AccountSummary, window: &RevealWindow) -
         seconds_remaining: None,
         counter_used: Some(window.counter_used),
     };
-    project_row(summary, Some(&code))
+    // HOTP reveals never carry an "upcoming" code — HOTP rows
+    // intentionally project `next_code = None` so the Next column's
+    // cell stays empty and inert per the §"Next-code column
+    // implementation" visibility contract.
+    project_row(summary, Some(&code), None)
 }
 
 /// Synchronous body of the `gio::spawn_blocking Vault::hotp_advance`

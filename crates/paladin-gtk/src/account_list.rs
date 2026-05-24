@@ -514,6 +514,7 @@ pub fn hidden_row_display(model: &AccountRowModel) -> RowDisplay {
         label: model.display_label.clone(),
         kind: model.kind,
         code: CodeDisplay::Hidden,
+        next_code: None,
         counter,
         copy_enabled: copy_enabled(model.kind, false),
         next_button_visible: next_button_visible(model.kind),

@@ -42,6 +42,7 @@ fn visible_totp_display(label: &str) -> RowDisplay {
         label: label.to_string(),
         kind: AccountKindSummary::Totp,
         code: CodeDisplay::Visible("123456".to_string()),
+        next_code: None,
         counter: None,
         copy_enabled: true,
         next_button_visible: false,
@@ -86,6 +87,28 @@ fn set_display_replaces_stored_display() {
     item.set_display(new_display.clone());
 
     assert_eq!(item.display(), new_display);
+}
+
+#[test]
+fn set_display_round_trips_next_code_field() {
+    // The Next-code cell factory reads `RowDisplay::next_code` from
+    // `RowItem::display()` inside its `bind` closure (no separate
+    // GObject property — the boxed-RowDisplay pass-through is the
+    // only channel).  Pin the contract that a `set_display` write
+    // with `next_code: Some(...)` is visible to a subsequent
+    // `display()` read, so a regression in either the `RefCell`
+    // swap inside `set_display` or the `display()` getter surfaces
+    // as a failing test rather than as an empty Next cell at
+    // runtime.
+    let model = totp_model();
+    let item = RowItem::from_row_model(&model);
+
+    let mut next_display = visible_totp_display(&model.display_label);
+    next_display.next_code = Some("987654".to_string());
+    item.set_display(next_display.clone());
+
+    assert_eq!(item.display().next_code, Some("987654".to_string()));
+    assert_eq!(item.display(), next_display);
 }
 
 #[test]

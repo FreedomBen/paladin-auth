@@ -1097,7 +1097,7 @@ the implementer can claim by ticking it.
   helpers.  Per-test items: `gsettings_logic.rs` covers the
   schema declaration, default `true`, round-trip, and the
   `changed::show-next-code-column` signal.
-* [ ] **`account_row.rs::RowDisplay`.** Add
+* [x] **`account_row.rs::RowDisplay`.** Add
   `pub next_code: Option<String>` alongside the existing `code` /
   `progress_*` / `copy_enabled` fields. Populate it inside the
   per-tick projection helper (the same one that already calls
@@ -1105,7 +1105,7 @@ the implementer can claim by ticking it.
   HOTP / section rows project `None`. The projection sees a
   single `now: SystemTime` so the next-code digits and the
   gauge's `seconds_remaining` stay aligned within the same tick.
-* [ ] **`row_item.rs::RowItem`.** No new GObject property is
+* [x] **`row_item.rs::RowItem`.** No new GObject property is
   needed — `RowDisplay` is already carried as a boxed value via
   the existing `display-changed` signal. Confirm the new
   `next_code` field flows through `set_display` and reaches the

@@ -94,6 +94,7 @@ mod imp {
                     label: String::new(),
                     kind: AccountKindSummary::Totp,
                     code: CodeDisplay::Hidden,
+                    next_code: None,
                     counter: None,
                     copy_enabled: false,
                     next_button_visible: false,

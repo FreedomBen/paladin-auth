@@ -169,7 +169,19 @@ pub fn compute_tick_displays(
         .filter_map(|row| {
             let summary = vault.summaries().find(|s| s.id == row.id)?;
             let code = vault.totp_code(row.id, now).ok()?;
-            Some((row.id, project_row(&summary, Some(&code))))
+            // `Vault::totp_next_code` is a single HMAC — sub-ms —
+            // and runs on the same `now` sample as `totp_code` so the
+            // projected next-code digits and the current row's
+            // gauge `seconds_remaining` stay aligned within the
+            // same tick.  `.ok()` so a per-row resolution failure
+            // (e.g. the row's account vanished between summary
+            // lookup and this call) projects `None` for the Next
+            // cell rather than dropping the entire row.
+            let next_code = vault.totp_next_code(row.id, now).ok();
+            Some((
+                row.id,
+                project_row(&summary, Some(&code), next_code.as_ref()),
+            ))
         })
         .collect()
 }
