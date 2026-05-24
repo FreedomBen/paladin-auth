@@ -54,7 +54,7 @@ pub const SHOW_COLUMN_HEADERS_KEY: &str = "show-column-headers";
 /// `show-next-code-column` key name as declared in the gschema.
 ///
 /// Controls whether the unlocked account list shows the per-TOTP-row
-/// Next column (between Code and Time) that surfaces the upcoming
+/// Next column (to the right of the Time / countdown column) that surfaces the upcoming
 /// TOTP digits with a clickable copy-to-clipboard affordance.  The
 /// rendered column is the AND of this key and
 /// `column_view::any_totp(&rows)` — either latch off hides the

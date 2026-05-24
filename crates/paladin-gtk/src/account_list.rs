@@ -1229,11 +1229,12 @@ impl SimpleComponent for AccountListComponent {
 
         column_view.append_column(&account_column);
         column_view.append_column(&code_column);
-        // "Next" sits between Code and Time per DESIGN §7 — the
-        // upcoming code visually follows the current one before
-        // the gauge.
-        column_view.append_column(&next_code_column);
+        // "Next" sits to the right of "Time" per DESIGN §7 — the
+        // countdown is the user's primary urgency cue for the
+        // current code, so Next renders after it as a quieter
+        // "what's coming" affordance.
         column_view.append_column(&time_column);
+        column_view.append_column(&next_code_column);
         column_view.append_column(&copy_column);
         column_view.append_column(&kebab_column);
 

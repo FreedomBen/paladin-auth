@@ -1,11 +1,12 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 2520
 expression: rendered
 ---
 ┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
 │ Search:                                                                      │
 │ ──────┌ Add account ─────────────────────────────────────────────────┐────── │
-│ ▶ gith│ Mode: ▶ Manual ◀     URI       QR                            │   18s │
+│ ▶ gith│ Mode: ▶ Manual ◀     URI       QR                            │55 062 │
 │       │                                                              │       │
 │       │ Label:      [  ]                                             │       │
 │       │ Issuer:     [  ]                                             │       │

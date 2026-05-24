@@ -1,11 +1,12 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 1196
 expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
 ---
 ┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
 │ Search:                                                                      │
 │ ──────────────────────────────────────────────────────────────────────────── │
-│   GitHub (ben@example.com)            914 994  ↪   255 062  ██████░░░░   18s │
+│   GitHub (ben@example.com)            914 994  ██████░░░░   18s  ↪   255 062 │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -17,4 +18,4 @@ expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
 ─── styles ───
 (1..22, 0) " Paladin [plaintext] " fg=Reset bg=Reset mod=BOLD
 (38..47, 3) "  914 994" fg=Reset bg=Reset mod=BOLD
-(49..60, 3) "↪   255 062" fg=Reset bg=Reset mod=DIM
+(67..78, 3) "↪   255 062" fg=Reset bg=Reset mod=DIM

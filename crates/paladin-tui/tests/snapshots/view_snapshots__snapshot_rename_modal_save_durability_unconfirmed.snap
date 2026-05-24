@@ -1,11 +1,12 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 2834
 expression: rendered
 ---
 ┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
 │ Search:                                                                      │
 │ ──────────────────────────────────────────────────────────────────────────── │
-│ ▶ GitHub (ben@example.com)            914 994  ↪   255 062  ██████░░░░   18s │
+│ ▶ GitHub (ben@example.com)            914 994  ██████░░░░   18s  ↪   255 062 │
 │                                                                              │
 │       ┌ Rename account ──────────────────────────────────────────────┐       │
 │       │ Renaming the following account:                              │       │

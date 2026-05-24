@@ -1532,8 +1532,8 @@ Layout (single-screen MVP):
 ┌ Paladin ──────────────────────────────────────────────────────────────┐
 │ Search: ____________                                                  │
 ├───────────────────────────────────────────────────────────────────────┤
-│ ▶ GitHub (ben@…)        123 456   ↪ 482 913   ████████░░  18s         │
-│   AWS prod              987 654   ↪ 391 044   ████░░░░░░   8s         │
+│ ▶ GitHub (ben@…)        123 456   ████████░░  18s   ↪ 482 913        │
+│   AWS prod              987 654   ████░░░░░░   8s   ↪ 391 044        │
 │   AWS-HOTP (#42)        ▸ press n to advance                          │
 ├───────────────────────────────────────────────────────────────────────┤
 │ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add [/]find│
@@ -1541,9 +1541,10 @@ Layout (single-screen MVP):
 ```
 
 - TOTP rows: live `Gauge` countdown, re-render on a 250 ms tick.
-- **Next code column** (TOTP rows only): immediately to the right of the
-  current code, render the code for the next 30-second window prefixed
-  with `↪ ` and styled with `Style::default().add_modifier(Modifier::DIM)`.
+- **Next code column** (TOTP rows only): rendered to the right of the
+  countdown (mirroring the GTK `ColumnView` order), the code for the
+  next 30-second window is prefixed with `↪ ` and styled with
+  `Style::default().add_modifier(Modifier::DIM)`.
   The dim styling plus the `↪` glyph signal "upcoming, not the live one"
   without requiring the user to read the column header. Computed via
   `paladin_core::Vault::totp_next_code(id, now)` so the boundary math
@@ -1715,7 +1716,9 @@ Library: **Relm4** on **GTK4**. Component tree:
   copying during the reveal window copies the visible code and does not
   advance again.
 - **Next code column** (GTK `gtk::ColumnView`, header `Next`): inserted
-  between the existing `Code` and `Time` columns. TOTP rows render the
+  to the right of the existing `Time` column (the countdown is the
+  user's primary urgency cue for the current code, so Next renders
+  after it as a quieter "what's coming" affordance). TOTP rows render the
   upcoming 30-second-window code (computed via
   `paladin_core::Vault::totp_next_code(id, now)`) prefixed with `↪ ` and
   the `.dim-label` CSS class applied to the `gtk::Label`, mirroring the

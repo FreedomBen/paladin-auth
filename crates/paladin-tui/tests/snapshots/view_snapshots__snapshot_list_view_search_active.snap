@@ -1,12 +1,13 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 795
 expression: "render_to_text(&state, snapshot_now(), 80, 12)"
 ---
 ┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
 │ Search: git                                                                  │
 │ ──────────────────────────────────────────────────────────────────────────── │
-│ ▶ GitHub (ben@example.com)            914 994  ↪   255 062  ██████░░░░   18s │
-│   GitLab (ben@example.com)            914 994  ↪   255 062  ██████░░░░   18s │
+│ ▶ GitHub (ben@example.com)            914 994  ██████░░░░   18s  ↪   255 062 │
+│   GitLab (ben@example.com)            914 994  ██████░░░░   18s  ↪   255 062 │
 │                                                                              │
 │                                                                              │
 │                                                                              │

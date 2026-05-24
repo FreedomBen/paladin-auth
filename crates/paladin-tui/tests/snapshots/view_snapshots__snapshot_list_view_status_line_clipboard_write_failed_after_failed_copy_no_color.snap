@@ -1,11 +1,12 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 1027
 expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
 ---
 ┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
 │ Search:                                                                      │
 │ ──────────────────────────────────────────────────────────────────────────── │
-│ ▶ GitHub (ben@example.com)            914 994  ↪   255 062  ██████░░░░   18s │
+│ ▶ GitHub (ben@example.com)            914 994  ██████░░░░   18s  ↪   255 062 │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -16,6 +17,5 @@ expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
 └──────────────────────────────────────────────────────────────────────────────┘
 ─── styles ───
 (1..22, 0) " Paladin [plaintext] " fg=Reset bg=Reset mod=BOLD
-(2..49, 3) "▶ GitHub (ben@example.com)            914 994  " fg=Reset bg=Reset mod=BOLD | REVERSED
-(49..60, 3) "↪   255 062" fg=Reset bg=Reset mod=BOLD | DIM | REVERSED
-(60..78, 3) "  ██████░░░░   18s" fg=Reset bg=Reset mod=BOLD | REVERSED
+(2..67, 3) "▶ GitHub (ben@example.com)            914 994  ██████░░░░   18s  " fg=Reset bg=Reset mod=BOLD | REVERSED
+(67..78, 3) "↪   255 062" fg=Reset bg=Reset mod=BOLD | DIM | REVERSED

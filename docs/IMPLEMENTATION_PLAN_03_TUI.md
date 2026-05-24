@@ -186,8 +186,8 @@ header per §4.4, so opening is unaffected.
 ┌ Paladin ──────────────────────────────────────────────────────────────┐
 │ Search: ____________                                                  │
 ├───────────────────────────────────────────────────────────────────────┤
-│ ▶ GitHub (ben@…)        123 456   ↪ 482 913   ████████░░  18s         │
-│   AWS prod              987 654   ↪ 391 044   ████░░░░░░   8s         │
+│ ▶ GitHub (ben@…)        123 456   ████████░░  18s   ↪ 482 913        │
+│   AWS prod              987 654   ████░░░░░░   8s   ↪ 391 044        │
 │   AWS-HOTP (#42)        ▸ press n to advance                          │
 ├───────────────────────────────────────────────────────────────────────┤
 │ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add [/]find│
@@ -195,8 +195,9 @@ header per §4.4, so opening is unaffected.
 ```
 
 - TOTP rows render a live `Gauge` countdown; re-rendered on every `paladin_core::TICK_INTERVAL_MS` tick.
-- **Next-code column** (TOTP rows only, per DESIGN §6): rendered between
-  the current code and the progress gauge as `↪ NNN NNN` with
+- **Next-code column** (TOTP rows only, per DESIGN §6): rendered to the
+  right of the seconds-remaining countdown (matching the GTK
+  `ColumnView` order) as `↪ NNN NNN` with
   `Style::default().add_modifier(Modifier::DIM)`. Resolved at render
   time via `Vault::totp_next_code(id, now)` so the boundary math
   stays in core; the row holds the resulting `Code` only for the

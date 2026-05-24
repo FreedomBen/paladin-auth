@@ -186,11 +186,11 @@ inclusion.
   reading a `gtk::SingleSelection` that wraps a
   `gio::ListStore<crate::row_item::RowItem>`.  Each account in
   `paladin_core::AccountSummary` order is one persistent `RowItem`
-  GObject; the six columns (Account, Code, Next, Time, Copy, More) are
+  GObject; the six columns (Account, Code, Time, Next, Copy, More) are
   bound via `gtk::SignalListItemFactory` builders shipped from
   `crate::column_view` (`build_account_column_factory`,
-  `build_code_column_factory`, `build_next_code_column_factory`,
-  `build_time_column_factory`, `build_copy_column_factory`,
+  `build_code_column_factory`, `build_time_column_factory`,
+  `build_next_code_column_factory`, `build_copy_column_factory`,
   `build_kebab_column_factory`).
   Per-tick updates iterate the store and call
   `RowItem::set_display(new_display)` on the matching item; the
@@ -1141,8 +1141,8 @@ the implementer can claim by ticking it.
 * [x] **`column_view.rs` wiring.** Append the new column factory
   to the same column-construction site that builds the existing
   Account / Code / Time / Copy / More columns; insert the new
-  column between Code and Time so the visual order matches
-  DESIGN §7. Hold the returned `gtk::ColumnViewColumn` on
+  column to the right of Time so the visual order matches
+  DESIGN §7 (Code → Time → Next). Hold the returned `gtk::ColumnViewColumn` on
   `AccountListComponent` so `SetShowNextCodeColumn` can call
   `set_visible` without re-querying the view.
 * [x] **`app/model.rs::AppMsg`.** Add
