@@ -1050,7 +1050,10 @@ pub enum AccountListMsg {
     /// default `gtk::Editable` behavior.
     FocusSearch,
     /// User activated the row at the given store position — Enter
-    /// on the focused row, or a double-click. Posted by the
+    /// on the focused row, or a single click on the row body
+    /// (cells without an inline `gtk::Button`; the Next, Copy, and
+    /// kebab buttons capture their own clicks and never bubble to
+    /// activate). Posted by the
     /// `column_view.connect_activate` closure installed in
     /// [`AccountListComponent::init`]. The handler resolves the
     /// store position to a `RowItem`, ignores section rows
@@ -1180,7 +1183,7 @@ impl SimpleComponent for AccountListComponent {
             .model(&selection)
             .show_row_separators(false)
             .show_column_separators(false)
-            .single_click_activate(false)
+            .single_click_activate(true)
             .build();
 
         // Construct the five columns. The cell factories live in
@@ -1280,10 +1283,14 @@ impl SimpleComponent for AccountListComponent {
         wire_account_list_navigation_controllers(&search_entry, &column_view, &selection, &store);
 
         // `gtk::ColumnView::connect_activate` fires when the user
-        // hits Enter on the focused row or double-clicks. The
-        // closure forwards the row's position back through
-        // `AccountListMsg::ActivateRow`, which resolves the row's
-        // kind + visible-code state and emits the matching
+        // hits Enter on the focused row or single-clicks the row
+        // body (the view is built with `single_click_activate(true)`
+        // above). Inline `gtk::Button` widgets in the Next, Copy,
+        // and kebab cells capture their own clicks via GTK's gesture
+        // claim, so activating those buttons does not also bubble to
+        // `connect_activate`. The closure forwards the row's position
+        // back through `AccountListMsg::ActivateRow`, which resolves
+        // the row's kind + visible-code state and emits the matching
         // `AccountListOutput::CopyCode` /
         // `AccountListOutput::ActivateHotpAndCopy` per
         // `default_row_activation`.

@@ -365,8 +365,9 @@ inclusion.
   "Add account" app accelerator reaches `gio::Application::
   set_accels_for_action`.
 
-  Enter on the focused row (or a double-click) routes through
-  `gtk::ColumnView::connect_activate` →
+  Enter on the focused row (or a single click on the row body —
+  the `ColumnView` is built with `single_click_activate(true)`)
+  routes through `gtk::ColumnView::connect_activate` →
   `AccountListMsg::ActivateRow(position)`, which resolves the
   store position to the bound `RowItem`, skips section rows
   (defensive — they are `set_selectable(false)`), reads the
@@ -783,18 +784,24 @@ keyboard navigation.
 
 ### Row activation
 
-Enter on the focused row (or a double-click) routes through
-`gtk::ColumnView::connect_activate` →
+Enter on the focused row (or a single click on the row body —
+the `ColumnView` is built with `single_click_activate(true)`)
+routes through `gtk::ColumnView::connect_activate` →
 `AccountListMsg::ActivateRow(position)`, which resolves the
 position to a `RowItem`, skips section rows defensively
 (non-selectable per `set_selectable(false)`), reads the row's kind
 and visible-code state from `AccountListComponent::{current_rows,
-live_displays}`, and dispatches `default_row_activation`.
+live_displays}`, and dispatches `default_row_activation`. The
+inline `gtk::Button` widgets in the Next, Copy, and kebab cells
+capture their own clicks via GTK4's gesture-claim rules, so
+activating those buttons emits only the button's own
+`AccountListOutput` (e.g. `CopyNextCode`) and never bubbles up to
+fire row activation as well.
 
 | Trigger                | Row state                                | Outcome                                                                          |
 | ---------------------- | ---------------------------------------- | -------------------------------------------------------------------------------- |
-| `Enter` / double-click | TOTP, or HOTP with a code currently revealed | Emit `AccountListOutput::CopyCode(id)` — same path as the per-row copy button. |
-| `Enter` / double-click | HOTP with the code hidden                | Emit `AccountListOutput::ActivateHotpAndCopy(id)`; `AppModel` latches `pending_copy_after_advance = Some(id)`, re-enters the standard `AdvanceHotp` dispatch, and on `HotpAdvanceWorkerCompleted` fires a follow-up `CopyCode(id)` after `publish_reveal_for`. The latch is cleared on `Locked` / `Quit` via `prune_reveals_if_locked` / `tear_down_for_quit`. |
+| `Enter` / single click on the row body | TOTP, or HOTP with a code currently revealed | Emit `AccountListOutput::CopyCode(id)` — same path as the per-row copy button. |
+| `Enter` / single click on the row body | HOTP with the code hidden                | Emit `AccountListOutput::ActivateHotpAndCopy(id)`; `AppModel` latches `pending_copy_after_advance = Some(id)`, re-enters the standard `AdvanceHotp` dispatch, and on `HotpAdvanceWorkerCompleted` fires a follow-up `CopyCode(id)` after `publish_reveal_for`. The latch is cleared on `Locked` / `Quit` via `prune_reveals_if_locked` / `tear_down_for_quit`. |
 | `Ctrl+Shift+C`         | TOTP (Next column enabled)               | Emit `AccountListOutput::CopyNextCode(id)` — same path as clicking the row's Next cell; `AppModel` resolves the code via `Vault::totp_next_code(id, now)` and raises an `adw::Toast` `Next code copied, valid in Xs`. Silent no-op on HOTP rows and when the Next column is hidden. |
 
 ### Dialog dismissal
@@ -4538,7 +4545,8 @@ sign-off.
     `dispatch_list_box_nav` / `ListNavIntent`, the widget binding
     `wire_account_list_navigation_controllers`, and the dispatch
     unit tests in `tests/account_list_nav_logic.rs`.)
-  - [x] Wire Enter (and double-click) on the focused
+  - [x] Wire Enter (and a single click on the row body, via
+    `single_click_activate(true)`) on the focused
     `gtk::ListBoxRow` to the default row action via
     `gtk::ListBox::row-activated` → `AccountListMsg::ActivateRow(idx)`
     → `default_row_activation(kind, has_visible_code, id)`. TOTP

@@ -1790,8 +1790,8 @@ lockstep.
 | `Ctrl+P` / `Ctrl+N` | Account list     | Readline-style previous / next row (mirrors `Up` / `Down`).                  |
 | `Up` / `Ctrl+K` / `Ctrl+P` at first row | Account list | Hands focus back to the search entry and re-selects its contents.            |
 | `Down` / `Ctrl+J` / `Ctrl+N` | Search entry | Hands focus to the first row of the filtered list.                           |
-| `Enter` (or double-click) | TOTP row, or HOTP row with a visible code | Copy the code to the clipboard.                                              |
-| `Enter` (or double-click) | HOTP row with a hidden code | Advance the counter, reveal the new code, then copy it.                      |
+| `Enter` (or single click on the row body) | TOTP row, or HOTP row with a visible code | Copy the code to the clipboard. The Next, Copy, and kebab cell buttons capture their own clicks, so activating those buttons does not also fire this action. |
+| `Enter` (or single click on the row body) | HOTP row with a hidden code | Advance the counter, reveal the new code, then copy it.                      |
 | Click on Next cell        | TOTP row (Next column enabled) | Copy the next code; toast reads `Next code copied, valid in Xs`. Inert on HOTP rows. |
 | `Ctrl+Shift+C`            | TOTP row (Next column enabled) | Keyboard mirror of clicking the Next cell on the selected row.            |
 | `Esc`             | Dialog             | Dismiss the dialog (bare press; no Ctrl / Shift / Alt / Super / Hyper / Meta).|

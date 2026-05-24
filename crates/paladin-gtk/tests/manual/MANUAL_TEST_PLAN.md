@@ -102,6 +102,25 @@ Conventions in this file:
     TOTP code on the system clipboard, the row briefly indicates
     success, and (if clipboard auto-clear is enabled) the value is
     cleared per the configured interval and if-unchanged rule.
+- [ ] Single-click anywhere on the TOTP row body (account name,
+  code cell, time cell) copies the current code.
+  * Expected: the `ColumnView` is built with
+    `single_click_activate(true)`, so a single click on any
+    non-button cell of a TOTP row fires the same
+    `AccountListOutput::CopyCode` path as the per-row Copy button.
+    Clicking the Next cell button still copies the **next** code
+    (toast `Next code copied, valid in Xs`) and never doubles up
+    by also copying the current code. Clicking the Copy button
+    or the kebab `⋮` button fires only that button's own action.
+  * Tied to: `default_row_activation`, the
+    `column_view.connect_activate` wiring in `account_list.rs`.
+- [ ] Single-click on a hidden HOTP row body advances + copies.
+  * Expected: clicking a hidden HOTP row body emits
+    `AccountListOutput::ActivateHotpAndCopy(id)`; the counter
+    advances exactly once on disk and the freshly revealed code
+    lands on the clipboard via the `pending_copy_after_advance`
+    latch. Clicking the row body again during the reveal window
+    copies the visible code without advancing.
 - [ ] HOTP `next` reveals and copies while showing the counter
   used.
   * Expected: activating `next` advances the on-disk counter
