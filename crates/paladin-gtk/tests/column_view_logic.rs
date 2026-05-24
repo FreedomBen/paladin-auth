@@ -16,8 +16,9 @@
 use paladin_core::{AccountId, AccountKindSummary};
 use paladin_gtk::account_list::AccountRowModel;
 use paladin_gtk::column_view::{
-    account_column_sort_key, apply_splice_plan, compare_account_row_items,
-    interleave_section_headers, splice_plan, InterleavedRow, RowKey, SpliceOp,
+    account_column_sort_key, apply_interleaved_splice_plan, apply_splice_plan,
+    compare_account_row_items, interleave_section_headers, splice_plan, InterleavedRow, RowKey,
+    SpliceOp,
 };
 use paladin_gtk::row_item::RowItem;
 
@@ -548,4 +549,240 @@ fn splice_plan_handles_mixed_account_and_section_keys() {
             n_remove: 1,
         }],
     );
+}
+
+// ---------------------------------------------------------------------------
+// apply_interleaved_splice_plan — section-row integration.
+//
+// Pins the three §A.4 "Section headers" checklist invariants:
+//   1. Section RowItems land at the predicate positions.
+//   2. Every section RowItem in the store is marked `is_section()` so the
+//      cell factory's `list_item.set_selectable(!is_section())` reliably
+//      gates `gtk::SingleSelection`.
+//   3. Toggling `show_section_headers` rebuilds the row sequence without
+//      disturbing account-row `RowItem` identity, so the live selection
+//      survives a preference flip.
+// ---------------------------------------------------------------------------
+
+fn collect_row_items(store: &gio::ListStore) -> Vec<RowItem> {
+    (0..store.n_items())
+        .filter_map(|i| store.item(i))
+        .filter_map(|obj| obj.downcast::<RowItem>().ok())
+        .collect()
+}
+
+fn apply_rows(rows: &[AccountRowModel], show_section_headers: bool) -> gio::ListStore {
+    let store = gio::ListStore::new::<RowItem>();
+    apply_interleaved_splice_plan(&store, rows, show_section_headers);
+    store
+}
+
+#[test]
+fn apply_interleaved_inserts_section_rows_at_predicate_positions() {
+    let rows = vec![
+        account_model("alice", Some("Acme")),
+        account_model("bob", Some("Acme")),
+        account_model("carol", Some("Zenith")),
+        account_model("dan", None),
+    ];
+
+    let store = apply_rows(&rows, true);
+    let items = collect_row_items(&store);
+
+    // Expected sequence mirrors interleave_section_headers's output:
+    //   Section("Acme"), alice, bob, Section("Zenith"), carol, Section("Other"), dan
+    let expected_section_titles: Vec<Option<String>> = vec![
+        Some("Acme".to_string()),
+        None,
+        None,
+        Some("Zenith".to_string()),
+        None,
+        Some("Other".to_string()),
+        None,
+    ];
+    let actual: Vec<Option<String>> = items.iter().map(RowItem::section_title).collect();
+    assert_eq!(actual, expected_section_titles);
+
+    // Account positions must carry the original AccountIds in input order.
+    let expected_account_ids: Vec<Option<paladin_core::AccountId>> = vec![
+        None,
+        Some(rows[0].id),
+        Some(rows[1].id),
+        None,
+        Some(rows[2].id),
+        None,
+        Some(rows[3].id),
+    ];
+    let actual_ids: Vec<Option<paladin_core::AccountId>> =
+        items.iter().map(RowItem::account_id).collect();
+    assert_eq!(actual_ids, expected_account_ids);
+}
+
+#[test]
+fn apply_interleaved_every_section_row_is_marked_is_section() {
+    // The cell factory gates selectability on `is_section()`; if a section
+    // RowItem ever entered the store with `is_section() == false`, the
+    // section row would become selectable and `gtk::SingleSelection` could
+    // park its cursor on a non-account row.
+    let rows = vec![
+        account_model("alice", Some("Acme")),
+        account_model("carol", Some("Zenith")),
+        account_model("dan", None),
+    ];
+    let store = apply_rows(&rows, true);
+    for item in collect_row_items(&store) {
+        let has_account_id = item.account_id().is_some();
+        if item.is_section() {
+            assert!(
+                !has_account_id,
+                "section RowItem must not carry an AccountId"
+            );
+            assert!(
+                item.section_title().is_some(),
+                "section RowItem must carry a non-empty section title",
+            );
+        } else {
+            assert!(
+                has_account_id,
+                "account RowItem must carry an AccountId so selection can resolve to it",
+            );
+        }
+    }
+}
+
+#[test]
+fn apply_interleaved_disabled_yields_only_account_rows() {
+    let rows = vec![
+        account_model("alice", Some("Acme")),
+        account_model("carol", Some("Zenith")),
+    ];
+    let store = apply_rows(&rows, false);
+    let items = collect_row_items(&store);
+    assert_eq!(items.len(), rows.len());
+    assert!(
+        items.iter().all(|item| !item.is_section()),
+        "show_section_headers=false must leave no section RowItems in the store",
+    );
+}
+
+#[test]
+fn apply_interleaved_account_row_identity_survives_show_section_headers_toggle() {
+    // Live cursor preservation contract: a user toggling
+    // `show-section-headers` should keep their `gtk::SingleSelection`
+    // pointing at the same RowItem. `apply_interleaved_splice_plan`
+    // reuses existing account-row RowItems across a rebuild (RowKey
+    // identity for accounts is the AccountId), so the GObject pointer
+    // address must be stable for every account row across the toggle.
+    let rows = vec![
+        account_model("alice", Some("Acme")),
+        account_model("bob", Some("Acme")),
+        account_model("carol", Some("Zenith")),
+    ];
+
+    let store = apply_rows(&rows, false);
+    let account_ptrs_before: Vec<(paladin_core::AccountId, usize)> = collect_row_items(&store)
+        .iter()
+        .filter_map(|item| item.account_id().map(|id| (id, item.as_ptr() as usize)))
+        .collect();
+    assert_eq!(account_ptrs_before.len(), rows.len());
+
+    // Toggle the preference on.
+    apply_interleaved_splice_plan(&store, &rows, true);
+    let account_ptrs_after_enable: Vec<(paladin_core::AccountId, usize)> =
+        collect_row_items(&store)
+            .iter()
+            .filter_map(|item| item.account_id().map(|id| (id, item.as_ptr() as usize)))
+            .collect();
+    assert_eq!(
+        account_ptrs_after_enable, account_ptrs_before,
+        "enabling section headers must preserve every account RowItem identity",
+    );
+
+    // Toggle back off — identity must survive in both directions so a
+    // user flipping back and forth never loses their cursor.
+    apply_interleaved_splice_plan(&store, &rows, false);
+    let account_ptrs_after_disable: Vec<(paladin_core::AccountId, usize)> =
+        collect_row_items(&store)
+            .iter()
+            .filter_map(|item| item.account_id().map(|id| (id, item.as_ptr() as usize)))
+            .collect();
+    assert_eq!(
+        account_ptrs_after_disable, account_ptrs_before,
+        "disabling section headers again must preserve account RowItem identity",
+    );
+}
+
+#[test]
+fn apply_interleaved_section_rows_match_row_section_header_predicate() {
+    use paladin_gtk::account_list::row_section_header;
+
+    // Verifies the structural invariant directly against the underlying
+    // predicate `paladin_gtk::account_list::row_section_header`, which is
+    // the source of truth shared with the CLI / TUI grouping logic.
+    let rows = vec![
+        account_model("alice", Some("Acme")),
+        account_model("bob", Some("Acme")),
+        account_model("carol", Some("Zenith")),
+        account_model("erin", Some("Zenith")),
+        account_model("dan", None),
+    ];
+    let store = apply_rows(&rows, true);
+    let items = collect_row_items(&store);
+
+    let mut account_cursor = 0usize;
+    let mut prev: Option<&AccountRowModel> = None;
+    let mut store_cursor = 0usize;
+    while account_cursor < rows.len() {
+        let row = &rows[account_cursor];
+        if let Some(expected_title) = row_section_header(prev, row) {
+            let item = &items[store_cursor];
+            assert!(
+                item.is_section(),
+                "expected section RowItem at store position {store_cursor} before account {account_cursor}",
+            );
+            assert_eq!(item.section_title().as_deref(), Some(expected_title));
+            store_cursor += 1;
+        }
+        let item = &items[store_cursor];
+        assert!(
+            !item.is_section(),
+            "expected account RowItem at store position {store_cursor}",
+        );
+        assert_eq!(item.account_id(), Some(row.id));
+        prev = Some(row);
+        account_cursor += 1;
+        store_cursor += 1;
+    }
+    assert_eq!(store_cursor, items.len(), "store must end at the cursor");
+}
+
+#[test]
+fn apply_interleaved_repeated_toggle_is_idempotent_for_account_rows() {
+    // Defense against a regression where a future rebuild path forgets
+    // to consult `by_key` for matched account rows and starts allocating
+    // fresh `RowItem`s on every toggle, which would silently reset the
+    // live selection. Stresses several round trips.
+    let rows = vec![
+        account_model("alice", Some("Acme")),
+        account_model("bob", Some("Acme")),
+        account_model("carol", Some("Zenith")),
+    ];
+
+    let store = apply_rows(&rows, true);
+    let snapshot: Vec<(paladin_core::AccountId, usize)> = collect_row_items(&store)
+        .iter()
+        .filter_map(|item| item.account_id().map(|id| (id, item.as_ptr() as usize)))
+        .collect();
+
+    for show in [false, true, false, true, false, true] {
+        apply_interleaved_splice_plan(&store, &rows, show);
+        let ptrs: Vec<(paladin_core::AccountId, usize)> = collect_row_items(&store)
+            .iter()
+            .filter_map(|item| item.account_id().map(|id| (id, item.as_ptr() as usize)))
+            .collect();
+        assert_eq!(
+            ptrs, snapshot,
+            "toggle round trip should not allocate new account RowItems (show={show})",
+        );
+    }
 }
