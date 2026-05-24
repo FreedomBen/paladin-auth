@@ -1946,8 +1946,13 @@ producing the `next code copied, valid in Xs` status-line message.
   no `Effect`. *(`pressing_shift_c_with_hotp_account_selected_rejects_with_no_next_code_status_line`)*
 - [x] `C` with no selection surfaces the `no account selected` gate
   per DESIGN §6; `C` with a modal open does not emit
-  `Effect::CopyNextCode`. *(`pressing_shift_c_with_no_selection_sets_no_account_selected_status_line`,
-  `pressing_shift_c_with_modal_open_does_not_emit_copy_next_code`)*
+  `Effect::CopyNextCode`; `C` with `Focus::Search` types `C` into
+  the search query and emits no `Effect::CopyNextCode`. The
+  empty-filtered-set case shares the no-selection arm (the search
+  slice clears `selected` when the filter empties).
+  *(`pressing_shift_c_with_no_selection_sets_no_account_selected_status_line`,
+  `pressing_shift_c_with_modal_open_does_not_emit_copy_next_code`,
+  `pressing_shift_c_on_search_focus_types_into_search_and_does_not_emit_copy_next_code`)*
 - [x] Executor's `Effect::CopyNextCode` arm resolves the code via
   `Vault::totp_next_code(id, now)`, writes through
   `paladin_tui::clipboard::write_text`, and posts

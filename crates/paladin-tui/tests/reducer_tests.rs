@@ -21150,6 +21150,58 @@ fn pressing_shift_c_with_no_selection_sets_no_account_selected_status_line() {
 }
 
 #[test]
+fn pressing_shift_c_on_search_focus_types_into_search_and_does_not_emit_copy_next_code() {
+    // DESIGN §6 / IMPLEMENTATION_PLAN_03_TUI Next-code column: *"`C`
+    // is suppressed (silent no-op) when the search bar has focus or
+    // any modal is open, matching the existing letter-keybind
+    // suppression rules."* On search focus, Char keystrokes are
+    // routed into the search query — `C` lands as a literal `C` in
+    // the filter, never as a copy-next emission.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, shift_c());
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::CopyNextCode { .. })),
+        "Shift-c on search focus must not emit CopyNextCode, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked {
+            search_query,
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                search_query, "C",
+                "Shift-c on search focus must append `C` to the search query"
+            );
+            assert!(
+                status_line.is_none(),
+                "Shift-c on search focus must not surface the wrong-kind status line"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
 fn pressing_shift_c_with_modal_open_does_not_emit_copy_next_code() {
     // A modal traps focus — bare-letter Chars are routed into the
     // modal's text fields, not the list keybindings. Mirrors the
