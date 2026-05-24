@@ -984,3 +984,73 @@ pub fn account_column_sort_key(model: &AccountRowModel) -> (String, String) {
     let label = model.display_label.to_lowercase();
     (issuer, label)
 }
+
+/// Build a `gtk::CustomSorter` that compares two [`RowItem`]s by
+/// the case-folded `(issuer, display_label)` tuple, mirroring
+/// [`account_column_sort_key`] on the live `gio::ListStore<RowItem>`.
+///
+/// Attached to the "Account" `gtk::ColumnViewColumn` by
+/// `AccountListComponent::init` so clicking the column header toggles
+/// the sort direction.  Default unsorted preserves vault insertion
+/// order per `docs/DESIGN.md` §"listing-order"; sorting is a
+/// user-initiated override and does not persist across restarts —
+/// see `docs/IMPLEMENTATION_PLAN_04_GTK.md` §A.4 "Sortable columns".
+///
+/// Section rows compare `Equal` to each other and to themselves so
+/// their position is stable under the sort.  In practice section
+/// rows are non-selectable and the rendered list never asks the
+/// sorter to reorder them across account rows.
+/// Compare two [`RowItem`]s by their case-folded
+/// `(issuer, display_label)` sort key.
+///
+/// Pure helper extracted from [`build_account_column_sorter`] so
+/// the comparison contract can be pinned by tests without spinning
+/// up GTK (the `gtk::CustomSorter` wrapper requires `gtk::init()`,
+/// which depends on a display server).  Section rows always
+/// compare `Equal` so a sort never reorders them across account
+/// rows; in practice they are `set_selectable(false)` and the
+/// rendered list never asks the sorter to reorder them.
+#[must_use]
+pub fn compare_account_row_items(
+    a: &crate::row_item::RowItem,
+    b: &crate::row_item::RowItem,
+) -> std::cmp::Ordering {
+    if a.is_section() || b.is_section() {
+        return std::cmp::Ordering::Equal;
+    }
+    let key_a = (
+        a.issuer().unwrap_or_default().to_lowercase(),
+        a.display().label.to_lowercase(),
+    );
+    let key_b = (
+        b.issuer().unwrap_or_default().to_lowercase(),
+        b.display().label.to_lowercase(),
+    );
+    key_a.cmp(&key_b)
+}
+
+/// Build a `gtk::CustomSorter` that compares two [`RowItem`]s
+/// via [`compare_account_row_items`].
+///
+/// Attached to the "Account" `gtk::ColumnViewColumn` by
+/// `AccountListComponent::init` so clicking the column header toggles
+/// the sort direction.  Default unsorted preserves vault insertion
+/// order per `docs/DESIGN.md` §"listing-order"; sorting is a
+/// user-initiated override and does not persist across restarts —
+/// see `docs/IMPLEMENTATION_PLAN_04_GTK.md` §A.4 "Sortable columns".
+///
+/// Requires `gtk::init()` (the underlying `gtk::CustomSorter::new`
+/// asserts on the GTK type registration), so this constructor must
+/// be called from a thread that has already initialized GTK — the
+/// `AccountListComponent::init` path satisfies that.
+#[must_use]
+pub fn build_account_column_sorter() -> gtk::CustomSorter {
+    gtk::CustomSorter::new(|a, b| {
+        let row_a = a.downcast_ref::<crate::row_item::RowItem>();
+        let row_b = b.downcast_ref::<crate::row_item::RowItem>();
+        match (row_a, row_b) {
+            (Some(a), Some(b)) => compare_account_row_items(a, b).into(),
+            _ => gtk::Ordering::Equal,
+        }
+    })
+}

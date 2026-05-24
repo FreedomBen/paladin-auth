@@ -39,8 +39,8 @@ use crate::account_row::{
 };
 use crate::column_view::{
     any_totp, apply_interleaved_splice_plan, build_account_column_factory,
-    build_code_column_factory, build_copy_column_factory, build_kebab_column_factory,
-    build_time_column_factory,
+    build_account_column_sorter, build_code_column_factory, build_copy_column_factory,
+    build_kebab_column_factory, build_time_column_factory,
 };
 use crate::row_item::RowItem;
 use crate::search::filtered_account_ids;
@@ -1023,6 +1023,14 @@ impl SimpleComponent for AccountListComponent {
             .expand(true)
             .resizable(true)
             .build();
+        // Attach the case-insensitive (issuer, label) sorter so
+        // clicking the "Account" column header toggles between
+        // ascending and descending order.  The view defaults to
+        // unsorted on mount, preserving the vault insertion-order
+        // contract from `docs/DESIGN.md` §"listing-order"; sorting
+        // is a user-initiated override and does not persist across
+        // restarts.
+        account_column.set_sorter(Some(&build_account_column_sorter()));
         let code_column = gtk::ColumnViewColumn::builder()
             .title("Code")
             .factory(&build_code_column_factory(output_sender.clone()))

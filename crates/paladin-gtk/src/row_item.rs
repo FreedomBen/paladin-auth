@@ -73,6 +73,7 @@ mod imp {
         pub(super) id: Cell<Option<AccountId>>,
         pub(super) display: RefCell<RowDisplay>,
         pub(super) icon_hint: RefCell<Option<String>>,
+        pub(super) issuer: RefCell<Option<String>>,
         pub(super) busy: Cell<bool>,
     }
 
@@ -103,6 +104,7 @@ mod imp {
                     kebab_enabled: false,
                 }),
                 icon_hint: RefCell::new(None),
+                issuer: RefCell::new(None),
                 busy: Cell::new(false),
             }
         }
@@ -158,6 +160,7 @@ impl RowItem {
         imp.kind.replace(RowKind::Account);
         imp.id.set(Some(model.id));
         imp.icon_hint.replace(model.icon_hint.clone());
+        imp.issuer.replace(model.issuer.clone());
         imp.display
             .replace(crate::account_list::hidden_row_display(model));
         item
@@ -227,6 +230,19 @@ impl RowItem {
     #[must_use]
     pub fn icon_hint(&self) -> Option<String> {
         self.imp().icon_hint.borrow().clone()
+    }
+
+    /// The issuer string projected from
+    /// [`crate::account_list::AccountRowModel::issuer`].  Read by
+    /// the Account-column sorter
+    /// (`column_view::build_account_column_sorter`) to back the
+    /// case-insensitive `(issuer, label)` ordering pinned in
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §A.4 "Sortable
+    /// columns".  `None` for section rows and for any account row
+    /// whose `AccountRowModel.issuer` was `None`.
+    #[must_use]
+    pub fn issuer(&self) -> Option<String> {
+        self.imp().issuer.borrow().clone()
     }
 
     /// The last busy value latched via [`Self::set_busy`].

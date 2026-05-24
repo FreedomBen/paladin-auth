@@ -182,3 +182,37 @@ fn is_section_distinguishes_kinds() {
     assert!(RowItem::section("Other").is_section());
     assert!(!RowItem::from_row_model(&totp_model()).is_section());
 }
+
+#[test]
+fn from_row_model_preserves_issuer() {
+    // The Account ColumnViewColumn sorter (`column_view::build_account_column_sorter`)
+    // reads `RowItem::issuer` to back the case-insensitive
+    // `(issuer, label)` ordering pinned in §A.4 "Sortable columns".
+    // The constructor must carry the issuer through verbatim so the
+    // sorter sees the same projection the pure-logic
+    // `account_column_sort_key` test pins.
+    let item = RowItem::from_row_model(&totp_model());
+    assert_eq!(item.issuer(), Some("Acme".to_string()));
+}
+
+#[test]
+fn from_row_model_with_no_issuer_returns_none() {
+    let model = AccountRowModel {
+        id: AccountId::new(),
+        display_label: "bare-label".to_string(),
+        kind: AccountKindSummary::Totp,
+        counter: None,
+        icon_hint: None,
+        issuer: None,
+    };
+    let item = RowItem::from_row_model(&model);
+    assert_eq!(item.issuer(), None);
+}
+
+#[test]
+fn section_constructor_has_no_issuer() {
+    // Section rows are not account rows, so they have no issuer; the
+    // sorter routes around them via `set_selectable(false)` already.
+    let item = RowItem::section("Acme");
+    assert_eq!(item.issuer(), None);
+}

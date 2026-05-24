@@ -16,8 +16,8 @@
 use paladin_core::{AccountId, AccountKindSummary};
 use paladin_gtk::account_list::AccountRowModel;
 use paladin_gtk::column_view::{
-    account_column_sort_key, apply_splice_plan, interleave_section_headers, splice_plan,
-    InterleavedRow, RowKey, SpliceOp,
+    account_column_sort_key, apply_splice_plan, compare_account_row_items,
+    interleave_section_headers, splice_plan, InterleavedRow, RowKey, SpliceOp,
 };
 use paladin_gtk::row_item::RowItem;
 
@@ -469,6 +469,60 @@ fn sort_key_is_stable_across_clones() {
     let a = account_column_sort_key(&row);
     let b = account_column_sort_key(&row);
     assert_eq!(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// build_account_column_sorter — wraps account_column_sort_key in a
+// `gtk::CustomSorter` so the Account ColumnViewColumn can attach it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compare_row_items_orders_by_case_insensitive_issuer_then_label() {
+    let acme_alice = RowItem::from_row_model(&model_with(Some("Acme"), "Acme:alice"));
+    let acme_bob = RowItem::from_row_model(&model_with(Some("acme"), "Acme:bob"));
+    let github_adam = RowItem::from_row_model(&model_with(Some("Github"), "Github:adam"));
+    assert_eq!(
+        compare_account_row_items(&acme_alice, &acme_bob),
+        std::cmp::Ordering::Less
+    );
+    assert_eq!(
+        compare_account_row_items(&acme_bob, &acme_alice),
+        std::cmp::Ordering::Greater
+    );
+    assert_eq!(
+        compare_account_row_items(&acme_alice, &github_adam),
+        std::cmp::Ordering::Less
+    );
+    assert_eq!(
+        compare_account_row_items(&acme_alice, &acme_alice),
+        std::cmp::Ordering::Equal
+    );
+}
+
+#[test]
+fn compare_row_items_treats_missing_issuer_as_empty_string() {
+    let none_issuer = RowItem::from_row_model(&model_with(None, "loose"));
+    let acme = RowItem::from_row_model(&model_with(Some("Acme"), "Acme:alice"));
+    // `None` issuer projects to "" which sorts before any named
+    // issuer.  Mirrors the pure-helper contract pinned in
+    // `sort_key_missing_issuer_collates_with_empty_string`.
+    assert_eq!(
+        compare_account_row_items(&none_issuer, &acme),
+        std::cmp::Ordering::Less
+    );
+}
+
+#[test]
+fn compare_row_items_returns_equal_for_section_rows() {
+    // Section rows aren't selectable, but the sorter still needs to
+    // produce a stable comparison for them — return Equal so the
+    // section's position in the store is preserved by the sort.
+    let section_a = RowItem::section("Acme");
+    let section_b = RowItem::section("Github");
+    assert_eq!(
+        compare_account_row_items(&section_a, &section_b),
+        std::cmp::Ordering::Equal
+    );
 }
 
 // ---------------------------------------------------------------------------
