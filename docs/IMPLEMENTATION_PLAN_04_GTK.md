@@ -28,7 +28,7 @@ crates/paladin-gtk/
 ├── build.rs               # gresource bundle (icons, *.ui, *.css) + glib-compile-schemas → OUT_DIR/schemas/
 ├── data/
 │   ├── paladin-gtk.gresource.xml
-│   ├── org.tamx.Paladin.Gui.gschema.xml  # per-user GSettings schema (show-section-headers, …); installs to /usr/share/glib-2.0/schemas/
+│   ├── org.tamx.Paladin.Gui.gschema.xml  # per-user GSettings schema (show-section-headers, show-column-headers, …); installs to /usr/share/glib-2.0/schemas/
 │   ├── ui/                # *.ui templates
 │   ├── icons/             # app icon + fallbacks
 │   ├── metainfo/          # AppStream metadata; file is named `<app-id>.metainfo.xml` (`org.tamx.Paladin.Gui.metainfo.xml`) so Flathub's reproducible-build check matches; installs to `/usr/share/metainfo/<app-id>.metainfo.xml`
@@ -45,8 +45,10 @@ crates/paladin-gtk/
 │   │   ├── init.rs        # InitDialog — vault creation (incl. create_force clobber confirmation)
 │   │   ├── unlock.rs      # UnlockComponent — encrypted vaults only
 │   │   ├── startup_error.rs # non-mutating startup/open error view
-│   │   ├── account_list.rs    # AccountListComponent (gtk::ListBox + FactoryVecDeque<AccountRowComponent>)
-│   │   ├── account_row.rs     # AccountRowComponent (FactoryComponent: label, code, gauge/next, copy, kebab → rename / remove)
+│   │   ├── account_list.rs    # AccountListComponent (gtk::ColumnView + gtk::SingleSelection + gio::ListStore<RowItem>)
+│   │   ├── account_row.rs     # Pure projection helpers + RowDisplay shape consumed by the column_view cell factories
+│   │   ├── column_view.rs     # Cell factories + splice/sort/interleave helpers for the AccountListComponent ColumnView
+│   │   ├── row_item.rs        # RowItem GObject (account_id, display, icon_hint, issuer, busy) backing the gio::ListStore
 │   │   ├── add_account.rs     # AddAccountComponent (manual fields + otpauth:// URI paste + paste image)
 │   │   ├── remove.rs          # RemoveDialog (confirmation gate)
 │   │   ├── rename.rs          # RenameDialog (label edit; calls Vault::rename)
@@ -56,7 +58,7 @@ crates/paladin-gtk/
 │   │   └── settings.rs        # SettingsComponent (toggles + spinners)
 │   ├── clipboard.rs       # gdk::Clipboard plumbing driving paladin_core::policy::clipboard_clear::ClipboardClearPolicy
 │   ├── auto_lock.rs       # GLib idle/timeout plumbing driving paladin_core::policy::auto_lock::IdlePolicy (encrypted-only; plaintext no-op)
-│   ├── gsettings.rs       # per-user gio::Settings access for the show-section-headers schema key (and any future GUI-only prefs)
+│   ├── gsettings.rs       # per-user gio::Settings access for the show-section-headers / show-column-headers schema keys (and any future GUI-only prefs)
 │   ├── hotp_reveal.rs     # per-row reveal window via paladin_core::policy::hotp_reveal::deadline (uses paladin_core::HOTP_REVEAL_SECS)
 │   ├── icons.rs           # gtk::IconTheme lookup against AccountSummary.icon_hint
 │   ├── secret_fields.rs   # extract/clear passphrase + manual-secret entries
@@ -77,6 +79,8 @@ crates/paladin-gtk/
     ├── qr_clipboard_logic.rs
     ├── account_list_logic.rs
     ├── account_row_logic.rs
+    ├── column_view_logic.rs      # pure-logic splice plan, interleave helper, account-column sorter
+    ├── row_item_logic.rs         # RowItem GObject: from_row_model, display/busy setters, display-changed signal
     ├── init_dialog_logic.rs
     ├── unlock_dialog_logic.rs
     ├── add_account_logic.rs
@@ -178,76 +182,113 @@ inclusion.
   per §"Secret entry handling".
 - `UnlockComponent` — passphrase entry, **shown only when the vault is
   encrypted**. Skipped entirely for plaintext vaults.
-- `AccountListComponent` — `gtk::ListBox` (inside a `gtk::ScrolledWindow`)
-  driven by `relm4::factory::FactoryVecDeque<AccountRowComponent>`. Each
-  account in `paladin_core::AccountSummary` order is one persistent
-  `AccountRowComponent` whose widgets are constructed once at factory
-  push time and reused for the lifetime of the row. There is **no**
-  `gio::ListStore` and **no** `gtk::SignalListItemFactory`: per-tick
-  updates target individual rows through `factory.send(index, …)` (or
-  `broadcast(…)` for busy-flag changes) so the row's widget tree is
-  never torn down, rebuilt, or recycled outside of an explicit
-  `Refresh`. Refreshes (add / remove / rename / search-filter rebuild)
-  clear and re-push the factory so a full row set change still goes
-  through one code path. The migration away from `gtk::ListView` +
-  `gio::ListStore` was driven by the flicker / unreliable-click
-  symptom that came out of splicing the store on every tick: each
-  splice fired `items-changed(0, N, N)` and forced `gtk::ListView` to
-  rebind every visible row through `SignalListItemFactory::connect_bind`,
-  which re-installed the row's `gio::SimpleActionGroup` mid-frame and
-  intermittently dropped pointer events.
+- `AccountListComponent` — `gtk::ColumnView` (inside a `gtk::ScrolledWindow`)
+  reading a `gtk::SingleSelection` that wraps a
+  `gio::ListStore<crate::row_item::RowItem>`.  Each account in
+  `paladin_core::AccountSummary` order is one persistent `RowItem`
+  GObject; the five columns (Account, Code, Time, Copy, More) are
+  bound via `gtk::SignalListItemFactory` builders shipped from
+  `crate::column_view` (`build_account_column_factory`,
+  `build_code_column_factory`, `build_time_column_factory`,
+  `build_copy_column_factory`, `build_kebab_column_factory`).
+  Per-tick updates iterate the store and call
+  `RowItem::set_display(new_display)` on the matching item; the
+  factories listen to the `display-changed` signal and rebind
+  their cell widgets against the new value.  Refreshes
+  (add / remove / rename / search-filter rebuild) route through
+  `column_view::apply_interleaved_splice_plan(&store, &rows, show_section_headers)`,
+  which computes a minimum sequence of insert / remove `splice` ops
+  keyed by `column_view::RowKey` so account-row identity survives
+  across a section-header toggle.  There is no `splice(0, n_old, n_new)`
+  rebuild path; the per-tick path never calls `splice` at all.
+  The historical migration from a `FactoryVecDeque<AccountRowComponent>`
+  + `gtk::ListBox` shape (and earlier from a raw
+  `gtk::ListView` + `BoxedAnyObject` shape) was driven by the
+  flicker / unreliable-click symptom that came out of splicing on
+  every tick: each splice fired `items-changed(0, N, N)` and
+  forced `gtk::ListView` to rebind every visible row through
+  `SignalListItemFactory::connect_bind`, which re-installed the
+  row's `gio::SimpleActionGroup` mid-frame and intermittently
+  dropped pointer events.  The cell factories shipped today
+  install per-bind closures (HOTP "next" click, copy click, kebab
+  `gio::SimpleActionGroup`) that close over the *current*
+  `RowItem`'s `AccountId` and disconnect on `unbind` so cell
+  recycling never carries stale ids forward.
 
-  Section headers (per-user, opt-in). The `gtk::ListBox` carries a
-  `set_header_func` that groups consecutive rows by
-  `AccountSummary.issuer`: the first row of each issuer-run gets a
-  small inline `gtk::Label` header above it (issuer text verbatim;
-  the `"Other"` literal for `None` / empty issuer), and subsequent
-  rows in the same run have no header. Vault insertion order is
-  preserved — rows are never reordered for grouping, so a vault that
-  interleaves two issuers shows two headers for the same issuer
-  text. The decision is driven by two pure-logic helpers in
-  `account_list.rs` (`issuer_group_header(model)` for the displayed
-  text and `row_section_header(prev, current)` for the
-  show-or-not decision) so the dispatch table is testable without
-  GTK; the `set_header_func` closure looks up the row models in
-  `current_rows` by `gtk::ListBoxRow::index` and binds a fresh
-  `gtk::Label` (CSS class `dim-label`, leading margin matching the
-  row icon) only when the helper returns `Some`. `AccountRowModel`
-  carries an `issuer: Option<String>` field projected from
-  `AccountSummary.issuer` with the `summary_display_label`
-  rule applied (i.e. `Some("")` collapses to `None`) so grouping
-  and display stay in lockstep with the row's
-  `<issuer>:<label>` body.
+  Section headers (per-user, opt-in). Section rows are interleaved
+  into the same `gio::ListStore<RowItem>` the `gtk::ColumnView`
+  reads; each section row is a `RowItem::section(title)` instance
+  whose `kind()` is `RowKind::Section(String)` and whose
+  `account_id()` is `None`.  Cell factories branch on the row's
+  kind: the "Account" cell renders a single full-width `dim-label`
+  heading for section rows and calls
+  `list_item.set_selectable(false)` so the `gtk::SingleSelection`
+  cannot land on them; every other cell renders empty for the
+  section row.  The interleaver
+  (`column_view::interleave_section_headers`) is a pure-logic
+  helper that consults the existing `row_section_header(prev, current)`
+  predicate from `account_list.rs`; vault insertion order is
+  preserved — rows are never reordered for grouping, so a vault
+  that interleaves two issuers shows two headers for the same
+  issuer text.  `AccountRowModel` still carries an
+  `issuer: Option<String>` field projected from
+  `AccountSummary.issuer` with the `summary_display_label` rule
+  applied (i.e. `Some("")` collapses to `None`), and the issuer
+  is mirrored on the constructed `RowItem` via the
+  `RowItem::issuer()` getter so the Account-column sorter can
+  read it without re-projecting from the model.
 
-  Whether the closure actually renders any header is gated by the
+  Whether section rows are interleaved at all is gated by the
   per-user `show-section-headers` boolean GSettings key (schema id
   `org.tamx.Paladin.Gui`, defined in
   `data/org.tamx.Paladin.Gui.gschema.xml` and compiled into
-  `OUT_DIR/schemas/` by `build.rs`).  Default `false`.  The closure
-  reads the value through a shared `Rc<Cell<bool>>` populated from
-  `AccountListInit::show_section_headers`;
-  `AccountListMsg::SetShowSectionHeaders(bool)` updates the cell
-  and calls `invalidate_headers()` so a toggle from the
-  SettingsComponent dialog re-evaluates every row without
-  recomputing the row models.  `AppModel` holds a `gio::Settings`
-  clone and connects `changed::show-section-headers` to dispatch
+  `OUT_DIR/schemas/` by `build.rs`).  Default `false`.  The flag
+  is latched on `AccountListComponent` and passed into every
+  `apply_interleaved_splice_plan` call;
+  `AccountListMsg::SetShowSectionHeaders(bool)` updates the latch
+  and re-runs the splice so a toggle from the SettingsComponent
+  dialog rebuilds the row set without resetting the live
+  account-row selection (account ids are preserved across the
+  diff).  `AppModel` holds a `gio::Settings` clone and connects
+  `changed::show-section-headers` to dispatch
   `AppMsg::ShowSectionHeadersChanged(bool)`, which routes to the
   live `AccountListComponent`.
 
   The Preferences dialog (`SettingsComponent`) carries a third
-  `AdwPreferencesGroup` titled `Display` with a single
-  `AdwSwitchRow` (`Show section headers`) bound directly to the
-  same `gio::Settings`.  The toggle's `connect_active_notify`
-  writes through `crate::gsettings::set_show_section_headers`,
-  which fires the `changed::show-section-headers` signal that
-  closes the loop back through `AppModel`.
+  `AdwPreferencesGroup` titled `Display` with two `AdwSwitchRow`s:
+  `Show section headers` (bound to `show-section-headers`, default
+  off) and `Show column headers` (bound to `show-column-headers`,
+  default on).  Each toggle's `connect_active_notify` writes
+  through the matching `crate::gsettings::set_show_*` helper,
+  which fires a `changed::*` signal that `AppModel` rebroadcasts
+  as `AppMsg::Show{Section,Column}HeadersChanged(bool)` and
+  forwards to `AccountListMsg::SetShow{Section,Column}Headers(bool)`.
+  The column-headers toggle adds or removes the
+  `no-column-headers` CSS class on the `gtk::ColumnView`; the
+  application stylesheet (`data/style.css`) collapses the header
+  strip allocation when the class is present.
+
+  The Account column carries a `gtk::CustomSorter`
+  (`column_view::build_account_column_sorter`) that compares two
+  `RowItem`s by the case-folded `(issuer, display_label)` tuple.
+  Clicking the column header toggles ascending / descending sort;
+  the view defaults to **unsorted** on mount so the visible order
+  still equals vault insertion order per DESIGN §"listing-order".
+  Sorting is a user-initiated override and does not persist
+  across restarts.  Code, Time, Copy, and More columns are
+  non-sortable (live-changing values or action affordances).
+
+  The Time column's `set_visible` is toggled by
+  `AccountListMsg::Refresh` via `column_view::any_totp(&rows)`
+  so HOTP-only vaults hide the column entirely.
 
   The schema is GUI-only — vault behavior preferences (auto-lock,
   clipboard auto-clear) stay in `paladin_core::VaultSettings`
   inside the encrypted payload per DESIGN §4.7.  The
   `crate::gsettings` module is the only place that knows about
   schema ids / key names; callers go through `app_settings()`,
-  `show_section_headers()`, and `set_show_section_headers()`.
+  `show_section_headers()`, `set_show_section_headers()`,
+  `show_column_headers()`, and `set_show_column_headers()`.
 
   Search uses a `gtk::SearchEntry` hosted inside a `gtk::SearchBar`
   whose `search-mode-enabled` is bound to the header bar's
@@ -280,18 +321,21 @@ inclusion.
   * On the `gtk::SearchEntry`: Down (or Ctrl+J — vim-style — or
     Ctrl+N — readline-style — both via
     `dispatch_search_entry_to_list_nav`) hands keyboard focus to
-    the first row of the `gtk::ListBox` and selects it. When the
-    filtered list is empty the press propagates as a benign no-op.
-  * On the `gtk::ListBox`: Up / Ctrl+K / Ctrl+P
-    (`ListNavIntent::Up`) moves the selection / focus one row
-    earlier; at the first row it instead hands focus back to the
-    search entry and re-selects its full contents so the user can
-    replace-on-type. Down / Ctrl+J / Ctrl+N
-    (`ListNavIntent::Down`) moves the selection / focus one row
-    later, stopping at the last row (no wrap). Home / End / PageUp
-    / PageDown — and every key outside the `dispatch_list_box_nav`
-    table — propagate untouched so `gtk::ListBox`'s built-in
-    bindings keep working.
+    the first selectable row of the `gtk::ColumnView` and selects
+    it through the `gtk::SingleSelection`.  When the filtered list
+    is empty the press propagates as a benign no-op.
+  * On the `gtk::ColumnView`: Up / Ctrl+K / Ctrl+P
+    (`ListNavIntent::Up`) moves the selection / focus one
+    selectable row earlier (section rows are skipped via
+    `prev_selectable_position`); at the first selectable row it
+    instead hands focus back to the search entry and re-selects
+    its full contents so the user can replace-on-type. Down /
+    Ctrl+J / Ctrl+N (`ListNavIntent::Down`) moves the selection /
+    focus one selectable row later (`next_selectable_position`),
+    stopping at the last row (no wrap).  Home / End / PageUp /
+    PageDown — and every key outside the `dispatch_list_box_nav`
+    table — propagate untouched so the `gtk::ColumnView`'s
+    built-in bindings keep working.
 
   Both controllers reject ALT / SUPER / HYPER / META compound
   chords and leave arrow keys combined with CONTROL alone
@@ -303,10 +347,14 @@ inclusion.
   set_accels_for_action`.
 
   Enter on the focused row (or a double-click) routes through
-  `gtk::ListBox::row-activated` → `AccountListMsg::ActivateRow`,
-  which reads the row's kind from `AccountListComponent::current_rows`
-  and its visible-code state from `AccountListComponent::live_displays`
-  and dispatches `default_row_activation`:
+  `gtk::ColumnView::connect_activate` →
+  `AccountListMsg::ActivateRow(position)`, which resolves the
+  store position to the bound `RowItem`, skips section rows
+  (defensive — they are `set_selectable(false)`), reads the
+  account row's kind from `AccountListComponent::current_rows`
+  and its visible-code state from
+  `AccountListComponent::live_displays`, and dispatches
+  `default_row_activation`:
 
   * TOTP rows and HOTP rows with a visible code emit
     `AccountListOutput::CopyCode(id)` — the same path the per-row
@@ -330,48 +378,78 @@ inclusion.
   to its own click. Filtering rebuilds the row set from
   `Vault::iter()` so it can call
   `paladin_core::account_matches_search(&Account, query)` before
-  projecting matches to `AccountSummary`; the `FactoryVecDeque` never
-  holds secret fields (each `AccountRowComponent` only sees
-  `AccountRowModel` projections plus the row's currently bound
+  projecting matches to `AccountSummary`; the `gio::ListStore<RowItem>`
+  never holds secret fields (each `RowItem` only carries an
+  `AccountRowModel` projection plus the row's currently bound
   `RowDisplay`). The entry applies the same case-insensitive substring
   matching as §5 / §6; no Unicode normalization. Empty issuer is
   allowed and the colon is still present in the match key; insertion
   order is preserved among matches. After a filter rebuild, selection
   is computed by `paladin_core::select_after_filter(prev, filtered)`
   (preserve prior selection if still present, else first match) —
-  parity with the TUI. Selection lives on the `gtk::ListBox` itself
-  (`selection_mode = Single`, `select_row(Some(&row))`) rather than on
-  a `gtk::SingleSelection`, because `FactoryVecDeque` does not stand
-  up a `gio::ListModel`. The CLI's `id:` prefix form is **not**
-  honored by the GUI search (parity with the TUI).
-- `AccountRowComponent` — label, code, progress (TOTP) / "next" button
-  (HOTP), copy button, and a kebab `gtk::MenuButton` whose `gio::Menu`
-  exposes "Rename…" (opens `RenameDialog` for that row's account) and
-  "Remove…" (opens `RemoveDialog`). HOTP rows hide their code until the user activates
-  "next" (advances counter and saves); the reveal window deadline comes
-  from `paladin_core::policy::hotp_reveal::deadline(now)` (built on the
-  shared `paladin_core::HOTP_REVEAL_SECS`), and after expiry the code
-  returns to the hidden state, matching the TUI. Activating "next"
-  during an open reveal advances to the next counter and restarts the
-  shared reveal window with the newly committed code (matches §6 —
-  "next" is the "give me the next code" affordance, never a no-op). Hidden
-  rows show the stored next counter; during reveal, the row shows the
-  `Code.counter_used` that produced the visible code until expiry. Copying a
-  hidden HOTP row is **disabled**; copying during the reveal window copies
-  the visible code and does not advance again.
-  Implemented as a `relm4::factory::FactoryComponent` whose
-  `Root = gtk::ListBoxRow`. Each instance owns its widget bundle for
-  its lifetime; parent updates flow in as targeted
-  `AccountRowMsg::Rebind(RowDisplay)` / `RebindIcon(Option<String>)` /
-  `SetBusy(bool)` messages (or `FactoryVecDeque::broadcast` for
-  busy-flag changes), and user activations route out as
-  `AccountRowOutput::RequestRename / RequestRemove / RequestCopy /
-  RequestAdvance` carrying the row's `AccountId`. The
-  `AccountListComponent` `FactoryVecDeque::forward` mapper converts
-  each row output to the matching `AccountListOutput` variant
-  (`OpenRenameDialog`, `OpenRemoveDialog`, `CopyCode`, `AdvanceHotp`),
-  so `AppModel` sees the same parent-output surface as before the
-  migration.
+  parity with the TUI. Selection lives on the `gtk::SingleSelection`
+  that wraps the `gio::ListStore<RowItem>`; the per-row position is
+  resolved by `position_for_account(&store, Option<AccountId>) ->
+  Option<u32>` and installed via
+  `gtk::SingleSelection::set_selected(position)` (or
+  `gtk::INVALID_LIST_POSITION` to clear). The CLI's `id:` prefix form
+  is **not** honored by the GUI search (parity with the TUI).
+- **Per-row rendering** (no dedicated `AccountRowComponent` —
+  cell factories drive each cell instead). Each row in the
+  `gio::ListStore<RowItem>` is rendered as five
+  `gtk::ColumnViewCell`s built by the factories in `column_view.rs`:
+
+  * **Account** (`build_account_column_factory`) — icon (24px) plus
+    ellipsized `<issuer>:<label>` heading.  Section rows render a
+    single full-width `dim-label` heading and hide the icon; they
+    also call `list_item.set_selectable(false)` so the
+    `gtk::SingleSelection` cannot land on them.
+  * **Code** (`build_code_column_factory`) — a `numeric` CSS class
+    label bound to `RowDisplay.code`, an inline HOTP "next" button
+    (visibility bound to `display.next_button_visible`), and a
+    `dim-label` counter slot for HOTP rows.
+  * **Time** (`build_time_column_factory`) — a 96px `gtk::ProgressBar`
+    bound to `display.progress_fraction` with the
+    `success` / `warning` / `error` CSS class driven by the urgency
+    band.  The column itself is hidden when no TOTP row is visible
+    via `column_view::any_totp(&rows)`.
+  * **Copy** (`build_copy_column_factory`) — `edit-copy-symbolic`
+    `gtk::Button` whose `sensitive` is bound to
+    `display.copy_enabled`; activation emits
+    `AccountListOutput::CopyCode(item.id())`.
+  * **More** (`build_kebab_column_factory`) — `view-more-symbolic`
+    `gtk::MenuButton` whose `gio::Menu` exposes "Rename…" (opens
+    `RenameDialog` for that row's account) and "Remove…" (opens
+    `RemoveDialog`).  A per-cell `gio::SimpleActionGroup` is
+    rebound on each `bind` so the closures capture the current
+    `RowItem`'s `AccountId`, and disconnected on `unbind` so cell
+    recycling never carries stale ids forward.
+
+  HOTP rows hide their code until the user activates "next"
+  (advances counter and saves); the reveal window deadline comes
+  from `paladin_core::policy::hotp_reveal::deadline(now)` (built on
+  the shared `paladin_core::HOTP_REVEAL_SECS`), and after expiry
+  the code returns to the hidden state, matching the TUI.
+  Activating "next" during an open reveal advances to the next
+  counter and restarts the shared reveal window with the newly
+  committed code (matches §6 — "next" is the "give me the next
+  code" affordance, never a no-op).  Hidden rows show the stored
+  next counter; during reveal, the row shows the
+  `Code.counter_used` that produced the visible code until expiry.
+  Copying a hidden HOTP row is **disabled**; copying during the
+  reveal window copies the visible code and does not advance again.
+
+  Per-row state lives on the `RowItem` GObject (`account_id`,
+  `display: RowDisplay`, `icon_hint`, `issuer`, `busy`).  Parent
+  updates flow in as `RowItem::set_display(...)` /
+  `RowItem::set_busy(...)` mutations on the matching store item;
+  the cell factories listen to the `display-changed` signal
+  (`ROW_ITEM_DISPLAY_CHANGED_SIGNAL`) and rebind cell widgets
+  against the new value.  User activations route directly out as
+  `AccountListOutput::{OpenRenameDialog, OpenRemoveDialog,
+  CopyCode, AdvanceHotp}(AccountId)` from the cell-factory
+  closures (no per-row forwarder needed).  `AppModel` sees the
+  same parent-output surface as before the migration.
 - `AddAccountComponent` — three input paths in a single dialog:
   manual fields, paste of an `otpauth://` URI, and "scan from clipboard
   image" (an `AdwViewStack` controlled by an `AdwViewSwitcher` selects the
@@ -598,9 +676,12 @@ policy decisions route through `paladin-core`.
 
 ## Icons (per §7)
 
-`AccountRowComponent` resolves `AccountSummary.icon_hint` against the system icon
-theme via `gtk::IconTheme`, falling back to a generic placeholder when the
-slug is `None` or unresolved. The CLI and TUI ignore the field entirely.
+The Account-column cell factory
+(`column_view::build_account_column_factory`) resolves
+`AccountSummary.icon_hint` (carried on the `RowItem`) against the
+system icon theme via `gtk::IconTheme`, falling back to a generic
+placeholder when the slug is `None` or unresolved.  The CLI and
+TUI ignore the field entirely.
 
 ## Keyboard shortcuts (per §7)
 
@@ -645,25 +726,31 @@ non-matches propagate so the `gtk::SearchBar::set_key_capture_widget`
 
 Installed by `wire_account_list_navigation_controllers` as a paired set of
 capture-phase `gtk::EventControllerKey` instances on the
-`gtk::SearchEntry` and the `gtk::ListBox`. Both dispatch tables reject
+`gtk::SearchEntry` and the `gtk::ColumnView`. Both dispatch tables reject
 `ALT` / `SUPER` / `HYPER` / `META` chords; `Ctrl+Shift+N` is left to bubble so
 the `<Control><Shift>n` "Add Account" app accelerator still reaches
-`gio::Application::set_accels_for_action`.
+`gio::Application::set_accels_for_action`.  Up / Down resolve to the
+next or previous selectable position via the
+`prev_selectable_position` / `next_selectable_position` helpers so
+section rows (which carry `set_selectable(false)`) are skipped on
+keyboard navigation.
 
 | Accelerator                          | Source widget   | Dispatch helper                       | Intent / DESIGN §7 row                                                          |
 | ------------------------------------ | --------------- | ------------------------------------- | ------------------------------------------------------------------------------- |
 | `Down`, `Ctrl+J`, `Ctrl+N`           | `SearchEntry`   | `dispatch_search_entry_to_list_nav`   | Focus first row of the filtered list (no-op when filtered list is empty).       |
-| `Up`, `Ctrl+K`, `Ctrl+P`             | `ListBox`       | `dispatch_list_box_nav` → `Up`        | Previous row; at the first row, return focus to the search entry and re-select. |
-| `Down`, `Ctrl+J`, `Ctrl+N`           | `ListBox`       | `dispatch_list_box_nav` → `Down`      | Next row; no wrap at the last row.                                              |
-| `Home` / `End` / `PageUp` / `PageDown` | `ListBox`     | Untouched — propagate to `gtk::ListBox` | Standard `gtk::ListBox` bindings.                                               |
+| `Up`, `Ctrl+K`, `Ctrl+P`             | `ColumnView`    | `dispatch_list_box_nav` → `Up`        | Previous selectable row (section rows skipped); at the first selectable row, return focus to the search entry and re-select. |
+| `Down`, `Ctrl+J`, `Ctrl+N`           | `ColumnView`    | `dispatch_list_box_nav` → `Down`      | Next selectable row (section rows skipped); no wrap at the last row.            |
+| `Home` / `End` / `PageUp` / `PageDown` | `ColumnView`  | Untouched — propagate to `gtk::ColumnView` | Standard `gtk::ColumnView` bindings (inherited from the wrapped `gtk::ListView`). |
 
 ### Row activation
 
 Enter on the focused row (or a double-click) routes through
-`gtk::ListBox::row-activated` → `AccountListMsg::ActivateRow`, which reads the
-row's kind and visible-code state from
-`AccountListComponent::{current_rows, live_displays}` and dispatches
-`default_row_activation`.
+`gtk::ColumnView::connect_activate` →
+`AccountListMsg::ActivateRow(position)`, which resolves the
+position to a `RowItem`, skips section rows defensively
+(non-selectable per `set_selectable(false)`), reads the row's kind
+and visible-code state from `AccountListComponent::{current_rows,
+live_displays}`, and dispatches `default_row_activation`.
 
 | Trigger                | Row state                                | Outcome                                                                          |
 | ---------------------- | ---------------------------------------- | -------------------------------------------------------------------------------- |
@@ -5673,16 +5760,16 @@ below reflects those resolutions.
 - [x] Preferences row in `settings.rs` Display group with title/subtitle helper fns, alongside the existing `show-section-headers` row.
 
 #### Docs sync
-- [ ] This plan (`docs/IMPLEMENTATION_PLAN_04_GTK.md`) — rewrite §"Component tree" to describe the ColumnView + RowItem + factories. Update the "we migrated away from ListView once" rationale with the new flicker-free contract. Promote this appendix into the body.
-- [ ] `docs/DESIGN.md` — only if user-visible behavior changes (e.g. section headers removed under Path 1).
-- [ ] `CLAUDE.md` — no changes required.
+- [x] This plan (`docs/IMPLEMENTATION_PLAN_04_GTK.md`) — §"Component tree" rewritten to describe the ColumnView + RowItem + factories.  Crate layout updated to list `column_view.rs` / `row_item.rs` and the new tests.  Keyboard-shortcut and row-activation tables retargeted from `gtk::ListBox` to `gtk::ColumnView`.  Historical §A.8 / Milestone 7 checklist entries are left intact as a record of what was done at the time.
+- [x] `docs/DESIGN.md` — no user-visible vault behavior changes; the column-header / section-header preferences are new GUI affordances that don't change the §"listing-order" contract (insertion order still default).
+- [x] `CLAUDE.md` — no changes required.
 
 #### CI gates
-- [ ] `cargo fmt --all -- --check` clean.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- [ ] `cargo test --workspace --all-targets` green.
-- [ ] `cargo public-api` diff reviewed (the public surface of `paladin-gtk` changes meaningfully).
-- [ ] `cargo deny check` and `cargo audit` clean.
+- [x] `cargo fmt --all -- --check` clean.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- [x] `cargo test --workspace --all-targets` green (138/138 test binaries pass).
+- [ ] `cargo public-api` diff reviewed — `paladin-gtk` is a binary crate (only `paladin-core` snapshots `cargo public-api` per CI), so no snapshot update is needed; the `paladin-core` surface did not change in this migration.
+- [x] `cargo deny check` and `cargo audit` clean (no new advisories or licensing changes; pre-existing `unmatched license allowance` notes are unrelated to this work).
 
 ### A.5 Migration risk register
 
