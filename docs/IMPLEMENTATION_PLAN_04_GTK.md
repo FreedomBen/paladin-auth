@@ -5768,7 +5768,7 @@ below reflects those resolutions.
 - [x] `cargo fmt --all -- --check` clean.
 - [x] `cargo clippy --workspace --all-targets -- -D warnings` clean.
 - [x] `cargo test --workspace --all-targets` green (138/138 test binaries pass).
-- [ ] `cargo public-api` diff reviewed — `paladin-gtk` is a binary crate (only `paladin-core` snapshots `cargo public-api` per CI), so no snapshot update is needed; the `paladin-core` surface did not change in this migration.
+- [x] `cargo public-api` diff reviewed — `paladin-gtk` is a binary crate (only `paladin-core` snapshots `cargo public-api` per CI), so no snapshot update is needed; the `paladin-core` surface did not change in this migration.  Verified 2026-05-24 by regenerating with the CI invocation (`cargo public-api -p paladin-core --simplified --color=never`) and confirming zero substantive diff against `crates/paladin-core/public-api.txt` (the only delta is two stale `Documenting…` / `Finished` build-log lines at the top of the committed file, a pre-existing wart unrelated to this work).
 - [x] `cargo deny check` and `cargo audit` clean (no new advisories or licensing changes; pre-existing `unmatched license allowance` notes are unrelated to this work).
 
 ### A.5 Migration risk register
