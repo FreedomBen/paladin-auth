@@ -252,6 +252,47 @@ pub enum EffectResult {
         completed_at: Instant,
     },
 
+    /// Outcome of an [`Effect::CopyNextCode`] attempt.
+    ///
+    /// Mirrors [`EffectResult::CopyCode`] for the clipboard-write
+    /// success / failure routing — `Ok(value)` arms
+    /// [`paladin_core::ClipboardClearPolicy`] identically to a
+    /// current-code copy, and `Err(())` surfaces the same
+    /// `clipboard_write_failed` status-line error. The only
+    /// distinguishing field is [`seconds_until_valid`](Self::CopyNextCode):
+    /// the number of seconds remaining in the *current* TOTP window
+    /// at the moment the copy was issued, which the reducer renders
+    /// verbatim as `next code copied, valid in {n}s` on
+    /// [`crate::app::state::StatusLine::Confirmation`]. Per DESIGN
+    /// §6: *"Pressing `C` … emits a status-line confirmation of the
+    /// form `next code copied, valid in 18s` — seconds =
+    /// `period - (now_unix % period)`."*
+    CopyNextCode {
+        /// The account whose next code was (or was meant to be) copied.
+        account_id: AccountId,
+        /// The clipboard-write outcome — same shape as
+        /// [`EffectResult::CopyCode::result`].
+        result: Result<Zeroizing<Vec<u8>>, ()>,
+        /// Monotonic clock sampled immediately after the clipboard
+        /// write returned; the reducer feeds it into
+        /// [`paladin_core::ClipboardClearPolicy::schedule`] just like
+        /// the current-code path so the auto-clear deadline rebases
+        /// on the actual copy time.
+        completed_at: Instant,
+        /// Seconds remaining in the *current* TOTP window at the
+        /// moment the executor sampled `SystemTime::now()` for the
+        /// next-code copy. Equals
+        /// `period - (now_unix % period)`, in the range `1..=period`.
+        /// The reducer formats it into the user-facing
+        /// `next code copied, valid in {n}s` confirmation; carried
+        /// even on `Err(())` so the executor never needs to compute
+        /// the value at status-rendering time. `None` if the
+        /// executor's defensive guards short-circuited before
+        /// sampling the wall-clock (the same defensive path that
+        /// silently drops a stale-path or wrong-kind effect).
+        seconds_until_valid: Option<u32>,
+    },
+
     /// Outcome of an [`Effect::Rename`] attempt.
     ///
     /// On `Ok(())` while [`crate::app::state::AppState::Unlocked`]
@@ -845,6 +886,42 @@ pub enum Effect {
         /// executor generates a fresh code from the live wall clock;
         /// for HOTP the executor reads the most recently revealed
         /// code (guaranteed to exist by reducer-level gating).
+        account_id: AccountId,
+    },
+    /// Copy the selected account's *next* TOTP code to the OS
+    /// clipboard. Sibling of [`Effect::CopyCode`] for the upcoming
+    /// 30-second-window code surfaced by the Next column.
+    ///
+    /// Per DESIGN §6 / `docs/IMPLEMENTATION_PLAN_03_TUI.md` Keybindings:
+    /// *"`C` (Shift-c) — Copy selected row's **next** code (TOTP
+    /// only; rejected on HOTP with status-line message)."* The
+    /// reducer emits this effect when `KeyCode::Char('C')` is
+    /// pressed on `Unlocked` with `Focus::List`, no modal open, no
+    /// help overlay, and a TOTP account selected. HOTP rows surface
+    /// the `no next code for HOTP accounts` status-line message
+    /// directly from the reducer and never produce this effect.
+    ///
+    /// The executor confirms the live `Unlocked` state still owns
+    /// `path` (silent drop on mismatch / non-`Unlocked`, mirroring
+    /// `Effect::CopyCode`), resolves the next code via
+    /// [`paladin_core::Vault::totp_next_code`], samples the wall-clock
+    /// for `seconds_until_valid = period - (now_unix % period)`,
+    /// writes through `paladin_tui::clipboard::write_text`, samples
+    /// `Instant::now()` after the write, and posts back
+    /// `EffectResult::CopyNextCode` so the reducer can route the
+    /// success path through [`paladin_core::ClipboardClearPolicy::schedule`]
+    /// and publish the
+    /// `next code copied, valid in {seconds_until_valid}s`
+    /// confirmation, or surface `clipboard_write_failed` on
+    /// `Err(())`.
+    CopyNextCode {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+        /// The TOTP account whose next code should be copied. The
+        /// reducer guarantees TOTP kind; the executor defensively
+        /// silent-drops on HOTP / missing-id mismatches.
         account_id: AccountId,
     },
     /// Rename the selected account's label and persist the change.

@@ -706,6 +706,46 @@ fn snapshot_list_view_mixed_totp_hotp_hidden_and_revealed() {
 }
 
 #[test]
+fn snapshot_list_view_hotp_only_vault_omits_next_code_column() {
+    // DESIGN §6 Next column: HOTP rows leave the Next slot blank —
+    // HOTP has no time-based "next code." A vault whose visible
+    // rows are all HOTP must therefore render no `↪` glyph at
+    // all; the snapshot pins this invariant so a regression that
+    // ever leaks a next-code projection (or a stray `↪` cell) into
+    // HOTP rendering surfaces as a diff.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let _bank = push_hotp_account(&mut vault, &store, Some("Bank"), "savings", 0);
+    let vpn = push_hotp_account(&mut vault, &store, Some("VPN"), "work", 42);
+
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(vpn),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 12);
+    assert!(
+        !rendered.contains('↪'),
+        "HOTP-only vault must not render the `↪` next-code glyph; got:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_list_view_search_active() {
     // Plan L1781: "Search-active list view." Drive `view::list` against a
     // vault holding three accounts where only two match a non-empty
@@ -4709,7 +4749,10 @@ fn snapshot_help_overlay() {
         status_line: None,
         help_open: true,
     };
-    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 30));
+    // Bumped to 31 rows (was 30) for the §6 `C` Copy-next keybind
+    // row that the Help overlay enumerates from
+    // `keybindings::KEYBINDINGS`.
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 31));
 }
 
 #[test]

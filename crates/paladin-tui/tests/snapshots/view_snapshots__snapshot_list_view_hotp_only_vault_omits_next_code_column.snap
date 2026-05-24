@@ -5,18 +5,10 @@ expression: rendered
 ┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
 │ Search:                                                                      │
 │ ──────────────────────────────────────────────────────────────────────────── │
+│   Bank (savings) (#0)               ▸ press n to advance                     │
+│ ▶ VPN (work) (#42)                  ▸ press n to advance                     │
 │                                                                              │
-│                      No accounts. Press `a` to add one.                      │
-│       ┌ Change passphrase ───────────────────────────────────────────┐       │
-│       │ Re-encrypts this vault under a new passphrase.               │       │
-│       │                                                              │       │
-│       │ Passphrase:  [  ]                                            │       │
-│       │ Confirm:     [  ]                                            │       │
-│       │                                                              │       │
-│       │ save durability unconfirmed                                  │       │
-│       │                                                              │       │
-│       │                  Enter submit  ·  Esc cancel                 │       │
-│       └──────────────────────────────────────────────────────────────┘       │
+│                                                                              │
 │                                                                              │
 │                                                                              │
 │ ──────────────────────────────────────────────────────────────────────────── │

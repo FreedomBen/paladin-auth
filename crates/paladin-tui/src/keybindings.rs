@@ -77,6 +77,10 @@ pub const KEYBINDINGS: &[Keybinding] = &[
         action: "Copy selected code",
     },
     Keybinding {
+        keys: "C",
+        action: "Copy selected row's next code (TOTP only)",
+    },
+    Keybinding {
         keys: "n",
         action: "HOTP next-code (advance + reveal)",
     },

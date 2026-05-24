@@ -226,6 +226,68 @@ pub fn execute(
             }));
             EffectOutcome::Continue
         }
+        Effect::CopyNextCode { path, account_id } => {
+            // Sibling of `Effect::CopyCode`'s arm for the next-window
+            // TOTP code surfaced by the §6 Next column. Same
+            // defensive guards (Unlocked / matching path / TOTP-kind
+            // account / `account_not_found` silent drop), with the
+            // code resolved via `Vault::totp_next_code` instead of
+            // `Vault::totp_code`. HOTP rows are reducer-gated and
+            // would only reach this arm via a reducer-side bug;
+            // surfacing `clipboard_write_failed` for that case would
+            // be misleading so we silent-drop matching the
+            // current-code path's defensive style.
+            let AppState::Unlocked {
+                path: state_path,
+                vault,
+                ..
+            } = state
+            else {
+                return EffectOutcome::Continue;
+            };
+            if *state_path != path {
+                return EffectOutcome::Continue;
+            }
+
+            let Some(account) = vault.iter().find(|a| a.id() == account_id) else {
+                return EffectOutcome::Continue;
+            };
+            if account.kind() != paladin_core::AccountKindSummary::Totp {
+                return EffectOutcome::Continue;
+            }
+
+            // Sample the wall-clock once and reuse it for both the
+            // `totp_next_code` lookup and the `seconds_until_valid`
+            // projection so a window flip mid-arm cannot desync the
+            // displayed seconds from the copied digits.
+            let now = SystemTime::now();
+            let Ok(next) = vault.totp_next_code(account_id, now) else {
+                return EffectOutcome::Continue;
+            };
+
+            // DESIGN §6: seconds = `period - (now_unix % period)`,
+            // in the range `1..=period`. Reuse the projection
+            // `Vault::totp_code` already computes on the current
+            // window so the boundary semantics stay aligned with the
+            // `seconds_remaining` field surfaced elsewhere.
+            let seconds_until_valid = vault
+                .totp_code(account_id, now)
+                .ok()
+                .and_then(|current| current.seconds_remaining);
+
+            let code_str = zeroize::Zeroizing::new(next.code);
+            let write_result = clipboard.write_text(code_str.as_str());
+            let completed_at = Instant::now();
+            let result =
+                write_result.map(|()| zeroize::Zeroizing::new(code_str.as_bytes().to_vec()));
+            let _ = sender.send(AppEvent::EffectResult(EffectResult::CopyNextCode {
+                account_id,
+                result,
+                completed_at,
+                seconds_until_valid,
+            }));
+            EffectOutcome::Continue
+        }
         Effect::Remove { path, account_id } => {
             // Run `Vault::remove` inside `Vault::mutate_and_save` so a
             // pre-commit failure (`save_not_committed`) snaps the

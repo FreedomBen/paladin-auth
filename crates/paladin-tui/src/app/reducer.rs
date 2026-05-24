@@ -270,6 +270,18 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
             result,
             completed_at,
         } => reduce_copy_code_result(state, account_id, result, completed_at),
+        EffectResult::CopyNextCode {
+            account_id,
+            result,
+            completed_at,
+            seconds_until_valid,
+        } => reduce_copy_next_code_result(
+            state,
+            account_id,
+            result,
+            completed_at,
+            seconds_until_valid,
+        ),
         EffectResult::Rename { account_id, result } => {
             reduce_rename_result(state, account_id, result)
         }
@@ -399,6 +411,59 @@ fn reduce_copy_code_result(
                     });
                 }
                 *status_line = None;
+            }
+            Err(()) => {
+                *status_line = Some(StatusLine::Error(CLIPBOARD_WRITE_FAILED.to_string()));
+            }
+        }
+    }
+    (state, Vec::new())
+}
+
+/// Handle the outcome of an [`Effect::CopyNextCode`].
+///
+/// Mirrors [`reduce_copy_code_result`] for the clipboard-write
+/// success / failure routing — `Ok(value)` arms
+/// [`paladin_core::ClipboardClearPolicy`] identically so the
+/// auto-clear deadline rebases on `completed_at`; `Err(())` surfaces
+/// the same [`CLIPBOARD_WRITE_FAILED`] status-line error. The
+/// distinguishing behavior is the success-path
+/// [`StatusLine::Confirmation`]: per DESIGN §6 the reducer publishes
+/// `next code copied, valid in {seconds_until_valid}s` so the user
+/// sees both the action confirmation and the seconds remaining in
+/// the current window — `None` falls through to a generic
+/// confirmation (defensive: the executor only carries `None` when
+/// its guards short-circuited before sampling the wall-clock, which
+/// is unreachable for reducer-emitted effects).
+fn reduce_copy_next_code_result(
+    mut state: AppState,
+    _account_id: AccountId,
+    result: Result<Zeroizing<Vec<u8>>, ()>,
+    completed_at: Instant,
+    seconds_until_valid: Option<u32>,
+) -> (AppState, Vec<Effect>) {
+    if let AppState::Unlocked {
+        ref vault,
+        ref mut pending_clipboard_clear,
+        ref mut status_line,
+        ..
+    } = state
+    {
+        match result {
+            Ok(value) => {
+                if let Some((token, deadline)) =
+                    ClipboardClearPolicy::schedule(completed_at, vault.settings())
+                {
+                    *pending_clipboard_clear = Some(PendingClipboardClear {
+                        token,
+                        value,
+                        deadline,
+                    });
+                }
+                *status_line = Some(StatusLine::Confirmation(match seconds_until_valid {
+                    Some(secs) => crate::app::state::format_next_code_copied(secs),
+                    None => "next code copied".to_string(),
+                }));
             }
             Err(()) => {
                 *status_line = Some(StatusLine::Error(CLIPBOARD_WRITE_FAILED.to_string()));
@@ -1629,6 +1694,11 @@ fn route_unlocked_char_kbd(mut state: AppState, c: char) -> (AppState, Vec<Effec
     let rename_modal = pending_rename_for_char(c, vault, *selected);
     let remove_modal = pending_remove_for_char(c, *selected);
     let settings_modal = pending_settings_for_char(c, vault);
+    let copy_next = if c == 'C' {
+        Some(copy_next_code_outcome(path, vault, *selected))
+    } else {
+        None
+    };
     dispatch_unlocked_char(
         state,
         c,
@@ -1636,6 +1706,7 @@ fn route_unlocked_char_kbd(mut state: AppState, c: char) -> (AppState, Vec<Effec
         rename_modal,
         remove_modal,
         settings_modal,
+        copy_next,
     )
 }
 
@@ -2703,10 +2774,16 @@ fn route_passphrase_modal_input(
 /// account selected' error and no effect; Add / Import / Export /
 /// Passphrase / Settings remain available from list focus."*
 ///
+/// `C` (Shift-c, "copy next code") joins the same gate per
+/// DESIGN §6: the selection-empty rejection is uniform with the
+/// `n` / `r` / `R` bindings, even though the wrong-kind (HOTP
+/// selected) rejection is handled separately by
+/// [`copy_next_code_outcome`].
+///
 /// `Enter` is not bound on Unlocked at this slice — once it gains a
 /// show / copy action it joins this gate.
 fn selection_gated_status_error(c: char, selected: Option<AccountId>) -> Option<StatusLine> {
-    if matches!(c, 'n' | 'r' | 'R') && selected.is_none() {
+    if matches!(c, 'n' | 'r' | 'R' | 'C') && selected.is_none() {
         Some(StatusLine::Error(NO_ACCOUNT_SELECTED.to_string()))
     } else {
         None
@@ -2742,6 +2819,7 @@ fn dispatch_unlocked_char(
     rename_modal: Option<RenameModal>,
     remove_modal: Option<RemoveModal>,
     settings_modal: Option<SettingsModal>,
+    copy_next: Option<CopyNextCodeOutcome>,
 ) -> (AppState, Vec<Effect>) {
     // `q` quits Unlocked when no modal is open. (Once the search bar
     // can take focus, `q` is text input on the search surface too;
@@ -2807,6 +2885,28 @@ fn dispatch_unlocked_char(
             }
         }
         return (state, Vec::new());
+    }
+    if c == 'C' {
+        // `C` (Shift-c) — copy next code. Selection-gated upstream
+        // (`selection_gated_status_error` sets "no account selected"
+        // when `selected = None`). TOTP selection emits an
+        // [`Effect::CopyNextCode`]; HOTP selection surfaces the
+        // [`crate::app::state::NO_NEXT_CODE_FOR_HOTP`] status-line
+        // error and emits no effect. The pre-populated outcome is
+        // computed by `copy_next_code_outcome`, mirroring the
+        // `n_effects` / `rename_modal` / `remove_modal` /
+        // `settings_modal` precomputation pattern so this arm does
+        // not borrow the vault.
+        match copy_next {
+            Some(CopyNextCodeOutcome::Effect(effect)) => return (state, vec![effect]),
+            Some(CopyNextCodeOutcome::Reject(err)) => {
+                if let AppState::Unlocked { status_line, .. } = &mut state {
+                    *status_line = Some(err);
+                }
+                return (state, Vec::new());
+            }
+            Some(CopyNextCodeOutcome::Noop) | None => return (state, Vec::new()),
+        }
     }
     if c == 's' {
         // Settings is not selection-gated and carries a pre-populated
@@ -2915,6 +3015,53 @@ fn copy_code_effect(
         path: path.to_path_buf(),
         account_id: id,
     })
+}
+
+/// Outcome of `C` (Shift-c, "copy next code") dispatch on Unlocked /
+/// `Focus::List` with a selection set. Per DESIGN §6: TOTP rows emit
+/// [`Effect::CopyNextCode`]; HOTP rows surface
+/// [`crate::app::state::NO_NEXT_CODE_FOR_HOTP`] as a status-line
+/// error and emit no effect; a selection that has dropped out of
+/// the vault is a silent no-op (defensive — selection / vault are
+/// kept in sync by the search slice).
+///
+/// The no-selection case is intercepted upstream by
+/// [`selection_gated_status_error`] so this helper sees `selected
+/// = Some(_)` in normal flow; callers that bypass the gate still
+/// observe `None` and treat it as a silent no-op.
+#[derive(Debug)]
+enum CopyNextCodeOutcome {
+    /// Emit this `Effect::CopyNextCode` and clear the status line.
+    Effect(Effect),
+    /// Reject the dispatch — set the status line to this error and
+    /// emit no effect.
+    Reject(StatusLine),
+    /// Silent no-op (no selection, selection missing from vault).
+    Noop,
+}
+
+fn copy_next_code_outcome(
+    path: &std::path::Path,
+    vault: &Vault,
+    selected: Option<AccountId>,
+) -> CopyNextCodeOutcome {
+    let Some(id) = selected else {
+        return CopyNextCodeOutcome::Noop;
+    };
+    let Some(account) = vault.iter().find(|a| a.id() == id) else {
+        return CopyNextCodeOutcome::Noop;
+    };
+    match account.kind() {
+        paladin_core::AccountKindSummary::Totp => {
+            CopyNextCodeOutcome::Effect(Effect::CopyNextCode {
+                path: path.to_path_buf(),
+                account_id: id,
+            })
+        }
+        paladin_core::AccountKindSummary::Hotp => CopyNextCodeOutcome::Reject(StatusLine::Error(
+            crate::app::state::NO_NEXT_CODE_FOR_HOTP.to_string(),
+        )),
+    }
 }
 
 /// Step direction for list selection navigation.

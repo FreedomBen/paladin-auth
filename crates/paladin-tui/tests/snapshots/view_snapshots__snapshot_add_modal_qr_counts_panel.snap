@@ -20,5 +20,5 @@ expression: rendered
 │       │                                                              │       │
 │       │                     Enter or Esc to close                    │       │
 │ ──────└──────────────────────────────────────────────────────────────┘────── │
-│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find     │
 └──────────────────────────────────────────────────────────────────────────────┘

@@ -4108,4 +4108,130 @@ mod copy_code {
             assert_eq!(outcome, EffectOutcome::Continue);
         });
     }
+
+    /// Happy path: `Effect::CopyNextCode` against an `Unlocked` TOTP
+    /// account writes the *next* 30-second-window code to the
+    /// clipboard, posts `EffectResult::CopyNextCode { Ok(value),
+    /// seconds_until_valid: Some(_) }`, and the value matches what
+    /// landed on the clipboard. The next-code digits must differ
+    /// from the current-code digits the existing `CopyCode` arm
+    /// would have produced — same selection, different window.
+    #[test]
+    fn execute_copy_next_code_totp_writes_next_code_and_sends_ok_with_seconds() {
+        with_dryrun("1", || {
+            seed_test_clipboard("");
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+            // Compute what the current code would be so we can prove
+            // the next code is different. The `now` snapshot the
+            // executor uses is `SystemTime::now()` so two
+            // back-to-back calls land in the same 30 s window for a
+            // 30 s period — `totp_next_code` advances the counter by
+            // exactly one regardless.
+            let current_code = match &state {
+                AppState::Unlocked { vault, .. } => {
+                    vault
+                        .totp_code(id, std::time::SystemTime::now())
+                        .expect("totp_code happy path")
+                        .code
+                }
+                other => panic!("expected Unlocked, got {other:?}"),
+            };
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let effect = Effect::CopyNextCode {
+                path: path.clone(),
+                account_id: id,
+            };
+
+            let outcome = execute(
+                effect,
+                &mut state,
+                &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+
+            let evt = rx.try_recv().expect("an AppEvent should be sent");
+            match evt {
+                AppEvent::EffectResult(EffectResult::CopyNextCode {
+                    account_id,
+                    result: Ok(value),
+                    completed_at: _,
+                    seconds_until_valid,
+                }) => {
+                    assert_eq!(account_id, id, "result must carry the source account_id");
+                    let next_str = std::str::from_utf8(&value).expect("OTP digits are ASCII");
+                    assert_eq!(next_str.len(), 6, "default TOTP account is 6 digits");
+                    assert!(
+                        next_str.chars().all(|c| c.is_ascii_digit()),
+                        "next code must be ASCII digits, got {next_str:?}"
+                    );
+                    assert_ne!(
+                        next_str, current_code,
+                        "next code must differ from current code (counters differ by 1)"
+                    );
+                    assert_eq!(
+                        read_test_clipboard().as_bytes(),
+                        value.as_slice(),
+                        "clipboard must hold exactly the next-code bytes the executor wrote"
+                    );
+                    // DESIGN §6: `seconds_until_valid` is the
+                    // remainder of the current window in 1..=period.
+                    let secs = seconds_until_valid.expect("Ok path must carry seconds_until_valid");
+                    assert!(
+                        (1..=30).contains(&secs),
+                        "seconds_until_valid must be in 1..=period for the default 30 s TOTP, got {secs}",
+                    );
+                }
+                other => panic!("expected EffectResult::CopyNextCode {{ Ok }}, got {other:?}"),
+            }
+            assert!(
+                rx.try_recv().is_err(),
+                "executor must emit exactly one AppEvent per Effect::CopyNextCode"
+            );
+        });
+    }
+
+    /// Defensive silent drop: `Effect::CopyNextCode` aimed at an
+    /// HOTP account would only arrive via a reducer-side bug
+    /// (the §6 reducer gate rejects HOTP with a status-line message
+    /// before emitting). The executor must not touch the clipboard
+    /// and must not send a result envelope — surfacing
+    /// `clipboard_write_failed` for a routing bug would be
+    /// misleading. Mirrors the `Effect::CopyCode` silent-drop
+    /// precedent.
+    #[test]
+    fn execute_copy_next_code_silently_drops_on_hotp_account() {
+        with_dryrun("1", || {
+            seed_test_clipboard("sentinel");
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            let (mut state, id) = unlocked_with_hotp_and_reveal(&path, "github", "123456");
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let effect = Effect::CopyNextCode {
+                path: path.clone(),
+                account_id: id,
+            };
+            let outcome = execute(
+                effect,
+                &mut state,
+                &tx,
+                &mut paladin_tui::clipboard::ClipboardSession::new(),
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+            assert!(
+                rx.try_recv().is_err(),
+                "HOTP CopyNextCode must be silent-dropped: no EffectResult"
+            );
+            assert_eq!(
+                read_test_clipboard(),
+                "sentinel",
+                "HOTP CopyNextCode must not write to the clipboard"
+            );
+        });
+    }
 }

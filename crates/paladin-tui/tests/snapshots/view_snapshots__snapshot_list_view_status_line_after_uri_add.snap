@@ -1,11 +1,12 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 1093
 expression: "render_to_text(&state, snapshot_now(), 80, 12)"
 ---
 ┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
 │ Search:                                                                      │
 │ ──────────────────────────────────────────────────────────────────────────── │
-│ ▶ Example (alice@example.com)         914 994   ██████░░░░   18s             │
+│ ▶ Example (alice@example.com)         914 994  ↪   255 062  ██████░░░░   18s │
 │                                                                              │
 │                                                                              │
 │                                                                              │

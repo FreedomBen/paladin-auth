@@ -1936,36 +1936,56 @@ Coverage for the §6 "Next code column" feature. Boundary math lives in
 dim-styled `↪ NNN NNN` cell, dispatching the `C` keybind, and
 producing the `next code copied, valid in Xs` status-line message.
 
-- [ ] `C` on the list with a selected TOTP row dispatches the next-code
-  `Effect::CopyCode` variant; reducer leaves `pending_clipboard_clear`
-  untouched until the executor reports `Ok`. *(reducer test)*
-- [ ] `C` on the list with a selected HOTP row surfaces the
+- [x] `C` on the list with a selected TOTP row dispatches the
+  `Effect::CopyNextCode` variant; reducer leaves
+  `pending_clipboard_clear` untouched until the executor reports
+  `Ok`. *(`pressing_shift_c_with_totp_account_selected_emits_copy_next_code_effect`
+  in `tests/reducer_tests.rs`)*
+- [x] `C` on the list with a selected HOTP row surfaces the
   `no next code for HOTP accounts` status-line message and dispatches
-  no `Effect`. *(reducer test)*
-- [ ] `C` is a silent no-op when the search bar has focus, when any
-  modal is open, when the filtered set is empty, or when no row is
-  selected. *(reducer test, four cases)*
-- [ ] Executor's next-code `Effect::CopyCode` arm resolves the code via
+  no `Effect`. *(`pressing_shift_c_with_hotp_account_selected_rejects_with_no_next_code_status_line`)*
+- [x] `C` with no selection surfaces the `no account selected` gate
+  per DESIGN §6; `C` with a modal open does not emit
+  `Effect::CopyNextCode`. *(`pressing_shift_c_with_no_selection_sets_no_account_selected_status_line`,
+  `pressing_shift_c_with_modal_open_does_not_emit_copy_next_code`)*
+- [x] Executor's `Effect::CopyNextCode` arm resolves the code via
   `Vault::totp_next_code(id, now)`, writes through
   `paladin_tui::clipboard::write_text`, and posts
-  `EffectResult::CopyCode { account_id, result: Ok(..), .. }`. The
-  reducer's success arm seeds the status line with
-  `next code copied, valid in {period - (now_unix % period)}s` and
-  arms `pending_clipboard_clear` identically to the current-code path.
-  *(effect test + reducer test)*
-- [ ] `arboard` write failure surfaces the existing
-  `clipboard_write_failed` status-line error without scheduling.
-  *(effect test)*
-- [ ] Render snapshot covers a mixed TOTP+HOTP vault: TOTP rows show
-  `↪ NNN NNN` in dim style, HOTP rows leave the cell blank, and
-  column width is consistent across rows. *(`tests/snapshots/`)*
-- [ ] Render snapshot covers an HOTP-only vault: the next-code column
-  is fully suppressed (zero width), mirroring the gauge-column
-  suppression. *(`tests/snapshots/`)*
-- [ ] The `Code` returned by `Vault::totp_next_code` is dropped at the
-  end of the render pass; no copy persists in `AppState` between
-  ticks. *(reducer / state test asserting `Unlocked` carries no
-  cached next-code field)*
+  `EffectResult::CopyNextCode { account_id, result: Ok(..),
+  seconds_until_valid: Some(_) , .. }`. The reducer's success arm
+  seeds the status line with
+  `next code copied, valid in {seconds_until_valid}s` and arms
+  `pending_clipboard_clear` identically to the current-code path.
+  *(`execute_copy_next_code_totp_writes_next_code_and_sends_ok_with_seconds`
+  in `tests/effect_tests.rs`;
+  `effect_result_copy_next_code_ok_publishes_status_line_confirmation_with_seconds`
+  in `tests/reducer_tests.rs`)*
+- [x] `arboard` write failure surfaces the existing
+  `clipboard_write_failed` status-line error without scheduling
+  auto-clear. *(`effect_result_copy_next_code_err_sets_status_line_clipboard_write_failed`)*
+- [x] Executor silently drops `Effect::CopyNextCode` aimed at an HOTP
+  account (defensive — the reducer gate prevents the emission, so
+  reaching the executor means a routing bug; surfacing
+  `clipboard_write_failed` here would be misleading).
+  *(`execute_copy_next_code_silently_drops_on_hotp_account`)*
+- [x] Render snapshot covers a mixed TOTP+HOTP vault: TOTP rows show
+  `↪ NNN NNN` in dim style, HOTP rows leave the cell blank, and the
+  full row fits in an 80-column terminal.
+  *(`view_snapshots__snapshot_list_view_mixed_totp_hotp_hidden_and_revealed.snap`
+  plus the `_no_color` styled sibling that pins the `DIM` modifier
+  on the next-code span)*
+- [x] Render snapshot covers an HOTP-only vault: no `↪` glyph
+  appears anywhere in the rendered grid, asserting that the
+  next-code projection is skipped on HOTP rows.
+  *(`view_snapshots__snapshot_list_view_hotp_only_vault_omits_next_code_column.snap`
+  plus the in-test `assert!(!rendered.contains('↪'))` guard)*
+- [x] The `Code` returned by `Vault::totp_next_code` is dropped at
+  the end of the render pass; no copy persists in `AppState`
+  between ticks. *(Renderer reads the `Code` into a local for
+  `format_code_digits` and drops it before returning the `Line`;
+  `AppState::Unlocked` carries no cached next-code field — see
+  `crates/paladin-tui/src/view/list.rs::render_totp_row` and
+  `crates/paladin-tui/src/app/state.rs::AppState`.)*
 
 ### Insta snapshots (`tests/snapshots/`)
 

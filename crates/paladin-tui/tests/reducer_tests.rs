@@ -21003,3 +21003,277 @@ fn effect_result_passphrase_ok_closes_modal_and_publishes_status_line_confirmati
         other => panic!("expected AppState::Unlocked after EffectResult Ok, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// `C` (Shift-c) — copy next code (DESIGN §6 / IMPLEMENTATION_PLAN_03_TUI §6).
+// Mirrors the `Enter`-on-Unlocked CopyCode tests above for the
+// upcoming-window code surfaced by the Next column.
+// ---------------------------------------------------------------------------
+
+fn shift_c() -> AppEvent {
+    AppEvent::Input {
+        event: Event::Key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT)),
+        at: Instant::now(),
+    }
+}
+
+#[test]
+fn pressing_shift_c_with_totp_account_selected_emits_copy_next_code_effect() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, shift_c());
+    match effects.as_slice() {
+        [Effect::CopyNextCode {
+            path: emitted_path,
+            account_id,
+        }] => {
+            assert_eq!(
+                emitted_path, &path,
+                "CopyNextCode must carry the vault path"
+            );
+            assert_eq!(
+                *account_id, totp_id,
+                "CopyNextCode must carry the selected account id"
+            );
+        }
+        other => panic!("expected single Effect::CopyNextCode, got {other:?}"),
+    }
+    match state {
+        AppState::Unlocked { status_line, .. } => assert!(
+            status_line.is_none(),
+            "Effect::CopyNextCode emission for TOTP must leave status_line untouched"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_shift_c_with_hotp_account_selected_rejects_with_no_next_code_status_line() {
+    // DESIGN §6: `C` on a HOTP row is rejected with the
+    // `no next code for HOTP accounts` status-line message;
+    // emits no effect.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let hotp_id = add_hotp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(hotp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, shift_c());
+    assert!(
+        effects.is_empty(),
+        "Shift-c on a HOTP row must not emit CopyNextCode, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked { status_line, .. } => {
+            assert_eq!(
+                status_line,
+                Some(StatusLine::Error(
+                    paladin_tui::app::state::NO_NEXT_CODE_FOR_HOTP.to_string(),
+                )),
+                "Shift-c on HOTP must surface the `no next code for HOTP accounts` error"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_shift_c_with_no_selection_sets_no_account_selected_status_line() {
+    // `C` joins the `n` / `r` / `R` selection-empty gate per DESIGN
+    // §6: "no account selected" surfaces before the wrong-kind check.
+    let tmp = secure_tempdir();
+    let (path, (vault, store)) = open_plaintext_pair(&tmp);
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, shift_c());
+    assert!(
+        effects.is_empty(),
+        "Shift-c with no selection must not emit CopyNextCode, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked { status_line, .. } => assert_eq!(
+            status_line,
+            Some(StatusLine::Error(
+                paladin_tui::app::state::NO_ACCOUNT_SELECTED.to_string(),
+            )),
+            "Shift-c with no selection must surface NO_ACCOUNT_SELECTED"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_shift_c_with_modal_open_does_not_emit_copy_next_code() {
+    // A modal traps focus — bare-letter Chars are routed into the
+    // modal's text fields, not the list keybindings. Mirrors the
+    // existing `Enter` and `n` modal-open guard.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(AddModal::default())),
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (_state, effects) = reduce(state, shift_c());
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::CopyNextCode { .. })),
+        "Shift-c with a modal open must not emit CopyNextCode, got {effects:?}"
+    );
+}
+
+#[test]
+fn effect_result_copy_next_code_ok_publishes_status_line_confirmation_with_seconds() {
+    // DESIGN §6: on success the reducer publishes
+    // `next code copied, valid in {n}s` as a
+    // `StatusLine::Confirmation`. Mirrors the existing copy-code
+    // success path but writes a confirmation rather than clearing
+    // the line.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let event = AppEvent::EffectResult(EffectResult::CopyNextCode {
+        account_id: totp_id,
+        result: Ok(zeroize::Zeroizing::new(b"482913".to_vec())),
+        completed_at: Instant::now(),
+        seconds_until_valid: Some(18),
+    });
+    let (state, effects) = reduce(state, event);
+    assert!(
+        effects.is_empty(),
+        "EffectResult::CopyNextCode produces no follow-up effects"
+    );
+    match state {
+        AppState::Unlocked { status_line, .. } => {
+            assert_eq!(
+                status_line,
+                Some(StatusLine::Confirmation(
+                    "next code copied, valid in 18s".to_string(),
+                )),
+                "Ok arm must publish `next code copied, valid in 18s`"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_copy_next_code_err_sets_status_line_clipboard_write_failed() {
+    // Failure path mirrors `EffectResult::CopyCode { Err(()) }` —
+    // the same `clipboard_write_failed` wording surfaces.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let event = AppEvent::EffectResult(EffectResult::CopyNextCode {
+        account_id: totp_id,
+        result: Err(()),
+        completed_at: Instant::now(),
+        seconds_until_valid: Some(18),
+    });
+    let (state, _effects) = reduce(state, event);
+    match state {
+        AppState::Unlocked { status_line, .. } => assert_eq!(
+            status_line,
+            Some(StatusLine::Error(
+                paladin_tui::app::state::CLIPBOARD_WRITE_FAILED.to_string(),
+            )),
+            "Err arm must surface the shared `clipboard_write_failed` wording"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}

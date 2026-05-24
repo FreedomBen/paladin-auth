@@ -212,7 +212,9 @@ fn bottom_line(status_line: Option<&StatusLine>, no_color: bool) -> Line<'_> {
             msg.as_str(),
             theme::fg(theme::SUCCESS, no_color),
         )),
-        None => Line::from("[↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find"),
+        None => {
+            Line::from("[↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find")
+        }
     }
 }
 
@@ -306,9 +308,14 @@ fn render_totp_row(
         }) => (format_code_digits(&code), seconds_remaining.unwrap_or(0)),
         Err(_) => ("------".to_string(), 0),
     };
+    let next_code_text = match vault.totp_next_code(summary.id, now) {
+        Ok(Code { code, .. }) => format_code_digits(&code),
+        Err(_) => "------".to_string(),
+    };
     let gauge_text = render_gauge(secs_remaining, period);
     let gauge = theme::gauge_color(secs_remaining, period);
     let code_padded = format!("{code_text:>CODE_COL_WIDTH$}");
+    let next_padded = format!("{next_code_text:>CODE_COL_WIDTH$}");
 
     let mut spans = highlight_prefix_with_search(&prefix_text, search_query, no_color);
     spans.push(Span::raw("  "));
@@ -316,7 +323,19 @@ fn render_totp_row(
         code_padded,
         theme::fg_bold(theme::CODE, no_color),
     ));
-    spans.push(Span::raw("   "));
+    // DESIGN §6 Next column: `↪ NNN NNN` in dim style, rendered
+    // immediately to the right of the current code. The `Modifier::DIM`
+    // styling plus the `↪` glyph signal "upcoming, not the live one"
+    // without requiring the user to read a column header. The post-
+    // next-code gap is 2 spaces (vs. the 3-space gap the pre-Next
+    // layout used between code and gauge) so the full row still fits
+    // in an 80-column terminal.
+    spans.push(Span::raw("  "));
+    spans.push(Span::styled(
+        format!("↪ {next_padded}"),
+        theme::fg_dim(theme::CODE, no_color),
+    ));
+    spans.push(Span::raw("  "));
     spans.push(Span::styled(gauge_text, theme::fg(gauge, no_color)));
     spans.push(Span::raw(format!("  {secs_remaining:>3}s")));
     Line::from(spans)

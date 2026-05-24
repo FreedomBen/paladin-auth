@@ -142,6 +142,34 @@ pub const NO_ACCOUNT_SELECTED: &str = "no account selected";
 /// the same condition.
 pub const CLIPBOARD_WRITE_FAILED: &str = "clipboard write failed";
 
+/// Status-line error string surfaced when `C` (Shift-c, the
+/// "copy next code" keybind) is pressed on Unlocked with an HOTP
+/// account selected. Per DESIGN §6 / `docs/IMPLEMENTATION_PLAN_03_TUI.md`
+/// "Next-code column": *"`C` on a HOTP row is rejected with a
+/// status-line message (`no next code for HOTP accounts`); the next
+/// code itself is held in a `SecretString` and zeroized after the
+/// copy effect resolves."* The rejection lives in the reducer; the
+/// executor never sees the wrong-kind dispatch.
+pub const NO_NEXT_CODE_FOR_HOTP: &str = "no next code for HOTP accounts";
+
+/// Formatter for the status-line confirmation surfaced when an
+/// [`crate::app::event::Effect::CopyNextCode`] copy succeeds. Per
+/// DESIGN §6: *"emits a status-line confirmation of the form
+/// `next code copied, valid in 18s` (where the seconds value is
+/// the remainder of the current window)."*
+///
+/// Centralized here so the reducer, the snapshot tests, and any
+/// future doc/man-page tooling can format the same wording without
+/// reaching for a local `format!`. `seconds_until_valid` is the
+/// value the executor sampled at copy time (in the range
+/// `1..=period`); callers fall through to the `Err(())` branch
+/// instead of this helper when the executor's defensive guards
+/// short-circuited.
+#[must_use]
+pub fn format_next_code_copied(seconds_until_valid: u32) -> String {
+    format!("next code copied, valid in {seconds_until_valid}s")
+}
+
 /// A pending vim chord leader on the list view.
 ///
 /// Set by the first press of a chord leader key and cleared by the

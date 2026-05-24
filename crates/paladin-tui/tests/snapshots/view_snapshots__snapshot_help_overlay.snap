@@ -1,6 +1,7 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
-expression: "render_to_text(&state, snapshot_now(), 80, 30)"
+assertion_line: 4715
+expression: "render_to_text(&state, snapshot_now(), 80, 31)"
 ---
 ┌┌ Help — keybindings ────────────────────────────────────────────────────────┐┐
 ││ Read-only — keys are listed for reference.                                 ││
@@ -11,6 +12,7 @@ expression: "render_to_text(&state, snapshot_now(), 80, 30)"
 ││ Ctrl-U Ctrl-D                Half-page up / down                           ││
 ││ zz                           Recenter viewport on selected row             ││
 ││ Enter                        Copy selected code                            ││
+││ C                            Copy selected row's next code (TOTP only)     ││
 ││ n                            HOTP next-code (advance + reveal)             ││
 ││ a                            Open Add modal                                ││
 ││ r                            Open Remove confirmation                      ││

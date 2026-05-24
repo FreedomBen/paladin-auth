@@ -5,7 +5,7 @@ expression: rendered
 ┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
 │ Search:                                                                      │
 │ ──────┌ Add account ─────────────────────────────────────────────────┐────── │
-│ ▶ gith│ Mode: ▶ Manual ◀     URI       QR                            │       │
+│ ▶ gith│ Mode: ▶ Manual ◀     URI       QR                            │   18s │
 │       │                                                              │       │
 │       │ Label:      [  ]                                             │       │
 │       │ Issuer:     [  ]                                             │       │
@@ -20,5 +20,5 @@ expression: rendered
 │       │                                                              │       │
 │       │       Tab cycles fields  ·  Enter submit  ·  Esc cancel      │       │
 │ ──────└──────────────────────────────────────────────────────────────┘────── │
-│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find     │
 └──────────────────────────────────────────────────────────────────────────────┘
