@@ -781,6 +781,15 @@ pub struct AccountListInit {
     /// `SettingsComponent` toggle flow through
     /// [`AccountListMsg::SetShowSectionHeaders`].
     pub show_section_headers: bool,
+    /// Initial value of the per-user `show-column-headers`
+    /// `GSettings` key.  When `false`, the
+    /// [`COLUMN_VIEW_NO_HEADERS_CSS_CLASS`] CSS class is added to
+    /// the `gtk::ColumnView` so the application stylesheet
+    /// suppresses the header strip; when `true`, the column
+    /// header row renders normally.  Live updates from the
+    /// `SettingsComponent` toggle flow through
+    /// [`AccountListMsg::SetShowColumnHeaders`].
+    pub show_column_headers: bool,
 }
 
 /// Widget-bearing list view for the unlocked vault state.
@@ -819,6 +828,10 @@ pub struct AccountListComponent {
     /// flip from the [`AccountListMsg::Refresh`] handler when the
     /// row set transitions between TOTP-bearing and HOTP-only.
     time_column: gtk::ColumnViewColumn,
+    /// The [`gtk::ColumnView`] kept on `self` so
+    /// [`AccountListMsg::SetShowColumnHeaders`] can add / remove the
+    /// [`COLUMN_VIEW_NO_HEADERS_CSS_CLASS`] CSS class on it.
+    column_view: gtk::ColumnView,
     /// `gtk::SearchBar` whose `search-mode-enabled` property is
     /// toggled by [`AccountListMsg::SetSearchModeEnabled`]. The
     /// header-bar search-toggle button (wired in `app/model.rs`)
@@ -867,6 +880,12 @@ pub struct AccountListComponent {
     /// [`crate::column_view::apply_interleaved_splice_plan`] on
     /// every refresh.
     show_section_headers: bool,
+    /// Per-user `show-column-headers` `GSettings` value latched at
+    /// mount time and updated by
+    /// [`AccountListMsg::SetShowColumnHeaders`].  Drives whether
+    /// the [`COLUMN_VIEW_NO_HEADERS_CSS_CLASS`] CSS class is
+    /// present on the [`Self::column_view`].
+    show_column_headers: bool,
 }
 
 /// Messages handled by [`AccountListComponent`].
@@ -964,7 +983,30 @@ pub enum AccountListMsg {
     /// Idempotent — sending the same value twice is a benign
     /// no-op.
     SetShowSectionHeaders(bool),
+    /// Live update for the per-user `show-column-headers`
+    /// `GSettings` key.  `AppModel` connects
+    /// `changed::show-column-headers` on its `gio::Settings` clone
+    /// and dispatches this message so a toggle from the
+    /// `SettingsComponent` dialog adds or removes the
+    /// [`COLUMN_VIEW_NO_HEADERS_CSS_CLASS`] CSS class on the
+    /// `gtk::ColumnView`.  The CSS rule that hides the header
+    /// strip when the class is present lives in
+    /// `crates/paladin-gtk/data/style.css`.
+    ///
+    /// Idempotent — sending the same value twice is a benign
+    /// no-op.
+    SetShowColumnHeaders(bool),
 }
+
+/// CSS class added to the [`gtk::ColumnView`] when the per-user
+/// `show-column-headers` preference is `false`.
+///
+/// The application stylesheet (`crates/paladin-gtk/data/style.css`)
+/// carries a rule that hides the header strip while this class is
+/// present.  Pinned as a `pub const` so the toggle helper, the
+/// style sheet, and the integration tests stay aligned on the
+/// literal.
+pub const COLUMN_VIEW_NO_HEADERS_CSS_CLASS: &str = "no-column-headers";
 
 #[allow(missing_docs)]
 #[relm4::component(pub)]
@@ -1060,6 +1102,12 @@ impl SimpleComponent for AccountListComponent {
         apply_interleaved_splice_plan(&store, &init.rows, init.show_section_headers);
         time_column.set_visible(any_totp(&init.rows));
 
+        // Apply the per-user `show-column-headers` preference.
+        // When `false`, the application stylesheet hides the
+        // ColumnView header strip via the
+        // `COLUMN_VIEW_NO_HEADERS_CSS_CLASS` selector.
+        apply_show_column_headers_css(&column_view, init.show_column_headers);
+
         // Install the initial selection.
         let initial_selection = init.initial_selection;
         let initial_selected_pos =
@@ -1136,6 +1184,7 @@ impl SimpleComponent for AccountListComponent {
             store,
             selection,
             time_column,
+            column_view,
             search_bar,
             search_entry,
             current_query: init.initial_query,
@@ -1144,6 +1193,7 @@ impl SimpleComponent for AccountListComponent {
             live_displays: HashMap::new(),
             busy: false,
             show_section_headers: init.show_section_headers,
+            show_column_headers: init.show_column_headers,
         };
         ComponentParts {
             model: component,
@@ -1219,6 +1269,13 @@ impl SimpleComponent for AccountListComponent {
                     }
                     item.set_busy(busy);
                 }
+            }
+            AccountListMsg::SetShowColumnHeaders(enabled) => {
+                if self.show_column_headers == enabled {
+                    return;
+                }
+                self.show_column_headers = enabled;
+                apply_show_column_headers_css(&self.column_view, enabled);
             }
             AccountListMsg::SetShowSectionHeaders(enabled) => {
                 if self.show_section_headers == enabled {
@@ -1348,6 +1405,21 @@ impl AccountListComponent {
 /// selection. Section rows (`RowItem::is_section() == true`) are
 /// skipped — they carry no `AccountId` and cannot be the
 /// `gtk::SingleSelection` cursor.
+/// Add or remove the [`COLUMN_VIEW_NO_HEADERS_CSS_CLASS`] CSS class
+/// on `column_view` based on `show`.
+///
+/// Mirrors the show / hide contract of the per-user
+/// `show-column-headers` `GSettings` key.  The CSS rule that hides
+/// the header strip when the class is present lives in
+/// `crates/paladin-gtk/data/style.css`.
+fn apply_show_column_headers_css(column_view: &gtk::ColumnView, show: bool) {
+    if show {
+        column_view.remove_css_class(COLUMN_VIEW_NO_HEADERS_CSS_CLASS);
+    } else {
+        column_view.add_css_class(COLUMN_VIEW_NO_HEADERS_CSS_CLASS);
+    }
+}
+
 fn position_for_account(store: &gio::ListStore, target: Option<AccountId>) -> Option<u32> {
     let id = target?;
     let n = store.n_items();

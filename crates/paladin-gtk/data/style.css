@@ -14,3 +14,27 @@
  * confirmation toasts, and other Paladin-specific affordances here
  * without overriding base Adwaita colors.
  */
+
+/*
+ * Hide the gtk::ColumnView header strip when the
+ * `no-column-headers` CSS class is present on the view.  The
+ * class is toggled by `paladin_gtk::account_list` in response to
+ * `AccountListMsg::SetShowColumnHeaders(bool)` (the live
+ * dispatcher for the per-user `show-column-headers` GSettings
+ * key) per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §A.4
+ * "Column-header visibility preference".  The class name is
+ * pinned as `account_list::COLUMN_VIEW_NO_HEADERS_CSS_CLASS`.
+ *
+ * `min-height: 0` + `padding: 0` collapse the header allocation
+ * so the rows below sit at the top of the scrolled window.
+ * `child > *` covers every cell label / sort chevron drawn in
+ * the header row.
+ */
+columnview.no-column-headers > header {
+    min-height: 0;
+    padding: 0;
+    border: none;
+}
+columnview.no-column-headers > header > * {
+    opacity: 0;
+}

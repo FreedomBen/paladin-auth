@@ -5668,9 +5668,9 @@ below reflects those resolutions.
 #### Column-header visibility preference
 - [x] `show-column-headers` schema key in `org.tamx.Paladin.Gui.gschema.xml`, default `true`.
 - [x] `crate::gsettings::{show_column_headers, set_show_column_headers, SHOW_COLUMN_HEADERS_KEY}` mirroring the existing `show_section_headers` helpers.
-- [ ] `AppMsg::ShowColumnHeadersChanged(bool)` + `changed::show-column-headers` signal wiring mirroring `show-section-headers`.
-- [ ] `AccountListMsg::SetShowColumnHeaders(bool)` → toggle visibility on each `gtk::ColumnViewColumn` header widget (or use `column_view.set_show_column_separators(false)` + CSS to hide the whole header strip, whichever produces the cleaner look in libadwaita).
-- [ ] Preferences row in `settings.rs` Display group with title/subtitle helper fns, alongside the existing `show-section-headers` row.
+- [x] `AppMsg::ShowColumnHeadersChanged(bool)` + `changed::show-column-headers` signal wiring mirroring `show-section-headers`.
+- [x] `AccountListMsg::SetShowColumnHeaders(bool)` → toggle the [`account_list::COLUMN_VIEW_NO_HEADERS_CSS_CLASS`] CSS class on the `gtk::ColumnView`.  The class is hooked up in `crates/paladin-gtk/data/style.css`, which collapses the header strip allocation (`min-height: 0`, `padding: 0`, `border: none`) and fades each cell to `opacity: 0` so the header disappears without restructuring the widget tree.
+- [x] Preferences row in `settings.rs` Display group with title/subtitle helper fns, alongside the existing `show-section-headers` row.
 
 #### Docs sync
 - [ ] This plan (`docs/IMPLEMENTATION_PLAN_04_GTK.md`) — rewrite §"Component tree" to describe the ColumnView + RowItem + factories. Update the "we migrated away from ListView once" rationale with the new flicker-free contract. Promote this appendix into the body.
