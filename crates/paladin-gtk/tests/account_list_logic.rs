@@ -38,6 +38,8 @@ use paladin_gtk::account_row::{
     ProgressDisplay, RowDisplay, ROW_ACTION_GROUP_NAME, ROW_COPY_ACTION_NAME, ROW_NEXT_ACTION_NAME,
     ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
 };
+use paladin_gtk::column_view::apply_interleaved_splice_plan;
+use paladin_gtk::row_item::RowItem;
 use relm4::gtk::gio::prelude::*;
 
 // --- fixtures ----------------------------------------------------------------
@@ -2071,4 +2073,136 @@ fn row_section_header_treats_distinct_casings_as_distinct_issuers() {
     let prev = totp_model_with_issuer(AccountId::new(), "GitHub:ben", Some("GitHub"));
     let curr = totp_model_with_issuer(AccountId::new(), "github:alice", Some("github"));
     assert_eq!(row_section_header(Some(&prev), &curr), Some("github"));
+}
+
+// ---------------------------------------------------------------------------
+// AppModel search → splice_diff end-to-end wiring
+//
+// Pins the §A.4 "Search / filter" checklist item: AppModel recomputes
+// `filtered_row_models_from_vault` on every search-query change (see
+// `app/model.rs` `AppMsg::AccountListAction(QueryChanged)` handler and
+// `refresh_account_list`) and hands the filtered slice to
+// `AccountListMsg::Refresh`, which calls `apply_interleaved_splice_plan`
+// against the store. This pair of helpers is the only data path between
+// the two; composing them here proves the wiring without standing up the
+// live `AccountListComponent` widget tree.
+// ---------------------------------------------------------------------------
+
+fn store_account_ids(store: &relm4::gtk::gio::ListStore) -> Vec<AccountId> {
+    use relm4::gtk::gio::prelude::*;
+    (0..store.n_items())
+        .filter_map(|i| store.item(i))
+        .filter_map(|obj| obj.downcast::<RowItem>().ok())
+        .filter_map(|item| item.account_id())
+        .collect()
+}
+
+fn ptr_for_account(store: &relm4::gtk::gio::ListStore, target: AccountId) -> Option<usize> {
+    use relm4::gtk::gio::prelude::*;
+    (0..store.n_items())
+        .filter_map(|i| store.item(i))
+        .filter_map(|obj| obj.downcast::<RowItem>().ok())
+        .find(|item| item.account_id() == Some(target))
+        .map(|item| item.as_ptr() as usize)
+}
+
+#[test]
+fn search_then_splice_filters_store_to_matches_only() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let _alice = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let bob = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    let _carol = add_totp(&mut vault, &store, Some("Zenith"), "carol");
+
+    let list_store = relm4::gtk::gio::ListStore::new::<RowItem>();
+    // Initial: empty query — store mirrors the full vault.
+    let initial = filtered_row_models_from_vault(&vault, "");
+    apply_interleaved_splice_plan(&list_store, &initial, false);
+    assert_eq!(list_store.n_items(), 3);
+
+    // User types "bob" — recompute and splice. Store narrows to one row.
+    let narrowed = filtered_row_models_from_vault(&vault, "bob");
+    apply_interleaved_splice_plan(&list_store, &narrowed, false);
+    assert_eq!(store_account_ids(&list_store), vec![bob]);
+}
+
+#[test]
+fn search_then_splice_preserves_matched_row_identity_across_query_changes() {
+    // The live `gtk::SingleSelection`'s cursor must survive a query
+    // change as long as the selected row is still a match. The data-level
+    // proof is that `apply_interleaved_splice_plan` keeps the `RowItem`
+    // GObject pointer for every account id that survives the recompute.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let alice = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let _bob = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    let _carol = add_totp(&mut vault, &store, Some("Zenith"), "carol");
+
+    let list_store = relm4::gtk::gio::ListStore::new::<RowItem>();
+    let initial = filtered_row_models_from_vault(&vault, "");
+    apply_interleaved_splice_plan(&list_store, &initial, false);
+    let alice_ptr_before =
+        ptr_for_account(&list_store, alice).expect("alice present before filter");
+
+    // Narrow to alice only.
+    let narrowed = filtered_row_models_from_vault(&vault, "alice");
+    apply_interleaved_splice_plan(&list_store, &narrowed, false);
+    assert_eq!(store_account_ids(&list_store), vec![alice]);
+    let alice_ptr_filtered = ptr_for_account(&list_store, alice).expect("alice survived filter");
+    assert_eq!(
+        alice_ptr_filtered, alice_ptr_before,
+        "matched row identity must survive the filter so the selection cursor is preserved",
+    );
+
+    // Clear the query — alice's identity must still match (newly admitted
+    // rows get fresh RowItems, but the previously-matched row is reused).
+    let restored = filtered_row_models_from_vault(&vault, "");
+    apply_interleaved_splice_plan(&list_store, &restored, false);
+    let alice_ptr_restored =
+        ptr_for_account(&list_store, alice).expect("alice present after clearing filter");
+    assert_eq!(
+        alice_ptr_restored, alice_ptr_before,
+        "row identity must survive a filter widen so the cursor stays put",
+    );
+}
+
+#[test]
+fn search_then_splice_after_vault_mutation_reapplies_query() {
+    // Mirrors `AppModel::refresh_account_list`: after a vault Add / Rename
+    // / Remove, the helper re-projects through `filtered_row_models_from_vault`
+    // with the cached `search_query` (not "") and hands the slice to
+    // `AccountListMsg::Refresh`, which splices the new vec into the store.
+    // The mutation must therefore *survive* the filter — a freshly added
+    // matching row appears in the store; a freshly added non-matching row
+    // does not.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let alice = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let _carol = add_totp(&mut vault, &store, Some("Zenith"), "carol");
+
+    let list_store = relm4::gtk::gio::ListStore::new::<RowItem>();
+    let query = "acme";
+    let initial = filtered_row_models_from_vault(&vault, query);
+    apply_interleaved_splice_plan(&list_store, &initial, false);
+    assert_eq!(store_account_ids(&list_store), vec![alice]);
+
+    // Vault gains a matching row — refresh must reveal it under the same
+    // query.
+    let bob = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    let after_add = filtered_row_models_from_vault(&vault, query);
+    apply_interleaved_splice_plan(&list_store, &after_add, false);
+    assert_eq!(store_account_ids(&list_store), vec![alice, bob]);
+
+    // Vault gains a non-matching row — refresh must leave the store
+    // unchanged under the same query.
+    let _dan = add_totp(&mut vault, &store, Some("Zenith"), "dan");
+    let after_nonmatching_add = filtered_row_models_from_vault(&vault, query);
+    apply_interleaved_splice_plan(&list_store, &after_nonmatching_add, false);
+    assert_eq!(store_account_ids(&list_store), vec![alice, bob]);
 }

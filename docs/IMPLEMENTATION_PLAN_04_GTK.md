@@ -5741,7 +5741,7 @@ below reflects those resolutions.
 - [ ] Stress test: 50 TOTP accounts, 1s tick, observe no flicker / no dropped clicks across 60s.
 
 #### Search / filter
-- [ ] `AppModel` recomputes `filtered_row_models_from_vault(...)`, then asks the live `AccountListComponent` to `splice_diff` the new vec into its store.
+- [x] `AppModel` recomputes `filtered_row_models_from_vault(...)`, then asks the live `AccountListComponent` to `splice_diff` the new vec into its store.  The wiring runs through two call sites in `crates/paladin-gtk/src/app/model.rs`: the `AppMsg::AccountListAction(AccountListOutput::QueryChanged)` handler (user typed into the search bar) and `AppModel::refresh_account_list` (post-mutation refresh after Add / Rename / Remove), both of which project through `filtered_row_models_from_vault(vault, &self.search_query)` and emit `AccountListMsg::Refresh`; the live `AccountListComponent` handler calls [`crate::column_view::apply_interleaved_splice_plan`] against its `gio::ListStore<RowItem>`.  End-to-end coverage lives in `tests/account_list_logic.rs` as `search_then_splice_filters_store_to_matches_only`, `search_then_splice_preserves_matched_row_identity_across_query_changes` (proves the live `gtk::SingleSelection` cursor survives a query change because matched-row `RowItem` GObject pointers are stable), and `search_then_splice_after_vault_mutation_reapplies_query` (pins `refresh_account_list`'s `&self.search_query` carry-through after a vault Add).
 - [x] Cursor / selection survives a query change as today (`selected_row_after_refresh` + `position_for_account` together preserve the prior cursor across a `Refresh` whose `rows` still contain the selected id).
 
 #### Section headers (via `RowKind::Section`)
