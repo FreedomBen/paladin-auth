@@ -1159,7 +1159,7 @@ the implementer can claim by ticking it.
   on the shared `adw::ToastOverlay`. Failure surfaces the
   existing clipboard-write-failed toast and arms no clear
   schedule (matches `CopyCode`'s failure branch).
-* [ ] **`components/settings.rs` Preferences toggle.** Append a
+* [x] **`components/settings.rs` Preferences toggle.** Append a
   third `AdwSwitchRow` titled `Show next code` to the `Display`
   `AdwPreferencesGroup`, bound to `show-next-code-column` via the
   matching `crate::gsettings::set_show_next_code_column` helper.

@@ -550,6 +550,27 @@ pub fn format_settings_dialog_column_headers_row_subtitle() -> &'static str {
     "Show the Account / Code / Time / Copy / Menu column titles above the list. On by default."
 }
 
+/// Title rendered on the next-code-column `AdwSwitchRow` per
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Next-code column
+/// implementation" > "Build order" > "Preferences toggle".
+///
+/// Verb-led wording matches the auto-lock / clipboard / section-
+/// headers / column-headers rows for parallel structure inside
+/// the Display group.
+#[must_use]
+pub fn format_settings_dialog_next_code_column_row_title() -> &'static str {
+    "Show next code"
+}
+
+/// Subtitle rendered on the next-code-column `AdwSwitchRow` so the
+/// user knows what flipping it does without having to consult the
+/// docs.  Explains the upcoming-TOTP-digits behavior and the
+/// default-on stance in one sentence.
+#[must_use]
+pub fn format_settings_dialog_next_code_column_row_subtitle() -> &'static str {
+    "Show the upcoming TOTP code in a Next column with a copy affordance. On by default."
+}
+
 /// Fixed `(lower, upper, step_increment)` tuple the widget hands
 /// to `gtk::Adjustment::new` for the auto-lock seconds
 /// `AdwSpinRow` per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
@@ -1828,13 +1849,16 @@ pub struct SettingsDialogInit {
     /// On-disk settings snapshot the dialog renders.
     pub settings: CommittedSettings,
     /// Per-user `gio::Settings` clone bound to
-    /// [`crate::gsettings::SCHEMA_ID`].  Drives the new "Display"
-    /// `AdwPreferencesGroup`'s `Show section headers`
-    /// `AdwSwitchRow`: the initial active state is read from this
-    /// instance, and the row's `connect_active_notify` writes back
-    /// to it (which fires the `changed::show-section-headers`
-    /// signal that `AppModel` has wired up to refresh the live
-    /// `AccountListComponent`).
+    /// [`crate::gsettings::SCHEMA_ID`].  Drives the "Display"
+    /// `AdwPreferencesGroup`'s three `AdwSwitchRow`s
+    /// (`Show section headers`, `Show column headers`,
+    /// `Show next code`): the initial active state for each row is
+    /// read from this instance, and each row's
+    /// `connect_active_notify` writes back to it (firing the
+    /// matching `changed::show-section-headers` /
+    /// `changed::show-column-headers` /
+    /// `changed::show-next-code-column` signal that `AppModel` has
+    /// wired up to refresh the live `AccountListComponent`).
     pub app_settings: gio::Settings,
 }
 
@@ -2077,11 +2101,15 @@ pub struct SettingsComponent {
     /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` line 3458.
     debounce_source: Option<glib::SourceId>,
     /// Per-user `gio::Settings` clone seeded from
-    /// [`SettingsDialogInit::app_settings`].  Drives the new
-    /// "Display" group's section-headers `AdwSwitchRow`: the
-    /// initial active state reads from this instance, and the
-    /// row's `connect_active_notify` writes back through
-    /// [`crate::gsettings::set_show_section_headers`].
+    /// [`SettingsDialogInit::app_settings`].  Drives the
+    /// "Display" group's three `AdwSwitchRow`s
+    /// (section-headers, column-headers, and next-code-column):
+    /// the initial active state for each row reads from this
+    /// instance, and each row's `connect_active_notify` writes
+    /// back through the matching
+    /// [`crate::gsettings::set_show_section_headers`] /
+    /// [`crate::gsettings::set_show_column_headers`] /
+    /// [`crate::gsettings::set_show_next_code_column`] helper.
     app_settings: gio::Settings,
 }
 
@@ -2178,6 +2206,21 @@ impl SimpleComponent for SettingsComponent {
                             );
                         },
                     },
+
+                    #[name = "show_next_code_column_row"]
+                    add = &adw::SwitchRow {
+                        set_title: format_settings_dialog_next_code_column_row_title(),
+                        set_subtitle: format_settings_dialog_next_code_column_row_subtitle(),
+                        set_active:
+                            crate::gsettings::show_next_code_column(&model.app_settings),
+                        connect_active_notify[app_settings_for_next_code_column_toggle] =>
+                            move |row| {
+                                let _ = crate::gsettings::set_show_next_code_column(
+                                    &app_settings_for_next_code_column_toggle,
+                                    row.is_active(),
+                                );
+                            },
+                    },
                 },
 
                 add = &adw::PreferencesGroup {
@@ -2257,6 +2300,7 @@ impl SimpleComponent for SettingsComponent {
         // capture has a sibling binding to clone into the closure.
         let app_settings_for_toggle = model.app_settings.clone();
         let app_settings_for_column_toggle = model.app_settings.clone();
+        let app_settings_for_next_code_column_toggle = model.app_settings.clone();
         let widgets = view_output!();
         // Forward the dialog's intrinsic close signal (Escape /
         // window close button) as `SettingsDialogOutput::Close` so

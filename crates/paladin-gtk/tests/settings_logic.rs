@@ -2464,6 +2464,127 @@ fn settings_dialog_column_headers_row_subtitle_calls_out_default_on() {
 }
 
 #[test]
+fn settings_dialog_next_code_column_row_title_is_pinned() {
+    // The third `AdwSwitchRow` in the Display group binds its
+    // title to this helper per
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Next-code column
+    // implementation" > "Build order" > "Preferences toggle".
+    // Verb-led wording matches the sibling rows so the Display
+    // group reads as a single coherent block.
+    use paladin_gtk::settings::format_settings_dialog_next_code_column_row_title;
+
+    assert_eq!(
+        format_settings_dialog_next_code_column_row_title(),
+        "Show next code",
+    );
+}
+
+#[test]
+fn settings_dialog_next_code_column_row_subtitle_calls_out_default_on() {
+    // The next-code-column `AdwSwitchRow` subtitle mirrors the
+    // column-headers subtitle in shape: it tells the user what
+    // flipping the toggle does and which way the default falls.
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Next-code column
+    // implementation" the default is **on**, so the subtitle
+    // must say "on by default" and mention the upcoming code.
+    use paladin_gtk::settings::format_settings_dialog_next_code_column_row_subtitle;
+
+    let subtitle = format_settings_dialog_next_code_column_row_subtitle();
+    assert!(
+        subtitle.to_lowercase().contains("on by default"),
+        "subtitle should tell the user the default state; got {subtitle:?}",
+    );
+    assert!(
+        subtitle.to_lowercase().contains("next"),
+        "subtitle should mention what flipping the toggle changes; got {subtitle:?}",
+    );
+}
+
+#[test]
+fn settings_dialog_next_code_column_toggle_round_trips_via_helper() {
+    // The Display group's third `AdwSwitchRow` wires
+    // `connect_active_notify` through
+    // `crate::gsettings::set_show_next_code_column`.  The pure-
+    // logic shape of that round trip — a write via the typed
+    // setter followed by a read via the typed getter returning
+    // the new value — is what the widget closure executes.
+    // Pinning the round trip through the helpers (the production
+    // wiring) here lets a refactor of either wrapper surface as a
+    // failing test before the widget contract drifts.
+    use paladin_gtk::gsettings::{set_show_next_code_column, show_next_code_column, SCHEMA_ID};
+    use relm4::gtk::gio;
+
+    let schema_dir = env!("PALADIN_GTK_SCHEMA_DIR");
+    let source = gio::SettingsSchemaSource::from_directory(schema_dir, None, false)
+        .expect("build.rs compiled the gschema into PALADIN_GTK_SCHEMA_DIR");
+    let schema = source.lookup(SCHEMA_ID, true).expect("schema id matches");
+    let backend = gio::functions::memory_settings_backend_new();
+    let settings = gio::Settings::new_full(&schema, Some(&backend), None);
+
+    // Default is true per `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
+    assert!(
+        show_next_code_column(&settings),
+        "default read via helper must be true",
+    );
+
+    set_show_next_code_column(&settings, false).expect("helper write to false");
+    assert!(
+        !show_next_code_column(&settings),
+        "after a `false` write the helper must read false",
+    );
+
+    set_show_next_code_column(&settings, true).expect("helper write back to true");
+    assert!(
+        show_next_code_column(&settings),
+        "after a `true` write the helper must read true",
+    );
+}
+
+#[test]
+fn settings_dialog_next_code_column_toggle_fires_changed_signal() {
+    // The Display group's third `AdwSwitchRow` writes through
+    // `set_show_next_code_column`, and the
+    // `changed::show-next-code-column` signal is what re-enters
+    // the pipeline via `AppModel` (no direct controller call from
+    // the Preferences dialog).  Pin the contract that the write
+    // actually fires the signal so the wiring does not silently
+    // no-op if either the helper or the key name drifts.
+    //
+    // Mirrors `changed_signal_fires_for_show_next_code_column_write`
+    // in `tests/gsettings_logic.rs` but from the
+    // `SettingsComponent` viewpoint: the write executed below
+    // matches the body of the row's `connect_active_notify`
+    // closure verbatim.
+    use paladin_gtk::gsettings::{set_show_next_code_column, SCHEMA_ID, SHOW_NEXT_CODE_COLUMN_KEY};
+    use relm4::gtk::gio;
+    use relm4::gtk::gio::prelude::*;
+    use relm4::gtk::glib;
+
+    let fired: std::rc::Rc<std::cell::Cell<bool>> = std::rc::Rc::new(std::cell::Cell::new(false));
+    let fired_for_closure = std::rc::Rc::clone(&fired);
+    let ctx = glib::MainContext::new();
+    ctx.with_thread_default(|| {
+        let schema_dir = env!("PALADIN_GTK_SCHEMA_DIR");
+        let source = gio::SettingsSchemaSource::from_directory(schema_dir, None, false)
+            .expect("build.rs compiled the gschema into PALADIN_GTK_SCHEMA_DIR");
+        let schema = source.lookup(SCHEMA_ID, true).expect("schema id matches");
+        let backend = gio::functions::memory_settings_backend_new();
+        let settings = gio::Settings::new_full(&schema, Some(&backend), None);
+        settings.connect_changed(Some(SHOW_NEXT_CODE_COLUMN_KEY), move |_, _| {
+            fired_for_closure.set(true);
+        });
+        set_show_next_code_column(&settings, false).expect("helper write");
+        while ctx.iteration(false) {}
+    })
+    .expect("nested with_thread_default");
+    assert!(
+        fired.get(),
+        "writing the key via the helper must fire \
+         `changed::{SHOW_NEXT_CODE_COLUMN_KEY}` so AppModel can refresh",
+    );
+}
+
+#[test]
 fn settings_dialog_init_round_trips_committed_settings() {
     use paladin_gtk::gsettings::SCHEMA_ID;
     use paladin_gtk::settings::SettingsDialogInit;
