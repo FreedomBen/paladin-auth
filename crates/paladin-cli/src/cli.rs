@@ -3,6 +3,17 @@
 //! Clap argument tree for the `paladin` binary. See docs/DESIGN.md §5 and
 //! `docs/IMPLEMENTATION_PLAN_02_CLI.md` for the authoritative command surface.
 
+// Items in this module are clap argument-tree definitions. They are
+// public because the library surface (`src/lib.rs`) re-exposes the
+// root `Cli` so `xtask` can call `Cli::command()` for man-page
+// rendering, but the individual fields / variants are internal clap
+// scaffolding that derive their semantics from clap attributes — not
+// from rustdoc. Suppressing `missing_docs` here keeps the lib-level
+// `#![warn(missing_docs)]` (set in `src/lib.rs`) honest for the
+// genuinely-public surface without forcing rustdoc on every clap
+// arg.
+#![allow(missing_docs)]
+
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};

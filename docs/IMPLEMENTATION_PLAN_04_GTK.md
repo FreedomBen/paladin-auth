@@ -1415,6 +1415,19 @@ the implementer can claim by ticking it.
   Flatpak dry-run runs), and verifies the
   hicolor icon install layout; it does not add package-owned
   post-install hooks.
+
+  *Implemented (v0.2 Milestone 7, `.rpm` only):* the local entry
+  point is `cargo xtask package --frontend paladin-gtk --format
+  rpm` (or `make rpm-paladin-gtk`). The xtask runs `cargo build
+  --release --locked -p paladin-gtk`, then invokes `nfpm` inside
+  the `docker.io/goreleaser/nfpm` container under rootless podman
+  with `${PALADIN_VERSION}` exported. Output lands in
+  `target/dist/paladin-gtk-*.rpm`. The CI `packaging-dry-run` job
+  (`.github/workflows/ci.yml`) still runs the same `nfpm
+  package -f packaging/rpm/paladin-gtk.yaml` command directly so
+  the dry-run does not depend on xtask being green.
+  `packaging/deb/paladin-gtk.yaml` reuses the same xtask wiring
+  once `Format::Deb` lands.
 - **Flatpak.** `packaging/flatpak/paladin-gtk.yml` declares
   `org.gnome.Platform//47` (and the matching SDK) — that runtime
   bundles GTK 4.16 and libadwaita 1.6, matching the

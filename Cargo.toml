@@ -5,6 +5,7 @@ members = [
     "crates/paladin-cli",
     "crates/paladin-tui",
     "crates/paladin-gtk",
+    "xtask",
 ]
 
 [workspace.package]

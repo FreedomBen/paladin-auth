@@ -34,6 +34,17 @@ use crate::app::event::AppEvent;
 use crate::app::state::AppState;
 use crate::terminal::TerminalBackend;
 
+/// Return the live clap `Command` for the `paladin-tui` binary.
+///
+/// Consumed by `xtask::man` (via `clap_mangen`) so `paladin-tui.1`
+/// always tracks the live argument tree per
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` §"Packaging (per §11)".
+#[must_use]
+pub fn clap_command() -> clap::Command {
+    use clap::CommandFactory;
+    <cli::GlobalArgs as CommandFactory>::command()
+}
+
 /// Run the `paladin-tui` binary.
 ///
 /// Parses [`cli::GlobalArgs`] from `std::env::args_os` and hands the

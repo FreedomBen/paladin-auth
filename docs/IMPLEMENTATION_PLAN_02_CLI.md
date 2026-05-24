@@ -976,6 +976,19 @@ The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
   driven by `cargo xtask man` so the page always tracks the live
   argument tree. The packaging configs ship it gzipped at
   `/usr/share/man/man1/paladin.1.gz` per §11.3.
+
+  *Implemented (v0.2 Milestone 7):* `cargo xtask man` renders
+  `paladin.1` (and `paladin-tui.1`) into `target/man/` via
+  `clap_mangen`. The workspace `xtask` crate pulls the live clap
+  `Command` through `paladin_cli::clap_command()`, which is why
+  `crates/paladin-cli` is a lib+bin pair — the binary entry stays
+  in `src/main.rs` and `src/lib.rs` exposes only what the
+  man-page generator needs. `cargo xtask package --frontend
+  paladin --format rpm` calls the same renderer, gzips the output
+  into `target/man/paladin.1.gz`, and then runs `nfpm` inside the
+  `docker.io/goreleaser/nfpm` container under rootless podman so
+  the manifest's `src:` path resolves on first build without a
+  host `nfpm` install.
 - **Cargo.toml metadata.** `crates/paladin-cli/Cargo.toml` inherits
   `description`, `repository`, `homepage`, `license` (set to
   `"AGPL-3.0-or-later"` at the workspace), `edition`, and
@@ -991,6 +1004,17 @@ The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
   stay minimal. The Debian one-line description fits the conventional
   ~60-character synopsis display width (Debian Policy §5.6.13 caps the
   synopsis under 80); the long form is sourced from README.
+
+  *Implemented (v0.2 Milestone 7, `.rpm` only):*
+  `packaging/rpm/paladin.yaml` declares `name: paladin`, depends on
+  `glibc` only (matching the headless-friendly footprint §11.3
+  promises), installs `/usr/bin/paladin` + the gzipped
+  `/usr/share/man/man1/paladin.1.gz`, and inherits `version:
+  ${PALADIN_VERSION}` from the release pipeline. The contract is
+  pinned by `crates/paladin-cli/tests/packaging_rpm_nfpm_manifest_logic.rs`
+  — `cargo test --workspace --all-targets` fails on regression even
+  when `nfpm` itself is not installed. `packaging/deb/paladin.yaml`
+  lands alongside the `.deb` pipeline in a follow-up commit.
 - **Flatpak.** `packaging/flatpak/paladin.yml` declares
   `org.freedesktop.Platform//23.08`, no `--share=network`,
   filesystem access scoped to `xdg-data/paladin:create` plus

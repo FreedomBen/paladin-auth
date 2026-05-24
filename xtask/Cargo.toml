@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Workspace-internal `xtask` orchestrator. Per docs/DESIGN.md §11.2 this
+# crate owns the per-frontend release flow: `cargo xtask man` renders
+# the clap-derived man pages, and `cargo xtask package` builds + bundles
+# the .deb / .rpm / Flatpak / AppImage artifacts. v0.2 ships the `man`
+# and `package --format rpm` subcommands; the rest land alongside the
+# matching artifact pipelines as Milestone 7 follow-ups.
+#
+# `xtask` is not published — it has no `description` / `repository`
+# inheritance — and is intentionally kept off the workspace's frozen
+# public API surface scanned by `cargo public-api`.
+[package]
+name = "xtask"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.94"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned to the same minor the user-facing CLIs use (4.5) so the
+# clap_mangen output matches the `--help` shape end users see, and
+# transitive bumps to derive macros do not change the rendered man
+# pages out from under the contract tests.
+clap = { version = "4.5", features = ["derive"] }
+
+# clap_mangen 0.2 tracks clap 4.x. Pinned at the minor used by the
+# Milestone 7 packaging pipeline; the in-tree contract tests assert
+# the resulting `paladin.1` / `paladin-tui.1` headers + section list
+# so a transitive bump that reshapes the output fails CI.
+clap_mangen = "0.2"
+
+# Reach into the frontend lib crates to recover their clap Commands.
+# `paladin-cli` exposes `lib.rs` per IMPLEMENTATION_PLAN_02_CLI.md
+# "Crate layout"; `paladin-tui` already does per
+# IMPLEMENTATION_PLAN_03_TUI.md.
+paladin-cli = { path = "../crates/paladin-cli", version = "0.0.1" }
+paladin-tui = { path = "../crates/paladin-tui", version = "0.0.1" }
+
+# Gzip the rendered man pages before they land in the .rpm. Pinned at
+# the minor `flate2` tracked through the workspace's transitive deps
+# (cargo tree resolves 1.x).
+flate2 = "1"
+
+[dev-dependencies]
+tempfile = "3"

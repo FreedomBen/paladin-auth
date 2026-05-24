@@ -30,6 +30,16 @@ default = []
 # See `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Implementation checklist".
 test-hooks = ["paladin-core/test-fault-injection"]
 
+# Both a library and a binary so the workspace `xtask` crate can reach
+# the live clap `Command` for man-page rendering via
+# `paladin_cli::clap_command()`. The binary entry stays in
+# `src/main.rs` and the library surface is intentionally minimal — see
+# `src/lib.rs`. Mirrors the lib+bin layout `paladin-tui` and
+# `paladin-gtk` already use for the same reason.
+[lib]
+name = "paladin_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "paladin"
 path = "src/main.rs"

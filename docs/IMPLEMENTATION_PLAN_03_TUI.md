@@ -3471,6 +3471,19 @@ terminal theme and survives `--no-color`.
   modal behavior, and the §6 create-vault / startup-error screens, driven
   by the workspace `cargo xtask man` target. The packaging configs ship it
   gzipped at `/usr/share/man/man1/paladin-tui.1.gz` per §11.3.
+
+  *Implemented (v0.2 Milestone 7, partial):* `cargo xtask man`
+  renders the clap-derived argument synopsis for `paladin-tui.1`
+  via `clap_mangen`, pulling the live `Command` through
+  `paladin_tui::clap_command()`. `cargo xtask package --frontend
+  paladin-tui --format rpm` gzips the result into
+  `target/man/paladin-tui.1.gz` before running `nfpm`.
+  **Deferred:** the maintained keybindings / modal-behavior /
+  create-vault / startup-error sections this bullet promises are
+  not yet appended — `xtask::man` only emits the clap synopsis. A
+  follow-up commit adds those handwritten sections (likely sourced
+  from in-tree templates so they stay diffable) and re-renders
+  through the same pipeline.
 - **Cargo.toml metadata.** `crates/paladin-tui/Cargo.toml` inherits
   `description`, `repository`, `homepage`, `license` (set to
   `"AGPL-3.0-or-later"` at the workspace), `edition`, and
@@ -3485,6 +3498,19 @@ terminal theme and survives `--no-color`.
   stay minimal. The Debian one-line description fits the conventional
   ~60-character synopsis display width (Debian Policy §5.6.13 caps the
   synopsis under 80); the long form is sourced from README.
+
+  *Implemented (v0.2 Milestone 7, `.rpm` only):*
+  `packaging/rpm/paladin-tui.yaml` declares `name: paladin-tui`,
+  depends on `glibc` only (the TUI is terminal-only and never
+  links GTK / libadwaita), installs `/usr/bin/paladin-tui` + the
+  gzipped `/usr/share/man/man1/paladin-tui.1.gz`, and inherits
+  `version: ${PALADIN_VERSION}` from the release pipeline. The
+  contract is pinned by
+  `crates/paladin-tui/tests/packaging_rpm_nfpm_manifest_logic.rs`
+  — including a `rpm_manifest_does_not_declare_gtk_or_libadwaita`
+  guard that catches a copy-paste from the `.gtk.yaml` manifest.
+  `packaging/deb/paladin-tui.yaml` lands alongside the `.deb`
+  pipeline in a follow-up commit.
 - **No desktop entry.** The TUI is launched from a terminal and does
   not register a `.desktop` file (§11.3 only ships one for
   `paladin-gtk`). No icon assets are required.

@@ -39,7 +39,7 @@ priority: optional
 
 maintainer: Benjamin Porter <ben@ameelio.org>
 vendor: tamx
-description: Paladin: Rust OTP authenticator (TOTP + HOTP) with CLI, TUI, and GTK front-ends
+description: "Paladin: Rust OTP authenticator (TOTP + HOTP) with CLI, TUI, and GTK front-ends"
 homepage: https://paladin.tamx.org
 license: AGPL-3.0-or-later
 
