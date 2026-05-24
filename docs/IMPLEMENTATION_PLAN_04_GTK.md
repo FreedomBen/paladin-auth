@@ -1016,6 +1016,234 @@ switches and spin rows, are reverted on pre-commit failure:
   inline; export does not mutate vault state, so save-error rollback does
   not apply.
 
+## Next-code column implementation (per DESIGN §7)
+
+Single-place build plan for the §7 Next-code column feature.
+The architecture is described in the **Component tree** /
+**Per-row rendering** / **Keyboard shortcuts** sections above; the
+per-test items are enumerated in **Pure-logic unit tests** below
+(`gsettings_logic.rs` and `account_list_logic.rs`). This section
+ties those threads together in build order so the implementer can
+work top-to-bottom without re-deriving the touch points.
+
+### Design contract (locked)
+
+* **Visibility:** TOTP rows render `↪ NNN NNN` in a
+  `numeric dim-label` `gtk::Label`; HOTP and section rows render
+  the empty string. Column-level `set_visible` is the AND of the
+  per-user `show-next-code-column` GSettings key (default **true**)
+  and `column_view::any_totp(&rows)`. Either latch off → column
+  hidden; both on → column visible.
+* **Click target:** the cell wraps the `gtk::Label` in a
+  `gtk::Button` carrying the stock `.flat` libadwaita CSS class so
+  the cell *looks* like text but is clickable. The button's
+  `sensitive` is `false` for HOTP and section rows so the cursor
+  changes and the click is inert. No additions to
+  `data/style.css` — `.dim-label` and `.flat` are stock GTK4 /
+  libadwaita classes.
+* **Copy semantics:** clicking a populated Next cell (or pressing
+  `Ctrl+Shift+C` with a TOTP row selected) emits
+  `AccountListOutput::CopyNextCode(AccountId)`. `AppModel` routes
+  it through the same
+  `prepare_copy_bytes` / `gdk::Clipboard::set_text` /
+  `schedule_copy` pipeline as `CopyCode` but reads the code via
+  `Vault::totp_next_code(id, now)` instead of `Vault::totp_code`,
+  and raises an `adw::Toast` reading
+  `Next code copied, valid in {seconds_until_valid}s` on the
+  shared `adw::ToastOverlay`.  `seconds_until_valid` is sampled
+  off the *current* window:
+  `seconds_until_valid = period - (now_unix % period)`, in the
+  range `1..=period`. Sample `SystemTime::now()` **once** at the
+  copy site and reuse it for both `totp_next_code` and the
+  `seconds_remaining` projection so a window flip mid-handler
+  cannot desync the toast seconds from the copied digits.
+* **Thread isolation:** `Vault::totp_next_code` is a single HMAC
+  — sub-millisecond. Run it on the main loop; **do not** wrap in
+  `gio::spawn_blocking`. The clipboard write reuses the existing
+  synchronous `gdk::Clipboard::set_text` path.
+* **Auto-clear arming:** the success path arms
+  `pending_clipboard_clear` through the existing
+  `paladin_core::ClipboardClearPolicy::schedule` call inside
+  `schedule_copy`; the next-code copy reuses that pipeline so a
+  user with `clipboard_clear_enabled = true` sees the same wipe
+  behavior as a current-code copy.
+* **Toast wording source:** the format string
+  `Next code copied, valid in {n}s` is duplicated in
+  `paladin_gtk` rather than shared with `paladin_tui::app::state::format_next_code_copied`
+  (the two binary crates cannot depend on each other and a
+  `paladin-core` text helper would expand the public surface for
+  one wording). Pin the wording in the
+  `account_list_logic.rs` toast test and in the `tests/snapshots/`
+  shortcuts-window snapshot so drift between the two crates
+  surfaces as a test diff.
+
+### Build order
+
+The list below is the order to land the implementation in a
+single reviewable commit (mirroring the TUI commit
+`4d3e1a7`'s shape). Each unticked box is a discrete unit of work
+the implementer can claim by ticking it.
+
+* [ ] **gschema entry.** Add a `<key name="show-next-code-column"
+  type="b"><default>true</default></key>` block to
+  `data/org.tamx.Paladin.Gui.gschema.xml` next to the existing
+  `show-section-headers` / `show-column-headers` keys. `build.rs`
+  recompiles the gresource bundle on save.
+* [ ] **`gsettings.rs` accessors.** Add `pub const
+  SHOW_NEXT_CODE_COLUMN_KEY: &str = "show-next-code-column";` and
+  the matching `show_next_code_column(&gio::Settings) -> bool` /
+  `set_show_next_code_column(&gio::Settings, bool)` pair next to
+  the existing `show_column_headers` / `set_show_column_headers`
+  helpers.  Per-test items: `gsettings_logic.rs` covers the
+  schema declaration, default `true`, round-trip, and the
+  `changed::show-next-code-column` signal.
+* [ ] **`account_row.rs::RowDisplay`.** Add
+  `pub next_code: Option<String>` alongside the existing `code` /
+  `progress_*` / `copy_enabled` fields. Populate it inside the
+  per-tick projection helper (the same one that already calls
+  `Vault::totp_code`) via `Vault::totp_next_code(id, now)`;
+  HOTP / section rows project `None`. The projection sees a
+  single `now: SystemTime` so the next-code digits and the
+  gauge's `seconds_remaining` stay aligned within the same tick.
+* [ ] **`row_item.rs::RowItem`.** No new GObject property is
+  needed — `RowDisplay` is already carried as a boxed value via
+  the existing `display-changed` signal. Confirm the new
+  `next_code` field flows through `set_display` and reaches the
+  Next cell factory's `bind` closure.
+* [ ] **`account_list.rs::AccountListMsg`.** Add
+  `SetShowNextCodeColumn(bool)` next to
+  `SetShowColumnHeaders(bool)`. The reducer arm:
+  latches the value on `AccountListComponent`, recomputes
+  `show_next_code_column && any_totp(&rows)`, and calls
+  `next_code_column.set_visible(visible)`. No splice; no rebind.
+* [ ] **`account_list.rs::AccountListOutput`.** Add
+  `CopyNextCode(AccountId)` next to the existing
+  `CopyCode(AccountId)` variant.
+* [ ] **`column_view.rs::build_next_code_column_factory`.** Build
+  the `gtk::SignalListItemFactory` per the cell-factory
+  description above. On `setup`, install the `gtk::Button`
+  (`.flat`) wrapping the `gtk::Label` (`.dim-label`, `.numeric`).
+  On `bind`, read `RowDisplay.next_code`, write the prefixed
+  `↪ {code}` text (empty string when `None`), toggle the button's
+  `sensitive` against the row kind / section / `None`, and
+  install a click closure that closes over the row's `AccountId`
+  and emits `AccountListOutput::CopyNextCode(id)` via the
+  controller sender.  On `unbind`, disconnect the click closure
+  exactly like the existing copy-column factory so cell recycling
+  cannot carry stale ids forward.
+* [ ] **`column_view.rs` wiring.** Append the new column factory
+  to the same column-construction site that builds the existing
+  Account / Code / Time / Copy / More columns; insert the new
+  column between Code and Time so the visual order matches
+  DESIGN §7. Hold the returned `gtk::ColumnViewColumn` on
+  `AccountListComponent` so `SetShowNextCodeColumn` can call
+  `set_visible` without re-querying the view.
+* [ ] **`app/model.rs::AppMsg`.** Add
+  `ShowNextCodeColumnChanged(bool)` next to
+  `ShowColumnHeadersChanged(bool)`. On `AppModel::init`, connect
+  `gio::Settings::changed::show-next-code-column` to a handler
+  that dispatches the new `AppMsg`, which forwards to
+  `AccountListMsg::SetShowNextCodeColumn(bool)` on the live
+  controller (mirrors the existing column-headers wiring exactly).
+* [ ] **`app/model.rs` `CopyNextCode` route.** Add an
+  `AccountListAction(AccountListOutput::CopyNextCode(id))`
+  handler that mirrors the existing `CopyCode` handler:
+  resolves the code via `Vault::totp_next_code(id, now)` (sample
+  `now` once and reuse for `seconds_until_valid = period -
+  (now_unix % period)` — read `period` off `account.period()` or
+  the existing `vault.totp_code(id, now).seconds_remaining`
+  projection so the formula stays in one place), writes through
+  the shared `prepare_copy_bytes` / `gdk::Clipboard::set_text` /
+  `schedule_copy` pipeline, and on success raises
+  `adw::Toast::new(&format!("Next code copied, valid in {secs}s"))`
+  on the shared `adw::ToastOverlay`. Failure surfaces the
+  existing clipboard-write-failed toast and arms no clear
+  schedule (matches `CopyCode`'s failure branch).
+* [ ] **`components/settings.rs` Preferences toggle.** Append a
+  third `AdwSwitchRow` titled `Show next code` to the `Display`
+  `AdwPreferencesGroup`, bound to `show-next-code-column` via the
+  matching `crate::gsettings::set_show_next_code_column` helper.
+  The toggle's `connect_active_notify` writes through the helper
+  and the `changed::show-next-code-column` signal re-enters the
+  pipeline via `AppModel` (no direct controller call from the
+  Preferences dialog).
+* [ ] **`keybindings.rs::format_app_copy_next_code_*`.** Add a
+  `format_app_copy_next_code_accelerator() -> &'static str`
+  returning `"<Control><Shift>c"` and a
+  `format_app_copy_next_code_action() -> &'static str` returning
+  `"win.copy-next-code"` (or `"app.copy-next-code"` to match the
+  existing format-app-* convention — pin whichever the other
+  format-app helpers use). Bump the
+  `format_app_window_accelerator_bindings()` return type from
+  `[(&'static str, &'static str); 4]` to `[…; 5]` and append the
+  new pair so `gio::Application::set_accels_for_action` picks it
+  up; the existing
+  `format_app_window_accelerator_bindings_pin_helpers_via_iteration`
+  unit test will fail until the array length and the new helper
+  are added together, which is exactly the lockstep guard the
+  pattern provides. The same two helpers are surfaced through
+  the primary menu and the `GtkShortcutsWindow` so the wiring
+  stays in lockstep.
+* [ ] **`app/actions.rs` (or wherever `add_action_entries` lives).**
+  Register a `win.copy-next-code` (or `app.copy-next-code`)
+  `gio::SimpleAction`. Its `activate` resolves the live
+  `AccountListComponent` selection, branches:
+  TOTP → dispatch the same `AccountListOutput::CopyNextCode(id)`
+  flow as the cell click; HOTP / no-selection / Next column
+  hidden → silent no-op (the TUI surfaces a status-line error
+  for HOTP; the GTK accelerator's silent-no-op preserves the
+  existing "menu accelerators don't surface toast errors"
+  pattern). The cell click path is unaffected by this gate
+  because cells are `sensitive=false` for HOTP rows.
+* [ ] **`view/keyboard_shortcuts.rs` (or the `.ui` template the
+  `GtkShortcutsWindow` reads).** Add a row in the "List view"
+  shortcut group: `Ctrl+Shift+C — Copy selected row's next code`.
+  Source the accelerator string from
+  `format_app_copy_next_code_accelerator` so future renames stay
+  in lockstep.
+* [ ] **`tests/snapshots/` shortcuts-window snapshot.** Update
+  the `GtkShortcutsWindow` snapshot to include the new row.
+* [ ] **`tests/manual/MANUAL_TEST_PLAN.md`.** Append three
+  scenarios:
+    * "Click the Next cell on a TOTP row → clipboard holds the
+      upcoming code and a toast reads `Next code copied, valid in
+      Xs`."
+    * "Press `Ctrl+Shift+C` with a TOTP row selected → same
+      behavior as clicking the Next cell."
+    * "Toggle Preferences → Display → Show next code → the column
+      hides / shows; the visible cells re-flow without flicker."
+* [ ] **Pure-logic unit tests.** Already enumerated in
+  `gsettings_logic.rs` (4 items) and `account_list_logic.rs`
+  (6 items) — see the **Pure-logic unit tests** section.
+  Implementation must tick all 10 boxes; CI gates them.
+* [ ] **CI gates.** `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace --all-targets`, `cargo deny check`,
+  `cargo audit`. `cargo public-api` snapshot stays unchanged
+  (no new `paladin-core` API).
+
+### Open decisions / non-goals
+
+* **No new `paladin-core` API.** The TUI commit already added
+  `Vault::totp_next_code`; the GTK implementation reuses it
+  verbatim. No public-api.txt diff is expected.
+* **No new CSS.** Both `.dim-label` and `.flat` are stock
+  libadwaita classes; `data/style.css` stays untouched.
+* **Accelerator scope = window.** `Ctrl+Shift+C` is registered
+  as a window-level action (mirrors `Ctrl+Shift+N` for Add) so
+  it's active wherever the account list is visible but quiet
+  during modal dialogs whose own bindings trap focus.
+* **HOTP rejection is silent at the accelerator.** Unlike the
+  TUI's `no next code for HOTP accounts` status-line error, the
+  GTK accelerator no-ops on HOTP rows. The Next cell button is
+  already `sensitive=false` for HOTP, so the visible affordance
+  carries the rejection signal; a toast on top would feel like
+  noise. Revisit if user testing surfaces confusion.
+* **Backward compatibility.** New GSettings key with default
+  `true` means upgrading users see the Next column on first
+  launch after this lands. No migration path; the schema-version
+  GSettings infrastructure handles new keys idiomatically.
+
 ## Linux desktop integration
 
 - `data/org.tamx.Paladin.Gui.desktop` shipped at
@@ -5316,6 +5544,17 @@ sign-off.
     swaps the container, stops pointing at the in-tree manifest
     paths, skips extraction, or stops validating the installed
     payload.)
+- [ ] **Next-code column (DESIGN §7).** Lands on top of the
+  Milestone 7 foundation as a single focused commit; see
+  **Next-code column implementation** above for the ordered
+  build steps and the pinned design contract. The TUI side
+  (`Vault::totp_next_code`, `Effect::CopyNextCode`,
+  `Shift+C` keybind, `↪` cell rendering) shipped in commits
+  `53b34ca` (core helper + docs), `4d3e1a7` (TUI), and
+  `7bec88d` (TUI audit gap); the GTK side replays the same
+  contract through cell factories, GSettings, and the
+  `Ctrl+Shift+C` accelerator. Tick each box in the dedicated
+  "Build order" list as the corresponding code lands.
 - [ ] Milestone 7 automated and manual sign-off stays tracked.
   - [x] Manual test plan documented in
     `crates/paladin-gtk/tests/manual/MANUAL_TEST_PLAN.md`, with
