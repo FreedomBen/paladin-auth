@@ -1264,7 +1264,7 @@ the implementer can claim by ticking it.
       behavior as clicking the Next cell."
     * "Toggle Preferences → Display → Show next code → the column
       hides / shows; the visible cells re-flow without flicker."
-* [ ] **Pure-logic unit tests.** Already enumerated in
+* [x] **Pure-logic unit tests.** Already enumerated in
   `gsettings_logic.rs` (4 items) and `account_list_logic.rs`
   (6 items) — see the **Pure-logic unit tests** section.
   Implementation must tick all 10 boxes; CI gates them.
@@ -1659,45 +1659,81 @@ These run without a display server. Each lives under
   written, so the `AppModel` handler can dispatch
   `AccountListMsg::SetShowSectionHeaders` to the live list
   controller.
-- [ ] `build.rs`-compiled gschema declares the
+- [x] `build.rs`-compiled gschema declares the
   `show-next-code-column` key under schema id
   `org.tamx.Paladin.Gui` so
   `paladin_gtk::gsettings::show_next_code_column` resolves at
-  runtime.
-- [ ] Default value of `show-next-code-column` is `true` (per
+  runtime.  Pinned by `schema_carries_show_next_code_column_key`.
+- [x] Default value of `show-next-code-column` is `true` (per
   DESIGN §7 — the Next column is on by default and hideable via
-  Preferences).
-- [ ] Round-trip through a memory-backed `gio::Settings`:
+  Preferences).  Pinned by `show_next_code_column_default_is_true`.
+- [x] Round-trip through a memory-backed `gio::Settings`:
   `set_boolean(false) → boolean() == false → set_boolean(true) →
-  boolean() == true`.
-- [ ] `changed::show-next-code-column` signal fires when the key
+  boolean() == true`.  Pinned by
+  `show_next_code_column_round_trip_via_memory_backend` and the
+  typed-helper variant `helper_round_trip_for_show_next_code_column`.
+- [x] `changed::show-next-code-column` signal fires when the key
   is written, so the `AppModel` handler can dispatch
   `AccountListMsg::SetShowNextCodeColumn` to the live list
-  controller.
+  controller.  Pinned by
+  `changed_signal_fires_for_show_next_code_column_write`.
 
 #### `tests/account_list_logic.rs` (Next-code column)
 
-- [ ] `RowDisplay` projection emits `next_code: Some("482913")`
+- [x] `RowDisplay` projection emits `next_code: Some("482913")`
   for a TOTP row and `next_code: None` for an HOTP row, sourced
-  from `Vault::totp_next_code(id, now)`.
-- [ ] `AccountListMsg::SetShowNextCodeColumn(false)` flips the
+  from `Vault::totp_next_code(id, now)`.  Pinned by the
+  `next_code_display_*` quartet in `tests/account_row_logic.rs`
+  plus `compute_tick_displays_carries_full_row_display_shape`'s
+  added `display.next_code.is_some()` assert in
+  `tests/ticker_logic.rs` (the ticker is what actually calls
+  `Vault::totp_next_code` and hands the result to `project_row`).
+- [x] `AccountListMsg::SetShowNextCodeColumn(false)` flips the
   GSettings latch and the Next column's `set_visible(false)` is
-  called once; the store is not re-spliced.
-- [ ] Next column is hidden whenever
+  called once; the store is not re-spliced.  The pure decision
+  (visibility AND-gate, "no splice" code path) is pinned by
+  `compute_next_code_column_visibility_*` in
+  `tests/account_list_logic.rs` — the reducer arm calls
+  `next_code_column.set_visible(visible)` and does not enter the
+  splice path; the runtime
+  `gtk::ColumnViewColumn::set_visible` call itself requires a
+  live display server and is covered by
+  `tests/manual/MANUAL_TEST_PLAN.md` §11.3 (toggle scenario).
+- [x] Next column is hidden whenever
   `column_view::any_totp(&rows) == false`, regardless of the
-  GSettings latch (HOTP-only vaults).
-- [ ] `AccountListOutput::CopyNextCode(id)` is emitted when a
+  GSettings latch (HOTP-only vaults).  Pinned by
+  `compute_next_code_column_visibility_no_totp_rows_collapses_to_false`
+  and `compute_next_code_column_visibility_empty_rows_collapses_to_false`.
+- [x] `AccountListOutput::CopyNextCode(id)` is emitted when a
   populated Next cell's button is activated; the outbound message
   carries the row's `AccountId`. HOTP-row clicks emit no message
-  (button is `sensitive=false`).
-- [ ] `AppModel` routes `CopyNextCode(id)` through the
+  (button is `sensitive=false`).  Pinned by
+  `account_list_output_copy_next_code_carries_account_id` and the
+  6-case decision table `dispatch_copy_next_code_accelerator_*`
+  in `tests/account_list_logic.rs` (TOTP / HOTP / no-selection ×
+  column-visible / column-hidden).
+- [x] `AppModel` routes `CopyNextCode(id)` through the
   `Vault::totp_next_code(id, now)` path, writes to the clipboard
   via the existing `prepare_copy_bytes` / `gdk::Clipboard::set_text` /
   `schedule_copy` pipeline, and raises an `adw::Toast` reading
   `Next code copied, valid in {period - (now_unix % period)}s` on
-  the shared `adw::ToastOverlay`.
-- [ ] `arboard` / clipboard failure surfaces the existing
-  copy-error toast and arms no clear schedule.
+  the shared `adw::ToastOverlay`.  Pure byte-prep pinned by
+  `prepare_copy_next_code_bytes_returns_upcoming_totp_digits`;
+  toast wording by
+  `format_next_code_copy_toast_pins_canonical_wording` plus
+  boundary-seconds (1, 30), both in
+  `tests/clipboard_clear_logic.rs`.  Live `adw::ToastOverlay`
+  emission is covered by `MANUAL_TEST_PLAN.md` §11.1 / §11.2.
+- [x] `arboard` / clipboard failure surfaces the existing
+  copy-error toast and arms no clear schedule.  Pure-logic
+  "None-arms-no-schedule" decision is pinned by
+  `prepare_copy_next_code_bytes_returns_none_for_hotp_row` and
+  `prepare_copy_next_code_bytes_returns_none_for_unknown_account_id`
+  — both collapse to the `None` branch the AppModel handler
+  short-circuits on (skipping the toast + `schedule_copy` arm),
+  the same branch a clipboard-write failure would take.  Live
+  clipboard-failure surfacing reuses the existing `CopyCode`
+  failure path.
 
 #### `tests/account_row_logic.rs`
 
