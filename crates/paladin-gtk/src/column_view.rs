@@ -675,6 +675,150 @@ fn bind_code_cell(container: &gtk::Box, item: &RowItem) {
     next.set_sensitive(display.next_button_enabled);
 }
 
+/// Glyph prefix the "Next" column cell prepends to the upcoming
+/// TOTP digits.
+///
+/// `↪` (U+21AA RIGHTWARDS ARROW WITH HOOK) signals "this row's
+/// follow-up code" without competing with the current code's
+/// visual weight.  Sourced as a `pub const` so the cell factory,
+/// the snapshot tests, and the per-row reducer tests all agree on
+/// the exact byte sequence (the existing TUI commit pins the same
+/// glyph in `paladin-tui/src/view/list.rs`).
+pub const NEXT_CODE_PREFIX: &str = "↪ ";
+
+/// Build the cell factory for the "Next" column.
+///
+/// Cell layout: a single flat [`gtk::Button`] (carrying the
+/// `.flat` libadwaita class) wrapping a [`gtk::Label`] (carrying
+/// the `.dim-label` and `.numeric` stock GTK4 / libadwaita
+/// classes).  Clicking the button emits
+/// [`AccountListOutput::CopyNextCode`] for the bound row's
+/// [`AccountId`]; the visual treatment makes the cell read as
+/// text while staying click-targetable.
+///
+/// Per-row rendering:
+///
+/// * TOTP rows with a populated [`RowDisplay::next_code`] →
+///   label is `"↪ <digits>"`, button is sensitive.
+/// * TOTP rows whose ticker has not yet landed the first
+///   `Vault::totp_next_code` (`next_code = None`) → label is
+///   empty, button is `sensitive = false`.
+/// * HOTP rows → projection answers `None` per
+///   [`crate::account_row::next_code_display`]; label empty,
+///   button insensitive (the affordance carries the rejection
+///   signal so a separate toast is unnecessary per
+///   `docs/IMPLEMENTATION_PLAN_04_GTK.md` "Next-code column
+///   implementation" → Click target).
+/// * Section rows → the cell hides the button entirely (mirrors
+///   the existing copy / kebab cells' section-row handling).
+///
+/// While the parent `AppModel` is `UnlockedBusy`, the row's busy
+/// latch dims the button via the same per-control busy mask the
+/// `Copy` cell honors — a transient mutation must not let the
+/// user enqueue a follow-up clipboard write.
+///
+/// Click handlers are re-installed on every `bind` so each cell
+/// closes over the *current* row's `AccountId`.  `unbind`
+/// disconnects both the `display-changed` subscription and the
+/// click closure so cell recycling cannot carry stale ids forward
+/// (mirrors `build_copy_column_factory`).
+#[must_use]
+pub fn build_next_code_column_factory(
+    sender: Sender<AccountListOutput>,
+) -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    let handlers: HandlerMap = Rc::new(RefCell::new(HashMap::new()));
+    let click_handlers: Rc<RefCell<HashMap<usize, glib::SignalHandlerId>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+
+    factory.connect_setup(|_, item| {
+        let list_item = cast_list_item(item);
+        let label = gtk::Label::builder()
+            .halign(gtk::Align::End)
+            .xalign(1.0)
+            .build();
+        label.add_css_class("numeric");
+        label.add_css_class("dim-label");
+        let button = gtk::Button::builder()
+            .child(&label)
+            .tooltip_text("Copy upcoming code")
+            .valign(gtk::Align::Center)
+            .halign(gtk::Align::End)
+            .build();
+        button.add_css_class("flat");
+        list_item.set_child(Some(&button));
+    });
+
+    let handlers_b = Rc::clone(&handlers);
+    let click_handlers_b = Rc::clone(&click_handlers);
+    factory.connect_bind(move |_, item| {
+        let list_item = cast_list_item(item);
+        let Some(row_item) = try_row_item(&list_item) else {
+            return;
+        };
+        let Some(button) = list_item.child().and_downcast::<gtk::Button>() else {
+            return;
+        };
+
+        let button_for_rebind = button.clone();
+        install_display_subscription(&handlers_b, &list_item, &row_item, move |item| {
+            bind_next_code_cell(&button_for_rebind, item);
+        });
+
+        let key = list_item_key(&list_item);
+        if let Some(prev) = click_handlers_b.borrow_mut().remove(&key) {
+            button.disconnect(prev);
+        }
+        if let Some(id) = row_item.account_id() {
+            let sender_c = sender.clone();
+            let handler = button.connect_clicked(move |_| {
+                let _ = sender_c.send(AccountListOutput::CopyNextCode(id));
+            });
+            click_handlers_b.borrow_mut().insert(key, handler);
+        }
+    });
+
+    let handlers_u = Rc::clone(&handlers);
+    let click_handlers_u = Rc::clone(&click_handlers);
+    factory.connect_unbind(move |_, item| {
+        let list_item = cast_list_item(item);
+        drop_handler(&handlers_u, &list_item);
+        let key = list_item_key(&list_item);
+        if let Some(handler) = click_handlers_u.borrow_mut().remove(&key) {
+            if let Some(button) = list_item.child().and_downcast::<gtk::Button>() {
+                button.disconnect(handler);
+            }
+        }
+    });
+
+    factory
+}
+
+fn bind_next_code_cell(button: &gtk::Button, item: &RowItem) {
+    let Some(label) = button.child().and_downcast::<gtk::Label>() else {
+        return;
+    };
+
+    if item.is_section() {
+        button.set_visible(false);
+        return;
+    }
+    button.set_visible(true);
+
+    let display = item.display();
+    if let Some(digits) = display.next_code.as_deref() {
+        label.set_label(&format!("{NEXT_CODE_PREFIX}{digits}"));
+        // While busy, dim the button — a transient mutation
+        // must not let the user enqueue a follow-up clipboard
+        // write through the next-code path either.  Mirrors
+        // the `apply_busy_mask` gating on `copy_enabled`.
+        button.set_sensitive(!item.busy());
+    } else {
+        label.set_label("");
+        button.set_sensitive(false);
+    }
+}
+
 /// Build the cell factory for the "Time" column.
 ///
 /// Cell layout (account row): centered `gtk::ProgressBar` (96 px

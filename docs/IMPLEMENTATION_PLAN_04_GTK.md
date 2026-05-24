@@ -1110,16 +1110,16 @@ the implementer can claim by ticking it.
   the existing `display-changed` signal. Confirm the new
   `next_code` field flows through `set_display` and reaches the
   Next cell factory's `bind` closure.
-* [ ] **`account_list.rs::AccountListMsg`.** Add
+* [x] **`account_list.rs::AccountListMsg`.** Add
   `SetShowNextCodeColumn(bool)` next to
   `SetShowColumnHeaders(bool)`. The reducer arm:
   latches the value on `AccountListComponent`, recomputes
   `show_next_code_column && any_totp(&rows)`, and calls
   `next_code_column.set_visible(visible)`. No splice; no rebind.
-* [ ] **`account_list.rs::AccountListOutput`.** Add
+* [x] **`account_list.rs::AccountListOutput`.** Add
   `CopyNextCode(AccountId)` next to the existing
   `CopyCode(AccountId)` variant.
-* [ ] **`column_view.rs::build_next_code_column_factory`.** Build
+* [x] **`column_view.rs::build_next_code_column_factory`.** Build
   the `gtk::SignalListItemFactory` per the cell-factory
   description above. On `setup`, install the `gtk::Button`
   (`.flat`) wrapping the `gtk::Label` (`.dim-label`, `.numeric`).
@@ -1131,21 +1131,21 @@ the implementer can claim by ticking it.
   controller sender.  On `unbind`, disconnect the click closure
   exactly like the existing copy-column factory so cell recycling
   cannot carry stale ids forward.
-* [ ] **`column_view.rs` wiring.** Append the new column factory
+* [x] **`column_view.rs` wiring.** Append the new column factory
   to the same column-construction site that builds the existing
   Account / Code / Time / Copy / More columns; insert the new
   column between Code and Time so the visual order matches
   DESIGN §7. Hold the returned `gtk::ColumnViewColumn` on
   `AccountListComponent` so `SetShowNextCodeColumn` can call
   `set_visible` without re-querying the view.
-* [ ] **`app/model.rs::AppMsg`.** Add
+* [x] **`app/model.rs::AppMsg`.** Add
   `ShowNextCodeColumnChanged(bool)` next to
   `ShowColumnHeadersChanged(bool)`. On `AppModel::init`, connect
   `gio::Settings::changed::show-next-code-column` to a handler
   that dispatches the new `AppMsg`, which forwards to
   `AccountListMsg::SetShowNextCodeColumn(bool)` on the live
   controller (mirrors the existing column-headers wiring exactly).
-* [ ] **`app/model.rs` `CopyNextCode` route.** Add an
+* [x] **`app/model.rs` `CopyNextCode` route.** Add an
   `AccountListAction(AccountListOutput::CopyNextCode(id))`
   handler that mirrors the existing `CopyCode` handler:
   resolves the code via `Vault::totp_next_code(id, now)` (sample

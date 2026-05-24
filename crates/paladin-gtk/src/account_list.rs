@@ -40,7 +40,7 @@ use crate::account_row::{
 use crate::column_view::{
     any_totp, apply_interleaved_splice_plan, build_account_column_factory,
     build_account_column_sorter, build_code_column_factory, build_copy_column_factory,
-    build_kebab_column_factory, build_time_column_factory,
+    build_kebab_column_factory, build_next_code_column_factory, build_time_column_factory,
 };
 use crate::row_item::RowItem;
 use crate::search::filtered_account_ids;
@@ -167,6 +167,23 @@ pub enum AccountListOutput {
     /// button via [`crate::account_row::copy_enabled`], so this
     /// variant never fires before a reveal opens.
     CopyCode(AccountId),
+    /// User clicked the per-row "Next" cell button (or pressed
+    /// `Ctrl+Shift+C` with a TOTP row selected).  `AppModel`
+    /// resolves the upcoming code via
+    /// `Vault::totp_next_code(id, now)`, writes the digits through
+    /// the shared
+    /// [`crate::clipboard_clear::prepare_copy_bytes`] /
+    /// `gdk::Clipboard::set_text` /
+    /// [`crate::clipboard_clear::schedule_copy`] pipeline (so the
+    /// user's `clipboard.clear_enabled` opt-in arms a wipe), and
+    /// raises an `adw::Toast` reading
+    /// `Next code copied, valid in {seconds_until_valid}s` on the
+    /// shared `adw::ToastOverlay`.  HOTP rows project
+    /// `next_code = None` (see
+    /// [`crate::account_row::next_code_display`]) and the cell
+    /// button is `sensitive = false`, so this variant never fires
+    /// for HOTP rows.
+    CopyNextCode(AccountId),
     /// User pressed Enter on an un-revealed HOTP row (the row had
     /// no visible code at activation time). Emitted by
     /// [`default_row_activation`] for that one specific case;
@@ -622,6 +639,34 @@ pub fn default_row_activation(
     }
 }
 
+/// Whether the "Next" `gtk::ColumnViewColumn` should be visible
+/// for the current `(show_next_code_column, rows)` pair.
+///
+/// AND-gate per `docs/IMPLEMENTATION_PLAN_04_GTK.md` "Next-code
+/// column implementation" → Visibility:
+///
+/// * The per-user `show-next-code-column` `GSettings` preference
+///   must be `true`, *and*
+/// * at least one rendered row must be a TOTP row (via
+///   [`crate::column_view::any_totp`]).
+///
+/// Either latch off ⇒ column hidden.  Both on ⇒ column visible.
+///
+/// HOTP-only vaults always hide the column even when the user
+/// preference is `true` — the column would otherwise sit
+/// permanently empty because [`crate::account_row::next_code_display`]
+/// answers `None` for every HOTP row.
+///
+/// Pure logic so reducer tests can pin the decision without
+/// spinning up GTK / libadwaita.
+#[must_use]
+pub fn compute_next_code_column_visibility(
+    show_next_code_column: bool,
+    rows: &[AccountRowModel],
+) -> bool {
+    show_next_code_column && any_totp(rows)
+}
+
 /// Navigation intent decoded from a keyboard event inside the
 /// account-list controller stack.
 ///
@@ -791,6 +836,15 @@ pub struct AccountListInit {
     /// `SettingsComponent` toggle flow through
     /// [`AccountListMsg::SetShowColumnHeaders`].
     pub show_column_headers: bool,
+    /// Initial value of the per-user `show-next-code-column`
+    /// `GSettings` key.  Default `true` per
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` "Next-code column
+    /// implementation".  The column's *rendered* visibility ANDs
+    /// this with [`crate::column_view::any_totp`] over
+    /// [`Self::rows`], so a HOTP-only vault hides the column even
+    /// when the user preference is `true`.  Live updates flow
+    /// through [`AccountListMsg::SetShowNextCodeColumn`].
+    pub show_next_code_column: bool,
 }
 
 /// Widget-bearing list view for the unlocked vault state.
@@ -812,6 +866,7 @@ pub struct AccountListInit {
 /// [`AccountListInit::initial_query`] on a rebuild;
 /// `current_selection` mirrors the visible row id for the same
 /// reason.
+#[allow(clippy::struct_excessive_bools)]
 pub struct AccountListComponent {
     /// Backing store of `RowItem`s the [`gtk::ColumnView`] reads.
     /// `Refresh` mutates this through
@@ -887,6 +942,17 @@ pub struct AccountListComponent {
     /// the [`COLUMN_VIEW_NO_HEADERS_CSS_CLASS`] CSS class is
     /// present on the [`Self::column_view`].
     show_column_headers: bool,
+    /// Per-user `show-next-code-column` `GSettings` value latched
+    /// at mount time and updated by
+    /// [`AccountListMsg::SetShowNextCodeColumn`].  `AND`ed with
+    /// [`crate::column_view::any_totp`] over [`Self::current_rows`]
+    /// to drive [`Self::next_code_column`]'s `set_visible`.
+    show_next_code_column: bool,
+    /// "Next" column kept on `self` so its `set_visible` can be
+    /// flipped both by [`AccountListMsg::SetShowNextCodeColumn`]
+    /// (preference toggle) and by [`Self::handle_refresh`] (row
+    /// set transitions between TOTP-bearing and HOTP-only).
+    next_code_column: gtk::ColumnViewColumn,
 }
 
 /// Messages handled by [`AccountListComponent`].
@@ -997,6 +1063,21 @@ pub enum AccountListMsg {
     /// Idempotent — sending the same value twice is a benign
     /// no-op.
     SetShowColumnHeaders(bool),
+    /// Live update for the per-user `show-next-code-column`
+    /// `GSettings` key.  `AppModel` connects
+    /// `changed::show-next-code-column` on its `gio::Settings`
+    /// clone and dispatches this message so a toggle from the
+    /// `SettingsComponent` dialog calls `set_visible` on the
+    /// `gtk::ColumnViewColumn` held on
+    /// [`AccountListComponent::next_code_column`].  The actual
+    /// visibility is the AND of this value and
+    /// [`crate::column_view::any_totp`] over the current rows —
+    /// a HOTP-only vault hides the column even when this key is
+    /// `true` so the column never sits empty.
+    ///
+    /// Idempotent — sending the same value twice is a benign
+    /// no-op.
+    SetShowNextCodeColumn(bool),
 }
 
 /// CSS class added to the [`gtk::ColumnView`] when the per-user
@@ -1033,6 +1114,7 @@ impl SimpleComponent for AccountListComponent {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn init(
         init: Self::Init,
         root: Self::Root,
@@ -1078,6 +1160,10 @@ impl SimpleComponent for AccountListComponent {
             .title("Code")
             .factory(&build_code_column_factory(output_sender.clone()))
             .build();
+        let next_code_column = gtk::ColumnViewColumn::builder()
+            .title("Next")
+            .factory(&build_next_code_column_factory(output_sender.clone()))
+            .build();
         let time_column = gtk::ColumnViewColumn::builder()
             .title("Time")
             .factory(&build_time_column_factory())
@@ -1093,15 +1179,25 @@ impl SimpleComponent for AccountListComponent {
 
         column_view.append_column(&account_column);
         column_view.append_column(&code_column);
+        // "Next" sits between Code and Time per DESIGN §7 — the
+        // upcoming code visually follows the current one before
+        // the gauge.
+        column_view.append_column(&next_code_column);
         column_view.append_column(&time_column);
         column_view.append_column(&copy_column);
         column_view.append_column(&kebab_column);
 
         // Seed the store with the initial row set, interleaving
-        // section headers per the user preference. Time column is
-        // visible only if any account row is TOTP.
+        // section headers per the user preference. Time / Next
+        // columns are visible only if any account row is TOTP and
+        // (for Next) the per-user `show-next-code-column`
+        // preference is also `true`.
         apply_interleaved_splice_plan(&store, &init.rows, init.show_section_headers);
         time_column.set_visible(any_totp(&init.rows));
+        next_code_column.set_visible(compute_next_code_column_visibility(
+            init.show_next_code_column,
+            &init.rows,
+        ));
 
         // Apply the per-user `show-column-headers` preference.
         // When `false`, the application stylesheet hides the
@@ -1195,6 +1291,8 @@ impl SimpleComponent for AccountListComponent {
             busy: false,
             show_section_headers: init.show_section_headers,
             show_column_headers: init.show_column_headers,
+            show_next_code_column: init.show_next_code_column,
+            next_code_column,
         };
         ComponentParts {
             model: component,
@@ -1278,6 +1376,17 @@ impl SimpleComponent for AccountListComponent {
                 self.show_column_headers = enabled;
                 apply_show_column_headers_css(&self.column_view, enabled);
             }
+            AccountListMsg::SetShowNextCodeColumn(enabled) => {
+                if self.show_next_code_column == enabled {
+                    return;
+                }
+                self.show_next_code_column = enabled;
+                self.next_code_column
+                    .set_visible(compute_next_code_column_visibility(
+                        enabled,
+                        &self.current_rows,
+                    ));
+            }
             AccountListMsg::SetShowSectionHeaders(enabled) => {
                 if self.show_section_headers == enabled {
                     return;
@@ -1358,6 +1467,16 @@ impl AccountListComponent {
 
         // Toggle Time-column visibility for HOTP-only vaults.
         self.time_column.set_visible(any_totp(&rows));
+        // Re-evaluate the Next column visibility AND-gate
+        // (`show_next_code_column && any_totp(&rows)`) for the
+        // refreshed row set; a vault flipping between TOTP-bearing
+        // and HOTP-only must collapse the column the same way the
+        // Time column already does.
+        self.next_code_column
+            .set_visible(compute_next_code_column_visibility(
+                self.show_next_code_column,
+                &rows,
+            ));
 
         self.current_selection = effective_selection;
         self.current_rows = rows;

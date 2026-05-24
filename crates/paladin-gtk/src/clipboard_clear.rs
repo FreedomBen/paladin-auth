@@ -223,3 +223,45 @@ pub fn format_copy_toast(settings: &VaultSettings) -> String {
         "Code copied".to_string()
     }
 }
+
+/// Resolve the upcoming TOTP code for the row identified by `id`
+/// and return its digits wrapped in a [`Zeroizing`] buffer ready
+/// for the `gdk::Clipboard::set_text` / [`schedule_copy`] pipeline.
+///
+/// Mirrors [`prepare_copy_bytes`] but reads
+/// [`Vault::totp_next_code`] instead of [`Vault::totp_code`].
+/// HOTP rows / unknown ids / pre-Unix-epoch clocks all collapse to
+/// `None`; the caller in `AppModel` treats `None` as "silently
+/// drop" exactly like the current-code copy path so a stray
+/// click through the `win.copy-next-code` action group on a HOTP
+/// selection is a benign no-op.
+#[must_use]
+pub fn prepare_copy_next_code_bytes(
+    vault: &Vault,
+    id: AccountId,
+    wall_clock: SystemTime,
+) -> Option<Zeroizing<Vec<u8>>> {
+    let code = vault.totp_next_code(id, wall_clock).ok()?;
+    Some(Zeroizing::new(code.code.into_bytes()))
+}
+
+/// Format the `adw::Toast` body raised after a successful Next
+/// code copy.
+///
+/// Pinned wording: `Next code copied, valid in {seconds_until_valid}s`.
+/// Duplicated against `paladin_tui::app::state::format_next_code_copied`
+/// because the two binary crates can't depend on each other and
+/// `paladin-core` shouldn't grow a text helper for a single
+/// wording.  The two strings are pinned in tests so a drift
+/// between the GTK and the TUI surfaces as a failing assertion
+/// rather than as an inconsistent UX.
+///
+/// `seconds_until_valid` is the count of seconds remaining in the
+/// *current* TOTP window — once that window flips, the digits in
+/// the user's clipboard become the new "current" code.  Always in
+/// the inclusive range `1..=period` because the toast is raised
+/// after a successful copy that itself sampled the same `now`.
+#[must_use]
+pub fn format_next_code_copy_toast(seconds_until_valid: u32) -> String {
+    format!("Next code copied, valid in {seconds_until_valid}s")
+}

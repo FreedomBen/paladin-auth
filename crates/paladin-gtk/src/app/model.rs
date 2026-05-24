@@ -111,8 +111,8 @@ use crate::auto_lock::{
     IdleSource, LockedTransition, UnlockedDiscards,
 };
 use crate::clipboard_clear::{
-    evaluate_wake, format_copy_toast, prepare_copy_bytes, schedule_copy, PendingClipboardClear,
-    WakeDecision,
+    evaluate_wake, format_copy_toast, format_next_code_copy_toast, prepare_copy_bytes,
+    prepare_copy_next_code_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
 };
 use crate::effect_ownership::{
     CompleteOutcome, EffectKind, EffectOwnership, EffectStart, LockDecision, QuitDecision,
@@ -680,6 +680,16 @@ pub enum AppMsg {
     /// benign no-op otherwise (the next mount reads the freshly
     /// committed value through `crate::gsettings::show_column_headers`).
     ShowColumnHeadersChanged(bool),
+    /// New value of the per-user `show-next-code-column`
+    /// `GSettings` key, forwarded from the
+    /// `changed::show-next-code-column` signal handler installed
+    /// in `init`. `AppModel`'s handler dispatches
+    /// [`AccountListMsg::SetShowNextCodeColumn`] to the live
+    /// [`AccountListComponent`] when it is mounted, and is a
+    /// benign no-op otherwise (the next mount reads the freshly
+    /// committed value through
+    /// `crate::gsettings::show_next_code_column`).
+    ShowNextCodeColumnChanged(bool),
     /// Forwarded from the live [`RenameDialogComponent`] when the
     /// user interacts with the dialog. Today only
     /// [`RenameDialogOutput::Cancel`] is emitted — `AppModel`
@@ -1654,6 +1664,7 @@ impl SimpleComponent for AppModel {
                     key_capture_widget: Some(root.clone().upcast::<gtk::Widget>()),
                     show_section_headers: crate::gsettings::show_section_headers(&app_settings),
                     show_column_headers: crate::gsettings::show_column_headers(&app_settings),
+                    show_next_code_column: crate::gsettings::show_next_code_column(&app_settings),
                 })
                 .forward(sender.input_sender(), AppMsg::AccountListAction);
             widgets.content.append(controller.widget());
@@ -1761,6 +1772,20 @@ impl SimpleComponent for AppModel {
             move |s, _| {
                 let value = crate::gsettings::show_column_headers(s);
                 let _ = app_settings_input.send(AppMsg::ShowColumnHeadersChanged(value));
+            },
+        );
+
+        // Forward live changes to the per-user
+        // `show-next-code-column` GSettings key back through the
+        // model so the live `AccountListComponent` (if any) flips
+        // the Next column's `set_visible` (gated by `any_totp` over
+        // the current rows).
+        let app_settings_input = sender.input_sender().clone();
+        model.app_settings.connect_changed(
+            Some(crate::gsettings::SHOW_NEXT_CODE_COLUMN_KEY),
+            move |s, _| {
+                let value = crate::gsettings::show_next_code_column(s);
+                let _ = app_settings_input.send(AppMsg::ShowNextCodeColumnChanged(value));
             },
         );
 
@@ -2095,6 +2120,41 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
+            AppMsg::AccountListAction(AccountListOutput::CopyNextCode(id)) => {
+                // Per-row Next-cell click (or the `Ctrl+Shift+C`
+                // accelerator with a TOTP row selected).  Resolve
+                // the upcoming code via
+                // `prepare_copy_next_code_bytes` and the
+                // *current* code's `seconds_remaining` projection
+                // off the *same* `wall_clock` sample so a window
+                // flip mid-handler cannot desync the toast seconds
+                // from the copied digits.  HOTP rows / unknown ids
+                // collapse the `prepare_copy_next_code_bytes` call
+                // to `None`, so a stray click through the
+                // accelerator on a HOTP selection (the cell itself
+                // is `sensitive = false`) is a benign no-op per
+                // `docs/IMPLEMENTATION_PLAN_04_GTK.md` "Next-code
+                // column implementation" → "HOTP rejection is
+                // silent at the accelerator".
+                if let Some((vault, _)) = self.vault.as_ref() {
+                    let wall_clock = SystemTime::now();
+                    if let (Some(bytes), Some(current)) = (
+                        prepare_copy_next_code_bytes(vault, id, wall_clock),
+                        vault.totp_code(id, wall_clock).ok(),
+                    ) {
+                        let seconds_until_valid = current.seconds_remaining.unwrap_or(0);
+                        let clipboard = WidgetExt::display(&self.content).clipboard();
+                        crate::clipboard::write_payload(&clipboard, &bytes);
+                        let toast_body = format_next_code_copy_toast(seconds_until_valid);
+                        if let Some(pending) =
+                            schedule_copy(Instant::now(), vault.settings(), bytes)
+                        {
+                            self.pending_clipboard = Some(pending);
+                        }
+                        self.toast_overlay.add_toast(adw::Toast::new(&toast_body));
+                    }
+                }
+            }
             AppMsg::AccountListAction(AccountListOutput::SearchModeChanged(active)) => {
                 // The live `AccountListComponent` reported that its
                 // owned `gtk::SearchBar`'s `search-mode-enabled`
@@ -2196,6 +2256,21 @@ impl SimpleComponent for AppModel {
                 // through `crate::gsettings::show_column_headers`.
                 if let Some(controller) = self.account_list.as_ref() {
                     controller.emit(AccountListMsg::SetShowColumnHeaders(enabled));
+                }
+            }
+            AppMsg::ShowNextCodeColumnChanged(enabled) => {
+                // The `changed::show-next-code-column` GSettings
+                // signal fired (typically from the SettingsComponent
+                // toggle, but any external write hits the same
+                // path).  Drive the live `AccountListComponent` to
+                // flip the Next column's `set_visible` (it ANDs
+                // this with `any_totp` over the live rows).  Benign
+                // no-op when the list is not mounted (Locked /
+                // Missing / StartupError) because the next mount
+                // reads the freshly committed value through
+                // `crate::gsettings::show_next_code_column`.
+                if let Some(controller) = self.account_list.as_ref() {
+                    controller.emit(AccountListMsg::SetShowNextCodeColumn(enabled));
                 }
             }
             AppMsg::RenameDialogAction(RenameDialogOutput::Cancel) => {
@@ -4929,6 +5004,9 @@ impl AppModel {
                             &self.app_settings,
                         ),
                         show_column_headers: crate::gsettings::show_column_headers(
+                            &self.app_settings,
+                        ),
+                        show_next_code_column: crate::gsettings::show_next_code_column(
                             &self.app_settings,
                         ),
                     })

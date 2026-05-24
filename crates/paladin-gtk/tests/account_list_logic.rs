@@ -1196,6 +1196,75 @@ fn dispatch_row_action_returns_none_for_unknown_action() {
     assert_eq!(dispatch_row_action("row.rename", id), None);
 }
 
+// ---------------------------------------------------------------------------
+// `compute_next_code_column_visibility` — Next column AND-gate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compute_next_code_column_visibility_pref_off_collapses_to_false() {
+    // Either latch off ⇒ column hidden.  When the user preference
+    // is `false`, even a TOTP-only vault hides the Next column.
+    use paladin_gtk::account_list::compute_next_code_column_visibility;
+    let rows = vec![totp_model_for(AccountId::new(), "alice")];
+    assert!(!compute_next_code_column_visibility(false, &rows));
+}
+
+#[test]
+fn compute_next_code_column_visibility_no_totp_rows_collapses_to_false() {
+    // Either latch off ⇒ column hidden.  HOTP-only vaults hide
+    // the column even when the user preference is `true` (the
+    // column would otherwise sit permanently empty because
+    // `next_code_display` answers `None` for every HOTP row).
+    use paladin_gtk::account_list::compute_next_code_column_visibility;
+    let rows = vec![
+        hotp_model_for(AccountId::new(), "bob", 1),
+        hotp_model_for(AccountId::new(), "carol", 7),
+    ];
+    assert!(!compute_next_code_column_visibility(true, &rows));
+}
+
+#[test]
+fn compute_next_code_column_visibility_both_on_returns_true() {
+    // Both latches on ⇒ column visible.  A single TOTP row in
+    // a mixed vault is enough to satisfy `any_totp`.
+    use paladin_gtk::account_list::compute_next_code_column_visibility;
+    let rows = vec![
+        hotp_model_for(AccountId::new(), "bob", 1),
+        totp_model_for(AccountId::new(), "alice"),
+    ];
+    assert!(compute_next_code_column_visibility(true, &rows));
+}
+
+#[test]
+fn compute_next_code_column_visibility_empty_rows_collapses_to_false() {
+    // Edge: an empty row set has no TOTP row, so the gate
+    // collapses to `false` regardless of the preference.  Pins
+    // the contract that a freshly-mounted, still-empty vault
+    // hides the column rather than briefly flashing it during
+    // the first refresh.
+    use paladin_gtk::account_list::compute_next_code_column_visibility;
+    assert!(!compute_next_code_column_visibility(true, &[]));
+    assert!(!compute_next_code_column_visibility(false, &[]));
+}
+
+// ---------------------------------------------------------------------------
+// `AccountListOutput::CopyNextCode` — variant shape
+// ---------------------------------------------------------------------------
+
+#[test]
+fn account_list_output_copy_next_code_carries_account_id() {
+    // Pin the variant payload so a refactor (e.g. to add a
+    // `seconds_until_valid` field) surfaces as a failing
+    // assertion the AppModel `CopyNextCode` route can pivot
+    // against, rather than as a silent ABI break.
+    let id = AccountId::new();
+    let out = AccountListOutput::CopyNextCode(id);
+    match out {
+        AccountListOutput::CopyNextCode(observed) => assert_eq!(observed, id),
+        other => panic!("expected CopyNextCode, got {other:?}"),
+    }
+}
+
 #[test]
 fn tick_routes_only_to_changed_rows() {
     // Regression test for the flicker / dropped-click bug that

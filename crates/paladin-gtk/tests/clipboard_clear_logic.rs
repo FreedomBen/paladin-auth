@@ -35,8 +35,8 @@ use paladin_core::{
 
 use paladin_gtk::auto_lock::{lock_on_expiry, UnlockedDiscards};
 use paladin_gtk::clipboard_clear::{
-    evaluate_wake, format_copy_toast, prepare_copy_bytes, schedule_copy, PendingClipboardClear,
-    WakeDecision,
+    evaluate_wake, format_copy_toast, format_next_code_copy_toast, prepare_copy_bytes,
+    prepare_copy_next_code_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
 };
 use paladin_gtk::hotp_reveal::RevealWindow;
 
@@ -665,4 +665,89 @@ fn format_copy_toast_ignores_secs_when_disabled() {
     assert!(!vault.settings().clipboard_clear_enabled());
 
     assert_eq!(format_copy_toast(vault.settings()), "Code copied");
+}
+
+// ---------------------------------------------------------------------------
+// `prepare_copy_next_code_bytes` — Vault::totp_next_code → Zeroizing<Vec<u8>>
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prepare_copy_next_code_bytes_returns_upcoming_totp_digits() {
+    // TOTP rows: the helper resolves the upcoming code via
+    // `Vault::totp_next_code` and wraps the digits in
+    // `Zeroizing<Vec<u8>>` for the clipboard pipeline.  Pins that
+    // the bytes match the vault's own `totp_next_code` against the
+    // same `now`, so a window-flip mid-handler can't shift the
+    // copied digits behind the toast wording.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    let id = add_totp(&mut vault, &store, "alice");
+
+    let now = SystemTime::now();
+    let bytes =
+        prepare_copy_next_code_bytes(&vault, id, now).expect("totp row resolves an upcoming code");
+
+    let expected = vault
+        .totp_next_code(id, now)
+        .expect("totp_next_code returns Ok for a valid TOTP id");
+    assert_eq!(&bytes[..], expected.code.as_bytes());
+}
+
+#[test]
+fn prepare_copy_next_code_bytes_returns_none_for_hotp_row() {
+    // HOTP rows have no "upcoming" code — the vault helper answers
+    // `Err(NotTotp)`, which the byte-prep collapses to `None`.  This
+    // is the final pure-logic gate so a stray dispatch through the
+    // `win.copy-next-code` action group on a HOTP selection is a
+    // benign no-op (the GTK cell itself is `sensitive = false`).
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    let id = add_hotp(&mut vault, &store, "bob", 1);
+
+    assert!(prepare_copy_next_code_bytes(&vault, id, SystemTime::now()).is_none());
+}
+
+#[test]
+fn prepare_copy_next_code_bytes_returns_none_for_unknown_account_id() {
+    // A race between a vault mutation (remove / replace) and the
+    // accelerator firing must collapse to `None` rather than
+    // copying stale digits.  Mirrors `prepare_copy_bytes`'s
+    // `summary not found` branch.
+    let tmp = secure_tempdir();
+    let (vault, _store) = create_plaintext(&tmp.path().join("plain.bin"));
+    let stray_id = AccountId::new();
+
+    assert!(prepare_copy_next_code_bytes(&vault, stray_id, SystemTime::now()).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// `format_next_code_copy_toast` — pinned toast wording
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_next_code_copy_toast_pins_canonical_wording() {
+    // Wording is duplicated against
+    // `paladin_tui::app::state::format_next_code_copied` (the two
+    // binary crates cannot share a paladin-core string helper for a
+    // single wording).  Pin the exact bytes so a drift between the
+    // two surfaces as a failing assertion.
+    assert_eq!(
+        format_next_code_copy_toast(18),
+        "Next code copied, valid in 18s",
+    );
+}
+
+#[test]
+fn format_next_code_copy_toast_handles_boundary_seconds() {
+    // `seconds_until_valid` is always in `1..=period`.  Pin both
+    // ends for the default TOTP period of 30s — the formatter must
+    // not pluralize, capitalize, or otherwise transform the value.
+    assert_eq!(
+        format_next_code_copy_toast(1),
+        "Next code copied, valid in 1s",
+    );
+    assert_eq!(
+        format_next_code_copy_toast(30),
+        "Next code copied, valid in 30s",
+    );
 }
