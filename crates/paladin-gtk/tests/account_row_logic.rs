@@ -29,10 +29,11 @@
 use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Algorithm, Code};
 
 use paladin_gtk::account_row::{
-    apply_busy_mask, code_display, copy_enabled, counter_display, kebab_enabled, kebab_visible,
-    next_button_enabled, next_button_visible, progress_display, progress_fraction,
-    progress_urgency, progress_visible, project_row, summary_display_label, CodeDisplay,
-    CounterText, ProgressDisplay, ProgressUrgency, RowDisplay, PROGRESS_URGENCY_CSS_CLASSES,
+    apply_busy_mask, code_display, copy_enabled, counter_display, format_seconds_remaining,
+    kebab_enabled, kebab_visible, next_button_enabled, next_button_visible, progress_display,
+    progress_fraction, progress_urgency, progress_visible, project_row, summary_display_label,
+    CodeDisplay, CounterText, ProgressDisplay, ProgressUrgency, RowDisplay,
+    PROGRESS_URGENCY_CSS_CLASSES,
 };
 
 // ---------------------------------------------------------------------------
@@ -251,6 +252,53 @@ fn progress_fraction_zero_period_returns_zero_defensively() {
         seconds_remaining: 5,
     };
     assert!(progress_fraction(&p).abs() < f64::EPSILON);
+}
+
+// ---------------------------------------------------------------------------
+// `format_seconds_remaining` — the `Ns` suffix rendered right of the
+// `gtk::ProgressBar` in the Time column, mirroring the TUI gauge +
+// countdown layout.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_seconds_remaining_full_period() {
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 30,
+    };
+    assert_eq!(format_seconds_remaining(&p), "30s");
+}
+
+#[test]
+fn format_seconds_remaining_partial_window() {
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 18,
+    };
+    assert_eq!(format_seconds_remaining(&p), "18s");
+}
+
+#[test]
+fn format_seconds_remaining_single_digit_keeps_no_padding() {
+    // Layout stability comes from the gtk::Label's width_chars(3)
+    // + xalign(1.0), not from leading whitespace in the string.
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 1,
+    };
+    assert_eq!(format_seconds_remaining(&p), "1s");
+}
+
+#[test]
+fn format_seconds_remaining_clamps_overflow_to_period() {
+    // Defensive: paladin_core pins seconds_remaining to 1..=period,
+    // but the widget binding should still saturate rather than
+    // surface a value greater than period_secs to the user.
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 60,
+    };
+    assert_eq!(format_seconds_remaining(&p), "30s");
 }
 
 // ---------------------------------------------------------------------------

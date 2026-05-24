@@ -448,11 +448,18 @@ inclusion.
     projected per tick alongside the existing `code` / `progress_*`
     fields; the projection runs the same `Vault::totp_next_code`
     call so the value matches what the cell will copy on click.
-  * **Time** (`build_time_column_factory`) — a 96px `gtk::ProgressBar`
-    bound to `display.progress_fraction` with the
-    `success` / `warning` / `error` CSS class driven by the urgency
-    band.  The column itself is hidden when no TOTP row is visible
-    via `column_view::any_totp(&rows)`.
+  * **Time** (`build_time_column_factory`) — horizontal `gtk::Box`
+    holding a 96px `gtk::ProgressBar` (bound to
+    `display.progress_fraction` with the `success` / `warning` /
+    `error` CSS class driven by the urgency band) followed by a
+    numeric `gtk::Label` showing the seconds remaining in the active
+    TOTP window (e.g. `18s`) via
+    `account_row::format_seconds_remaining`.  The label uses
+    `width_chars(3)` + `xalign(1.0)` so values right-align in a fixed
+    slot as the countdown ticks, mirroring the TUI's gauge +
+    countdown layout (`view::list::render_totp_row` →
+    `"  {secs_remaining:>3}s"`).  The column itself is hidden when no
+    TOTP row is visible via `column_view::any_totp(&rows)`.
   * **Copy** (`build_copy_column_factory`) — `edit-copy-symbolic`
     `gtk::Button` whose `sensitive` is bound to
     `display.copy_enabled`; activation emits
@@ -6160,7 +6167,7 @@ below reflects those resolutions.
 #### Cell factories
 - [x] `build_account_column_factory` — icon (24px) + ellipsized label (hexpand). (Section rows render a single full-width heading and hide the icon.)
 - [x] `build_code_column_factory` — `numeric` CSS class label; bind to `display.code`. Also wires the inline HOTP "next" button and a `dim-label` counter slot.
-- [x] `build_time_column_factory` — `gtk::ProgressBar` (width_request 96); bind to `display.progress_fraction` + urgency CSS class.
+- [x] `build_time_column_factory` — horizontal `gtk::Box` containing `gtk::ProgressBar` (width_request 96; bind to `display.progress_fraction` + urgency CSS class) and a numeric/dim `gtk::Label` (`width_chars(3)`, `xalign(1.0)`) showing seconds-remaining via `account_row::format_seconds_remaining`, mirroring the TUI gauge + countdown layout.
 - [x] `build_copy_column_factory` — `gtk::Button` "edit-copy-symbolic"; activate emits `AccountListOutput::CopyCode(item.id())`. Sensitive bound to `display.copy_enabled`.
 - [x] `build_kebab_column_factory` — `gtk::MenuButton` "view-more-symbolic"; menu model built once at setup time; per-cell `gio::SimpleActionGroup` rebound on each `bind` so the closures capture the current item's `AccountId`.
 - [x] HOTP "next" affordance: rendered inline in the "Code" cell, immediately adjacent to the code label (matches today's layout). Visibility bound to `display.next_button_visible`; `connect_clicked` closure emits `AccountListOutput::AdvanceHotp(item.id())`.

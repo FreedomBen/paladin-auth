@@ -277,6 +277,22 @@ pub fn progress_fraction(progress: &ProgressDisplay) -> f64 {
     f64::from(remaining) / f64::from(progress.period_secs)
 }
 
+/// Format the seconds-remaining suffix rendered to the right of the
+/// `gtk::ProgressBar` in the Time column, mirroring the TUI's
+/// `format!("{secs:>3}s")` suffix so the two front-ends read alike.
+///
+/// The label itself carries no padding — layout stability comes from
+/// the `gtk::Label`'s `width_chars(3)` + `xalign(1.0)` so values
+/// flowing from `30s` → `9s` right-align inside a fixed slot. Clamps
+/// to `period_secs` defensively, matching [`progress_fraction`] and
+/// [`progress_urgency`] so a stray over-large `seconds_remaining`
+/// never escapes the widget layer.
+#[must_use]
+pub fn format_seconds_remaining(progress: &ProgressDisplay) -> String {
+    let remaining = progress.seconds_remaining.min(progress.period_secs);
+    format!("{remaining}s")
+}
+
 /// Adwaita CSS style classes [`bind_row`] toggles on the row's
 /// `gtk::ProgressBar` to color the fill by remaining-window urgency.
 ///

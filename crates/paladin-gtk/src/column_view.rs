@@ -32,8 +32,8 @@ use relm4::Sender;
 
 use crate::account_list::{row_section_header, AccountListOutput, AccountRowModel};
 use crate::account_row::{
-    build_kebab_menu_model, dispatch_row_action, format_counter_label, progress_fraction,
-    progress_urgency, AccountRowOutput, CodeDisplay, HIDDEN_CODE_PLACEHOLDER,
+    build_kebab_menu_model, dispatch_row_action, format_counter_label, format_seconds_remaining,
+    progress_fraction, progress_urgency, AccountRowOutput, CodeDisplay, HIDDEN_CODE_PLACEHOLDER,
     PROGRESS_URGENCY_CSS_CLASSES, ROW_ACTION_GROUP_NAME, ROW_COPY_ACTION_NAME,
     ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
 };
@@ -834,10 +834,14 @@ fn bind_next_code_cell(button: &gtk::Button, item: &RowItem) {
 
 /// Build the cell factory for the "Time" column.
 ///
-/// Cell layout (account row): centered `gtk::ProgressBar` (96 px
-/// wide) bound to [`RowDisplay::progress`]. Section rows render an
-/// empty placeholder; HOTP account rows render an empty placeholder
-/// (no progress, no time window). The parent
+/// Cell layout (account row): a horizontal [`gtk::Box`] holding a
+/// centered [`gtk::ProgressBar`] (96 px wide) followed by a numeric
+/// [`gtk::Label`] showing the seconds remaining in the active TOTP
+/// window (e.g. `18s`). The seconds suffix mirrors the TUI's
+/// gauge + countdown layout so the two front-ends read alike. Both
+/// children bind from [`RowDisplay::progress`]. Section rows render
+/// an empty placeholder; HOTP account rows render an empty
+/// placeholder (no progress, no time window). The parent
 /// `AccountListComponent` toggles the column itself off when no
 /// account row carries a TOTP kind so vaults with only HOTP
 /// accounts hide the column entirely.
@@ -848,12 +852,26 @@ pub fn build_time_column_factory() -> gtk::SignalListItemFactory {
 
     factory.connect_setup(|_, item| {
         let list_item = cast_list_item(item);
+        let container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .valign(gtk::Align::Center)
+            .build();
         let progress = gtk::ProgressBar::builder()
             .valign(gtk::Align::Center)
             .width_request(96)
             .show_text(false)
             .build();
-        list_item.set_child(Some(&progress));
+        let secs = gtk::Label::builder()
+            .valign(gtk::Align::Center)
+            .xalign(1.0)
+            .width_chars(3)
+            .build();
+        secs.add_css_class("numeric");
+        secs.add_css_class("dim-label");
+        container.append(&progress);
+        container.append(&secs);
+        list_item.set_child(Some(&container));
     });
 
     let handlers_b = Rc::clone(&handlers);
@@ -862,13 +880,32 @@ pub fn build_time_column_factory() -> gtk::SignalListItemFactory {
         let Some(row_item) = try_row_item(&list_item) else {
             return;
         };
-        let Some(progress) = list_item.child().and_downcast::<gtk::ProgressBar>() else {
+        let Some(container) = list_item.child().and_downcast::<gtk::Box>() else {
+            return;
+        };
+        let Some(progress) = container
+            .first_child()
+            .and_then(|w| w.downcast::<gtk::ProgressBar>().ok())
+        else {
+            return;
+        };
+        let Some(secs) = progress
+            .next_sibling()
+            .and_then(|w| w.downcast::<gtk::Label>().ok())
+        else {
             return;
         };
 
+        let container_for_rebind = container.clone();
         let progress_for_rebind = progress.clone();
+        let secs_for_rebind = secs.clone();
         install_display_subscription(&handlers_b, &list_item, &row_item, move |item| {
-            bind_time_cell(&progress_for_rebind, item);
+            bind_time_cell(
+                &container_for_rebind,
+                &progress_for_rebind,
+                &secs_for_rebind,
+                item,
+            );
         });
     });
 
@@ -881,25 +918,36 @@ pub fn build_time_column_factory() -> gtk::SignalListItemFactory {
     factory
 }
 
-fn bind_time_cell(progress: &gtk::ProgressBar, item: &RowItem) {
+fn bind_time_cell(
+    container: &gtk::Box,
+    progress: &gtk::ProgressBar,
+    secs: &gtk::Label,
+    item: &RowItem,
+) {
     for class in PROGRESS_URGENCY_CSS_CLASSES {
         progress.remove_css_class(class);
     }
     if item.is_section() {
+        container.set_visible(false);
         progress.set_visible(false);
+        secs.set_visible(false);
         progress.set_fraction(0.0);
-        progress.set_tooltip_text(None);
+        secs.set_label("");
+        container.set_tooltip_text(None);
         return;
     }
-    progress.set_tooltip_text(Some(ROW_BODY_COPY_TOOLTIP));
+    container.set_tooltip_text(Some(ROW_BODY_COPY_TOOLTIP));
     let display = item.display();
+    container.set_visible(display.progress_visible);
     progress.set_visible(display.progress_visible);
-    match display.progress {
-        Some(p) => {
-            progress.set_fraction(progress_fraction(&p));
-            progress.add_css_class(progress_urgency(&p).css_class());
-        }
-        None => progress.set_fraction(0.0),
+    secs.set_visible(display.progress_visible);
+    if let Some(p) = display.progress {
+        progress.set_fraction(progress_fraction(&p));
+        progress.add_css_class(progress_urgency(&p).css_class());
+        secs.set_label(&format_seconds_remaining(&p));
+    } else {
+        progress.set_fraction(0.0);
+        secs.set_label("");
     }
 }
 
