@@ -1084,12 +1084,12 @@ single reviewable commit (mirroring the TUI commit
 `4d3e1a7`'s shape). Each unticked box is a discrete unit of work
 the implementer can claim by ticking it.
 
-* [ ] **gschema entry.** Add a `<key name="show-next-code-column"
+* [x] **gschema entry.** Add a `<key name="show-next-code-column"
   type="b"><default>true</default></key>` block to
   `data/org.tamx.Paladin.Gui.gschema.xml` next to the existing
   `show-section-headers` / `show-column-headers` keys. `build.rs`
   recompiles the gresource bundle on save.
-* [ ] **`gsettings.rs` accessors.** Add `pub const
+* [x] **`gsettings.rs` accessors.** Add `pub const
   SHOW_NEXT_CODE_COLUMN_KEY: &str = "show-next-code-column";` and
   the matching `show_next_code_column(&gio::Settings) -> bool` /
   `set_show_next_code_column(&gio::Settings, bool)` pair next to

@@ -37,5 +37,22 @@
         can hide it from the Display preferences group.
       </description>
     </key>
+    <key name="show-next-code-column" type="b">
+      <default>true</default>
+      <summary>Show the next-code column on TOTP rows</summary>
+      <description>
+        When enabled, the account list shows a "Next" column between
+        the Code and Time columns; on TOTP rows it renders the
+        upcoming code prefixed with `↪`, and clicking the cell (or
+        pressing Ctrl+Shift+C with the row selected) copies that
+        upcoming code with a toast reading "Next code copied, valid
+        in Xs".  HOTP and section rows render an empty cell.  The
+        column hides altogether if the rendered list has no TOTP
+        rows even when this key is true, so the column never sits
+        empty.  Enabled by default per IMPLEMENTATION_PLAN_04
+        "Next-code column implementation"; users who prefer a more
+        compact list can hide it from the Display preferences group.
+      </description>
+    </key>
   </schema>
 </schemalist>

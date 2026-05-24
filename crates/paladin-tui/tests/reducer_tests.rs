@@ -21179,7 +21179,9 @@ fn pressing_shift_c_on_search_focus_types_into_search_and_does_not_emit_copy_nex
     };
     let (state, effects) = reduce(state, shift_c());
     assert!(
-        !effects.iter().any(|e| matches!(e, Effect::CopyNextCode { .. })),
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::CopyNextCode { .. })),
         "Shift-c on search focus must not emit CopyNextCode, got {effects:?}"
     );
     match state {

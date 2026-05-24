@@ -51,6 +51,18 @@ pub const SHOW_SECTION_HEADERS_KEY: &str = "show-section-headers";
 /// visibility preference" for the rationale.
 pub const SHOW_COLUMN_HEADERS_KEY: &str = "show-column-headers";
 
+/// `show-next-code-column` key name as declared in the gschema.
+///
+/// Controls whether the unlocked account list shows the per-TOTP-row
+/// Next column (between Code and Time) that surfaces the upcoming
+/// TOTP digits with a clickable copy-to-clipboard affordance.  The
+/// rendered column is the AND of this key and
+/// `column_view::any_totp(&rows)` — either latch off hides the
+/// column.  Default `true` per
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` "Next-code column
+/// implementation".
+pub const SHOW_NEXT_CODE_COLUMN_KEY: &str = "show-next-code-column";
+
 /// Build-time path to the directory containing the compiled
 /// gschemas (`gschemas.compiled`).  Set by `build.rs`.
 const BUILD_TIME_SCHEMA_DIR: &str = env!("PALADIN_GTK_SCHEMA_DIR");
@@ -129,6 +141,25 @@ pub fn set_show_column_headers(
     value: bool,
 ) -> Result<(), gio::glib::error::BoolError> {
     settings.set_boolean(SHOW_COLUMN_HEADERS_KEY, value)
+}
+
+/// Read the [`SHOW_NEXT_CODE_COLUMN_KEY`] boolean.
+#[must_use]
+pub fn show_next_code_column(settings: &gio::Settings) -> bool {
+    settings.boolean(SHOW_NEXT_CODE_COLUMN_KEY)
+}
+
+/// Write the [`SHOW_NEXT_CODE_COLUMN_KEY`] boolean.
+///
+/// Mirrors [`set_show_column_headers`]: callers must surface any
+/// failure rather than silently swallowing it — a write that does
+/// not stick leaves the visible widget out of sync with the
+/// persisted value.
+pub fn set_show_next_code_column(
+    settings: &gio::Settings,
+    value: bool,
+) -> Result<(), gio::glib::error::BoolError> {
+    settings.set_boolean(SHOW_NEXT_CODE_COLUMN_KEY, value)
 }
 
 fn lookup_build_time_schema() -> Option<gio::SettingsSchema> {

@@ -15,7 +15,9 @@
 //! that is the path the in-process `paladin_gtk::gsettings::app_settings`
 //! consults first.
 
-use paladin_gtk::gsettings::{SCHEMA_ID, SHOW_COLUMN_HEADERS_KEY, SHOW_SECTION_HEADERS_KEY};
+use paladin_gtk::gsettings::{
+    SCHEMA_ID, SHOW_COLUMN_HEADERS_KEY, SHOW_NEXT_CODE_COLUMN_KEY, SHOW_SECTION_HEADERS_KEY,
+};
 use relm4::gtk::gio;
 use relm4::gtk::gio::prelude::*;
 use relm4::gtk::glib;
@@ -237,5 +239,101 @@ fn changed_signal_fires_for_show_section_headers_write() {
     assert!(
         fired.get(),
         "writing the key must fire the `changed::{SHOW_SECTION_HEADERS_KEY}` signal",
+    );
+}
+
+#[test]
+fn schema_carries_show_next_code_column_key() {
+    let schema = build_time_schema();
+    assert!(
+        schema.has_key(SHOW_NEXT_CODE_COLUMN_KEY),
+        "the gschema must declare `{SHOW_NEXT_CODE_COLUMN_KEY}` so \
+         `paladin_gtk::gsettings::show_next_code_column` resolves",
+    );
+}
+
+#[test]
+fn show_next_code_column_default_is_true() {
+    // Default-on is the contract pinned in IMPLEMENTATION_PLAN_04
+    // §"Next-code column implementation": the Next column is
+    // visible out of the box because TOTP users overwhelmingly
+    // benefit from seeing the upcoming code when the current one
+    // is about to expire; users who prefer a compact list can
+    // hide it from the Display preferences group.
+    let settings = memory_backed_settings();
+    assert!(
+        settings.boolean(SHOW_NEXT_CODE_COLUMN_KEY),
+        "next-code column defaults to true per IMPLEMENTATION_PLAN_04",
+    );
+}
+
+#[test]
+fn show_next_code_column_round_trip_via_memory_backend() {
+    let settings = memory_backed_settings();
+    settings
+        .set_boolean(SHOW_NEXT_CODE_COLUMN_KEY, false)
+        .expect("write the show-next-code-column key");
+    assert!(
+        !settings.boolean(SHOW_NEXT_CODE_COLUMN_KEY),
+        "writing false and re-reading should return false",
+    );
+    settings
+        .set_boolean(SHOW_NEXT_CODE_COLUMN_KEY, true)
+        .expect("write the show-next-code-column key back to true");
+    assert!(
+        settings.boolean(SHOW_NEXT_CODE_COLUMN_KEY),
+        "writing true and re-reading should return true",
+    );
+}
+
+#[test]
+fn changed_signal_fires_for_show_next_code_column_write() {
+    // The AppModel registers a `changed::show-next-code-column`
+    // handler on its `gio::Settings` clone so a toggle from
+    // SettingsComponent dispatches a refresh to
+    // AccountListComponent (which calls `set_visible` on the
+    // held `gtk::ColumnViewColumn`).  Pin the contract that a
+    // write actually fires the signal so that wiring does not
+    // silently no-op if either the key name or the gschema id
+    // drifts.
+    let _guard = signal_lock();
+    let fired: std::rc::Rc<std::cell::Cell<bool>> = std::rc::Rc::new(std::cell::Cell::new(false));
+    let fired_for_closure = std::rc::Rc::clone(&fired);
+    with_owned_context(|settings| {
+        settings.connect_changed(Some(SHOW_NEXT_CODE_COLUMN_KEY), move |_, _| {
+            fired_for_closure.set(true);
+        });
+        settings
+            .set_boolean(SHOW_NEXT_CODE_COLUMN_KEY, false)
+            .expect("write the show-next-code-column key");
+    });
+    assert!(
+        fired.get(),
+        "writing the key must fire the `changed::{SHOW_NEXT_CODE_COLUMN_KEY}` signal",
+    );
+}
+
+#[test]
+fn helper_round_trip_for_show_next_code_column() {
+    // Mirrors `helper_round_trip_for_show_column_headers`: the
+    // typed `show_next_code_column` / `set_show_next_code_column`
+    // helpers are what production wiring calls.  Pin a round-trip
+    // so a refactor of those wrappers does not silently break the
+    // contract that reads see the most-recent write.
+    use paladin_gtk::gsettings::{set_show_next_code_column, show_next_code_column};
+    let settings = memory_backed_settings();
+    assert!(
+        show_next_code_column(&settings),
+        "default read via helper must be true",
+    );
+    set_show_next_code_column(&settings, false).expect("helper write");
+    assert!(
+        !show_next_code_column(&settings),
+        "helper read after a false write must be false",
+    );
+    set_show_next_code_column(&settings, true).expect("helper write back");
+    assert!(
+        show_next_code_column(&settings),
+        "helper read after a true write must be true",
     );
 }
