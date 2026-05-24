@@ -47,6 +47,7 @@ pub mod settings;
 pub mod shortcuts_window;
 pub mod startup_error;
 pub mod ticker;
+pub mod toast_queue;
 pub mod unlock_dialog;
 
 /// Stable application identifier per §"Linux desktop integration" /

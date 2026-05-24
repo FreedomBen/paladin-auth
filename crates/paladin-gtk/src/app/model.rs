@@ -345,6 +345,19 @@ pub struct AppModel {
     /// completion arms without rebuilding the overlay reference.
     #[allow(dead_code)]
     toast_overlay: adw::ToastOverlay,
+    /// Newest-wins collapse state for [`Self::toast_overlay`]. Every
+    /// toast funneled through [`Self::show_toast`] is routed through
+    /// this queue so back-to-back dispatches (copy → durability-
+    /// unconfirmed → reveal) never stack on the overlay; the latest
+    /// body always wins, but the prior toast is never cut short of
+    /// [`crate::toast_queue::TOAST_MIN_VISIBLE`].
+    toast_queue: crate::toast_queue::ToastQueue,
+    /// Most recently committed `adw::Toast`. Held so
+    /// [`Self::commit_toast`] can `.dismiss()` it before adding the
+    /// next body. `adw_toast_dismiss` is a no-op on already-dismissed
+    /// toasts, so we never need to clear this on the toast's own
+    /// self-dismiss timer.
+    current_toast: Option<adw::Toast>,
     /// Header-bar busy spinner cloned out of `widgets.busy_spinner`
     /// at init so [`AppModel::sync_app_busy_spinner`] can flip its
     /// visibility / spin state imperatively from each dispatch tick
@@ -586,6 +599,11 @@ impl std::fmt::Debug for AppModel {
                 &format!("<{} open>", self.reveal_windows.len()),
             )
             .field("toast_overlay", &"<adw::ToastOverlay>")
+            .field("toast_queue", &self.toast_queue)
+            .field(
+                "current_toast",
+                &self.current_toast.as_ref().map(|_| "<live>"),
+            )
             .field(
                 "pending_clipboard",
                 &self.pending_clipboard.as_ref().map(|_| "<armed>"),
@@ -1441,6 +1459,25 @@ pub enum AppMsg {
     /// `glib` callback so the deadline comparison does not race
     /// against main-loop dispatch latency.
     AutoLockTimerFired(Instant),
+    /// Fired by the one-shot `glib::timeout_add_local` source
+    /// scheduled by [`AppModel::commit_toast`] when it adds a body
+    /// to [`AppModel::toast_overlay`].
+    ///
+    /// Tells [`AppModel::update`] that the
+    /// [`crate::toast_queue::TOAST_MIN_VISIBLE`] window for the
+    /// most recently committed toast has elapsed; the handler
+    /// drains any [`crate::toast_queue::ToastQueue::on_show`] body
+    /// that arrived during the window and either commits it (which
+    /// dismisses the prior `adw::Toast` and starts a fresh
+    /// min-visible timer) or drops the queue back to idle.
+    ///
+    /// A stray firing with an empty queue is a benign no-op — the
+    /// timer source is one-shot per commit, so it cannot lap
+    /// itself, and `connect_dismissed` is intentionally *not*
+    /// wired (calling `.dismiss()` on an already-dismissed
+    /// `adw::Toast` is a no-op, so the stale [`AppModel::current_toast`]
+    /// reference is safe to overwrite).
+    ToastMinVisibleElapsed,
     /// Posted by a `gtk::glib::spawn_future_local` wrapper when its
     /// `gio::spawn_blocking` worker join handle returns `Err` (i.e.
     /// the worker panicked or otherwise failed to return its
@@ -1760,6 +1797,8 @@ impl SimpleComponent for AppModel {
             ticker_source: None,
             reveal_windows: HashMap::new(),
             toast_overlay: widgets.toast_overlay.clone(),
+            toast_queue: crate::toast_queue::ToastQueue::new(),
+            current_toast: None,
             busy_spinner: widgets.busy_spinner.clone(),
             search_button: widgets.search_button.clone(),
             window: root.clone(),
@@ -1940,6 +1979,11 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::AutoLockTimerFired(fired_at) => {
                 self.handle_auto_lock_timer_fired(fired_at, &sender);
+            }
+            AppMsg::ToastMinVisibleElapsed => {
+                if let Some(body) = self.toast_queue.on_min_visible_elapsed() {
+                    self.commit_toast(&sender, &body);
+                }
             }
             AppMsg::WorkerPanic(kind) => {
                 // A `gio::spawn_blocking` worker panicked / failed
@@ -2146,7 +2190,7 @@ impl SimpleComponent for AppModel {
                         {
                             self.pending_clipboard = Some(pending);
                         }
-                        self.toast_overlay.add_toast(adw::Toast::new(&toast_body));
+                        self.show_toast(&sender, toast_body);
                     }
                 }
             }
@@ -2181,7 +2225,7 @@ impl SimpleComponent for AppModel {
                         {
                             self.pending_clipboard = Some(pending);
                         }
-                        self.toast_overlay.add_toast(adw::Toast::new(&toast_body));
+                        self.show_toast(&sender, toast_body);
                     }
                 }
             }
@@ -2622,7 +2666,7 @@ impl SimpleComponent for AppModel {
                         }
                     }
                     if let Some(body) = dispatch.success_toast {
-                        self.toast_overlay.add_toast(adw::Toast::new(&body));
+                        self.show_toast(&sender, body);
                     }
                     if dispatch.reask_idle {
                         if let Some((vault, _)) = self.vault.as_ref() {
@@ -3027,7 +3071,7 @@ impl SimpleComponent for AppModel {
                         }
                     }
                     if let Some(body) = dispatch.success_toast {
-                        self.toast_overlay.add_toast(adw::Toast::new(&body));
+                        self.show_toast(&sender, body);
                     }
                 }
                 let vault_still_encrypted =
@@ -3265,7 +3309,7 @@ impl SimpleComponent for AppModel {
                         }
                     }
                     if let Some(body) = dispatch.success_toast {
-                        self.toast_overlay.add_toast(adw::Toast::new(&body));
+                        self.show_toast(&sender, body);
                     }
                     // Re-ask `IdlePolicy::should_arm` against the
                     // reinstalled vault so the auto-lock timer state
@@ -3953,7 +3997,7 @@ impl SimpleComponent for AppModel {
                         self.refresh_account_list();
                     }
                     if let Some(body) = dispatch.success_toast {
-                        self.toast_overlay.add_toast(adw::Toast::new(&body));
+                        self.show_toast(&sender, body);
                     }
                 }
                 let vault_still_encrypted =
@@ -4023,7 +4067,7 @@ impl SimpleComponent for AppModel {
                         self.refresh_account_list();
                     }
                     if let Some(body) = dispatch.success_toast {
-                        self.toast_overlay.add_toast(adw::Toast::new(&body));
+                        self.show_toast(&sender, body);
                     }
                 }
                 let vault_still_encrypted =
@@ -4081,7 +4125,7 @@ impl SimpleComponent for AppModel {
                 let account_id = outcome.account_id;
                 let decision = apply_advance_outcome(outcome);
                 let effect = apply_advance_decision(&mut self.reveal_windows, decision);
-                self.publish_reveal_for(account_id, effect);
+                self.publish_reveal_for(account_id, effect, &sender);
                 self.apply_effect_completion_outcome(post, &sender);
                 // Drain the Enter-activation latch (see
                 // `pending_copy_after_advance`). A deferred lock /
@@ -4156,7 +4200,7 @@ impl SimpleComponent for AppModel {
                         self.refresh_account_list();
                     }
                     if let Some(body) = dispatch.success_toast {
-                        self.toast_overlay.add_toast(adw::Toast::new(&body));
+                        self.show_toast(&sender, body);
                     }
                 }
                 let vault_still_encrypted =
@@ -4603,6 +4647,49 @@ impl AppModel {
 }
 
 impl AppModel {
+    /// Drive the [`crate::toast_queue::ToastQueue`] for one body
+    /// arriving from any of the model's worker-completion or
+    /// dispatch arms.
+    ///
+    /// Routes through [`crate::toast_queue::ToastQueue::on_show`]
+    /// so back-to-back toasts collapse to the newest body without
+    /// cutting any toast short of
+    /// [`crate::toast_queue::TOAST_MIN_VISIBLE`]. The imperative
+    /// side stays on the model so we never lose the queue's
+    /// dispatch table behind a closure capture.
+    fn show_toast(&mut self, sender: &ComponentSender<Self>, body: impl Into<String>) {
+        let body = body.into();
+        match self.toast_queue.on_show(body.clone()) {
+            crate::toast_queue::ShowAction::Commit => self.commit_toast(sender, &body),
+            crate::toast_queue::ShowAction::Defer => {}
+        }
+    }
+
+    /// Add `body` to [`Self::toast_overlay`] right now, dismiss any
+    /// `adw::Toast` we still hold from the previous commit, and
+    /// schedule the [`crate::toast_queue::TOAST_MIN_VISIBLE`]
+    /// one-shot that wakes [`Self::update`] with
+    /// [`AppMsg::ToastMinVisibleElapsed`].
+    ///
+    /// `adw_toast_dismiss` is a no-op on already-dismissed toasts
+    /// per the libadwaita docs, so a self-dismissed previous toast
+    /// is silently overwritten without needing a
+    /// `connect_dismissed` clear-on-drop callback.
+    fn commit_toast(&mut self, sender: &ComponentSender<Self>, body: &str) {
+        if let Some(prev) = self.current_toast.take() {
+            prev.dismiss();
+        }
+        let toast = adw::Toast::new(body);
+        self.toast_overlay.add_toast(toast.clone());
+        self.current_toast = Some(toast);
+        let elapsed_sender = sender.input_sender().clone();
+        glib::timeout_add_local_once(crate::toast_queue::TOAST_MIN_VISIBLE, move || {
+            let _ = elapsed_sender.send(AppMsg::ToastMinVisibleElapsed);
+        });
+    }
+}
+
+impl AppModel {
     /// Re-evaluate the TOTP ticker against the current
     /// `(state, rows)` pair and install / teardown the live
     /// `glib::timeout_add_local` source as needed.
@@ -4956,7 +5043,12 @@ impl AppModel {
     /// failure surface per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     /// §"Milestone 7 checklist" > "surface the inline / status
     /// error".
-    fn publish_reveal_for(&self, account_id: paladin_core::AccountId, effect: RevealEffect) {
+    fn publish_reveal_for(
+        &mut self,
+        account_id: paladin_core::AccountId,
+        effect: RevealEffect,
+        sender: &ComponentSender<Self>,
+    ) {
         match effect {
             RevealEffect::Refreshed { show_toast } => {
                 if let (Some((vault, _)), Some(controller), Some(window)) = (
@@ -4970,13 +5062,11 @@ impl AppModel {
                     }
                 }
                 if show_toast {
-                    self.toast_overlay
-                        .add_toast(adw::Toast::new(format_hotp_durability_unconfirmed_toast()));
+                    self.show_toast(sender, format_hotp_durability_unconfirmed_toast());
                 }
             }
             RevealEffect::Retained => {
-                self.toast_overlay
-                    .add_toast(adw::Toast::new(format_hotp_advance_failed_toast()));
+                self.show_toast(sender, format_hotp_advance_failed_toast());
             }
         }
     }
