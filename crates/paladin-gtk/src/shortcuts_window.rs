@@ -26,6 +26,7 @@ use relm4::gtk;
 
 use crate::app::model::{
     format_app_add_button_accelerator, format_app_add_button_tooltip,
+    format_app_copy_next_code_accelerator, format_app_copy_next_code_label,
     format_app_menu_keyboard_shortcuts_accelerator, format_app_menu_keyboard_shortcuts_label,
     format_app_menu_preferences_accelerator, format_app_menu_preferences_label,
     format_app_menu_quit_accelerator, format_app_menu_quit_label,
@@ -71,6 +72,16 @@ pub fn format_app_shortcuts_window_section_title() -> &'static str {
 ///   The `accelerator` property accepts a space-separated list, so
 ///   the single row renders both bindings together — matching how
 ///   the helper itself treats them as interchangeable shortcuts.
+/// * `(<Control><Shift>c, "Copy selected row's next code")` —
+///   [`format_app_copy_next_code_accelerator`] /
+///   [`format_app_copy_next_code_label`] mirror the
+///   `app.copy-next-code` `gio::SimpleAction` registered through
+///   [`crate::app::model::build_app_window_action_group`] and
+///   wired by
+///   [`crate::app::model::wire_app_window_accelerators`]. The row
+///   sits next to "Search accounts" because both shortcuts
+///   operate on the account-list surface (search reveals the
+///   filter entry; copy-next acts on the current selection).
 /// * `(<Control>comma, "Preferences")` —
 ///   [`format_app_menu_preferences_accelerator`] /
 ///   [`format_app_menu_preferences_label`] mirror the primary
@@ -84,14 +95,15 @@ pub fn format_app_shortcuts_window_section_title() -> &'static str {
 ///   entry.
 ///
 /// Display order is the most-frequent-use flow (Add → Search →
-/// Preferences → Keyboard Shortcuts → Quit) and is intentionally
-/// distinct from the
+/// Copy Next Code → Preferences → Keyboard Shortcuts → Quit) and
+/// is intentionally distinct from the
 /// [`crate::app::model::format_app_window_accelerator_bindings`]
 /// iteration order (which is Add → Quit → Preferences →
-/// Keyboard Shortcuts) — the bindings array is sized to keep
-/// `set_accels_for_action` wiring stable, while this array is
-/// sized for human reading. The Search row is intentionally absent
-/// from `format_app_window_accelerator_bindings` because it is not
+/// Keyboard Shortcuts → Copy Next Code) — the bindings array is
+/// sized to keep `set_accels_for_action` wiring stable, while this
+/// array is sized for human reading. The Search row is
+/// intentionally absent from
+/// `format_app_window_accelerator_bindings` because it is not
 /// a `gio::SimpleAction` accelerator (it lives behind a window-
 /// level `gtk::EventControllerKey` so a focused entry gets first
 /// crack at the keystroke and inline `/`-typing into any text
@@ -100,7 +112,7 @@ pub fn format_app_shortcuts_window_section_title() -> &'static str {
 /// Pure — returns an owned array of two-tuples without
 /// allocating.
 #[must_use]
-pub fn format_app_shortcuts_window_entries() -> [(&'static str, &'static str); 5] {
+pub fn format_app_shortcuts_window_entries() -> [(&'static str, &'static str); 6] {
     [
         (
             format_app_add_button_accelerator(),
@@ -109,6 +121,10 @@ pub fn format_app_shortcuts_window_entries() -> [(&'static str, &'static str); 5
         (
             format_app_search_focus_accelerator(),
             format_app_search_focus_label(),
+        ),
+        (
+            format_app_copy_next_code_accelerator(),
+            format_app_copy_next_code_label(),
         ),
         (
             format_app_menu_preferences_accelerator(),
@@ -236,9 +252,9 @@ mod tests {
     }
 
     #[test]
-    fn format_app_shortcuts_window_entries_lists_five_rows_in_display_order() {
+    fn format_app_shortcuts_window_entries_lists_six_rows_in_display_order() {
         let entries = format_app_shortcuts_window_entries();
-        assert_eq!(entries.len(), 5);
+        assert_eq!(entries.len(), 6);
         assert_eq!(
             entries[0],
             (
@@ -256,24 +272,48 @@ mod tests {
         assert_eq!(
             entries[2],
             (
+                format_app_copy_next_code_accelerator(),
+                format_app_copy_next_code_label(),
+            )
+        );
+        assert_eq!(
+            entries[3],
+            (
                 format_app_menu_preferences_accelerator(),
                 format_app_menu_preferences_label(),
             )
         );
         assert_eq!(
-            entries[3],
+            entries[4],
             (
                 format_app_menu_keyboard_shortcuts_accelerator(),
                 format_app_menu_keyboard_shortcuts_label(),
             )
         );
         assert_eq!(
-            entries[4],
+            entries[5],
             (
                 format_app_menu_quit_accelerator(),
                 format_app_menu_quit_label(),
             )
         );
+    }
+
+    #[test]
+    fn format_app_shortcuts_window_entries_sources_copy_next_code_row_from_helpers() {
+        // Pin that the Copy-Next-Code row sources both its
+        // accelerator and its title from the dedicated
+        // `format_app_copy_next_code_*` helpers (rather than
+        // re-spelling either literal) so future renames of the
+        // helper drive the shortcuts-window row in lockstep.
+        let entries = format_app_shortcuts_window_entries();
+        let row = entries
+            .iter()
+            .find(|(_accel, title)| *title == format_app_copy_next_code_label())
+            .expect("Copy-Next-Code row must be present in the shortcuts window entry list");
+        assert_eq!(row.0, format_app_copy_next_code_accelerator());
+        assert_eq!(row.0, "<Control><Shift>c");
+        assert_eq!(row.1, "Copy selected row's next code");
     }
 
     #[test]

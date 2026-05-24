@@ -6249,6 +6249,37 @@ pub fn format_app_copy_next_code_accelerator() -> &'static str {
     "<Control><Shift>c"
 }
 
+/// Human-readable label the `GtkShortcutsWindow` row sourced by
+/// [`crate::shortcuts_window::format_app_shortcuts_window_entries`]
+/// displays for the `Ctrl+Shift+C` "copy selected row's next code"
+/// accelerator wired through [`format_app_copy_next_code_action`].
+///
+/// Returns the static label `"Copy selected row's next code"` —
+/// the exact wording required by
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Next-code column
+/// implementation > Build order" > `view/keyboard_shortcuts.rs`
+/// for the `GtkShortcutsShortcut.title` rendered next to the
+/// accelerator key combination. Pinning the wording through a
+/// helper keeps the shortcuts-window row in lockstep with the
+/// matching `format_app_copy_next_code_action` /
+/// `format_app_copy_next_code_action_name` /
+/// `format_app_copy_next_code_accelerator` siblings so a future
+/// rename or copy edit cannot drift the user-visible label away
+/// from the accelerator / action wiring it advertises.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_copy_next_code_action`] (fully-qualified
+/// action target), [`format_app_copy_next_code_action_name`]
+/// (bare action name), and
+/// [`format_app_copy_next_code_accelerator`] (key spelling);
+/// together they pin the user-facing label, the action target,
+/// its bare name, and its keyboard accelerator against a single
+/// source of truth.
+#[must_use]
+pub fn format_app_copy_next_code_label() -> &'static str {
+    "Copy selected row's next code"
+}
+
 /// Ordered `(accelerator, fully-qualified action target)` pairs
 /// the application-window wiring hands to
 /// `gio::Application::set_accels_for_action(target, &[accel])`

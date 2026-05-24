@@ -1215,14 +1215,46 @@ the implementer can claim by ticking it.
   re-dispatches `AccountListOutput::CopyNextCode(id)` on TOTP.
   HOTP / no selection / hidden Next column / unmounted
   controller all collapse to silent no-op.)*
-* [ ] **`view/keyboard_shortcuts.rs` (or the `.ui` template the
+* [x] **`view/keyboard_shortcuts.rs` (or the `.ui` template the
   `GtkShortcutsWindow` reads).** Add a row in the "List view"
   shortcut group: `Ctrl+Shift+C — Copy selected row's next code`.
   Source the accelerator string from
   `format_app_copy_next_code_accelerator` so future renames stay
-  in lockstep.
-* [ ] **`tests/snapshots/` shortcuts-window snapshot.** Update
+  in lockstep. *(Landed inside
+  `crates/paladin-gtk/src/shortcuts_window.rs`. The crate keeps
+  the shortcuts-window definition in a single `shortcuts_window`
+  module rather than a `view/` submodule, and the renderer is a
+  pure-Rust XML template generator
+  (`format_app_shortcuts_window_xml`) iterating the pinned
+  `format_app_shortcuts_window_entries` array — no `.ui` file is
+  used. The new row was appended to the entry array between
+  Search and Preferences (single `"General"` group, since the
+  crate does not yet split rows into per-area sub-groups), and
+  the array length bumped from 5 to 6. The title is sourced from
+  a new `format_app_copy_next_code_label` helper added next to
+  the existing `format_app_copy_next_code_action` /
+  `format_app_copy_next_code_action_name` /
+  `format_app_copy_next_code_accelerator` siblings in
+  `crates/paladin-gtk/src/app/model.rs` so the user-visible label
+  stays in lockstep with the action wiring on a future rename.)*
+* [x] **`tests/snapshots/` shortcuts-window snapshot.** Update
   the `GtkShortcutsWindow` snapshot to include the new row.
+  *(The crate does not use `insta` snapshot files; the
+  "shortcuts-window snapshot" is the in-source unit test
+  `format_app_shortcuts_window_entries_lists_*_rows_in_display_order`
+  in `crates/paladin-gtk/src/shortcuts_window.rs` that pins the
+  entry array length and per-index `(accelerator, title)` pairs.
+  That test was renamed from `_lists_five_rows_*` to
+  `_lists_six_rows_*` with the new Copy-Next-Code assertion
+  inserted at index 2. A sibling guard
+  `format_app_shortcuts_window_entries_sources_copy_next_code_row_from_helpers`
+  pins that the row sources its accelerator and title from the
+  `format_app_copy_next_code_*` helpers so a literal-rewrite
+  cannot drift the row away from the helper. The existing
+  `format_app_shortcuts_window_xml_contains_one_shortcut_per_entry`
+  test already iterates the entry array, so it picks up the new
+  row automatically; the XML escape / title coverage tests do
+  the same.)*
 * [x] **`tests/manual/MANUAL_TEST_PLAN.md`.** Append three
   scenarios:
     * "Click the Next cell on a TOTP row → clipboard holds the
