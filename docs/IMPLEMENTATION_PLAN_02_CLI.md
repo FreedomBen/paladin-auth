@@ -20,12 +20,16 @@ crates/paladin-cli/
 ├── src/
 │   ├── main.rs           # entry: parse, dispatch, exit code map
 │   ├── cli.rs            # clap derive: GlobalArgs + Command enum
+│   ├── kdf.rs            # parses --kdf-memory-mib / --kdf-time / --kdf-parallelism into paladin_core::Argon2Params / EncryptionOptions; §5 validation_error + kdf_params_out_of_bounds contract
 │   ├── output/
 │   │   ├── mod.rs        # selects text vs json; no-color handling
 │   │   ├── text.rs       # human renderers per command
-│   │   └── json.rs       # stable JSON envelopes per §5
+│   │   ├── json.rs       # stable JSON envelopes per §5
+│   │   └── error.rs      # CliError → §5 error_kind taxonomy; renders the error envelope on stderr behind --json
 │   ├── prompt.rs         # /dev/tty passphrases, account prompts, and confirmations
 │   ├── exec_tui.rs       # `paladin tui` → execvp paladin-tui w/ flags
+│   ├── vault_open.rs     # shared resolve → inspect → optional passphrase prompt → Store::open pipeline used by every read / mutate command except `init`
+│   ├── clipboard.rs      # `paladin copy` clipboard adapter (arboard in production, `test-hooks`-feature dryrun bypass for integration tests); never schedules auto-clear (CLI is stateless per §8)
 │   ├── commands/
 │   │   ├── init.rs
 │   │   ├── add.rs
@@ -48,10 +52,12 @@ crates/paladin-cli/
     ├── cli_passphrase.rs
     ├── cli_import_export.rs
     ├── cli_settings.rs
-    ├── cli_global_flags.rs    # --vault, --no-color, --json
-    ├── cli_exec_tui.rs        # `paladin tui` shells out
-    ├── cli_errors_json.rs     # error envelope per error_kind
-    └── golden/                # snapshot fixtures for --json outputs
+    ├── cli_global_flags.rs         # --vault, --no-color, --json
+    ├── cli_exec_tui.rs             # `paladin tui` shells out
+    ├── cli_errors_json.rs          # error envelope per error_kind
+    ├── cli_advisory_suppression.rs # cross-command sweep: text-mode advisories suppressed under --json when the caller opted in (--force / empty-init / --yes / --plaintext)
+    ├── cli_json_snapshots.rs       # insta golden snapshots: per-command success envelopes, per-error_kind envelopes, --help / --version envelopes; volatile fields redacted
+    └── golden/                     # snapshot fixtures for --json outputs
 ```
 
 ## Global flags (per §5)

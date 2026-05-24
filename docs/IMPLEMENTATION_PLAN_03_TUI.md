@@ -23,45 +23,62 @@ don't need async I/O.
 
 ```
 crates/paladin-tui/
-├── Cargo.toml             # license = "AGPL-3.0-or-later"; bin = "paladin-tui"
+├── Cargo.toml             # license = "AGPL-3.0-or-later"; declares both [lib] (so integration tests can reach internal modules) and [[bin]] (name = "paladin-tui")
 ├── src/
-│   ├── main.rs            # parse args (clap), reject --json (text-only diagnostic — TUI has no JSON mode), hand off to app::run
-│   ├── cli.rs             # GlobalArgs (--vault, --no-color; --json rejected at parse time with clap's text diagnostic)
+│   ├── main.rs            # thin shim that hands off to `lib.rs::run`
+│   ├── lib.rs             # public library surface (`run`, `run_with_components`) so integration tests in tests/ can drive the composition without a TTY
+│   ├── cli.rs             # clap derive: GlobalArgs (--vault, --no-color; --json rejected at parse time with clap's text diagnostic)
 │   ├── app/
-│   │   ├── mod.rs         # App state machine + run loop
-│   │   ├── state.rs       # AppState variants + vault/store ownership
-│   │   ├── event.rs       # AppEvent enum (Input, Tick, EffectResult, ClipboardClear)
+│   │   ├── mod.rs         # app submodule namespace; re-exports the reducer / dispatch / effect / render / run surfaces
+│   │   ├── state.rs       # AppState variants + vault/store ownership; owns the auto-lock idle deadline and HOTP-reveal window state populated by paladin_core policy modules
+│   │   ├── event.rs       # AppEvent enum (Input, Tick, EffectResult, ClipboardClear, AutoLockFired, HotpRevealExpired)
 │   │   ├── input.rs       # crossterm event → AppEvent translation
 │   │   ├── ticker.rs      # `paladin_core::TICK_INTERVAL_MS` tick thread, sleeps, mpsc producer
-│   │   └── reducer.rs     # pure (state, event) → (state, side_effects)
-│   ├── ui/
-│   │   ├── mod.rs         # ratatui draw entry; routes to screen
-│   │   ├── unlock.rs      # passphrase entry screen
-│   │   ├── list.rs        # search + account list (TOTP gauge / HOTP reveal)
-│   │   ├── status.rs      # bottom status / shortcut bar
-│   │   └── modals/
-│   │       ├── add.rs
-│   │       ├── remove.rs
-│   │       ├── rename.rs       # label edit; calls Vault::rename inside Vault::mutate_and_save
-│   │       ├── import.rs       # path + format + on-conflict + (optional) bundle passphrase
-│   │       ├── export.rs       # format + path + overwrite + (encrypted) twice-confirmed passphrase
-│   │       ├── passphrase.rs   # set/change/remove sub-flows
-│   │       └── settings.rs     # auto_lock + clipboard toggles + timeouts
+│   │   ├── reducer.rs     # pure (state, event) → (state, Vec<Effect>); routes auto_lock / hotp_reveal through paladin_core::policy
+│   │   ├── dispatch.rs    # pure event-loop glue: terminal-free inner loop that drives reducer → effect::execute → render closure on each AppEvent
+│   │   ├── effect.rs      # Effect executor (the only impure boundary); save-bearing effects mutate Vault through core APIs then post EffectResult back through the mpsc channel
+│   │   ├── render.rs      # one-line adapter from `dispatch`'s render closure to `ratatui::Terminal::draw(crate::view::render)`; locked by `render_tests.rs`
+│   │   └── run.rs         # production composers: `run_event_loop` (terminal-free, fake-producer-friendly) and `run_with_terminal_guard` (wraps the TerminalGuard around the inner loop)
+│   ├── view/              # ratatui rendering surface; each AppState variant routes through one `view::<screen>` sub-module
+│   │   ├── mod.rs         # `render` entry: dispatches the current AppState to the correct screen module
+│   │   ├── theme.rs       # shared color palette; --no-color / NO_COLOR funnels through here so styled cells degrade to monochrome-but-legible
+│   │   ├── unlock.rs      # encrypted-vault passphrase entry screen
+│   │   ├── startup_error.rs # non-mutating startup / open error view
+│   │   ├── create_vault.rs  # two-step in-app create-vault wizard (ChooseMode → EnterPassphrase | ConfirmPlaintext)
+│   │   ├── list.rs        # search + account list (TOTP gauge / HOTP reveal label / Next-code column)
+│   │   ├── help.rs        # read-only help overlay, populated from `keybindings::KEYBINDINGS`
+│   │   ├── add.rs
+│   │   ├── remove.rs
+│   │   ├── rename.rs        # label edit; calls Vault::rename inside Vault::mutate_and_save
+│   │   ├── import.rs        # path + format + on-conflict + (optional) bundle passphrase
+│   │   ├── export.rs        # format + path + overwrite + (encrypted) twice-confirmed passphrase
+│   │   ├── passphrase.rs    # set / change / remove sub-flows
+│   │   └── settings.rs      # auto_lock + clipboard toggles + timeouts
 │   ├── search.rs          # incremental filter over Vault::iter() (§4.7 public surface, yielding &Account in insertion order) using paladin_core::account_matches_search; rows render AccountSummary projections via Account::summary()
-│   ├── clipboard.rs       # arboard writer; schedule + only-if-unchanged decisions route through `paladin_core::policy::clipboard_clear::ClipboardClearPolicy`
-│   ├── auto_lock.rs       # crossterm tick plumbing; idle-deadline math routes through `paladin_core::policy::auto_lock::IdlePolicy` (encrypted-only gating + timer math owned by core)
-│   ├── hotp_reveal.rs     # reveal window per row using `paladin_core::policy::hotp_reveal::deadline(now)`
-│   ├── terminal.rs        # raw mode / alternate-screen guard; restores terminal on exit
-│   ├── theme.rs           # color palette; --no-color / NO_COLOR disables styling
-│   └── prompt.rs          # shared zeroizing passphrase-input widget reused by unlock.rs, modals/passphrase.rs, modals/import.rs (encrypted Paladin bundle), and modals/export.rs (twice-confirmed encrypted bundle)
+│   ├── clipboard.rs       # arboard writer; schedule + only-if-unchanged decisions route through `paladin_core::policy::clipboard_clear::ClipboardClearPolicy`; `test-hooks`-feature dryrun bypass for reducer/effect integration tests
+│   ├── keybindings.rs     # `const KEYBINDINGS: &[KeyBindingRow]` — single source of truth for the help overlay (`view::help`) and the future `cargo xtask man` target so the overlay and man page cannot drift
+│   ├── terminal.rs        # raw mode / alternate-screen guard; restores terminal on normal exit, startup failure, Ctrl-C, and panic unwind
+│   └── prompt.rs          # shared zeroizing passphrase-input widget reused by view::unlock, view::passphrase, view::import (encrypted Paladin bundle), and view::export (twice-confirmed encrypted bundle)
 └── tests/
-    ├── reducer_tests.rs
+    ├── common/mod.rs       # shared test helpers (tempdirs, fixture builders) — referenced via `mod common;` from every integration test
+    ├── reducer_tests.rs    # pure (state, event) → (state, Vec<Effect>) coverage
+    ├── dispatch_tests.rs   # terminal-free event-loop glue: reducer → effect::execute → render closure on each AppEvent; quit + channel-disconnect exit paths
+    ├── effect_tests.rs     # Effect executor coverage (CreateVault, OpenVault, CopyCode, ClearClipboard, AddFromClipboardQr, …) with the test-hooks dryrun clipboard
+    ├── run_tests.rs        # production composer: `run_event_loop` with fake input/ticker spawners drives the channel synchronously without a TTY
+    ├── render_tests.rs     # `app::render` adapter is a no-op around `view::render` — regression guard so the closure cannot drift away from the view layer
+    ├── view_snapshots.rs   # insta golden frames for every screen + modal via `ratatui::backend::TestBackend`
     ├── search_tests.rs
     ├── auto_lock_tests.rs
     ├── clipboard_tests.rs
     ├── hotp_reveal_tests.rs
-    ├── terminal_tests.rs
-    └── snapshots/         # insta golden frames for every screen + modal
+    ├── create_vault_tests.rs   # in-app create-vault wizard (ChooseMode / EnterPassphrase / ConfirmPlaintext) reducer + executor coverage
+    ├── help_tests.rs           # help-overlay open / close / Esc precedence / keybindings-table parity
+    ├── input_tests.rs          # crossterm event → AppEvent translation, including key chords and resize
+    ├── ticker_tests.rs         # TICK_INTERVAL_MS producer + monotonic-vs-wall-clock contract
+    ├── terminal_tests.rs       # raw-mode / alternate-screen guard rollback on drop / panic
+    ├── no_color_tests.rs       # --no-color / NO_COLOR chokepoint via view::theme
+    ├── tui_exec_wrapper.rs     # smoke test: real `paladin` CLI binary execs into the real `paladin-tui` binary on a shared-PATH install
+    └── thinness.rs             # crate boundary contract: paladin-tui Cargo.toml does not pull in crypto/storage deps that belong to paladin-core
 ```
 
 Every new Rust source file carries the standard SPDX header

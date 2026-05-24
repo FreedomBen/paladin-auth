@@ -25,15 +25,19 @@ must live here, not in a sibling crate.
 
 ```
 crates/paladin-core/
-├── Cargo.toml            # license = "AGPL-3.0-or-later"
+├── Cargo.toml            # license = "AGPL-3.0-or-later"; opt-in features for test-fault-injection / zeroize-witness / serde
 ├── src/
 │   ├── lib.rs            # re-exports public surface from §4.7
 │   ├── error.rs          # PaladinError + Result alias; carries core-returnable §5 error_kind values verbatim so the CLI can emit them under --json without renaming or mapping
+│   ├── vault.rs          # Vault impl: add/remove/iter/rename/import_accounts/totp_code/totp_next_code/hotp_*; save/mutate_and_save; is_encrypted() mode getter; passphrase set/change/remove transitions with rollback; AccountSummary projection via summaries()/Account::summary()
+│   ├── text.rs           # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning helpers (CLI / TUI / GUI parity); fixture-pinned wording
+│   ├── ui_contract.rs    # HOTP_REVEAL_SECS, QR_RGBA_MAX_BYTES, TICK_INTERVAL_MS (250 ms TOTP gauge / clipboard-staleness tick shared by TUI + GTK), AUTO_LOCK_SECS_MIN/MAX (30 / 86_400), CLIPBOARD_CLEAR_SECS_MIN/MAX (5 / 600). All shared front-end constants live here so TUI / GUI never hard-code them.
 │   ├── domain/
-│   │   ├── mod.rs        # Public: Account, AccountId, AccountSummary, AccountKindSummary, Algorithm, Code, IconHintInput, AccountKindInput, AccountInput, ValidatedAccount, ValidationWarning, AccountQuery. pub(crate): OtpKind.
+│   │   ├── mod.rs        # Public: Account, AccountId, AccountSummary, AccountKindSummary, Algorithm, Code, IconHintInput, AccountKindInput, AccountInput, ValidatedAccount, ValidationWarning, AccountQuery; Account::summary() projection. pub(crate): OtpKind.
 │   │   ├── secret.rs     # Secret newtype with Zeroize + Drop
 │   │   ├── validation.rs # Shared Account validation (labels, secrets, periods…)
-│   │   ├── view.rs       # Account::summary(), Vault::summaries(); non-secret account projection for all front ends
+│   │   ├── settings.rs   # VaultSettings (auto-lock, clipboard), dotted SettingKey / SettingPatch grammar, typed setters; one validation source for CLI `settings set` and TUI / GUI typed controls
+│   │   ├── import.rs     # Import-flow types: ImportConflict (Skip/Replace/Append), ImportWarning (warning + zero-based source-row index), ImportReport (counts + per-bucket IDs + warnings)
 │   │   ├── match_key.rs  # account_match_key() + account_matches_search(); canonical "{issuer}:{label}" matching used by CLI / TUI / GUI
 │   │   ├── query.rs      # parse_account_query(), Vault::matching_accounts(), Vault::shortest_unique_id_prefix(), select_after_filter()
 │   │   ├── slug.rs       # icon_hint slug rules + issuer-derived defaulting
@@ -43,70 +47,94 @@ crates/paladin-core/
 │   │   ├── totp.rs       # RFC 6238
 │   │   └── hotp.rs       # RFC 4226
 │   ├── otpauth/
-│   │   ├── mod.rs        # otpauth:// parser + emitter
-│   │   └── tests.rs      # round-trip + edge cases
+│   │   └── mod.rs        # otpauth:// parser + emitter (round-trip + edge cases live in tests/proptest_uri_base32.rs)
 │   ├── storage/
-│   │   ├── mod.rs        # Store, default_vault_path, atomic-write pipeline, .bak rotation, export secret-file writer, classify_init_precheck() + InitPrecheck enum shared by CLI init and GUI InitDialog
+│   │   ├── mod.rs        # Store, default_vault_path, atomic-write pipeline, .bak rotation, write_secret_file_atomic (0600 export output; no .bak), classify_init_precheck() + InitPrecheck enum shared by CLI init and GUI InitDialog
 │   │   ├── header.rs     # PALADIN\0 magic, format_ver, mode, KDF/AEAD ids, AAD
 │   │   ├── payload.rs    # bincode v2 VaultPayload encode/decode (16 MiB cap)
 │   │   ├── path.rs       # ProjectDirs data_dir resolver + vault.bin filename
-│   │   ├── secret_file.rs # write_secret_file_atomic (0600 export output; no .bak)
+│   │   ├── fault.rs      # save-pipeline fault injection (test-fault-injection cargo feature only; honors PALADIN_FAULT_INJECT=pre_commit|post_commit|csprng_read|kdf_allocation); production builds compile the hook checks away to no-op stubs
 │   │   ├── perms_unix.rs # 0600/0700 enforcement (Linux v0.1)
 │   │   └── perms_other.rs # Stubs for non-Unix targets
 │   ├── crypto/
 │   │   ├── mod.rs        # KDF + AEAD facades
-│   │   ├── argon2.rs     # Argon2id params/options, defaults, bounds check
-│   │   └── aead.rs       # XChaCha20-Poly1305 with header-AAD wiring
+│   │   ├── kdf.rs        # Argon2id v1.3 wrapper: Argon2Params, defaults, validate() acceptance bounds (m_kib 8192..=1048576, t 1..=10, p 1..=4) so `open` rejects attacker-tunable cost before running the KDF
+│   │   ├── aead.rs       # XChaCha20-Poly1305 with header-AAD wiring
+│   │   ├── buffer.rs     # ZeroizingBytes — pre-/post-AEAD plaintext buffer; encrypt side holds the bincode-serialized payload, decrypt side holds the recovered plaintext; Drop zeroizes before the Vec deallocates
+│   │   └── zeroize_witness.rs # Zeroize-on-drop witness (zeroize-witness cargo feature only); ZeroizingBytes Drop records (site, length, capacity, all-zero?) into a thread-local queue that tests drain via take_observations()
 │   ├── policy/
 │   │   ├── mod.rs        # Re-exports: IdlePolicy, ClipboardClearPolicy, ClipboardClearToken, hotp_reveal_deadline
 │   │   ├── auto_lock.rs  # IdlePolicy: should_arm(is_encrypted, &VaultSettings), next_deadline(now, is_encrypted, &VaultSettings), is_expired(deadline, now). Pure timer math and encrypted-only gating; raw input handling stays in front ends.
 │   │   ├── clipboard_clear.rs # ClipboardClearPolicy: schedule(now, &VaultSettings) → Option<(token, deadline)>, should_clear(captured_value, current_clipboard) → bool. Token issuance is monotonic; the only-if-unchanged decision is shared so TUI/GUI can drive arboard / gdk::Clipboard with identical semantics.
 │   │   └── hotp_reveal.rs # hotp_reveal_deadline(now: Instant) -> Instant using HOTP_REVEAL_SECS; shared by TUI reveal countdown and GUI reveal countdown.
-│   ├── vault.rs          # Vault impl: add/remove/iter/rename/import_accounts/totp_code/hotp_*; save/mutate_and_save; is_encrypted() mode getter
-│   ├── shared_text.rs    # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning helpers (CLI / TUI / GUI parity)
-│   ├── settings.rs       # VaultSettings (auto-lock, clipboard), SettingKey / SettingPatch parsers, setters
-│   ├── passphrase.rs     # set / change / remove transitions, rollback
 │   ├── import/
-│   │   ├── mod.rs        # detect(), classify_paladin_import_precheck(), from_file/from_bytes facade
+│   │   ├── mod.rs        # importer namespace + ImportFormat enum + detect()
+│   │   ├── facade.rs     # public from_bytes / from_file facade with auto-detection + forced-format sanity check (unsupported_import_format if a forced format conflicts with detect())
+│   │   ├── precheck.rs   # classify_paladin_import_precheck — header-only inspection so front-ends know whether to prompt for a Paladin bundle passphrase before invoking from_file
 │   │   ├── otpauth.rs    # URI / line-list / JSON-array (handles Gnome plaintext)
 │   │   ├── aegis.rs      # plaintext JSON; encrypted returns unsupported error
 │   │   ├── paladin.rs    # Paladin bundle import; plaintext returns unsupported
 │   │   └── qr.rs         # rqrr + image
-│   ├── export/
-│   │   ├── mod.rs        # facade
-│   │   ├── otpauth.rs    # JSON array of otpauth:// URIs
-│   │   └── encrypted.rs  # Paladin encrypted bundle
-│   ├── time.rs           # SystemTime helpers (epoch math, overflow rejection)
-│   └── ui_contract.rs    # HOTP_REVEAL_SECS, QR_RGBA_MAX_BYTES, TICK_INTERVAL_MS (250 ms TOTP gauge / clipboard-staleness tick shared by TUI + GTK), AUTO_LOCK_SECS_MIN/MAX (30 / 86_400), CLIPBOARD_CLEAR_SECS_MIN/MAX (5 / 600). All shared front-end constants live here so TUI / GUI never hard-code them.
+│   └── export/
+│       ├── mod.rs            # facade
+│       ├── otpauth_list.rs   # JSON array of otpauth:// URIs
+│       └── encrypted.rs      # Paladin encrypted bundle
 └── tests/
-    ├── rfc_vectors.rs    # RFC 6238 App. B (digits × algorithm cross-product), RFC 4226 App. D, HOTP counter-0 baseline, HOTP MAX-1 → MAX → overflow chain
-    ├── otpauth_roundtrip.rs # parse / emit round-trip + non-string JSON elements + embedded-NUL rejection
-    ├── vault_roundtrip.rs   # both modes
-    ├── vault_lifecycle.rs   # inspect, default_vault_path, create_force, mutate_and_save, is_encrypted
-    ├── init_precheck.rs     # classify_init_precheck mapping for §5 init flow
-    ├── tamper.rs            # encrypted header / ciphertext / tag tamper matrix (per-field named cases)
-    ├── crypto_vectors.rs    # Argon2id + XChaCha20-Poly1305 known-answer vectors
-    ├── perms.rs             # 0600/0700 + unsafe_permissions rejection (per-subject discriminated)
-    ├── shared_text.rs       # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning text fixtures
-    ├── account_summary.rs   # AccountSummary and Code expose no secret bytes; Code is the core projection paired with AccountSummary by CLI show / peek / copy commands
-    ├── match_key.rs         # account_match_key + account_matches_search behavior (empty issuer keeps colon; case preserved)
-    ├── query.rs             # parse_account_query, matching_accounts, shortest_unique_id_prefix, select_after_filter
-    ├── prompt_input.rs      # parse_icon_hint_token: empty → Default, case-insensitive `none` (Unicode-whitespace trim) → Clear, slug → Slug, invalid token → validation_error
-    ├── ui_contract.rs       # HOTP_REVEAL_SECS / QR_RGBA_MAX_BYTES / TICK_INTERVAL_MS / AUTO_LOCK_SECS_MIN/MAX / CLIPBOARD_CLEAR_SECS_MIN/MAX lock-by-fixture
-    ├── policy.rs            # IdlePolicy + ClipboardClearPolicy + hotp_reveal_deadline behavior
-    ├── settings_patch.rs    # parse_setting_key / parse_setting_patch + apply_setting_patch dotted key/value grammar
-    ├── passphrase.rs        # all three transitions + rollback; Vault::is_encrypted reflects each transition outcome; old cached-key buffer is zero post-transition
+    ├── common/mod.rs                    # shared test helpers (tempdirs, fixture builders, in-memory Store wiring) — referenced via `mod common;` from every integration test
+    ├── rfc_vectors.rs                   # RFC 6238 App. B (digits × algorithm cross-product), RFC 4226 App. D, HOTP counter-0 baseline, HOTP MAX-1 → MAX → overflow chain; Argon2id + XChaCha20-Poly1305 known-answer vectors
+    ├── proptest_uri_base32.rs           # otpauth:// parse / emit round-trip + non-string JSON elements + embedded-NUL rejection (property-based)
+    ├── vault_lifecycle.rs               # inspect, default_vault_path, create_force, mutate_and_save, is_encrypted; folds in 0600/0700 + unsafe_permissions rejection per subject
+    ├── vault_account_ops.rs             # add / remove / iter / rename happy paths and rejection rules
+    ├── vault_account_id_errors.rs       # invalid / unknown AccountId rejection per command
+    ├── vault_find_duplicate.rs          # duplicate-account detection on add / rename
+    ├── vault_rename.rs                  # rename validation + persistence + idempotency
+    ├── vault_hotp_advance.rs            # hotp_advance persists and returns the pre-advance counter; peek and totp_code never mutate
+    ├── vault_otp_codes.rs               # totp_code / totp_next_code / hotp_peek surface contracts
+    ├── vault_import_accounts.rs         # Vault::import_accounts merge policies × ImportReport bucket assignments
+    ├── vault_mutate_and_save.rs         # mutate_and_save crash-safety contract (save fails → in-memory state rolls back to pre-mutation snapshot)
+    ├── vault_settings_setters.rs        # typed setters (auto_lock, clipboard) honor §4.7 bounds and emit validation_error for out-of-range input
+    ├── vault_stress.rs                  # high-account-count round-trip + many-mutate-and-save iterations
+    ├── encrypted_lifecycle.rs           # encrypted-mode open / mutate / save / re-open round-trip across the full §4.4 header surface
+    ├── encrypted_save_format.rs         # exact byte layout of the encrypted header and the AAD-bound fields
+    ├── encrypted_tamper.rs              # encrypted header / ciphertext / tag tamper matrix (per-field named cases)
+    ├── encryption_options.rs            # EncryptionOptions::new validation (empty passphrase rejection, Argon2 bounds)
+    ├── aead_key_cache.rs                # cached AEAD key invalidation on passphrase transitions
+    ├── icon_hint_input.rs               # parse_icon_hint_token: empty → Default, case-insensitive `none` (Unicode-whitespace trim) → Clear, slug → Slug, invalid token → validation_error
+    ├── match_key.rs                     # account_match_key + account_matches_search behavior (empty issuer keeps colon; case preserved)
+    ├── query.rs                         # parse_account_query, matching_accounts, shortest_unique_id_prefix, select_after_filter
+    ├── settings_grammar.rs              # parse_setting_key / parse_setting_patch + apply_setting_patch dotted key/value grammar
+    ├── validate_label.rs                # label-validation rules: byte-length cap, control-char rejection, embedded-NUL rejection
+    ├── validation_constants.rs          # public validation constants surface contract
+    ├── ui_contract.rs                   # HOTP_REVEAL_SECS / QR_RGBA_MAX_BYTES / TICK_INTERVAL_MS / AUTO_LOCK_SECS_MIN/MAX / CLIPBOARD_CLEAR_SECS_MIN/MAX lock-by-fixture
+    ├── policy.rs                        # IdlePolicy + ClipboardClearPolicy + hotp_reveal_deadline behavior
+    ├── passphrase_transitions.rs        # all three transitions (set / change / remove) + rollback; Vault::is_encrypted reflects each transition outcome
+    ├── passphrase_transitions_zeroize.rs # old cached-key buffer is zero post-transition; per-transition zeroize witness
+    ├── passphrase_transitions_fault.rs  # fault-injection coverage for each transition (pre/post commit failure modes)
+    ├── import_detect.rs                 # detect() auto-detection truth table across every supported source shape
+    ├── import_facade.rs                 # from_bytes / from_file public facade incl. forced-format vs detected-format conflict (unsupported_import_format)
     ├── import_otpauth.rs
     ├── import_aegis.rs
     ├── import_paladin.rs
-    ├── import_paladin_precheck.rs # shared CLI / TUI / GUI encrypted-bundle prompt classifier
+    ├── import_precheck.rs               # shared CLI / TUI / GUI encrypted-bundle prompt classifier
     ├── import_qr.rs
-    ├── export_writer.rs
-    ├── error_matrix.rs      # one test per §5 core-returnable error_kind asserting kind + every stable extra field
-    ├── send_assertions.rs   # static Send (and Sync where required) assertions for every public type that crosses a thread boundary
-    ├── no_network.rs        # source / metadata guard proving production paladin-core has no network API or network-stack deps
-    ├── fault_injection.rs   # cross-save-site coverage for the test-fault-injection feature
-    └── zeroize.rs           # controlled zeroize assertions
+    ├── export_encrypted.rs              # encrypted bundle export round-trip
+    ├── export_encrypted_fresh_material.rs # every export creates a fresh salt + nonce; never re-uses prior bytes
+    ├── export_otpauth_list.rs           # JSON-array-of-otpauth-URIs writer
+    ├── error_display.rs                 # PaladinError Display impl: stable text for every variant
+    ├── error_serde.rs                   # PaladinError JSON envelope shape (per §5)
+    ├── error_matrix.rs                  # one test per §5 core-returnable error_kind asserting kind + every stable extra field
+    ├── display_impls.rs                 # Display impls for public types (no secret bytes leak)
+    ├── text_formatters.rs               # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning text fixtures
+    ├── secret_audits.rs                 # compile-time non-impl assertions for secret-bearing types (no Debug, no Serialize)
+    ├── send_assertions.rs               # static Send (and Sync where required) assertions for every public type that crosses a thread boundary
+    ├── trybuild_audit.rs                # entry point that runs the trybuild/ compile-fail fixtures so Secret / AccountInput / Account cannot be Debug-printed or Serialize-d
+    ├── trybuild/account_input_not_debug.rs   # compile-fail fixture: `format!("{:?}", AccountInput)` must not compile
+    ├── trybuild/account_not_serialize.rs     # compile-fail fixture: `serde_json::to_string(&Account)` must not compile
+    ├── trybuild/secret_not_debug.rs          # compile-fail fixture: `format!("{:?}", Secret)` must not compile
+    ├── trybuild/secret_not_serialize.rs      # compile-fail fixture: `serde_json::to_string(&Secret)` must not compile
+    ├── no_network.rs                     # source / metadata guard proving production paladin-core has no network API or network-stack deps
+    ├── fault_injection.rs                # cross-save-site coverage for the test-fault-injection feature
+    └── zeroize_witness.rs                # controlled zeroize assertions via the zeroize-witness feature
 ```
 
 ## Milestone sequencing (TDD: red → green → refactor)

@@ -39,48 +39,57 @@ crates/paladin-gtk/
 │   ├── main.rs            # adw::init, register resources, RelmApp::new("org.tamx.Paladin.Gui").run(...) — ID matches the §11.4 Flatpak app ID and the desktop file's StartupWMClass
 │   ├── cli.rs             # GlobalArgs (--vault, --no-color); reject --json
 │   ├── app/
-│   │   ├── mod.rs         # AppModel + AppMsg + AppOutput
+│   │   ├── mod.rs         # app submodule namespace
+│   │   ├── model.rs       # AppModel + AppMsg + AppOutput; owns the resolved vault path, the toast_queue, the current_toast, the search controller, and the in-flight effect ownership token
 │   │   └── state.rs       # AppState variants: Missing / Locked / Unlocked / UnlockedBusy / StartupError
-│   ├── components/
-│   │   ├── init.rs        # InitDialog — vault creation (incl. create_force clobber confirmation)
-│   │   ├── unlock.rs      # UnlockComponent — encrypted vaults only
-│   │   ├── startup_error.rs # non-mutating startup/open error view
-│   │   ├── account_list.rs    # AccountListComponent (gtk::ColumnView + gtk::SingleSelection + gio::ListStore<RowItem>)
-│   │   ├── account_row.rs     # Pure projection helpers + RowDisplay shape consumed by the column_view cell factories
-│   │   ├── column_view.rs     # Cell factories + splice/sort/interleave helpers for the AccountListComponent ColumnView
-│   │   ├── row_item.rs        # RowItem GObject (account_id, display, icon_hint, issuer, busy) backing the gio::ListStore
-│   │   ├── add_account.rs     # AddAccountComponent (manual fields + otpauth:// URI paste + paste image)
-│   │   ├── remove.rs          # RemoveDialog (confirmation gate)
-│   │   ├── rename.rs          # RenameDialog (label edit; calls Vault::rename)
-│   │   ├── import.rs          # ImportDialog (file picker + format + on-conflict + bundle passphrase)
-│   │   ├── export.rs          # ExportDialog (file picker + format + overwrite + encrypted passphrase)
-│   │   ├── passphrase.rs      # PassphraseDialog (set / change / remove flows)
-│   │   └── settings.rs        # SettingsComponent (toggles + spinners)
+│   ├── account_list.rs    # AccountListComponent (gtk::ColumnView + gtk::SingleSelection + gio::ListStore<RowItem>)
+│   ├── account_row.rs     # Pure projection helpers + RowDisplay shape consumed by the column_view cell factories
+│   ├── column_view.rs     # Cell factories + splice/sort/interleave helpers for the AccountListComponent ColumnView
+│   ├── row_item.rs        # RowItem GObject (account_id, display, icon_hint, issuer, busy) backing the gio::ListStore
+│   ├── add_account.rs     # AddAccountComponent (manual fields + otpauth:// URI paste + paste image)
+│   ├── remove_dialog.rs   # RemoveDialog (confirmation gate before Vault::remove inside Vault::mutate_and_save)
+│   ├── rename_dialog.rs   # RenameDialog (label edit; calls Vault::rename inside Vault::mutate_and_save)
+│   ├── import_dialog.rs   # ImportDialog (file picker + format + on-conflict + bundle passphrase)
+│   ├── export_dialog.rs   # ExportDialog (file picker + format + overwrite + encrypted passphrase)
+│   ├── passphrase_dialog.rs # PassphraseDialog (set / change / remove flows)
+│   ├── init_dialog.rs     # InitDialog — vault creation from the GUI (incl. create_force clobber confirmation)
+│   ├── unlock_dialog.rs   # UnlockComponent — encrypted vaults only (passphrase entry)
+│   ├── startup_error.rs   # non-mutating startup / open error view
+│   ├── settings.rs        # SettingsComponent (`AdwPreferencesDialog` with toggles + spinners over the §4.7 VaultSettings fields)
+│   ├── otpauth_uri_paste.rs # `otpauth://`-paste pure-logic state machine for the AddAccount URI sub-path; validates via paladin_core::parse_otpauth
+│   ├── qr_clipboard.rs    # Clipboard-QR "scan from clipboard image" pure-logic glue: gdk::Texture → RGBA buffer (bounded by QR_RGBA_MAX_BYTES) → paladin_core::import::qr decoding
+│   ├── effect_ownership.rs # In-flight vault-effect ownership state machine: serializes every vault-touching blocking effect through one slot so the UI rejects re-entry while a save is mid-flight
+│   ├── toast_queue.rs     # Newest-wins toast collapse queue with a TOAST_MIN_VISIBLE (1 s) minimum-visible guarantee; every add_toast site in AppModel funnels through ToastQueue so back-to-back toasts on the shared adw::ToastOverlay stop stacking
+│   ├── shortcuts_window.rs # `gtk::ShortcutsWindow` content + `format_app_shortcuts_window_*` helpers shared with the primary menu, the `gio::Application::set_accels_for_action` table, and the `tests/startup_probes.rs` lockstep pin
 │   ├── clipboard.rs       # gdk::Clipboard plumbing driving paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+│   ├── clipboard_clear.rs # Clipboard auto-clear pure-logic glue; GUI owns the gdk::Clipboard reads/writes + glib timeout source, but every policy decision routes through paladin_core::policy::clipboard_clear (Zeroizing<Vec<u8>> for the captured value)
 │   ├── auto_lock.rs       # GLib idle/timeout plumbing driving paladin_core::policy::auto_lock::IdlePolicy (encrypted-only; plaintext no-op)
-│   ├── gsettings.rs       # per-user gio::Settings access for the show-section-headers / show-column-headers / show-next-code-column schema keys (and any future GUI-only prefs)
 │   ├── hotp_reveal.rs     # per-row reveal window via paladin_core::policy::hotp_reveal::deadline (uses paladin_core::HOTP_REVEAL_SECS)
-│   ├── icons.rs           # gtk::IconTheme lookup against AccountSummary.icon_hint
-│   ├── secret_fields.rs   # extract/clear passphrase + manual-secret entries
+│   ├── icon_resolution.rs # gtk::IconTheme lookup against AccountSummary.icon_hint via the pure `resolve_display_icon` decision function
+│   ├── gsettings.rs       # per-user gio::Settings access for the show-section-headers / show-column-headers / show-next-code-column schema keys (and any future GUI-only prefs)
+│   ├── secret_fields.rs   # extract/clear passphrase + manual-secret entries; keeps secret-bearing widget state out of AppModel / AppMsg / AppOutput per DESIGN §8
 │   ├── search.rs          # case-insensitive issuer/label filtering using paladin_core::account_matches_search (parity with CLI / TUI)
-│   └── ticker.rs          # paladin_core::TICK_INTERVAL_MS timeout source for TOTP gauge updates and clipboard staleness checks
+│   └── ticker.rs          # paladin_core::TICK_INTERVAL_MS glib::timeout_add_local source for TOTP gauge updates, Next-code projection, and clipboard staleness checks; install / teardown gated on AppState
 └── tests/
     ├── icon_resolution.rs
     ├── search_logic.rs
+    ├── search_focus_logic.rs       # window-level search-focus controller: routes "/" / Ctrl+F to the search entry, suppresses while modals are open
     ├── cli_global_args.rs
-    ├── startup_probes.rs
+    ├── startup_probes.rs           # pinned lockstep tests over the primary menu, ShortcutsWindow, and `set_accels_for_action` table
     ├── app_state_logic.rs
-    ├── auto_lock_logic.rs        # pure logic; no display required
-    ├── clipboard_logic.rs        # pure logic; no display required
-    ├── clipboard_clear_logic.rs  # pure logic; no display required
+    ├── auto_lock_logic.rs          # pure logic; no display required
+    ├── clipboard_logic.rs          # pure logic; no display required
+    ├── clipboard_clear_logic.rs    # pure logic; no display required
     ├── hotp_reveal_logic.rs
     ├── secret_fields_logic.rs
+    ├── secret_message_boundaries.rs # AppMsg / AppOutput / AppModel must not carry SecretString or secret-bearing AccountInput fields (compile-time + runtime assertions per DESIGN §8)
     ├── startup_error_logic.rs
     ├── qr_clipboard_logic.rs
     ├── account_list_logic.rs
+    ├── account_list_nav_logic.rs   # arrow-key / page navigation routing into AccountListComponent (focus ring, wrap behavior, modal-open suppression)
     ├── account_row_logic.rs
-    ├── column_view_logic.rs      # pure-logic splice plan, interleave helper, account-column sorter
-    ├── row_item_logic.rs         # RowItem GObject: from_row_model, display/busy setters, display-changed signal
+    ├── column_view_logic.rs        # pure-logic splice plan, interleave helper, account-column sorter
+    ├── row_item_logic.rs           # RowItem GObject: from_row_model, display/busy setters, display-changed signal
     ├── init_dialog_logic.rs
     ├── unlock_dialog_logic.rs
     ├── add_account_logic.rs
@@ -91,12 +100,28 @@ crates/paladin-gtk/
     ├── export_dialog_logic.rs
     ├── passphrase_dialog_logic.rs
     ├── settings_logic.rs
-    ├── gsettings_logic.rs        # pure logic; loads build.rs-compiled gschema from OUT_DIR
+    ├── gsettings_logic.rs          # pure logic; loads build.rs-compiled gschema from OUT_DIR
     ├── effect_ownership_logic.rs
+    ├── toast_queue_logic.rs        # newest-wins toast collapse truth table: initial commit, defer-within-window, newest-pending-wins on repeat defer, idle drain, reopen-on-drain, multi-cycle sequencing, TOAST_MIN_VISIBLE figure
+    ├── ticker_logic.rs             # TICK_INTERVAL_MS install / teardown gating against AppState (encrypted-locked teardown, unlocked install) and per-tick projection wiring
     ├── no_tokio_source.rs
     ├── thinness.rs
-    ├── manual_test_plan_doc.rs
-    ├── gtk_smoke.rs              # xvfb-run integration smoke test
+    ├── desktop_entry_logic.rs      # `data/org.tamx.Paladin.Gui.desktop` fields (Name, Categories, Exec, StartupWMClass) match §11.4 + match the binary
+    ├── metainfo_logic.rs           # AppStream metainfo XML schema sanity checks (release notes, component-id, content-rating, summary length)
+    ├── icon_assets_logic.rs        # required app icon sizes + scalable SVG presence; filenames match the app ID
+    ├── gresource_manifest_logic.rs # gresource bundle includes every *.ui / *.css / icon path the runtime needs
+    ├── cargo_manifest_workspace_inheritance_logic.rs # the crate manifest inherits each shared metadata field via per-field workspace inheritance per §"Cargo manifest"
+    ├── ci_desktop_metainfo_validators_logic.rs       # CI invokes desktop-file-validate / appstreamcli validate against installed assets
+    ├── ci_packaging_dry_run_logic.rs                 # CI packaging dry run: every nfpm / flatpak / appimage manifest builds without network access
+    ├── packaging_appimage_build_script_logic.rs
+    ├── packaging_deb_nfpm_manifest_logic.rs
+    ├── packaging_flathub_submission_logic.rs
+    ├── packaging_flatpak_manifest_logic.rs
+    ├── packaging_reproducible_build_logic.rs
+    ├── packaging_rpm_nfpm_manifest_logic.rs
+    ├── packaging_signing_script_logic.rs
+    ├── manual_test_plan_doc.rs                       # asserts the `tests/manual/MANUAL_TEST_PLAN.md` file is present + non-empty + tracks every Milestone 7 manual sign-off bullet
+    ├── gtk_smoke.rs                                  # xvfb-run integration smoke test
     └── manual/MANUAL_TEST_PLAN.md
 ```
 
