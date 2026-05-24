@@ -183,18 +183,49 @@ header per §4.4, so opening is unaffected.
 ## Layout (per §6)
 
 ```
-┌ Paladin ─────────────────────────────────────────────────┐
-│ Search: ____________                                     │
-├──────────────────────────────────────────────────────────┤
-│ ▶ GitHub (ben@…)        123 456   ████████░░  18s        │
-│   AWS prod              987 654   ████░░░░░░   8s        │
-│   AWS-HOTP (#42)        ▸ press n to advance             │
-├──────────────────────────────────────────────────────────┤
-│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find│
-└──────────────────────────────────────────────────────────┘
+┌ Paladin ──────────────────────────────────────────────────────────────┐
+│ Search: ____________                                                  │
+├───────────────────────────────────────────────────────────────────────┤
+│ ▶ GitHub (ben@…)        123 456   ↪ 482 913   ████████░░  18s         │
+│   AWS prod              987 654   ↪ 391 044   ████░░░░░░   8s         │
+│   AWS-HOTP (#42)        ▸ press n to advance                          │
+├───────────────────────────────────────────────────────────────────────┤
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add [/]find│
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 - TOTP rows render a live `Gauge` countdown; re-rendered on every `paladin_core::TICK_INTERVAL_MS` tick.
+- **Next-code column** (TOTP rows only, per DESIGN §6): rendered between
+  the current code and the progress gauge as `↪ NNN NNN` with
+  `Style::default().add_modifier(Modifier::DIM)`. Resolved at render
+  time via `Vault::totp_next_code(id, now)` so the boundary math
+  stays in core; the row holds the resulting `Code` only for the
+  duration of the render pass and never copies it into application
+  state (the `Code`'s `SecretString` zeroizes on drop at the end of
+  `draw_frame`). HOTP rows leave the cell empty — HOTP has no
+  time-based "next code." The column reserves a fixed width
+  (`" ↪ NNN NNN"` ≈ 11 cells with single-space digit grouping) and
+  collapses to zero width when the visible filter contains no TOTP
+  rows, mirroring how the gauge column is suppressed in HOTP-only
+  states. Render is exercised by an `insta` golden snapshot
+  (`tests/snapshots/`) covering mixed-kind, TOTP-only, and HOTP-only
+  vaults.
+- **Copy-next (`C`)**: pressing `Shift+C` while the list has focus and
+  the selected row is TOTP dispatches an `Effect::CopyCode`
+  variant scoped to the next-window code (executor calls
+  `Vault::totp_next_code(id, now)` instead of `Vault::totp_code`),
+  routes through the same `paladin_tui::clipboard::write_text`
+  pipeline as `Enter` / `c`, and on success surfaces a status-line
+  confirmation of the form `next code copied, valid in 18s` —
+  seconds = `period - (now_unix % period)`. Pressing `C` on a HOTP row
+  is rejected with the status-line message
+  `no next code for HOTP accounts` (no `Effect` dispatched, no
+  vault read). The `pending_clipboard_clear` / `ClipboardClearPolicy`
+  arming behaviour is identical to `Enter` / `c`; the executor's
+  `EffectResult::CopyCode` arm distinguishes "current" vs "next"
+  only for the status-line message text. `C` is suppressed (silent
+  no-op) when the search bar has focus or any modal is open, matching
+  the existing letter-keybind suppression rules.
 - HOTP rows: when hidden, the code area shows the prompt
   `▸ press n to advance` and the row's `(#counter)` is shown in the
   label-suffix slot using the stored next counter (matching DESIGN §6).
@@ -648,6 +679,7 @@ reaches the primary-file commit point with durability still uncertain:
 | `Ctrl-P` `Ctrl-N`                  | Previous / next row (readline-style mirrors of `↑` / `↓`)                                             |
 | `zz`                               | Recenter viewport on selected row (vim-style two-press chord)                                         |
 | `Enter`                            | Copy selected code (TOTP: current; HOTP: visible only)                                                |
+| `C` (Shift-c)                      | Copy selected row's **next** code (TOTP only; rejected on HOTP with status-line message)              |
 | `n`                                | HOTP next-code (advances + reveals `HOTP_REVEAL_SECS`)                                                |
 | `a`                                | Open Add modal                                                                                        |
 | `r`                                | Open Remove confirmation                                                                              |
@@ -1896,6 +1928,44 @@ end-to-end.
   and do not create or mutate files.
 - [x] `unsafe_permissions` rendering uses the `Some(text)` from
   `format_unsafe_permissions` verbatim.
+
+### Next-code column (`tests/reducer_tests.rs`, `tests/effect_tests.rs`, `tests/snapshots/`)
+
+Coverage for the §6 "Next code column" feature. Boundary math lives in
+`Vault::totp_next_code`; the TUI is responsible for rendering the
+dim-styled `↪ NNN NNN` cell, dispatching the `C` keybind, and
+producing the `next code copied, valid in Xs` status-line message.
+
+- [ ] `C` on the list with a selected TOTP row dispatches the next-code
+  `Effect::CopyCode` variant; reducer leaves `pending_clipboard_clear`
+  untouched until the executor reports `Ok`. *(reducer test)*
+- [ ] `C` on the list with a selected HOTP row surfaces the
+  `no next code for HOTP accounts` status-line message and dispatches
+  no `Effect`. *(reducer test)*
+- [ ] `C` is a silent no-op when the search bar has focus, when any
+  modal is open, when the filtered set is empty, or when no row is
+  selected. *(reducer test, four cases)*
+- [ ] Executor's next-code `Effect::CopyCode` arm resolves the code via
+  `Vault::totp_next_code(id, now)`, writes through
+  `paladin_tui::clipboard::write_text`, and posts
+  `EffectResult::CopyCode { account_id, result: Ok(..), .. }`. The
+  reducer's success arm seeds the status line with
+  `next code copied, valid in {period - (now_unix % period)}s` and
+  arms `pending_clipboard_clear` identically to the current-code path.
+  *(effect test + reducer test)*
+- [ ] `arboard` write failure surfaces the existing
+  `clipboard_write_failed` status-line error without scheduling.
+  *(effect test)*
+- [ ] Render snapshot covers a mixed TOTP+HOTP vault: TOTP rows show
+  `↪ NNN NNN` in dim style, HOTP rows leave the cell blank, and
+  column width is consistent across rows. *(`tests/snapshots/`)*
+- [ ] Render snapshot covers an HOTP-only vault: the next-code column
+  is fully suppressed (zero width), mirroring the gauge-column
+  suppression. *(`tests/snapshots/`)*
+- [ ] The `Code` returned by `Vault::totp_next_code` is dropped at the
+  end of the render pass; no copy persists in `AppState` between
+  ticks. *(reducer / state test asserting `Unlocked` carries no
+  cached next-code field)*
 
 ### Insta snapshots (`tests/snapshots/`)
 

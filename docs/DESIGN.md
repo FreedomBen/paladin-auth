@@ -157,6 +157,14 @@ secrets between 10 and 15 bytes inclusive.
   `totp_code` rejects `SystemTime` values before the Unix epoch instead of
   saturating, and returns a time-range error if `valid_until` would overflow
   `u64`.
+- **TOTP next-code:** `totp_next_code` returns the code for the next
+  window — counter `floor(now_unix / period) + 1`. It pins `now` to the
+  next window's start (`((now_unix / period) + 1) * period`) and delegates
+  to the same primitive as `totp_code`, so RFC 6238 coverage, the
+  pre-epoch rejection, and the `u64` overflow guard apply identically.
+  At an exact window boundary the result is the code for the window
+  immediately after the boundary, never two windows ahead. Used by the
+  TUI / GTK "Next" column (§6 / §7); the CLI never calls it.
 - **HOTP:** RFC 4226, same primitives. Validate against RFC 4226 Appendix D
   test vectors. Both entry points compute `HOTP(K, C)` for the current
   stored counter `C`; they differ only in whether they mutate state:
@@ -828,6 +836,7 @@ impl Vault {
     pub fn find_duplicate(&self, account: &ValidatedAccount) -> Option<&Account>;  // exact (secret, issuer, label) collision helper for single-entry add flows
     pub fn import_accounts(&mut self, accounts: Vec<ValidatedAccount>, policy: ImportConflict, now: SystemTime) -> Result<ImportReport>;  // applies the §5 merge policy
     pub fn totp_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;       // TOTP only; errors on HOTP entries
+    pub fn totp_next_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;  // TOTP only; code for the next window (`((now/period)+1)*period`); errors on HOTP entries
     pub fn hotp_peek(&self, id: AccountId) -> Result<Code>;                        // HOTP only; does not advance
     pub fn hotp_advance(&mut self, store: &Store, id: AccountId, now: SystemTime) -> Result<Code>;  // HOTP only; advances counter, updates `updated_at`, and saves atomically
     pub fn matching_accounts(&self, query: &AccountQuery) -> Vec<&Account>;         // shared selector matching; callers apply command-specific cardinality rules
@@ -1007,6 +1016,8 @@ calling these methods:
 | `rename`       | `account_not_found` | No account exists for the ID.   |
 | `totp_code`    | `account_not_found` | No account exists for the ID.   |
 | `totp_code`    | `not_totp`          | The account is HOTP.            |
+| `totp_next_code` | `account_not_found` | No account exists for the ID. |
+| `totp_next_code` | `not_totp`        | The account is HOTP.            |
 | `hotp_peek`    | `account_not_found` | No account exists for the ID.   |
 | `hotp_peek`    | `not_hotp`          | The account is TOTP.            |
 | `hotp_advance` | `account_not_found` | No account exists for the ID.   |
@@ -1518,18 +1529,37 @@ Library: **ratatui** + **crossterm**. Helpers: `tui-input` (text fields).
 Layout (single-screen MVP):
 
 ```
-┌ Paladin ─────────────────────────────────────────────────┐
-│ Search: ____________                                     │
-├──────────────────────────────────────────────────────────┤
-│ ▶ GitHub (ben@…)        123 456   ████████░░  18s        │
-│   AWS prod              987 654   ████░░░░░░   8s        │
-│   AWS-HOTP (#42)        ▸ press n to advance             │
-├──────────────────────────────────────────────────────────┤
-│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find│
-└──────────────────────────────────────────────────────────┘
+┌ Paladin ──────────────────────────────────────────────────────────────┐
+│ Search: ____________                                                  │
+├───────────────────────────────────────────────────────────────────────┤
+│ ▶ GitHub (ben@…)        123 456   ↪ 482 913   ████████░░  18s         │
+│   AWS prod              987 654   ↪ 391 044   ████░░░░░░   8s         │
+│   AWS-HOTP (#42)        ▸ press n to advance                          │
+├───────────────────────────────────────────────────────────────────────┤
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add [/]find│
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 - TOTP rows: live `Gauge` countdown, re-render on a 250 ms tick.
+- **Next code column** (TOTP rows only): immediately to the right of the
+  current code, render the code for the next 30-second window prefixed
+  with `↪ ` and styled with `Style::default().add_modifier(Modifier::DIM)`.
+  The dim styling plus the `↪` glyph signal "upcoming, not the live one"
+  without requiring the user to read the column header. Computed via
+  `paladin_core::Vault::totp_next_code(id, now)` so the boundary math
+  (next window start = `((now_secs / period) + 1) * period`) lives in
+  core. HOTP rows leave this cell blank — HOTP has no time-based "next";
+  the next code only exists after a deliberate counter advance. The
+  column is shown whenever any visible row is TOTP and hidden entirely
+  in HOTP-only vaults (parity with the existing progress / countdown
+  columns). Pressing `C` (shift-c) on the selected row copies the next
+  code to the clipboard and emits a status-line confirmation of the form
+  `next code copied, valid in 18s` (where the seconds value is the
+  remainder of the current window). `C` on a HOTP row is rejected with
+  a status-line message (`no next code for HOTP accounts`); the next
+  code itself is held in a `SecretString` and zeroized after the copy
+  effect resolves, matching the §6 secret-handling rules for the
+  current code.
 - HOTP rows: code is hidden until the user presses `n` (advances counter
   and saves); after the shared `paladin_core::HOTP_REVEAL_SECS`
   reveal window (120 seconds), returns to the hidden
@@ -1675,15 +1705,37 @@ Library: **Relm4** on **GTK4**. Component tree:
   Preferences dialog's "Display" group and is per-user (not
   per-vault); it is GUI-only and is never persisted inside the
   vault payload.
-- `AccountRowComponent` — label, code, progress (TOTP) / "next" button (HOTP),
-  copy button. HOTP rows hide their code until the user activates "next"
-  (advances counter and saves); after the shared
+- `AccountRowComponent` — label, code, next code (TOTP), progress (TOTP) /
+  "next" button (HOTP), copy button. HOTP rows hide their code until the
+  user activates "next" (advances counter and saves); after the shared
   `paladin_core::HOTP_REVEAL_SECS` reveal window (120 seconds) the code
   returns to the hidden state, matching the TUI. Hidden rows show the stored
   next counter; revealed rows show the counter that produced the visible
   code until the reveal expires. Copying a hidden HOTP row is disabled;
   copying during the reveal window copies the visible code and does not
   advance again.
+- **Next code column** (GTK `gtk::ColumnView`, header `Next`): inserted
+  between the existing `Code` and `Time` columns. TOTP rows render the
+  upcoming 30-second-window code (computed via
+  `paladin_core::Vault::totp_next_code(id, now)`) prefixed with `↪ ` and
+  the `.dim-label` CSS class applied to the `gtk::Label`, mirroring the
+  TUI's dim styling so the cell visually reads as "upcoming, not live."
+  HOTP rows leave the cell empty (the `gtk::Label` text is `""` with no
+  glyph). Column visibility is controlled by the per-user
+  `show-next-code-column` GSettings key (schema `org.tamx.Paladin.Gui`,
+  **default `true`**, exposed in the Preferences "Display" group); when
+  the key is enabled the column is additionally auto-hidden in
+  HOTP-only vaults via the same `column_view::any_totp(&rows)` check that
+  gates the `Time` column. Clicking a populated Next cell copies the
+  next code through the shared
+  `prepare_copy_bytes` / `gdk::Clipboard::set_text` /
+  `schedule_copy` pipeline used by the Copy column, and a
+  `gtk::Toast` is added to the `adw::ToastOverlay` reading
+  `Next code copied, valid in 18s` (seconds = remainder of the current
+  window). The clicked cell never advances any counter and is inert on
+  HOTP rows. The next-code `Code` is held in a `SecretString` for the
+  lifetime of the bind and zeroized when the cell is unbound or the row
+  re-renders, matching the §7 secret-handling rules for the current code.
 - `AddAccountComponent` — manual fields + paste of an `otpauth://` URI
   (decoded via `paladin_core::parse_otpauth`) + "scan from clipboard
   image" decoded through the core raw-RGBA QR import path. URI and
@@ -1740,6 +1792,8 @@ lockstep.
 | `Down` / `Ctrl+J` / `Ctrl+N` | Search entry | Hands focus to the first row of the filtered list.                           |
 | `Enter` (or double-click) | TOTP row, or HOTP row with a visible code | Copy the code to the clipboard.                                              |
 | `Enter` (or double-click) | HOTP row with a hidden code | Advance the counter, reveal the new code, then copy it.                      |
+| Click on Next cell        | TOTP row (Next column enabled) | Copy the next code; toast reads `Next code copied, valid in Xs`. Inert on HOTP rows. |
+| `Ctrl+Shift+C`            | TOTP row (Next column enabled) | Keyboard mirror of clicking the Next cell on the selected row.            |
 | `Esc`             | Dialog             | Dismiss the dialog (bare press; no Ctrl / Shift / Alt / Super / Hyper / Meta).|
 | `Enter`           | Dialog             | Activate the default button.                                                 |
 | `Tab` / `Shift+Tab` | Window or dialog | Standard GTK focus traversal.                                                |

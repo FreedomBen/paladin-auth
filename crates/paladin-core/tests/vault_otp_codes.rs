@@ -221,3 +221,118 @@ fn totp_code_does_not_mutate_vault_or_touch_store() {
         "totp_code must not rewrite the primary vault file",
     );
 }
+
+// ---- totp_next_code -----------------------------------------------
+
+#[test]
+fn totp_next_code_returns_code_for_following_window() {
+    // §4.2: at T=59 the active counter is `floor(59/30) = 1` and
+    // `totp_code` produces the RFC 6238 SHA1 vector "94287082".
+    // `totp_next_code` must produce the code for counter 2 — the
+    // window [60, 90) — independently of where inside the current
+    // window `now` falls.
+    let (mut vault, _store, _dir) = vault_with_path();
+    let id = vault.add(make_totp_account("alice", 30, 8));
+
+    let current = vault.totp_code(id, at_unix(59)).expect("totp_code");
+    let next = vault
+        .totp_next_code(id, at_unix(59))
+        .expect("totp_next_code");
+
+    // The two codes must differ (counter shifted by one).
+    assert_ne!(current.code, next.code);
+    // The next-code validity window is the one immediately following
+    // the current window: [60, 90).
+    assert_eq!(next.valid_from, Some(60));
+    assert_eq!(next.valid_until, Some(90));
+    // Pinning `now` to the next window's start means `seconds_remaining`
+    // always reports the full period.
+    assert_eq!(next.seconds_remaining, Some(30));
+    // TOTP projections leave `counter_used` unset; the next-code path
+    // is no exception.
+    assert!(next.counter_used.is_none());
+
+    // Stepping `now` anywhere inside the same window yields the same
+    // next code (the math depends on the active counter, not the
+    // sub-second position).
+    let next_at_30 = vault
+        .totp_next_code(id, at_unix(30))
+        .expect("totp_next_code at 30");
+    let next_at_45 = vault
+        .totp_next_code(id, at_unix(45))
+        .expect("totp_next_code at 45");
+    assert_eq!(next_at_30.code, next.code);
+    assert_eq!(next_at_45.code, next.code);
+}
+
+#[test]
+fn totp_next_code_on_window_boundary_returns_window_after_boundary() {
+    // DESIGN §4.2: at an exact window boundary the result is the code
+    // for the window immediately after the boundary, never two
+    // windows ahead.  At T=60 the active counter is 2 ([60, 90));
+    // `totp_next_code` must return the code for counter 3 ([90, 120)),
+    // not counter 4.
+    let (mut vault, _store, _dir) = vault_with_path();
+    let id = vault.add(make_totp_account("alice", 30, 8));
+
+    let next = vault
+        .totp_next_code(id, at_unix(60))
+        .expect("totp_next_code on boundary");
+
+    assert_eq!(next.valid_from, Some(90));
+    assert_eq!(next.valid_until, Some(120));
+    assert_eq!(next.seconds_remaining, Some(30));
+
+    // Sanity: `totp_code` at T=60 selects counter 2 ([60, 90));
+    // `totp_next_code` is one window beyond that, never two.
+    let current = vault.totp_code(id, at_unix(60)).expect("totp_code");
+    assert_eq!(current.valid_from, Some(60));
+    assert_ne!(current.code, next.code);
+}
+
+#[test]
+fn totp_next_code_matches_totp_code_for_next_window_start() {
+    // Equivalence check: `totp_next_code(id, now)` must equal
+    // `totp_code(id, next_window_start)` so callers that prefer to
+    // peek manually (e.g. when computing both a code and its
+    // `valid_*` fields at the same moment) get matching results.
+    let (mut vault, _store, _dir) = vault_with_path();
+    let id = vault.add(make_totp_account("alice", 30, 6));
+
+    let now = at_unix(1_700_000_017);
+    // floor(1_700_000_017 / 30) = 56_666_667, +1 = 56_666_668;
+    // 56_666_668 * 30 = 1_700_000_040 (next window start).
+    let next_window_start = at_unix(1_700_000_040);
+
+    let via_next = vault.totp_next_code(id, now).unwrap();
+    let via_direct = vault.totp_code(id, next_window_start).unwrap();
+
+    assert_eq!(via_next.code, via_direct.code);
+    assert_eq!(via_next.valid_from, via_direct.valid_from);
+    assert_eq!(via_next.valid_until, via_direct.valid_until);
+    assert_eq!(via_next.seconds_remaining, via_direct.seconds_remaining);
+}
+
+#[test]
+fn totp_next_code_does_not_mutate_vault_or_touch_store() {
+    // §4.7: read-only invariant. Repeated calls at varying `now`
+    // must leave the on-disk primary file byte-identical and must
+    // not bump `updated_at`.
+    let (mut vault, store, dir) = vault_with_path();
+    let id = vault.add(make_totp_account("alice", 30, 6));
+    vault.save(&store).expect("baseline save");
+    let path = dir.path().join("vault.bin");
+    let primary_before = std::fs::read(&path).unwrap();
+    let pre_updated_at = vault.get(id).unwrap().updated_at();
+
+    let _ = vault.totp_next_code(id, at_unix(59)).unwrap();
+    let _ = vault.totp_next_code(id, at_unix(60)).unwrap();
+    let _ = vault.totp_next_code(id, at_unix(1_111_111_109)).unwrap();
+
+    assert_eq!(vault.get(id).unwrap().updated_at(), pre_updated_at);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        primary_before,
+        "totp_next_code must not rewrite the primary vault file",
+    );
+}

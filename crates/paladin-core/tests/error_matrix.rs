@@ -287,6 +287,26 @@ fn invalid_state_totp_code_account_not_found() {
 }
 
 #[test]
+fn invalid_state_totp_next_code_account_not_found() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, _store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    let bogus = AccountId::new();
+    let err = vault.totp_next_code(bogus, fixture_now()).unwrap_err();
+    assert_invalid_state(&err, "totp_next_code", "account_not_found");
+}
+
+#[test]
+fn invalid_state_totp_next_code_not_totp() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, _store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    let id = vault.add(make_hotp_account("alice", 0));
+    let err = vault.totp_next_code(id, fixture_now()).unwrap_err();
+    assert_invalid_state(&err, "totp_next_code", "not_totp");
+}
+
+#[test]
 fn invalid_state_totp_code_not_totp() {
     let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
@@ -747,6 +767,24 @@ fn time_range_totp_code_pre_epoch() {
     assert_eq!(operation, "totp_code");
     assert_eq!(kind, TimeRangeKind::PreEpoch);
     assert_eq!(kind.as_str(), "pre_epoch");
+}
+
+#[test]
+fn time_range_totp_next_code_pre_epoch() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, _store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    let id = vault.add(make_account("alice", None));
+    let err = vault.totp_next_code(id, pre_epoch()).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::TimeRange);
+    let PaladinError::TimeRange { operation, kind } = err else {
+        panic!("expected TimeRange, got {err:?}");
+    };
+    // DESIGN §4.2: the operation tag must reflect the caller — leaking
+    // the underlying primitive's tag would defeat the "stable error
+    // operation" contract surfaced to callers.
+    assert_eq!(operation, "totp_next_code");
+    assert_eq!(kind, TimeRangeKind::PreEpoch);
 }
 
 #[test]

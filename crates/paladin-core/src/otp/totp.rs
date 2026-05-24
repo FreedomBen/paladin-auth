@@ -25,21 +25,22 @@ pub fn compute(
     period: u32,
     digits: u8,
     now: SystemTime,
+    operation: &'static str,
 ) -> Result<Code, PaladinError> {
     debug_assert!(period >= 1);
-    let now_unix = system_time_to_unix(now)?;
+    let now_unix = system_time_to_unix(now, operation)?;
     let period_u64 = u64::from(period);
     let counter = now_unix / period_u64;
     let valid_from = counter
         .checked_mul(period_u64)
         .ok_or(PaladinError::TimeRange {
-            operation: "totp_code",
+            operation,
             kind: TimeRangeKind::Overflow,
         })?;
     let valid_until = valid_from
         .checked_add(period_u64)
         .ok_or(PaladinError::TimeRange {
-            operation: "totp_code",
+            operation,
             kind: TimeRangeKind::Overflow,
         })?;
     let seconds_remaining = valid_until - now_unix;
@@ -59,11 +60,11 @@ pub fn compute(
     })
 }
 
-fn system_time_to_unix(now: SystemTime) -> Result<u64, PaladinError> {
+fn system_time_to_unix(now: SystemTime, operation: &'static str) -> Result<u64, PaladinError> {
     let dur = now
         .duration_since(UNIX_EPOCH)
         .map_err(|_| PaladinError::TimeRange {
-            operation: "totp_code",
+            operation,
             kind: TimeRangeKind::PreEpoch,
         })?;
     Ok(dur.as_secs())
@@ -96,7 +97,7 @@ mod tests {
             (20_000_000_000, "65353130"),
         ];
         for &(t, want) in cases {
-            let code = compute(&key, Algorithm::Sha1, 30, 8, at_unix(t)).unwrap();
+            let code = compute(&key, Algorithm::Sha1, 30, 8, at_unix(t), "totp_code").unwrap();
             assert_eq!(code.code, want, "T={t}");
             assert_eq!(code.valid_until.unwrap() - code.valid_from.unwrap(), 30);
             assert!(code.counter_used.is_none());
@@ -117,7 +118,7 @@ mod tests {
             (20_000_000_000, "77737706"),
         ];
         for &(t, want) in cases {
-            let code = compute(&key, Algorithm::Sha256, 30, 8, at_unix(t)).unwrap();
+            let code = compute(&key, Algorithm::Sha256, 30, 8, at_unix(t), "totp_code").unwrap();
             assert_eq!(code.code, want, "T={t}");
         }
     }
@@ -136,7 +137,7 @@ mod tests {
             (20_000_000_000, "47863826"),
         ];
         for &(t, want) in cases {
-            let code = compute(&key, Algorithm::Sha512, 30, 8, at_unix(t)).unwrap();
+            let code = compute(&key, Algorithm::Sha512, 30, 8, at_unix(t), "totp_code").unwrap();
             assert_eq!(code.code, want, "T={t}");
         }
     }
@@ -172,7 +173,7 @@ mod tests {
         for &(alg, key_bytes, expected) in table {
             let key = make_secret(key_bytes);
             for (digits, want) in [6u8, 7, 8].into_iter().zip(expected.iter()) {
-                let code = compute(&key, alg, 30, digits, at_unix(59)).unwrap();
+                let code = compute(&key, alg, 30, digits, at_unix(59), "totp_code").unwrap();
                 assert_eq!(code.code, *want, "digits={digits} alg={alg:?}");
                 assert_eq!(code.code.len(), digits as usize);
             }
@@ -185,22 +186,22 @@ mod tests {
         let period = 30u32;
         // At now = 30, counter = 1, valid_from = 30, valid_until = 60,
         // seconds_remaining = 30 (full period at the exact boundary).
-        let code = compute(&key, Algorithm::Sha1, period, 6, at_unix(30)).unwrap();
+        let code = compute(&key, Algorithm::Sha1, period, 6, at_unix(30), "totp_code").unwrap();
         assert_eq!(code.valid_from, Some(30));
         assert_eq!(code.valid_until, Some(60));
         assert_eq!(code.seconds_remaining, Some(30));
 
         // At now = 31, counter still 1, seconds_remaining = 29.
-        let code = compute(&key, Algorithm::Sha1, period, 6, at_unix(31)).unwrap();
+        let code = compute(&key, Algorithm::Sha1, period, 6, at_unix(31), "totp_code").unwrap();
         assert_eq!(code.seconds_remaining, Some(29));
 
         // At now = 59 (last second of the window), seconds_remaining = 1.
-        let code = compute(&key, Algorithm::Sha1, period, 6, at_unix(59)).unwrap();
+        let code = compute(&key, Algorithm::Sha1, period, 6, at_unix(59), "totp_code").unwrap();
         assert_eq!(code.seconds_remaining, Some(1));
 
         // At now = 60 (next window opens), counter = 2, valid_from = 60,
         // valid_until = 90, seconds_remaining = 30.
-        let code = compute(&key, Algorithm::Sha1, period, 6, at_unix(60)).unwrap();
+        let code = compute(&key, Algorithm::Sha1, period, 6, at_unix(60), "totp_code").unwrap();
         assert_eq!(code.valid_from, Some(60));
         assert_eq!(code.valid_until, Some(90));
         assert_eq!(code.seconds_remaining, Some(30));
@@ -210,10 +211,28 @@ mod tests {
     fn totp_pre_epoch_rejected() {
         let key = make_secret(b"12345678901234567890");
         let pre_epoch = UNIX_EPOCH - Duration::from_secs(1);
-        let err = compute(&key, Algorithm::Sha1, 30, 6, pre_epoch).unwrap_err();
+        let err = compute(&key, Algorithm::Sha1, 30, 6, pre_epoch, "totp_code").unwrap_err();
         match err {
             PaladinError::TimeRange { operation, kind } => {
                 assert_eq!(operation, "totp_code");
+                assert_eq!(kind, TimeRangeKind::PreEpoch);
+            }
+            other => panic!("expected TimeRange::PreEpoch, got {other:?}"),
+        }
+    }
+
+    /// The operation tag flows from the caller through every
+    /// `TimeRange` returned by `compute`, so `totp_next_code`
+    /// (defined on `Vault`) surfaces its own operation name rather
+    /// than leaking the `"totp_code"` tag from the primitive.
+    #[test]
+    fn totp_pre_epoch_uses_caller_supplied_operation_tag() {
+        let key = make_secret(b"12345678901234567890");
+        let pre_epoch = UNIX_EPOCH - Duration::from_secs(1);
+        let err = compute(&key, Algorithm::Sha1, 30, 6, pre_epoch, "totp_next_code").unwrap_err();
+        match err {
+            PaladinError::TimeRange { operation, kind } => {
+                assert_eq!(operation, "totp_next_code");
                 assert_eq!(kind, TimeRangeKind::PreEpoch);
             }
             other => panic!("expected TimeRange::PreEpoch, got {other:?}"),
@@ -231,19 +250,20 @@ mod tests {
         period: u32,
         digits: u8,
         now_unix: u64,
+        operation: &'static str,
     ) -> Result<Code, PaladinError> {
         let period_u64 = u64::from(period);
         let counter = now_unix / period_u64;
         let valid_from = counter
             .checked_mul(period_u64)
             .ok_or(PaladinError::TimeRange {
-                operation: "totp_code",
+                operation,
                 kind: TimeRangeKind::Overflow,
             })?;
         let valid_until = valid_from
             .checked_add(period_u64)
             .ok_or(PaladinError::TimeRange {
-                operation: "totp_code",
+                operation,
                 kind: TimeRangeKind::Overflow,
             })?;
         let seconds_remaining = valid_until - now_unix;
@@ -269,14 +289,29 @@ mod tests {
         let counter_max = (u64::MAX - u64::from(period)) / u64::from(period);
         let valid_from_max = counter_max * u64::from(period);
         let last_in_window = valid_from_max + u64::from(period) - 1;
-        let code = compute_from_unix(&key, Algorithm::Sha1, period, 6, last_in_window).unwrap();
+        let code = compute_from_unix(
+            &key,
+            Algorithm::Sha1,
+            period,
+            6,
+            last_in_window,
+            "totp_code",
+        )
+        .unwrap();
         assert_eq!(code.valid_from, Some(valid_from_max));
         assert_eq!(code.valid_until, Some(valid_from_max + u64::from(period)));
 
         // Step into the next window: `valid_until` overflows.
         let next_counter_window = last_in_window + 1;
-        let err =
-            compute_from_unix(&key, Algorithm::Sha1, period, 6, next_counter_window).unwrap_err();
+        let err = compute_from_unix(
+            &key,
+            Algorithm::Sha1,
+            period,
+            6,
+            next_counter_window,
+            "totp_code",
+        )
+        .unwrap_err();
         match err {
             PaladinError::TimeRange { operation, kind } => {
                 assert_eq!(operation, "totp_code");

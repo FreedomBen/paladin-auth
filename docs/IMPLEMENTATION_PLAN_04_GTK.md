@@ -28,7 +28,7 @@ crates/paladin-gtk/
 ├── build.rs               # gresource bundle (icons, *.ui, *.css) + glib-compile-schemas → OUT_DIR/schemas/
 ├── data/
 │   ├── paladin-gtk.gresource.xml
-│   ├── org.tamx.Paladin.Gui.gschema.xml  # per-user GSettings schema (show-section-headers, show-column-headers, …); installs to /usr/share/glib-2.0/schemas/
+│   ├── org.tamx.Paladin.Gui.gschema.xml  # per-user GSettings schema (show-section-headers, show-column-headers, show-next-code-column, …); installs to /usr/share/glib-2.0/schemas/
 │   ├── ui/                # *.ui templates
 │   ├── icons/             # app icon + fallbacks
 │   ├── metainfo/          # AppStream metadata; file is named `<app-id>.metainfo.xml` (`org.tamx.Paladin.Gui.metainfo.xml`) so Flathub's reproducible-build check matches; installs to `/usr/share/metainfo/<app-id>.metainfo.xml`
@@ -58,7 +58,7 @@ crates/paladin-gtk/
 │   │   └── settings.rs        # SettingsComponent (toggles + spinners)
 │   ├── clipboard.rs       # gdk::Clipboard plumbing driving paladin_core::policy::clipboard_clear::ClipboardClearPolicy
 │   ├── auto_lock.rs       # GLib idle/timeout plumbing driving paladin_core::policy::auto_lock::IdlePolicy (encrypted-only; plaintext no-op)
-│   ├── gsettings.rs       # per-user gio::Settings access for the show-section-headers / show-column-headers schema keys (and any future GUI-only prefs)
+│   ├── gsettings.rs       # per-user gio::Settings access for the show-section-headers / show-column-headers / show-next-code-column schema keys (and any future GUI-only prefs)
 │   ├── hotp_reveal.rs     # per-row reveal window via paladin_core::policy::hotp_reveal::deadline (uses paladin_core::HOTP_REVEAL_SECS)
 │   ├── icons.rs           # gtk::IconTheme lookup against AccountSummary.icon_hint
 │   ├── secret_fields.rs   # extract/clear passphrase + manual-secret entries
@@ -186,11 +186,12 @@ inclusion.
   reading a `gtk::SingleSelection` that wraps a
   `gio::ListStore<crate::row_item::RowItem>`.  Each account in
   `paladin_core::AccountSummary` order is one persistent `RowItem`
-  GObject; the five columns (Account, Code, Time, Copy, More) are
+  GObject; the six columns (Account, Code, Next, Time, Copy, More) are
   bound via `gtk::SignalListItemFactory` builders shipped from
   `crate::column_view` (`build_account_column_factory`,
-  `build_code_column_factory`, `build_time_column_factory`,
-  `build_copy_column_factory`, `build_kebab_column_factory`).
+  `build_code_column_factory`, `build_next_code_column_factory`,
+  `build_time_column_factory`, `build_copy_column_factory`,
+  `build_kebab_column_factory`).
   Per-tick updates iterate the store and call
   `RowItem::set_display(new_display)` on the matching item; the
   factories listen to the `display-changed` signal and rebind
@@ -255,14 +256,18 @@ inclusion.
   live `AccountListComponent`.
 
   The Preferences dialog (`SettingsComponent`) carries a third
-  `AdwPreferencesGroup` titled `Display` with two `AdwSwitchRow`s:
+  `AdwPreferencesGroup` titled `Display` with three `AdwSwitchRow`s:
   `Show section headers` (bound to `show-section-headers`, default
-  off) and `Show column headers` (bound to `show-column-headers`,
-  default on).  Each toggle's `connect_active_notify` writes
-  through the matching `crate::gsettings::set_show_*` helper,
-  which fires a `changed::*` signal that `AppModel` rebroadcasts
-  as `AppMsg::Show{Section,Column}HeadersChanged(bool)` and
-  forwards to `AccountListMsg::SetShow{Section,Column}Headers(bool)`.
+  off), `Show column headers` (bound to `show-column-headers`,
+  default on), and `Show next code` (bound to
+  `show-next-code-column`, default on).  Each toggle's
+  `connect_active_notify` writes through the matching
+  `crate::gsettings::set_show_*` helper, which fires a
+  `changed::*` signal that `AppModel` rebroadcasts as
+  `AppMsg::Show{Section,Column}HeadersChanged(bool)` /
+  `AppMsg::ShowNextCodeColumnChanged(bool)` and forwards to
+  `AccountListMsg::SetShow{Section,Column}Headers(bool)` /
+  `AccountListMsg::SetShowNextCodeColumn(bool)`.
   The column-headers toggle adds or removes the
   `no-column-headers` CSS class on the `gtk::ColumnView`; the
   application stylesheet (`data/style.css`) collapses the header
@@ -281,6 +286,20 @@ inclusion.
   The Time column's `set_visible` is toggled by
   `AccountListMsg::Refresh` via `column_view::any_totp(&rows)`
   so HOTP-only vaults hide the column entirely.
+
+  The Next column's `set_visible` is the AND of two latches:
+  the per-user `show-next-code-column` boolean GSettings key
+  (schema id `org.tamx.Paladin.Gui`, default **`true`**) and the
+  same `column_view::any_totp(&rows)` probe that gates the Time
+  column.  Both latches live on `AccountListComponent`; the
+  GSettings latch is updated by
+  `AccountListMsg::SetShowNextCodeColumn(bool)` (dispatched from
+  `AppMsg::ShowNextCodeColumnChanged(bool)`, sourced from a
+  `gio::Settings::changed::show-next-code-column` handler on
+  `AppModel`), and the `any_totp` probe is re-evaluated on every
+  `AccountListMsg::Refresh`.  Toggling either latch only changes
+  column visibility; it never rebinds the store or triggers a
+  splice.
 
   The schema is GUI-only — vault behavior preferences (auto-lock,
   clipboard auto-clear) stay in `paladin_core::VaultSettings`
@@ -396,7 +415,7 @@ inclusion.
   is **not** honored by the GUI search (parity with the TUI).
 - **Per-row rendering** (no dedicated `AccountRowComponent` —
   cell factories drive each cell instead). Each row in the
-  `gio::ListStore<RowItem>` is rendered as five
+  `gio::ListStore<RowItem>` is rendered as six
   `gtk::ColumnViewCell`s built by the factories in `column_view.rs`:
 
   * **Account** (`build_account_column_factory`) — icon (24px) plus
@@ -408,6 +427,26 @@ inclusion.
     label bound to `RowDisplay.code`, an inline HOTP "next" button
     (visibility bound to `display.next_button_visible`), and a
     `dim-label` counter slot for HOTP rows.
+  * **Next** (`build_next_code_column_factory`) — a `numeric`
+    `dim-label` `gtk::Label` bound to `RowDisplay.next_code`,
+    prefixed with `↪ `.  TOTP rows render `↪ NNN NNN`; HOTP and
+    section rows render the empty string.  The cell is wrapped in
+    a `gtk::Button` with the `.flat` CSS class so a click copies
+    the next code: activation emits
+    `AccountListOutput::CopyNextCode(item.id())`, which `AppModel`
+    routes through the same
+    `prepare_copy_bytes` / `gdk::Clipboard::set_text` /
+    `schedule_copy` pipeline as `CopyCode` but reads the code via
+    `Vault::totp_next_code(id, now)` instead of `Vault::totp_code`.
+    The button's `sensitive` is `false` for HOTP / section rows
+    so the click is inert.  Column-level visibility comes from the
+    AND of the `show-next-code-column` GSettings latch (default
+    `true`) and `column_view::any_totp(&rows)`; both live on
+    `AccountListComponent` and re-evaluate without rebinding the
+    store.  `RowDisplay` gains a `next_code: Option<String>` field
+    projected per tick alongside the existing `code` / `progress_*`
+    fields; the projection runs the same `Vault::totp_next_code`
+    call so the value matches what the cell will copy on click.
   * **Time** (`build_time_column_factory`) — a 96px `gtk::ProgressBar`
     bound to `display.progress_fraction` with the
     `success` / `warning` / `error` CSS class driven by the urgency
@@ -756,6 +795,7 @@ live_displays}`, and dispatches `default_row_activation`.
 | ---------------------- | ---------------------------------------- | -------------------------------------------------------------------------------- |
 | `Enter` / double-click | TOTP, or HOTP with a code currently revealed | Emit `AccountListOutput::CopyCode(id)` — same path as the per-row copy button. |
 | `Enter` / double-click | HOTP with the code hidden                | Emit `AccountListOutput::ActivateHotpAndCopy(id)`; `AppModel` latches `pending_copy_after_advance = Some(id)`, re-enters the standard `AdvanceHotp` dispatch, and on `HotpAdvanceWorkerCompleted` fires a follow-up `CopyCode(id)` after `publish_reveal_for`. The latch is cleared on `Locked` / `Quit` via `prune_reveals_if_locked` / `tear_down_for_quit`. |
+| `Ctrl+Shift+C`         | TOTP (Next column enabled)               | Emit `AccountListOutput::CopyNextCode(id)` — same path as clicking the row's Next cell; `AppModel` resolves the code via `Vault::totp_next_code(id, now)` and raises an `adw::Toast` `Next code copied, valid in Xs`. Silent no-op on HOTP rows and when the Next column is hidden. |
 
 ### Dialog dismissal
 
@@ -1339,6 +1379,45 @@ These run without a display server. Each lives under
   written, so the `AppModel` handler can dispatch
   `AccountListMsg::SetShowSectionHeaders` to the live list
   controller.
+- [ ] `build.rs`-compiled gschema declares the
+  `show-next-code-column` key under schema id
+  `org.tamx.Paladin.Gui` so
+  `paladin_gtk::gsettings::show_next_code_column` resolves at
+  runtime.
+- [ ] Default value of `show-next-code-column` is `true` (per
+  DESIGN §7 — the Next column is on by default and hideable via
+  Preferences).
+- [ ] Round-trip through a memory-backed `gio::Settings`:
+  `set_boolean(false) → boolean() == false → set_boolean(true) →
+  boolean() == true`.
+- [ ] `changed::show-next-code-column` signal fires when the key
+  is written, so the `AppModel` handler can dispatch
+  `AccountListMsg::SetShowNextCodeColumn` to the live list
+  controller.
+
+#### `tests/account_list_logic.rs` (Next-code column)
+
+- [ ] `RowDisplay` projection emits `next_code: Some("482913")`
+  for a TOTP row and `next_code: None` for an HOTP row, sourced
+  from `Vault::totp_next_code(id, now)`.
+- [ ] `AccountListMsg::SetShowNextCodeColumn(false)` flips the
+  GSettings latch and the Next column's `set_visible(false)` is
+  called once; the store is not re-spliced.
+- [ ] Next column is hidden whenever
+  `column_view::any_totp(&rows) == false`, regardless of the
+  GSettings latch (HOTP-only vaults).
+- [ ] `AccountListOutput::CopyNextCode(id)` is emitted when a
+  populated Next cell's button is activated; the outbound message
+  carries the row's `AccountId`. HOTP-row clicks emit no message
+  (button is `sensitive=false`).
+- [ ] `AppModel` routes `CopyNextCode(id)` through the
+  `Vault::totp_next_code(id, now)` path, writes to the clipboard
+  via the existing `prepare_copy_bytes` / `gdk::Clipboard::set_text` /
+  `schedule_copy` pipeline, and raises an `adw::Toast` reading
+  `Next code copied, valid in {period - (now_unix % period)}s` on
+  the shared `adw::ToastOverlay`.
+- [ ] `arboard` / clipboard failure surfaces the existing
+  copy-error toast and arms no clear schedule.
 
 #### `tests/account_row_logic.rs`
 

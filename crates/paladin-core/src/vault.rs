@@ -795,6 +795,68 @@ impl Vault {
             period,
             account.digits(),
             now,
+            "totp_code",
+        )
+    }
+
+    /// Compute the TOTP code for the *next* window — the code that
+    /// will become current at `((now_unix / period) + 1) * period`.
+    /// Read-only — never mutates the vault and never touches the
+    /// `Store` (docs/DESIGN.md §4.2 / §4.7).
+    ///
+    /// At an exact window boundary (`now_unix % period == 0`) the
+    /// returned code is for the window immediately after the
+    /// boundary, never two windows ahead.
+    ///
+    /// Missing IDs return
+    /// `invalid_state { operation: "totp_next_code", state: "account_not_found" }`;
+    /// HOTP accounts return
+    /// `invalid_state { operation: "totp_next_code", state: "not_totp" }`.
+    /// Pre-Unix-epoch / `valid_until`-overflow timestamps surface as
+    /// `time_range` tagged `operation: "totp_next_code"`.
+    pub fn totp_next_code(&self, id: AccountId, now: SystemTime) -> Result<Code> {
+        let account =
+            self.accounts
+                .iter()
+                .find(|a| a.id() == id)
+                .ok_or(PaladinError::InvalidState {
+                    operation: "totp_next_code",
+                    state: "account_not_found",
+                })?;
+        let period = match account.kind {
+            OtpKind::Totp { period } => period,
+            OtpKind::Hotp { .. } => {
+                return Err(PaladinError::InvalidState {
+                    operation: "totp_next_code",
+                    state: "not_totp",
+                });
+            }
+        };
+        let now_unix = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| PaladinError::TimeRange {
+                operation: "totp_next_code",
+                kind: crate::error::TimeRangeKind::PreEpoch,
+            })?
+            .as_secs();
+        let period_u64 = u64::from(period);
+        let current_counter = now_unix / period_u64;
+        let next_window_start_secs = current_counter
+            .checked_add(1)
+            .and_then(|c| c.checked_mul(period_u64))
+            .ok_or(PaladinError::TimeRange {
+                operation: "totp_next_code",
+                kind: crate::error::TimeRangeKind::Overflow,
+            })?;
+        let next_window_start =
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(next_window_start_secs);
+        totp::compute(
+            account.secret(),
+            account.algorithm(),
+            period,
+            account.digits(),
+            next_window_start,
+            "totp_next_code",
         )
     }
 

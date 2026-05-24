@@ -997,6 +997,7 @@ pub fn paladin_core::Vault::settings(&self) -> &paladin_core::VaultSettings
 pub fn paladin_core::Vault::shortest_unique_id_prefix(&self, id: paladin_core::AccountId) -> core::option::Option<alloc::string::String>
 pub fn paladin_core::Vault::summaries(&self) -> impl core::iter::traits::iterator::Iterator<Item = paladin_core::AccountSummary> + '_
 pub fn paladin_core::Vault::totp_code(&self, id: paladin_core::AccountId, now: std::time::SystemTime) -> paladin_core::Result<paladin_core::Code>
+pub fn paladin_core::Vault::totp_next_code(&self, id: paladin_core::AccountId, now: std::time::SystemTime) -> paladin_core::Result<paladin_core::Code>
 impl core::fmt::Debug for paladin_core::Vault
 pub fn paladin_core::Vault::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for paladin_core::Vault

@@ -131,6 +131,23 @@ fn totp_code_returns_invalid_state_not_totp_for_hotp_account() {
 }
 
 #[test]
+fn totp_next_code_returns_invalid_state_account_not_found_for_unknown_id() {
+    let (mut vault, _store, _dir) = vault_with_path();
+    vault.add(make_totp_account("alice", 30, 6));
+    let unknown = AccountId::new();
+    let err = vault.totp_next_code(unknown, fixture_now()).unwrap_err();
+    assert_invalid_state(err, "totp_next_code", "account_not_found");
+}
+
+#[test]
+fn totp_next_code_returns_invalid_state_not_totp_for_hotp_account() {
+    let (mut vault, _store, _dir) = vault_with_path();
+    let id = vault.add(make_hotp_account("alice", 0));
+    let err = vault.totp_next_code(id, fixture_now()).unwrap_err();
+    assert_invalid_state(err, "totp_next_code", "not_totp");
+}
+
+#[test]
 fn hotp_peek_returns_invalid_state_not_hotp_for_totp_account() {
     let (mut vault, _store, _dir) = vault_with_path();
     let id = vault.add(make_totp_account("alice", 30, 6));
@@ -163,6 +180,7 @@ fn account_not_found_failures_leave_other_accounts_unchanged() {
     let unknown = AccountId::new();
     let _ = vault.rename(unknown, "x", fixture_now()).unwrap_err();
     let _ = vault.totp_code(unknown, fixture_now()).unwrap_err();
+    let _ = vault.totp_next_code(unknown, fixture_now()).unwrap_err();
     let _ = vault.hotp_peek(unknown).unwrap_err();
     let _ = vault
         .hotp_advance(&store, unknown, fixture_now())
