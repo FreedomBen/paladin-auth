@@ -512,6 +512,7 @@ fn bind_account_cell(container: &gtk::Box, item: &RowItem) {
             label.remove_css_class("body");
             label.add_css_class("dim-label");
             label.add_css_class("heading");
+            container.set_tooltip_text(None);
         }
         RowKind::Account => {
             icon.set_visible(true);
@@ -525,6 +526,7 @@ fn bind_account_cell(container: &gtk::Box, item: &RowItem) {
             let icon_name =
                 resolve_display_icon(icon_hint.as_deref(), |slug| icon_theme.has_icon(slug));
             icon.set_icon_name(Some(icon_name));
+            container.set_tooltip_text(Some(ROW_BODY_COPY_TOOLTIP));
         }
     }
 }
@@ -650,12 +652,14 @@ fn bind_code_cell(container: &gtk::Box, item: &RowItem) {
         counter.set_visible(false);
         code.set_visible(false);
         next.set_visible(false);
+        container.set_tooltip_text(None);
         return;
     }
 
     let mut display = item.display();
     crate::account_row::apply_busy_mask(&mut display, item.busy());
 
+    container.set_tooltip_text(Some(ROW_BODY_COPY_TOOLTIP));
     code.set_visible(true);
     if let Some(c) = display.counter {
         counter.set_label(&format_counter_label(c));
@@ -685,6 +689,15 @@ fn bind_code_cell(container: &gtk::Box, item: &RowItem) {
 /// the exact byte sequence (the existing TUI commit pins the same
 /// glyph in `paladin-tui/src/view/list.rs`).
 pub const NEXT_CODE_PREFIX: &str = "↪ ";
+
+/// Tooltip text installed on the non-button cells of an account
+/// row (account, code, time) so a hover surfaces the consequence
+/// of `single_click_activate(true)` activation: the click copies
+/// the current code.  Parallels the Next column button's
+/// `"Copy upcoming code"` wording so the two click-targets read
+/// as a verb-led pair.  Section rows clear the tooltip in their
+/// bind branch since they are non-selectable.
+pub const ROW_BODY_COPY_TOOLTIP: &str = "Copy current code";
 
 /// Build the cell factory for the "Next" column.
 ///
@@ -875,8 +888,10 @@ fn bind_time_cell(progress: &gtk::ProgressBar, item: &RowItem) {
     if item.is_section() {
         progress.set_visible(false);
         progress.set_fraction(0.0);
+        progress.set_tooltip_text(None);
         return;
     }
+    progress.set_tooltip_text(Some(ROW_BODY_COPY_TOOLTIP));
     let display = item.display();
     progress.set_visible(display.progress_visible);
     match display.progress {

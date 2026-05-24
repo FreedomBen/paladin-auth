@@ -18,7 +18,7 @@ use paladin_gtk::account_list::AccountRowModel;
 use paladin_gtk::column_view::{
     account_column_sort_key, apply_interleaved_splice_plan, apply_splice_plan,
     compare_account_row_items, interleave_section_headers, splice_plan, InterleavedRow, RowKey,
-    SpliceOp,
+    SpliceOp, ROW_BODY_COPY_TOOLTIP,
 };
 use paladin_gtk::row_item::RowItem;
 
@@ -785,4 +785,30 @@ fn apply_interleaved_repeated_toggle_is_idempotent_for_account_rows() {
             "toggle round trip should not allocate new account RowItems (show={show})",
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// ROW_BODY_COPY_TOOLTIP — row-body hover wording
+// ---------------------------------------------------------------------------
+
+#[test]
+fn row_body_copy_tooltip_matches_pinned_wording() {
+    // `bind_account_cell`, `bind_code_cell`, and `bind_time_cell`
+    // each install this constant on their non-button cell so a
+    // hover surfaces the consequence of `single_click_activate(true)`
+    // activation: the click copies the current code. Pinning the
+    // wording here keeps the three call sites and the Next column
+    // button ("Copy upcoming code") legible as a verb-led pair.
+    assert_eq!(ROW_BODY_COPY_TOOLTIP, "Copy current code");
+}
+
+#[test]
+fn row_body_copy_tooltip_is_non_empty() {
+    // Defense against an accidental empty-string regression that
+    // would silently strip the row-body hover affordance and break
+    // accessibility (screen-readers read tooltips).
+    assert!(
+        !ROW_BODY_COPY_TOOLTIP.is_empty(),
+        "row-body tooltip must carry user-visible text",
+    );
 }

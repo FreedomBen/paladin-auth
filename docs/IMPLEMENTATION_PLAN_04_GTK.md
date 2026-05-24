@@ -798,6 +798,16 @@ activating those buttons emits only the button's own
 `AccountListOutput` (e.g. `CopyNextCode`) and never bubbles up to
 fire row activation as well.
 
+Each non-button cell (account, code, time) installs the
+`column_view::ROW_BODY_COPY_TOOLTIP` (`"Copy current code"`) on
+its root widget during `bind_*_cell` so a hover surfaces the
+click's consequence. The wording parallels the Next column
+button's `"Copy upcoming code"` so the two click targets read as
+a verb-led pair. Section rows clear the tooltip in their bind
+branch since they are non-selectable. The inline buttons
+(HOTP reveal, Next, Copy, kebab) keep their own tooltips, which
+GTK4 hover-target resolution honors over the parent cell's.
+
 | Trigger                | Row state                                | Outcome                                                                          |
 | ---------------------- | ---------------------------------------- | -------------------------------------------------------------------------------- |
 | `Enter` / single click on the row body | TOTP, or HOTP with a code currently revealed | Emit `AccountListOutput::CopyCode(id)` — same path as the per-row copy button. |
@@ -4575,6 +4585,18 @@ sign-off.
     `AccountListOutput::ActivateHotpAndCopy` variant, and the
     `default_row_activation` unit tests at the bottom of
     `tests/account_list_nav_logic.rs`.)
+  - [x] Hover-surface the row-body click target by installing
+    `column_view::ROW_BODY_COPY_TOOLTIP` (`"Copy current code"`) on
+    the account, code, and time cells during `bind_*_cell`. The
+    wording parallels the Next column button's
+    `"Copy upcoming code"` so the two click targets read as a
+    verb-led pair. Section rows clear the tooltip in their bind
+    branch since they are non-selectable; the inline HOTP-reveal,
+    Next, Copy, and kebab buttons keep their own tooltips, which
+    GTK4 hover-target resolution honors over the parent cell's.
+    Pinned by `row_body_copy_tooltip_matches_pinned_wording` and
+    `row_body_copy_tooltip_is_non_empty` in
+    `tests/column_view_logic.rs`.
   - [x] Add the primary `gtk::MenuButton` driven by a `gio::Menu`
     with the fixed entries Import…, Export…, Passphrase…,
     Preferences, About Paladin, Quit.
