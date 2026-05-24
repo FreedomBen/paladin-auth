@@ -1223,7 +1223,7 @@ the implementer can claim by ticking it.
   in lockstep.
 * [ ] **`tests/snapshots/` shortcuts-window snapshot.** Update
   the `GtkShortcutsWindow` snapshot to include the new row.
-* [ ] **`tests/manual/MANUAL_TEST_PLAN.md`.** Append three
+* [x] **`tests/manual/MANUAL_TEST_PLAN.md`.** Append three
   scenarios:
     * "Click the Next cell on a TOTP row → clipboard holds the
       upcoming code and a toast reads `Next code copied, valid in

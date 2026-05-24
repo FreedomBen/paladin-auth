@@ -277,6 +277,45 @@ Exports:
     theme (e.g. `Papirus`) under both Wayland and X11.
   * Tied to: `tests/icon_resolution.rs`.
 
+## 11. Next-code column (DESIGN §7)
+
+- [ ] Click the Next cell on a TOTP row → clipboard holds the
+  upcoming code and a toast reads
+  `Next code copied, valid in Xs`.
+  * Expected: the Next column's button on a TOTP row commits the
+    upcoming code (computed via `Vault::totp_next_code`) to the
+    system clipboard, the row briefly indicates success, and the
+    in-window toast renders the
+    `Next code copied, valid in Xs` text with `Xs` matching the
+    seconds remaining in the current step. HOTP rows leave the
+    Next cell `sensitive=false`; clicking it must no-op.
+  * Tied to: `tests/account_list_logic.rs` Next-column routing,
+    `paladin_core::Vault::totp_next_code`, `docs/DESIGN.md` §7.
+- [ ] Press `Ctrl+Shift+C` with a TOTP row selected → same
+  behavior as clicking the Next cell.
+  * Expected: with a TOTP row selected in the account list,
+    pressing `Ctrl+Shift+C` dispatches the `app.copy-next-code`
+    action, copies the upcoming code to the clipboard, and
+    renders the same `Next code copied, valid in Xs` toast as
+    the Next-cell click path. The accelerator no-ops on HOTP
+    rows (the Next cell already carries the rejection signal)
+    and stays quiet while a modal dialog traps focus.
+  * Tied to: `tests/account_list_logic.rs` accelerator routing,
+    `format_app_copy_next_code_accelerator`.
+- [ ] Toggle Preferences → Display → Show next code → the column
+  hides / shows; the visible cells re-flow without flicker.
+  * Expected: opening Preferences and toggling the **Show next
+    code** row in the **Display** group flips the
+    `show-next-code-column` GSettings key (default `true`); the
+    `ColumnView`'s Next column hides on toggle-off and reveals
+    on toggle-on, the remaining columns re-flow without flicker
+    or row-height jump, and the preference persists across an
+    app restart. The toggle is encrypted-mode-independent —
+    plaintext vaults see the same behavior.
+  * Tied to: `tests/gsettings_logic.rs`
+    `show-next-code-column` coverage,
+    `tests/account_list_logic.rs` column-visibility routing.
+
 ## Reporting
 
 If a step fails, file a bug with:
