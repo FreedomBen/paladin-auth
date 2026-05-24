@@ -667,6 +667,53 @@ pub fn compute_next_code_column_visibility(
     show_next_code_column && any_totp(rows)
 }
 
+/// Pure-logic decision table for the `Ctrl+Shift+C` "copy selected
+/// row's next code" accelerator registered by the
+/// `"app.copy-next-code"` `gio::SimpleAction`.
+///
+/// Returns `Some(AccountListOutput::CopyNextCode(id))` only when
+/// every gate is satisfied:
+///
+/// * a row is currently selected (`selection` is `Some`), and
+/// * the selected row is a TOTP account
+///   ([`AccountKindSummary::Totp`]), and
+/// * the per-user "Next" column is currently visible
+///   (`next_code_column_visible == true`; the
+///   [`compute_next_code_column_visibility`] AND-gate over the
+///   `show-next-code-column` `GSettings` key and the
+///   "any TOTP rows?" projection already collapsed the column
+///   away on a HOTP-only vault, so this single bool covers both
+///   the per-user preference and the "the column has no slot for
+///   this row" structural rule).
+///
+/// Returns `None` (silent no-op) for HOTP-selected rows, an
+/// empty selection, and a hidden Next column — matching the
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` "Next-code column
+/// implementation" → "HOTP rejection is silent at the
+/// accelerator" / "no-selection rejection is silent" gates. The
+/// per-cell click path is unaffected by these gates because the
+/// cell button is `sensitive = false` for HOTP rows and the
+/// column itself disappears when the gate above closes; the
+/// accelerator is the only entry surface that needs the gate at
+/// the action-activate site.
+///
+/// Pure logic so unit tests can pin the dispatch table without
+/// spinning up a display server.
+#[must_use]
+pub fn dispatch_copy_next_code_accelerator(
+    selection: Option<(AccountId, AccountKindSummary)>,
+    next_code_column_visible: bool,
+) -> Option<AccountListOutput> {
+    if !next_code_column_visible {
+        return None;
+    }
+    let (id, kind) = selection?;
+    match kind {
+        AccountKindSummary::Totp => Some(AccountListOutput::CopyNextCode(id)),
+        AccountKindSummary::Hotp => None,
+    }
+}
+
 /// Navigation intent decoded from a keyboard event inside the
 /// account-list controller stack.
 ///
@@ -1411,6 +1458,37 @@ impl SimpleComponent for AccountListComponent {
 }
 
 impl AccountListComponent {
+    /// Resolve the currently selected row into the
+    /// [`AccountListOutput`] the `Ctrl+Shift+C` accelerator's
+    /// `gio::SimpleAction` (`"app.copy-next-code"`) should emit,
+    /// or `None` if any gate fails.
+    ///
+    /// Reads the live `current_selection` / `current_rows` /
+    /// `next_code_column.is_visible()` triple and feeds them
+    /// through the pure-logic decision table in
+    /// [`dispatch_copy_next_code_accelerator`]. The accessor lives
+    /// here so the runtime widget gates (selection cursor, visible
+    /// column) stay encapsulated inside `AccountListComponent`
+    /// while the per-row kind / TOTP-vs-HOTP rule lives in the
+    /// pure helper a unit test can pin without GTK init.
+    ///
+    /// Returns `Some(AccountListOutput::CopyNextCode(id))` only
+    /// for a TOTP-selected row with a visible Next column; HOTP
+    /// rows, no selection, and a hidden Next column collapse to
+    /// `None` per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
+    /// "Next-code column implementation" > "HOTP rejection is
+    /// silent at the accelerator".
+    #[must_use]
+    pub fn current_selection_copy_next_code_output(&self) -> Option<AccountListOutput> {
+        let id = self.current_selection?;
+        let kind = self
+            .current_rows
+            .iter()
+            .find(|row| row.id == id)
+            .map(|row| row.kind)?;
+        dispatch_copy_next_code_accelerator(Some((id, kind)), self.next_code_column.is_visible())
+    }
+
     /// Handle [`AccountListMsg::Refresh`] by splicing the store to
     /// match the new row set, re-seeding each surviving / inserted
     /// `RowItem`'s display from the live cache, and reapplying the

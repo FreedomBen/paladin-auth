@@ -1167,7 +1167,7 @@ the implementer can claim by ticking it.
   and the `changed::show-next-code-column` signal re-enters the
   pipeline via `AppModel` (no direct controller call from the
   Preferences dialog).
-* [ ] **`keybindings.rs::format_app_copy_next_code_*`.** Add a
+* [x] **`keybindings.rs::format_app_copy_next_code_*`.** Add a
   `format_app_copy_next_code_accelerator() -> &'static str`
   returning `"<Control><Shift>c"` and a
   `format_app_copy_next_code_action() -> &'static str` returning
@@ -1183,8 +1183,14 @@ the implementer can claim by ticking it.
   are added together, which is exactly the lockstep guard the
   pattern provides. The same two helpers are surfaced through
   the primary menu and the `GtkShortcutsWindow` so the wiring
-  stays in lockstep.
-* [ ] **`app/actions.rs` (or wherever `add_action_entries` lives).**
+  stays in lockstep. *(Landed inside `crates/paladin-gtk/src/app/model.rs`
+  — the existing `format_app_*_accelerator` / `_action` /
+  `_action_name` helpers already live there alongside
+  `format_app_window_accelerator_bindings`; the action target is
+  `app.copy-next-code` matching the existing
+  `format_app_action_group_name() = "app"` convention used by
+  the menu and Add helpers.)*
+* [x] **`app/actions.rs` (or wherever `add_action_entries` lives).**
   Register a `win.copy-next-code` (or `app.copy-next-code`)
   `gio::SimpleAction`. Its `activate` resolves the live
   `AccountListComponent` selection, branches:
@@ -1194,7 +1200,21 @@ the implementer can claim by ticking it.
   for HOTP; the GTK accelerator's silent-no-op preserves the
   existing "menu accelerators don't surface toast errors"
   pattern). The cell click path is unaffected by this gate
-  because cells are `sensitive=false` for HOTP rows.
+  because cells are `sensitive=false` for HOTP rows. *(Landed
+  inside `crates/paladin-gtk/src/app/model.rs`: a
+  `build_app_copy_next_code_action()` factory adds the
+  `"copy-next-code"` `gio::SimpleAction` to the bundled
+  `build_app_window_action_group`; the existing
+  `wire_app_window_action_activations` /
+  `dispatch_app_window_action` pipeline routes its activation
+  through a new `AppMsg::CopyNextCodeAccelerator` variant whose
+  handler reads the live `AccountListComponent` selection via
+  the new `current_selection_copy_next_code_output` accessor
+  (which delegates to the pure
+  `dispatch_copy_next_code_accelerator` decision table) and
+  re-dispatches `AccountListOutput::CopyNextCode(id)` on TOTP.
+  HOTP / no selection / hidden Next column / unmounted
+  controller all collapse to silent no-op.)*
 * [ ] **`view/keyboard_shortcuts.rs` (or the `.ui` template the
   `GtkShortcutsWindow` reads).** Add a row in the "List view"
   shortcut group: `Ctrl+Shift+C — Copy selected row's next code`.

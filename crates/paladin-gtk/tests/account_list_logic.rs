@@ -27,8 +27,8 @@ use paladin_core::{
     IconHintInput, Store, Vault, VaultInit, VaultLock,
 };
 use paladin_gtk::account_list::{
-    bind_display_for_row, filtered_row_models_from_vault, format_rendered_marker,
-    format_widget_states_marker, hidden_row_display, issuer_group_header,
+    bind_display_for_row, dispatch_copy_next_code_accelerator, filtered_row_models_from_vault,
+    format_rendered_marker, format_widget_states_marker, hidden_row_display, issuer_group_header,
     precompute_section_headers, prune_cache_to_rows, row_model_for_account, row_models_from_vault,
     row_section_header, selected_row_after_refresh, tick_dispatch_plan, AccountListOutput,
     AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, SECTION_HEADER_FALLBACK,
@@ -2480,4 +2480,79 @@ fn tick_dispatch_fans_change_signal_through_set_display() {
             "row {i} should have received one display-changed per iteration",
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// dispatch_copy_next_code_accelerator decision-table coverage
+// ---------------------------------------------------------------------------
+//
+// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Next-code column
+// implementation" the `Ctrl+Shift+C` accelerator and the bundled
+// `"copy-next-code"` `gio::SimpleAction` resolve a TOTP-selected
+// row with a visible Next column to
+// `AccountListOutput::CopyNextCode(id)` and silently no-op for
+// HOTP / no selection / hidden Next column. The decision lives in
+// the pure helper so tests can pin every branch without spinning
+// up a display server.
+
+fn dispatch_acc_id() -> AccountId {
+    AccountId::new()
+}
+
+#[test]
+fn dispatch_copy_next_code_accelerator_emits_copy_next_code_for_totp_with_visible_column() {
+    let id = dispatch_acc_id();
+    assert_eq!(
+        dispatch_copy_next_code_accelerator(Some((id, AccountKindSummary::Totp)), true),
+        Some(AccountListOutput::CopyNextCode(id)),
+        "TOTP row + visible Next column must dispatch CopyNextCode(id)",
+    );
+}
+
+#[test]
+fn dispatch_copy_next_code_accelerator_silent_no_op_for_hotp_selection() {
+    let id = dispatch_acc_id();
+    assert_eq!(
+        dispatch_copy_next_code_accelerator(Some((id, AccountKindSummary::Hotp)), true),
+        None,
+        "HOTP selection must collapse to silent no-op even when the Next column is visible (the cell itself is sensitive=false but the accelerator must also reject HOTP at the dispatch table)",
+    );
+}
+
+#[test]
+fn dispatch_copy_next_code_accelerator_silent_no_op_for_no_selection() {
+    assert_eq!(
+        dispatch_copy_next_code_accelerator(None, true),
+        None,
+        "no selection must collapse to silent no-op even when the Next column is visible",
+    );
+}
+
+#[test]
+fn dispatch_copy_next_code_accelerator_silent_no_op_when_column_hidden_with_totp_selection() {
+    let id = dispatch_acc_id();
+    assert_eq!(
+        dispatch_copy_next_code_accelerator(Some((id, AccountKindSummary::Totp)), false),
+        None,
+        "hidden Next column must collapse to silent no-op even with a TOTP row selected — the per-user `show-next-code-column` GSettings key or a HOTP-only vault folded the column away through `compute_next_code_column_visibility`",
+    );
+}
+
+#[test]
+fn dispatch_copy_next_code_accelerator_silent_no_op_when_column_hidden_with_hotp_selection() {
+    let id = dispatch_acc_id();
+    assert_eq!(
+        dispatch_copy_next_code_accelerator(Some((id, AccountKindSummary::Hotp)), false),
+        None,
+        "HOTP + hidden Next column must also collapse to silent no-op",
+    );
+}
+
+#[test]
+fn dispatch_copy_next_code_accelerator_silent_no_op_when_column_hidden_with_no_selection() {
+    assert_eq!(
+        dispatch_copy_next_code_accelerator(None, false),
+        None,
+        "no selection + hidden Next column must also collapse to silent no-op",
+    );
 }

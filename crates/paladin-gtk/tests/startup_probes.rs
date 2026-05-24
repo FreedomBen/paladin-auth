@@ -2328,17 +2328,19 @@ fn format_app_add_button_accelerator_returns_control_shift_n() {
 }
 
 #[test]
-fn format_app_window_accelerator_bindings_returns_four_pinned_pairs_in_order() {
+fn format_app_window_accelerator_bindings_returns_five_pinned_pairs_in_order() {
     // The application-window wiring iterates this array against
     // `gio::Application::set_accels_for_action(target, &[accel])`
     // for every pinned keyboard surface (Add, Quit, Preferences,
-    // Keyboard Shortcuts). The order matches the pinned-accelerator
-    // helper sequence (`format_app_add_button_accelerator`,
+    // Keyboard Shortcuts, Copy Next Code). The order matches the
+    // pinned-accelerator helper sequence
+    // (`format_app_add_button_accelerator`,
     //  `format_app_menu_quit_accelerator`,
     //  `format_app_menu_preferences_accelerator`,
-    //  `format_app_menu_keyboard_shortcuts_accelerator`) and each
-    // pair sources its two slots from the matching `_accelerator`
-    // and `_action` helpers so a future rename of any one helper
+    //  `format_app_menu_keyboard_shortcuts_accelerator`,
+    //  `format_app_copy_next_code_accelerator`) and each pair
+    // sources its two slots from the matching `_accelerator` and
+    // `_action` helpers so a future rename of any one helper
     // propagates through the bindings instead of drifting per-
     // entry.
     //
@@ -2346,11 +2348,12 @@ fn format_app_window_accelerator_bindings_returns_four_pinned_pairs_in_order() {
     // `for (accel, target) in
     //  format_app_window_accelerator_bindings()` loop, so the
     // wiring stays a single iteration over the pinned source of
-    // truth instead of four hand-spelled
+    // truth instead of five hand-spelled
     // `set_accels_for_action` calls that could silently drift in
     // order or coverage.
     use paladin_gtk::app::model::{
         format_app_add_button_accelerator, format_app_add_button_action,
+        format_app_copy_next_code_accelerator, format_app_copy_next_code_action,
         format_app_menu_keyboard_shortcuts_accelerator, format_app_menu_keyboard_shortcuts_action,
         format_app_menu_preferences_accelerator, format_app_menu_preferences_action,
         format_app_menu_quit_accelerator, format_app_menu_quit_action,
@@ -2360,8 +2363,8 @@ fn format_app_window_accelerator_bindings_returns_four_pinned_pairs_in_order() {
     let bindings = format_app_window_accelerator_bindings();
     assert_eq!(
         bindings.len(),
-        4,
-        "the four pinned keyboard surfaces (Add, Quit, Preferences, Keyboard Shortcuts) form the entire accelerator surface today",
+        5,
+        "the five pinned keyboard surfaces (Add, Quit, Preferences, Keyboard Shortcuts, Copy Next Code) form the entire accelerator surface today",
     );
     assert_eq!(
         bindings[0],
@@ -2394,6 +2397,94 @@ fn format_app_window_accelerator_bindings_returns_four_pinned_pairs_in_order() {
             format_app_menu_keyboard_shortcuts_action()
         ),
         "fourth binding must be the Keyboard Shortcuts menu entry's `<Control>question` -> `app.shortcuts`",
+    );
+    assert_eq!(
+        bindings[4],
+        (
+            format_app_copy_next_code_accelerator(),
+            format_app_copy_next_code_action()
+        ),
+        "fifth binding must be the Copy Next Code accelerator's `<Control><Shift>c` -> `app.copy-next-code`",
+    );
+}
+
+#[test]
+fn format_app_copy_next_code_accelerator_returns_control_shift_c() {
+    // Pins the gtk-rs accelerator spelling
+    // `"<Control><Shift>c"`. The widget binding hands this
+    // verbatim to `gio::Application::set_accels_for_action`
+    // through the `format_app_window_accelerator_bindings`
+    // iteration, so a typo here would silently unbind the
+    // shortcut at runtime. The
+    // `format_app_window_accelerator_bindings_parse_via_gtk_accelerator_parse`
+    // test additionally rounds the spelling through
+    // `gtk::accelerator_parse` to catch unknown-keysym typos.
+    use paladin_gtk::app::model::format_app_copy_next_code_accelerator;
+
+    assert_eq!(
+        format_app_copy_next_code_accelerator(),
+        "<Control><Shift>c",
+        "Ctrl+Shift+C accelerator must use the gtk-rs `<Control><Shift>c` spelling per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §\"Next-code column implementation\"",
+    );
+}
+
+#[test]
+fn format_app_copy_next_code_action_returns_app_copy_next_code() {
+    // Pins the fully-qualified `"app.copy-next-code"` action
+    // target. The widget binding hands this verbatim to
+    // `gio::Application::set_accels_for_action` through the
+    // `format_app_window_accelerator_bindings` iteration; the
+    // `"app."` prefix names the bundled application action
+    // group (`format_app_action_group_name`) the action is
+    // registered on by `build_app_window_action_group`.
+    use paladin_gtk::app::model::format_app_copy_next_code_action;
+
+    assert_eq!(
+        format_app_copy_next_code_action(),
+        "app.copy-next-code",
+        "Ctrl+Shift+C action target must be the fully-qualified `app.copy-next-code` form so `set_accels_for_action` and the menu/action-group wiring resolve through the same group",
+    );
+}
+
+#[test]
+fn format_app_copy_next_code_action_name_returns_copy_next_code() {
+    // Pins the bare `"copy-next-code"` action name passed to
+    // `gio::SimpleAction::new(..., None)` by
+    // `build_app_copy_next_code_action`. The fully-qualified
+    // `"app.copy-next-code"` returned by
+    // `format_app_copy_next_code_action` is the
+    // `format_app_action_group_name` group prefix joined to
+    // this bare name via the `<group>.<action>` separator.
+    use paladin_gtk::app::model::format_app_copy_next_code_action_name;
+
+    assert_eq!(
+        format_app_copy_next_code_action_name(),
+        "copy-next-code",
+        "Ctrl+Shift+C bare action name must be `copy-next-code` so the `gio::SimpleAction::new(..., None)` registration matches the fully-qualified `app.copy-next-code` target",
+    );
+}
+
+#[test]
+fn format_app_copy_next_code_action_name_matches_action_after_group_prefix_strip() {
+    // Cross-helper invariant: the bare action name must equal
+    // the fully-qualified action target with the `"app."`
+    // group-prefix stripped. Guards against a future rename
+    // updating one helper without the other, which would
+    // silently break the `app.copy-next-code` action-group
+    // resolution.
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_copy_next_code_action,
+        format_app_copy_next_code_action_name,
+    };
+
+    let prefix = format!("{}.", format_app_action_group_name());
+    let stripped = format_app_copy_next_code_action()
+        .strip_prefix(&prefix)
+        .expect("`format_app_copy_next_code_action` must start with the `app.` group prefix");
+    assert_eq!(
+        stripped,
+        format_app_copy_next_code_action_name(),
+        "the bare action name (`copy-next-code`) must equal the fully-qualified target (`app.copy-next-code`) minus the `app.` group prefix",
     );
 }
 
@@ -3004,32 +3095,36 @@ fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
 }
 
 #[test]
-fn format_app_window_action_names_lists_the_seven_primary_menu_entries_then_add() {
-    // Per §"libadwaita usage" and §"Component tree": the
-    // application's `app` action group bundles the seven
-    // primary-menu bare action names (Import, Export,
-    // Passphrase, Preferences, Keyboard Shortcuts, About, Quit)
-    // with the header-bar `+` button's bare Add action name.
-    // This helper returns all eight names in a fixed-size array
-    // so the widget binding can iterate without allocating a
+fn format_app_window_action_names_lists_the_seven_primary_menu_entries_then_add_then_copy_next_code(
+) {
+    // Per §"libadwaita usage" / §"Component tree" /
+    // §"Next-code column implementation": the application's
+    // `app` action group bundles the seven primary-menu bare
+    // action names (Import, Export, Passphrase, Preferences,
+    // Keyboard Shortcuts, About, Quit) with the header-bar `+`
+    // button's bare Add action name and the `Ctrl+Shift+C`
+    // "copy selected row's next code" bare action name. This
+    // helper returns all nine names in a fixed-size array so
+    // the widget binding can iterate without allocating a
     // `Vec` per `init` call. The pinned order keeps the menu
-    // entries first (matching the §"libadwaita usage" sequence)
-    // and appends Add at the end so callers walking the array
-    // can stop at index 6 for menu-only loops and the full
-    // length for action-group loops.
+    // entries first (matching the §"libadwaita usage" sequence),
+    // appends Add, and ends with Copy Next Code so callers
+    // walking the array can stop at index 6 for menu-only
+    // loops and the full length for action-group loops.
     use paladin_gtk::app::model::{
-        format_app_add_button_action_name, format_app_primary_menu_action_names,
-        format_app_window_action_names,
+        format_app_add_button_action_name, format_app_copy_next_code_action_name,
+        format_app_primary_menu_action_names, format_app_window_action_names,
     };
 
     let combined = format_app_window_action_names();
     let menu = format_app_primary_menu_action_names();
     let add = format_app_add_button_action_name();
+    let copy_next = format_app_copy_next_code_action_name();
 
     assert_eq!(
         combined.len(),
-        menu.len() + 1,
-        "format_app_window_action_names must return exactly one entry per primary menu action plus the Add action",
+        menu.len() + 2,
+        "format_app_window_action_names must return exactly one entry per primary menu action plus the Add action plus the Copy Next Code action",
     );
     for (idx, name) in menu.iter().enumerate() {
         assert_eq!(
@@ -3040,7 +3135,41 @@ fn format_app_window_action_names_lists_the_seven_primary_menu_entries_then_add(
     assert_eq!(
         combined[menu.len()],
         add,
-        "format_app_window_action_names must end with format_app_add_button_action_name",
+        "format_app_window_action_names[menu.len()] must be format_app_add_button_action_name",
+    );
+    assert_eq!(
+        combined[menu.len() + 1],
+        copy_next,
+        "format_app_window_action_names must end with format_app_copy_next_code_action_name",
+    );
+}
+
+#[test]
+fn dispatch_app_window_action_routes_copy_next_code_to_copy_next_code_accelerator() {
+    // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Next-code
+    // column implementation": the `Ctrl+Shift+C` accelerator
+    // and the bundled `"copy-next-code"` `gio::SimpleAction`
+    // both activate the bare action name
+    // `format_app_copy_next_code_action_name()` =
+    // `"copy-next-code"`, which the dispatch table routes to
+    // `AppMsg::CopyNextCodeAccelerator`. The handler resolves
+    // the live `AccountListComponent`'s selection / kind /
+    // Next-column-visibility triple and (on a TOTP row)
+    // re-dispatches `AppMsg::AccountListAction(CopyNextCode(id))`
+    // — the same pipeline the per-row Next cell click already
+    // uses. The action is always enabled so this dispatch can
+    // arrive in every `AppState`; the runtime gate
+    // (HOTP rejection / no selection / hidden Next column /
+    // unmounted controller all collapse to silent no-op) lives
+    // in the `update` arm.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_copy_next_code_action_name, AppMsg,
+    };
+
+    let msg = dispatch_app_window_action(format_app_copy_next_code_action_name());
+    assert!(
+        matches!(msg, Some(AppMsg::CopyNextCodeAccelerator)),
+        "dispatch_app_window_action must route the copy-next-code bare action name to AppMsg::CopyNextCodeAccelerator; got {msg:?}",
     );
 }
 
@@ -7116,9 +7245,23 @@ fn format_app_window_action_names_use_ascii_lowercase_only() {
 
     for (idx, name) in format_app_window_action_names().iter().enumerate() {
         for ch in name.chars() {
+            // ASCII lowercase letters plus the ASCII hyphen are
+            // the GLib `g_action_name_is_valid`-accepted character
+            // set the bundled names use: single-word entries like
+            // `"add"`, `"quit"`, `"about"`, `"import"`,
+            // `"shortcuts"` and the kebab-case
+            // `"copy-next-code"` introduced by §"Next-code
+            // column implementation". Digits / dots / uppercase
+            // letters are excluded so a regression that
+            // introduced an upper-case letter on the bundled-array
+            // side — e.g. renaming `"add"` to `"Add"` — still
+            // surfaces here (the `dispatch_app_window_action`
+            // helper is case-sensitive on the bare name, so an
+            // upper-case slip would mis-route the
+            // `gio::SimpleAction` activation at runtime).
             assert!(
-                ch.is_ascii_lowercase(),
-                "format_app_window_action_names[{idx}] = {name:?} must use lowercase ASCII letters only so the dispatch_app_window_action case-sensitive lookup resolves; got disallowed character {ch:?} (libadwaita / GLib convention for SimpleAction names is lowercase, and the per-name exact-value pins lock each helper to a lowercase literal)",
+                ch.is_ascii_lowercase() || ch == '-',
+                "format_app_window_action_names[{idx}] = {name:?} must use lowercase ASCII letters and ASCII hyphens only so the dispatch_app_window_action case-sensitive lookup resolves; got disallowed character {ch:?} (libadwaita / GLib `g_action_name_is_valid` accepts `[A-Za-z0-9.-]` but the bundled names additionally pin the lowercase ASCII + hyphen subset for kebab-case)",
             );
         }
     }

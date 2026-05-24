@@ -652,6 +652,36 @@ pub enum AppMsg {
     /// state is a benign no-op — `AppModel` drops it when
     /// [`AppModel::account_list`] is `None`.
     SearchToggled(bool),
+    /// Posted by the `connect_activate` handler on the bundled
+    /// `"copy-next-code"` `gio::SimpleAction` registered through
+    /// [`build_app_window_action_group`] (the action `Ctrl+Shift+C`
+    /// is wired to via [`wire_app_window_accelerators`] sourcing
+    /// the `(accelerator, target)` pair from
+    /// [`format_app_window_accelerator_bindings`]).
+    ///
+    /// The `update` arm resolves the live
+    /// [`crate::account_list::AccountListComponent`]'s
+    /// `(selection, kind, next_code_column.is_visible())`
+    /// triple through
+    /// [`crate::account_list::AccountListComponent::current_selection_copy_next_code_output`]
+    /// (a pure
+    /// [`crate::account_list::dispatch_copy_next_code_accelerator`]
+    /// call against the cached values). On a TOTP-selected row
+    /// with a visible Next column the resolver returns
+    /// `Some(AccountListOutput::CopyNextCode(id))`, which the
+    /// handler re-dispatches as
+    /// `AppMsg::AccountListAction(AccountListOutput::CopyNextCode(id))`
+    /// — the same pipeline the per-row Next cell click already
+    /// uses. HOTP rows, no selection, a hidden Next column, and a
+    /// missing live controller (`Locked` / `Missing` /
+    /// `StartupError`) all collapse to `None`, leaving the handler a silent
+    /// no-op per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
+    /// §"Next-code column implementation" >
+    /// "HOTP rejection is silent at the accelerator". Mirrors the
+    /// TUI's `c`-key path, which surfaces a status-line error on
+    /// HOTP; the GTK accelerator stays silent so menu-accelerator
+    /// activations do not raise unexpected toasts.
+    CopyNextCodeAccelerator,
     /// Posted by the window-level `EventControllerKey` installed by
     /// [`wire_app_window_search_focus_controller`] when the user
     /// presses `/` or `Ctrl+L` and no focused entry has consumed
@@ -2228,6 +2258,36 @@ impl SimpleComponent for AppModel {
                 // not mounted (Locked / Missing / StartupError).
                 if let Some(controller) = self.account_list.as_ref() {
                     controller.emit(AccountListMsg::FocusSearch);
+                }
+            }
+            AppMsg::CopyNextCodeAccelerator => {
+                // The bundled `"copy-next-code"` `gio::SimpleAction`
+                // activated (the `Ctrl+Shift+C` accelerator wired
+                // through `wire_app_window_accelerators` /
+                // `format_app_window_accelerator_bindings`). Read
+                // the live `AccountListComponent`'s selection /
+                // kind / Next-column-visibility triple through
+                // `current_selection_copy_next_code_output`, which
+                // routes through the pure
+                // `dispatch_copy_next_code_accelerator` decision
+                // table; on a TOTP-selected row with a visible
+                // Next column the resolver returns
+                // `Some(AccountListOutput::CopyNextCode(id))` and
+                // we re-dispatch through `AppMsg::AccountListAction`
+                // so the existing route already covered by
+                // commit `daa9b3f` (clipboard write + toast)
+                // handles the rest. HOTP rows / no selection /
+                // hidden Next column / no live controller all
+                // resolve to `None` and the accelerator is a
+                // silent no-op per
+                // `docs/IMPLEMENTATION_PLAN_04_GTK.md`
+                // §"Next-code column implementation" >
+                // "HOTP rejection is silent at the accelerator".
+                if let Some(controller) = self.account_list.as_ref() {
+                    let model_ref = controller.model();
+                    if let Some(output) = model_ref.current_selection_copy_next_code_output() {
+                        sender.input(AppMsg::AccountListAction(output));
+                    }
                 }
             }
             AppMsg::ShowSectionHeadersChanged(enabled) => {
@@ -6092,26 +6152,125 @@ pub fn format_app_add_button_accelerator() -> &'static str {
     "<Control><Shift>n"
 }
 
+/// Fully-qualified `detailed_action_name` the `Ctrl+Shift+C`
+/// "copy selected row's next code" accelerator activates per
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Next-code column
+/// implementation".
+///
+/// Returns the static action target `"app.copy-next-code"` —
+/// the fully-qualified target the application's `app` action
+/// group resolves against. The matching `gio::SimpleAction`
+/// (`"copy-next-code"`) is registered on the bundled
+/// application action group built by
+/// [`build_app_window_action_group`]; its `connect_activate`
+/// handler dispatches [`AppMsg::CopyNextCodeAccelerator`], whose
+/// `update` arm routes through the live
+/// [`crate::account_list::AccountListComponent`]'s selection /
+/// kind / Next-column-visibility gate
+/// ([`crate::account_list::AccountListComponent::current_selection_copy_next_code_output`])
+/// and, on a TOTP row, emits the same
+/// [`crate::account_list::AccountListOutput::CopyNextCode`] the
+/// per-row Next cell click already uses. HOTP rows / no
+/// selection / hidden Next column are silent no-ops per the
+/// "HOTP rejection is silent at the accelerator" rule. The
+/// `"app."` prefix names the group; `"copy-next-code"` names the
+/// action.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_copy_next_code_action_name`] (bare action
+/// name) and [`format_app_copy_next_code_accelerator`] (key
+/// spelling); together they pin the action target, its bare
+/// name, and its keyboard accelerator against a single source
+/// of truth.
+#[must_use]
+pub fn format_app_copy_next_code_action() -> &'static str {
+    "app.copy-next-code"
+}
+
+/// Bare `GLib` action name the `Ctrl+Shift+C` "copy selected
+/// row's next code" accelerator binds via
+/// [`format_app_copy_next_code_action`].
+///
+/// Returns the static action name `"copy-next-code"` — the
+/// name passed to `gio::SimpleAction::new(..., None)` when the
+/// matching action is registered on the application's `app`
+/// action group. The fully-qualified `detailed_action_name`
+/// `"app.copy-next-code"` spelled by
+/// [`format_app_copy_next_code_action`] is the
+/// [`format_app_action_group_name`] group prefix joined to this
+/// bare name via the `<group>.<action>` separator.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_copy_next_code_action`] on the fully-
+/// qualified target side and
+/// [`format_app_copy_next_code_accelerator`] on the keyboard-
+/// shortcut side; together they pin the bare action name and
+/// its action wiring against a single source of truth.
+#[must_use]
+pub fn format_app_copy_next_code_action_name() -> &'static str {
+    "copy-next-code"
+}
+
+/// Keyboard accelerator the `Ctrl+Shift+C` "copy selected row's
+/// next code" `gio::SimpleAction` is wired to per
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Next-code column
+/// implementation".
+///
+/// Returns the gtk-rs accelerator spelling `"<Control><Shift>c"`
+/// — the `<Control><Shift>` compound is used so the unshifted
+/// `<Control>c` slot remains free for any future "copy current
+/// row's visible code" surface and so the accelerator does not
+/// collide with the bare `c` keysym that account-row
+/// navigation may want to claim for type-to-search. The widget
+/// binding consumes this via
+/// `gio::Application::set_accels_for_action(format_app_copy_next_code_action(),
+/// &[format_app_copy_next_code_accelerator()])` so the
+/// accelerator and the action target stay against a single
+/// source of truth instead of being re-spelled at the wiring
+/// site (which would silently drift away from the documented
+/// shortcut on a future rename).
+///
+/// The `<Control><Shift>c` form (uppercase modifier names in
+/// angle brackets, lowercase key letter) matches gtk-rs
+/// `accels_for_action`'s recognised spelling; `<Primary>` would
+/// also resolve on Linux but `<Control>` keeps the helper
+/// consistent with the existing
+/// [`format_app_add_button_accelerator`] / quit / preferences /
+/// shortcuts siblings.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_copy_next_code_action`] (fully-qualified
+/// action target) and [`format_app_copy_next_code_action_name`]
+/// (bare action name); together they pin the action target, its
+/// bare name, and its keyboard accelerator against a single
+/// source of truth.
+#[must_use]
+pub fn format_app_copy_next_code_accelerator() -> &'static str {
+    "<Control><Shift>c"
+}
+
 /// Ordered `(accelerator, fully-qualified action target)` pairs
 /// the application-window wiring hands to
 /// `gio::Application::set_accels_for_action(target, &[accel])`
 /// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
-/// "Primary menu" / "Header bar > Add".
+/// "Primary menu" / "Header bar > Add" /
+/// §"Next-code column implementation".
 ///
-/// Returns the four pinned accelerator surfaces in pinned
+/// Returns the five pinned accelerator surfaces in pinned
 /// order: Add (`<Control><Shift>n` → `app.add`), Quit
 /// (`<Control>q` → `app.quit`), Preferences (`<Control>comma` →
-/// `app.preferences`), and Keyboard Shortcuts
-/// (`<Control>question` → `app.shortcuts`). Each pair sources
-/// its accelerator from the matching `format_app_*_accelerator`
-/// helper and its action target from the matching
-/// `format_app_*_action` helper so the table cannot drift away
-/// from either source of truth on a future rename. The widget
-/// binding consumes this array via
+/// `app.preferences`), Keyboard Shortcuts
+/// (`<Control>question` → `app.shortcuts`), and Copy Next Code
+/// (`<Control><Shift>c` → `app.copy-next-code`). Each pair
+/// sources its accelerator from the matching
+/// `format_app_*_accelerator` helper and its action target from
+/// the matching `format_app_*_action` helper so the table cannot
+/// drift away from either source of truth on a future rename.
+/// The widget binding consumes this array via
 /// `for (accel, target) in format_app_window_accelerator_bindings()
 /// { app.set_accels_for_action(target, &[accel]); }` so the
 /// accelerator wiring stays a single iteration over the pinned
-/// source of truth instead of four hand-spelled calls that
+/// source of truth instead of five hand-spelled calls that
 /// could silently drift in order or coverage.
 ///
 /// Pure — returns a small fixed-size array of `'static` string
@@ -6121,7 +6280,7 @@ pub fn format_app_add_button_accelerator() -> &'static str {
 /// for every keyboard-reachable surface in the application
 /// window against a single source of truth.
 #[must_use]
-pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str); 4] {
+pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str); 5] {
     [
         (
             format_app_add_button_accelerator(),
@@ -6139,20 +6298,26 @@ pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str)
             format_app_menu_keyboard_shortcuts_accelerator(),
             format_app_menu_keyboard_shortcuts_action(),
         ),
+        (
+            format_app_copy_next_code_accelerator(),
+            format_app_copy_next_code_action(),
+        ),
     ]
 }
 
 /// Register every pinned keyboard accelerator on `app` per
 /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
-/// "Primary menu" / "Header bar > Add".
+/// "Primary menu" / "Header bar > Add" /
+/// §"Next-code column implementation".
 ///
 /// Iterates [`format_app_window_accelerator_bindings`] (the
 /// `(accelerator, fully-qualified action target)` pairs for
-/// Add, Quit, Preferences, and Keyboard Shortcuts) and calls
+/// Add, Quit, Preferences, Keyboard Shortcuts, and Copy Next
+/// Code) and calls
 /// `gio::Application::set_accels_for_action(target, &[accel])`
 /// per pair so the menu and button activations share their
 /// keyboard surfaces against a single source of truth instead
-/// of four hand-spelled `set_accels_for_action` calls that
+/// of five hand-spelled `set_accels_for_action` calls that
 /// could silently drift in order or coverage.
 ///
 /// The widget binding calls this helper inside `init` once the
@@ -6625,6 +6790,41 @@ pub fn apply_app_add_action_sensitivity(action: &gtk::gio::SimpleAction, state: 
     action.set_enabled(format_app_add_button_sensitive(state));
 }
 
+/// Construct the `"copy-next-code"` [`gtk::gio::SimpleAction`]
+/// (the `Ctrl+Shift+C` "copy selected row's next code"
+/// accelerator) the bundled application action group built by
+/// [`build_app_window_action_group`] resolves against per
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Next-code column
+/// implementation".
+///
+/// The action is parameter-less and always enabled — the
+/// gating (`AppState`, the current selection, the selected
+/// row's kind, the Next column visibility) all happen at the
+/// `connect_activate` site through the
+/// [`AppMsg::CopyNextCodeAccelerator`] handler, which routes
+/// through
+/// [`crate::account_list::AccountListComponent::current_selection_copy_next_code_output`].
+/// Leaving the `SimpleAction` itself always-enabled keeps the
+/// keyboard accelerator live at every `AppState`; a stray
+/// activation while the live
+/// [`crate::account_list::AccountListComponent`] is unmounted
+/// (`Locked` / `Missing` / `StartupError`) is a benign no-op
+/// per the "HOTP rejection is silent at the accelerator" rule.
+///
+/// The `connect_activate` handler that forwards activation to
+/// [`AppMsg::CopyNextCodeAccelerator`] is wired by the widget
+/// binding (the closure needs the [`relm4::ComponentSender`]
+/// that lives on the widget side); this helper only registers
+/// the action surface so the test suite can prove the name is
+/// pinned. Sibling of [`build_app_add_action`] on the per-
+/// action construction side.
+///
+/// Returns an owned [`gtk::gio::SimpleAction`].
+#[must_use]
+pub fn build_app_copy_next_code_action() -> gtk::gio::SimpleAction {
+    gtk::gio::SimpleAction::new(format_app_copy_next_code_action_name(), None)
+}
+
 /// Apply the per-state visibility returned by
 /// [`format_app_add_button_visible`] to an existing
 /// header-bar `+` button [`gtk::Button`].
@@ -7062,22 +7262,24 @@ pub fn wire_app_window_action_activations(
 /// [`format_app_primary_menu_action_names`] (Import, Export,
 /// Passphrase, Preferences, Keyboard Shortcuts, About, Quit)
 /// with the header-bar `+` button's bare action name returned
-/// by [`format_app_add_button_action_name`] into a fixed-size
-/// array so the widget binding can iterate every action on
-/// the bundled group without allocating a `Vec` per `init`
-/// call.
+/// by [`format_app_add_button_action_name`] and the
+/// `Ctrl+Shift+C` "copy selected row's next code" bare action
+/// name returned by [`format_app_copy_next_code_action_name`]
+/// into a fixed-size array so the widget binding can iterate
+/// every action on the bundled group without allocating a `Vec`
+/// per `init` call.
 ///
 /// The pinned order keeps the menu entries first (matching
-/// the §"libadwaita usage" sequence) and appends Add at the
-/// end so callers that only care about the menu can take
-/// `&names[..7]` while the full array covers the entire
-/// action surface for `connect_activate` wiring and runtime
-/// sensitivity updates.
+/// the §"libadwaita usage" sequence), appends Add, and ends
+/// with Copy Next Code so callers that only care about the
+/// menu can take `&names[..7]` while the full array covers
+/// the entire action surface for `connect_activate` wiring
+/// and runtime sensitivity updates.
 ///
 /// Pure — returns an owned array of `&'static str` without
 /// allocating.
 #[must_use]
-pub fn format_app_window_action_names() -> [&'static str; 8] {
+pub fn format_app_window_action_names() -> [&'static str; 9] {
     let menu = format_app_primary_menu_action_names();
     [
         menu[0],
@@ -7088,6 +7290,7 @@ pub fn format_app_window_action_names() -> [&'static str; 8] {
         menu[5],
         menu[6],
         format_app_add_button_action_name(),
+        format_app_copy_next_code_action_name(),
     ]
 }
 
@@ -7140,6 +7343,9 @@ pub fn dispatch_app_window_action(name: &str) -> Option<AppMsg> {
     }
     if name == format_app_menu_quit_action_name() {
         return Some(AppMsg::Quit);
+    }
+    if name == format_app_copy_next_code_action_name() {
+        return Some(AppMsg::CopyNextCodeAccelerator);
     }
     None
 }
@@ -7232,6 +7438,7 @@ pub fn dispatch_startup_error_output(out: StartupErrorOutput) -> AppMsg {
 pub fn build_app_window_action_group(state: &AppState) -> gtk::gio::SimpleActionGroup {
     let group = build_app_primary_action_group(state);
     group.add_action(&build_app_add_action(state));
+    group.add_action(&build_app_copy_next_code_action());
     group
 }
 
