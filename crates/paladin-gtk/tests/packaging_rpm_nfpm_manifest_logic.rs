@@ -19,9 +19,20 @@
 //!   features enforce, just spelled with the Fedora package
 //!   names instead of the Debian `libgtk-4-1` /
 //!   `libadwaita-1-0` ones.
-//! * Declares NO `scripts:` section, for the same reason the `.deb`
-//!   manifest omits one: package state never touches user vault
-//!   state.
+//! * Declares the same narrowly scoped `scripts:` section as
+//!   `packaging/deb/paladin-gtk.yaml` (wiring `postinstall` and
+//!   `postremove` to the shared
+//!   `packaging/scripts/paladin-gtk-postinstall.sh` /
+//!   `packaging/scripts/paladin-gtk-postremove.sh` files) so a
+//!   freshly installed `.rpm`'s desktop entry and application
+//!   icon appear in GNOME Shell / KDE / XFCE without requiring
+//!   the user to log out and back in. The script-content
+//!   security checks (no `$XDG_*` / no `$HOME` / no `/home/` /
+//!   no network calls / fail-soft on missing helpers) live in
+//!   `packaging_deb_nfpm_manifest_logic.rs` since both formats
+//!   reference the same script files; this file's assertion is
+//!   the cross-format parity check that the two manifests stay
+//!   in lockstep.
 //! * Inherits `version` / `description` / `homepage` / `license` /
 //!   `maintainer` from the workspace `Cargo.toml`'s
 //!   `[workspace.package]` table or from build-time environment
@@ -64,6 +75,22 @@ const REQUIRED_INSTALL_DESTINATIONS: &[&str] = &[
     "/usr/share/icons/hicolor/128x128/apps/org.tamx.Paladin.Gui.png",
     "/usr/share/icons/hicolor/256x256/apps/org.tamx.Paladin.Gui.png",
     "/usr/share/icons/hicolor/512x512/apps/org.tamx.Paladin.Gui.png",
+];
+
+/// Required `scripts:` keys and the relative paths they MUST reference.
+/// Mirrors `REQUIRED_SCRIPT_KEYS_AND_PATHS` in
+/// `tests/packaging_deb_nfpm_manifest_logic.rs` so both packaging
+/// formats reference the same on-disk shell scripts; the parity
+/// is double-pinned by `rpm_manifest_scripts_match_deb_manifest_scripts`.
+const REQUIRED_SCRIPT_KEYS_AND_PATHS: &[(&str, &str)] = &[
+    (
+        "postinstall",
+        "./packaging/scripts/paladin-gtk-postinstall.sh",
+    ),
+    (
+        "postremove",
+        "./packaging/scripts/paladin-gtk-postremove.sh",
+    ),
 ];
 
 /// `src` paths each `dst` MUST source from, in the same order as
@@ -142,6 +169,43 @@ fn top_level_sequence_scalars(manifest: &str, key: &str) -> Vec<String> {
                     out.push(item.trim().trim_matches(['"', '\'']).to_string());
                 } else if stripped == "-" {
                     out.push(String::new());
+                }
+                i += 1;
+            }
+            return out;
+        }
+        i += 1;
+    }
+    out
+}
+
+fn top_level_mapping_kv_pairs(manifest: &str, mapping_key: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let header = format!("{mapping_key}:");
+    let lines: Vec<&str> = manifest.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = strip_trailing_comment(lines[i]);
+        if line == header {
+            i += 1;
+            while i < lines.len() {
+                let raw = lines[i];
+                let trimmed = strip_trailing_comment(raw).trim_end();
+                if trimmed.is_empty() {
+                    i += 1;
+                    continue;
+                }
+                if !raw.starts_with(' ') && !raw.starts_with('\t') {
+                    break;
+                }
+                let stripped = trimmed.trim_start();
+                if let Some(colon) = stripped.find(':') {
+                    let k = stripped[..colon].trim().to_string();
+                    let v = stripped[colon + 1..]
+                        .trim()
+                        .trim_matches(['"', '\''])
+                        .to_string();
+                    out.push((k, v));
                 }
                 i += 1;
             }
@@ -412,16 +476,58 @@ fn rpm_manifest_in_tree_sources_all_exist_under_the_workspace() {
 }
 
 #[test]
-fn rpm_manifest_has_no_maintainer_scripts_section() {
+fn rpm_manifest_declares_required_scripts_section() {
+    // Same narrowly scoped maintainer scripts as the .deb. Without
+    // these scriptlets, a freshly installed .rpm's desktop entry
+    // shows up in a running GNOME Shell with a generic placeholder
+    // icon until the user logs out and back in — the in-memory
+    // GtkIconTheme inside the gnome-shell process never rebuilds
+    // from the new on-disk icon-theme.cache.
     let manifest = read_rpm_manifest();
-    for raw_line in manifest.lines() {
-        let line = strip_trailing_comment(raw_line);
-        assert!(
-            !line.starts_with("scripts:"),
-            "rpm nfpm manifest must NOT declare a `scripts:` section — Milestone 7 forbids \
-             maintainer scripts on the .rpm; found: {raw_line:?}",
+    let scripts = top_level_mapping_kv_pairs(&manifest, "scripts");
+    assert!(
+        !scripts.is_empty(),
+        "rpm nfpm manifest must declare a top-level `scripts:` mapping with `postinstall` \
+         and `postremove` entries so the freedesktop desktop-database and icon-theme caches \
+         refresh on install and removal; none was found",
+    );
+    for (expected_key, expected_path) in REQUIRED_SCRIPT_KEYS_AND_PATHS {
+        let actual = scripts
+            .iter()
+            .find(|(k, _v)| k == expected_key)
+            .map(|(_k, v)| v.as_str());
+        assert_eq!(
+            actual,
+            Some(*expected_path),
+            "rpm nfpm manifest `scripts:` must map `{expected_key}: {expected_path}`; got \
+             {actual:?}. The same path ships in packaging/deb/paladin-gtk.yaml so a fix \
+             lands in both formats simultaneously.",
         );
     }
+}
+
+#[test]
+fn rpm_manifest_scripts_match_deb_manifest_scripts() {
+    // Cross-format parity: both packagings MUST embed identical
+    // postinstall + postremove behavior, achieved by referencing
+    // the same on-disk shell scripts. A drift would mean a Fedora
+    // user and a Debian user get different launcher behavior
+    // after install — exactly the scenario the shared-scripts
+    // layout is designed to prevent.
+    let rpm = read_rpm_manifest();
+    let rpm_scripts = top_level_mapping_kv_pairs(&rpm, "scripts");
+
+    let deb_path = workspace_root().join("packaging/deb/paladin-gtk.yaml");
+    let deb = fs::read_to_string(&deb_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", deb_path.display()));
+    let deb_scripts = top_level_mapping_kv_pairs(&deb, "scripts");
+
+    assert_eq!(
+        rpm_scripts, deb_scripts,
+        "rpm and deb nfpm manifests must declare identical `scripts:` mappings so Fedora \
+         and Debian users land on the same maintainer-script behavior; rpm: {rpm_scripts:?}; \
+         deb: {deb_scripts:?}",
+    );
 }
 
 #[test]
@@ -527,6 +633,32 @@ contents:
         vec!["gtk4 >= 4.16".to_string(), "libadwaita >= 1.6".to_string()],
     );
     assert!(top_level_sequence_scalars(manifest, "missing").is_empty());
+}
+
+#[test]
+fn top_level_mapping_kv_pairs_reads_scripts_block() {
+    let manifest = "\
+scripts:
+  postinstall: ./packaging/scripts/paladin-gtk-postinstall.sh
+  postremove: \"./packaging/scripts/paladin-gtk-postremove.sh\"
+contents:
+  - src: a
+";
+    let scripts = top_level_mapping_kv_pairs(manifest, "scripts");
+    assert_eq!(
+        scripts,
+        vec![
+            (
+                "postinstall".to_string(),
+                "./packaging/scripts/paladin-gtk-postinstall.sh".to_string(),
+            ),
+            (
+                "postremove".to_string(),
+                "./packaging/scripts/paladin-gtk-postremove.sh".to_string(),
+            ),
+        ],
+    );
+    assert!(top_level_mapping_kv_pairs(manifest, "missing").is_empty());
 }
 
 #[test]

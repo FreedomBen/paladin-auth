@@ -7,8 +7,10 @@
 # release binary, the freedesktop desktop entry, the AppStream
 # metainfo, and the hicolor icon set on the canonical FHS paths the
 # §11 packaging dry-run validates against. Maintainer scripts are
-# intentionally absent — paladin-gtk packages never create or alter
-# user vault state. The runtime baselines (libgtk-4-1 (>= 4.16) and
+# narrowly scoped to refreshing two system-owned freedesktop caches
+# under /usr/share (mimeinfo.cache + icon-theme.cache); user vault
+# state under $XDG_DATA_HOME/paladin/ is never created or altered by
+# the package. The runtime baselines (libgtk-4-1 (>= 4.16) and
 # libadwaita-1-0 (>= 1.6)) mirror the build-time gtk4 (v4_16) and
 # libadwaita (v1_6) crate features so an installed .deb cannot land
 # on a system whose libraries fall below the GUI's widget floor.
@@ -124,8 +126,19 @@ contents:
     file_info:
       mode: 0644
 
-# No `scripts:` section: paladin-gtk packages must not run preinst,
-# postinst, prerm, or postrm hooks. Vault files live under
-# $XDG_DATA_HOME/paladin/ and are only created by `paladin init` or
-# the GUI's InitDialog — package state and user state are kept
-# strictly separate per docs/IMPLEMENTATION_PLAN_04_GTK.md §11.3.
+# Maintainer scripts. nfpm reads the referenced shell scripts at
+# package-build time and embeds them verbatim into the .deb's
+# control.tar.gz as postinst / postrm. Both scripts are also
+# referenced by packaging/rpm/paladin-gtk.yaml so a single source
+# of truth ships on .deb and .rpm — see packaging/scripts/paladin-
+# gtk-postinstall.sh for the pinned security posture (touches only
+# /usr/share, never reads or writes any $XDG_* or user-vault path,
+# fail-soft on missing helpers). Without these scriptlets, a
+# freshly installed .deb's desktop entry shows up in GNOME Shell
+# with a generic placeholder icon until the user logs out and back
+# in, because the in-memory GtkIconTheme inside the running gnome-
+# shell process never rebuilds from the new on-disk
+# icon-theme.cache.
+scripts:
+  postinstall: ./packaging/scripts/paladin-gtk-postinstall.sh
+  postremove: ./packaging/scripts/paladin-gtk-postremove.sh

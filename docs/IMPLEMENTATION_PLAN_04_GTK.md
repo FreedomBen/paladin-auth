@@ -5408,8 +5408,13 @@ sign-off.
   - [x] Add `packaging/deb/paladin-gtk.yaml` (`nfpm`) installing
     `/usr/bin/paladin-gtk`, the desktop entry, the AppStream
     metainfo, and the hicolor icon set; declare
-    `libgtk-4-1 (>= 4.16)` and `libadwaita-1-0 (>= 1.6)`; no
-    maintainer scripts. Pinned by
+    `libgtk-4-1 (>= 4.16)` and `libadwaita-1-0 (>= 1.6)`; wire a
+    narrowly scoped `postinstall` / `postremove` scriptlet pair
+    that refreshes `/usr/share/applications/mimeinfo.cache` and
+    `/usr/share/icons/hicolor/icon-theme.cache` (the shell scripts
+    live at `packaging/scripts/paladin-gtk-postinstall.sh` and
+    `packaging/scripts/paladin-gtk-postremove.sh` and are shared
+    byte-for-byte with the `.rpm` manifest). Pinned by
     `tests/packaging_deb_nfpm_manifest_logic.rs`:
     `deb_manifest_exists_at_expected_path`,
     `deb_manifest_starts_with_spdx_license_header`,
@@ -5422,22 +5427,35 @@ sign-off.
     `deb_manifest_installs_every_required_destination`,
     `deb_manifest_sources_each_install_from_the_expected_in_tree_path`,
     `deb_manifest_in_tree_sources_all_exist_under_the_workspace`,
-    `deb_manifest_has_no_maintainer_scripts_section`, and
-    `deb_manifest_binary_install_uses_executable_mode` — together
-    these read `packaging/deb/paladin-gtk.yaml` as plain text (no
-    `serde_yaml` dep lands in the test deck) and fail if the
-    manifest stops installing `/usr/bin/paladin-gtk` (with
+    `deb_manifest_declares_required_scripts_section`,
+    `deb_manifest_scripts_reference_only_the_baseline_keys`,
+    `deb_manifest_script_references_point_to_existing_executable_files`,
+    `paladin_gtk_scripts_have_spdx_license_header`,
+    `paladin_gtk_scripts_touch_only_system_owned_caches`,
+    `paladin_gtk_scripts_gate_helpers_with_command_v_and_fail_soft`,
+    and `deb_manifest_binary_install_uses_executable_mode` —
+    together these read `packaging/deb/paladin-gtk.yaml` as plain
+    text (no `serde_yaml` dep lands in the test deck) and fail if
+    the manifest stops installing `/usr/bin/paladin-gtk` (with
     `mode: 0755`), the desktop entry at `/usr/share/applications/`,
     the AppStream metainfo at `/usr/share/metainfo/`, or any of the
     hicolor scalable / symbolic / 16x16 / 24x24 / 32x32 / 48x48 /
     64x64 / 128x128 / 256x256 / 512x512 icon paths; if any `src`
-    references a missing in-tree path; if
-    `depends:` drifts from the exact `libgtk-4-1 (>= 4.16)` /
-    `libadwaita-1-0 (>= 1.6)` baseline pair; or if a `scripts:`
-    section sneaks in.
+    references a missing in-tree path; if `depends:` drifts from
+    the exact `libgtk-4-1 (>= 4.16)` / `libadwaita-1-0 (>= 1.6)`
+    baseline pair; if the `scripts:` mapping loses the
+    `postinstall` / `postremove` entries or grows additional
+    maintainer-hook keys; or if the referenced shell scripts grow
+    `$HOME` / `$XDG_*` / `~/` / `/home/` references, network
+    calls, or stop gating helpers with `command -v` + `|| :`
+    fail-soft.
   - [x] Add `packaging/rpm/paladin-gtk.yaml` (`nfpm`) installing the
-    same payload with matching `gtk4` / `libadwaita` package names.
-    Pinned by `tests/packaging_rpm_nfpm_manifest_logic.rs`:
+    same payload with matching `gtk4` / `libadwaita` package names,
+    and declaring the same `postinstall` / `postremove` scriptlet
+    pair as the `.deb` (both manifests reference the shared
+    `packaging/scripts/paladin-gtk-*.sh` shell files so a fix lands
+    in both formats at once). Pinned by
+    `tests/packaging_rpm_nfpm_manifest_logic.rs`:
     `rpm_manifest_exists_at_expected_path`,
     `rpm_manifest_starts_with_spdx_license_header`,
     `rpm_manifest_declares_package_name_paladin_gtk`,
@@ -5450,18 +5468,20 @@ sign-off.
     `rpm_manifest_installs_every_required_destination`,
     `rpm_manifest_sources_each_install_from_the_expected_in_tree_path`,
     `rpm_manifest_in_tree_sources_all_exist_under_the_workspace`,
-    `rpm_manifest_has_no_maintainer_scripts_section`,
+    `rpm_manifest_declares_required_scripts_section`,
+    `rpm_manifest_scripts_match_deb_manifest_scripts`,
     `rpm_manifest_binary_install_uses_executable_mode`, and
     `rpm_manifest_install_layout_matches_deb_manifest_layout` — the
-    last of these is a cross-format check that asserts the `.rpm`
-    and `.deb` manifests stage byte-identical `dst:` layouts so
-    Fedora and Debian users land on the same filesystem footprint.
-    Together they fail if the manifest stops installing any of the
-    Milestone 7 destinations, if any `src` references a missing in-
-    tree path, if `depends:` drifts from `gtk4 >= 4.16` /
-    `libadwaita >= 1.6`, if a Debian-style `libgtk-4-1` /
-    `libadwaita-1-0` name slips in, or if a `scripts:` section
-    sneaks in.
+    last two are cross-format checks that assert the `.rpm` and
+    `.deb` manifests stage byte-identical `dst:` layouts and
+    declare byte-identical `scripts:` mappings so Fedora and Debian
+    users land on the same filesystem footprint and the same
+    maintainer-script behavior. Together they fail if the manifest
+    stops installing any of the Milestone 7 destinations, if any
+    `src` references a missing in-tree path, if `depends:` drifts
+    from `gtk4 >= 4.16` / `libadwaita >= 1.6`, if a Debian-style
+    `libgtk-4-1` / `libadwaita-1-0` name slips in, or if the
+    `scripts:` mapping diverges from the `.deb` manifest.
   - [x] Add `packaging/flatpak/paladin-gtk.yml` declaring
     `org.gnome.Platform//47` and the matching SDK, the §11.4 sandbox
     permissions (`xdg-data/paladin:create`,

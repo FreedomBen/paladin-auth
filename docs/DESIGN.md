@@ -2164,9 +2164,23 @@ artifacts side by side.
     deprecated-widget compatibility shim; distributions whose stable
     channel ships older GTK / libadwaita cannot install
     `paladin-gtk` until their baseline rises.
-- **Maintainer scripts.** None. The vault lives under
-  `$XDG_DATA_HOME/paladin/` and is created on first use, so install and
-  removal touch nothing global.
+- **Maintainer scripts.** Narrowly scoped: `paladin-gtk` ships a
+  `postinstall` and a `postremove` scriptlet that refresh
+  `/usr/share/applications/mimeinfo.cache` (via
+  `update-desktop-database`) and `/usr/share/icons/hicolor/icon-theme.cache`
+  (via `gtk-update-icon-cache`) so a freshly installed `.deb` /
+  `.rpm` desktop entry and application icon appear in GNOME Shell,
+  KDE, XFCE, and other freedesktop-aware launchers without requiring
+  the user to log out and back in. The scripts touch only
+  system-owned caches under `/usr/share`; the vault under
+  `$XDG_DATA_HOME/paladin/` is never created or altered by package
+  install or removal. Identical script bodies ship on `.deb` and
+  `.rpm` (single source of truth at
+  `packaging/scripts/paladin-gtk-postinstall.sh` and
+  `packaging/scripts/paladin-gtk-postremove.sh`) so cross-format
+  drift is impossible. `paladin` (CLI) and `paladin-tui` ship no
+  maintainer scripts — they install no desktop entries or hicolor
+  icons, so no cache rebuild is required.
 - **Conflicts / replaces.** The three packages coexist; they do not
   shadow each other's binaries, and a user can install any subset.
 - **License metadata.** Every control file declares

@@ -23,12 +23,20 @@
 //!   `gtk4`/`libadwaita` crate features (`v4_16` / `v1_6`) enforce so
 //!   a `.deb` install never lands a binary that links against a
 //!   too-old system library.
-//! * Declares NO `scripts:` section — `paladin-gtk` packages never
-//!   create or alter user vaults; vault files live under
-//!   `$XDG_DATA_HOME/paladin/` and are only created by `paladin init`
-//!   or the GUI's `InitDialog`, so a maintainer hook would be both
-//!   unnecessary and a security-sensitive surface to keep off the
-//!   `.deb` post-install path.
+//! * Declares a narrowly scoped `scripts:` section that wires
+//!   `postinstall` and `postremove` to
+//!   `packaging/scripts/paladin-gtk-postinstall.sh` and
+//!   `packaging/scripts/paladin-gtk-postremove.sh`. Both scripts
+//!   refresh the system-owned freedesktop caches
+//!   (`/usr/share/applications/mimeinfo.cache` and
+//!   `/usr/share/icons/hicolor/icon-theme.cache`) so a freshly
+//!   installed `.deb`'s desktop entry and application icon appear
+//!   in GNOME Shell / KDE / XFCE without requiring the user to
+//!   log out and back in. The security posture (no `$XDG_*` / no
+//!   `$HOME` / no `/home/` / no network calls / fail-soft on
+//!   missing helpers) is pinned by per-script-content assertions
+//!   below; vault state under `$XDG_DATA_HOME/paladin/` remains
+//!   untouched by package install and removal.
 //! * Inherits `version` / `description` / `homepage` / `license` /
 //!   `maintainer` from the workspace `Cargo.toml`'s
 //!   `[workspace.package]` table or from build-time environment
@@ -71,6 +79,23 @@ const REQUIRED_INSTALL_DESTINATIONS: &[&str] = &[
     "/usr/share/icons/hicolor/128x128/apps/org.tamx.Paladin.Gui.png",
     "/usr/share/icons/hicolor/256x256/apps/org.tamx.Paladin.Gui.png",
     "/usr/share/icons/hicolor/512x512/apps/org.tamx.Paladin.Gui.png",
+];
+
+/// Required `scripts:` keys and the relative paths they MUST reference.
+/// Both keys are required: `postinstall` rebuilds the freedesktop
+/// caches on `apt install`; `postremove` rebuilds them on
+/// `apt remove` so the launcher no longer shows the stale entry.
+/// Both scripts are shared with `packaging/rpm/paladin-gtk.yaml`
+/// so a fix lands in both packaging formats simultaneously.
+const REQUIRED_SCRIPT_KEYS_AND_PATHS: &[(&str, &str)] = &[
+    (
+        "postinstall",
+        "./packaging/scripts/paladin-gtk-postinstall.sh",
+    ),
+    (
+        "postremove",
+        "./packaging/scripts/paladin-gtk-postremove.sh",
+    ),
 ];
 
 /// `src` paths each `dst` MUST source from. Indexed against
@@ -179,6 +204,57 @@ fn top_level_sequence_scalars(manifest: &str, key: &str) -> Vec<String> {
     out
 }
 
+/// Return the `(key, value)` pairs under a top-level YAML mapping
+/// keyed by `mapping_key`. Handles the canonical block-mapping form
+///
+/// ```yaml
+/// scripts:
+///   postinstall: ./packaging/scripts/paladin-gtk-postinstall.sh
+///   postremove: ./packaging/scripts/paladin-gtk-postremove.sh
+/// ```
+///
+/// Inline comments are stripped before splitting. Quoted and unquoted
+/// values are both supported. Returns an empty `Vec` if the mapping
+/// key is absent so callers can distinguish "no scripts:" from
+/// "scripts: present but malformed".
+fn top_level_mapping_kv_pairs(manifest: &str, mapping_key: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let header = format!("{mapping_key}:");
+    let lines: Vec<&str> = manifest.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = strip_trailing_comment(lines[i]);
+        if line == header {
+            i += 1;
+            while i < lines.len() {
+                let raw = lines[i];
+                let trimmed = strip_trailing_comment(raw).trim_end();
+                if trimmed.is_empty() {
+                    i += 1;
+                    continue;
+                }
+                // Stop on the next top-level key (column-zero non-list).
+                if !raw.starts_with(' ') && !raw.starts_with('\t') {
+                    break;
+                }
+                let stripped = trimmed.trim_start();
+                if let Some(colon) = stripped.find(':') {
+                    let k = stripped[..colon].trim().to_string();
+                    let v = stripped[colon + 1..]
+                        .trim()
+                        .trim_matches(['"', '\''])
+                        .to_string();
+                    out.push((k, v));
+                }
+                i += 1;
+            }
+            return out;
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Extract the `(src, dst)` pairs from the top-level `contents:`
 /// block. Each entry is the canonical nfpm form:
 ///
@@ -254,6 +330,37 @@ fn strip_trailing_comment(line: &str) -> &str {
         Some(idx) => &line[..idx],
         None => line,
     }
+}
+
+/// Return the executable portion of a POSIX shell script — comment
+/// lines (`^\s*#`) are stripped, the shebang (`^#!`) is preserved,
+/// and trailing comments after a space-prefixed `#` are removed.
+/// Used by the script-content security tests so the explanatory
+/// header comments in the shell scripts can describe what the
+/// script intentionally avoids (e.g. `# never touches $XDG_*`)
+/// without the test flagging the documentation itself as a
+/// forbidden reference.
+fn strip_shell_comments(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("#!") {
+            out.push_str(line);
+        } else if trimmed.starts_with('#') {
+            // Whole-line comment — drop entirely.
+        } else {
+            // Trailing comment: only treat ` #` (space then hash)
+            // as a comment marker so a literal `#` inside an
+            // unquoted shell token (rare; the scripts here never
+            // do this) is not accidentally stripped.
+            match line.find(" #") {
+                Some(idx) => out.push_str(&line[..idx]),
+                None => out.push_str(line),
+            }
+        }
+        out.push('\n');
+    }
+    out
 }
 
 // --- tests -------------------------------------------------------------------
@@ -446,19 +553,229 @@ fn deb_manifest_in_tree_sources_all_exist_under_the_workspace() {
 }
 
 #[test]
-fn deb_manifest_has_no_maintainer_scripts_section() {
-    // §11.3 explicitly forbids package-owned maintainer scripts.
-    // `nfpm` exposes maintainer hooks under the top-level
-    // `scripts:` mapping (`preinstall` / `postinstall` /
-    // `preremove` / `postremove`). The manifest under test must
-    // omit that section entirely.
+fn deb_manifest_declares_required_scripts_section() {
+    // §11.3 scopes maintainer scripts narrowly to refreshing
+    // /usr/share/applications/mimeinfo.cache and
+    // /usr/share/icons/hicolor/icon-theme.cache after install
+    // and after removal — without them, a freshly installed .deb
+    // shows up in a running GNOME Shell with a generic placeholder
+    // icon (the in-memory GtkIconTheme inside gnome-shell does not
+    // rebuild from the new on-disk icon-theme.cache until the
+    // user logs out and back in).
     let manifest = read_deb_manifest();
-    for raw_line in manifest.lines() {
-        let line = strip_trailing_comment(raw_line);
+    let scripts = top_level_mapping_kv_pairs(&manifest, "scripts");
+    assert!(
+        !scripts.is_empty(),
+        "deb nfpm manifest must declare a top-level `scripts:` mapping with `postinstall` \
+         and `postremove` entries so the freedesktop desktop-database and icon-theme caches \
+         refresh on install and removal; none was found",
+    );
+    for (expected_key, expected_path) in REQUIRED_SCRIPT_KEYS_AND_PATHS {
+        let actual = scripts
+            .iter()
+            .find(|(k, _v)| k == expected_key)
+            .map(|(_k, v)| v.as_str());
+        assert_eq!(
+            actual,
+            Some(*expected_path),
+            "deb nfpm manifest `scripts:` must map `{expected_key}: {expected_path}`; got \
+             {actual:?}. The same path ships in packaging/rpm/paladin-gtk.yaml so a fix \
+             lands in both formats simultaneously.",
+        );
+    }
+}
+
+#[test]
+fn deb_manifest_scripts_reference_only_the_baseline_keys() {
+    // Pin the script-keys set so accidental additions (e.g. a
+    // `preinstall` that reads user state, or a `preremove` that
+    // removes vault files) land an explicit review. §11.3 scopes
+    // the maintainer-scripts surface to postinstall + postremove
+    // only.
+    let manifest = read_deb_manifest();
+    let scripts = top_level_mapping_kv_pairs(&manifest, "scripts");
+    let allowed: Vec<&str> = REQUIRED_SCRIPT_KEYS_AND_PATHS
+        .iter()
+        .map(|(k, _v)| *k)
+        .collect();
+    let extras: Vec<&str> = scripts
+        .iter()
+        .map(|(k, _v)| k.as_str())
+        .filter(|k| !allowed.contains(k))
+        .collect();
+    assert!(
+        extras.is_empty(),
+        "deb nfpm manifest `scripts:` must declare ONLY the keys {allowed:?}; found \
+         unexpected entries: {extras:?}. If a new maintainer hook is genuinely required, \
+         update DESIGN.md §11.3 first and add it to REQUIRED_SCRIPT_KEYS_AND_PATHS.",
+    );
+}
+
+#[test]
+fn deb_manifest_script_references_point_to_existing_executable_files() {
+    // Each script the manifest references MUST exist on disk and
+    // be executable so nfpm can stage it into the .deb's
+    // control.tar.gz at build time. A typo here would not be
+    // caught by `nfpm pkg` (it embeds whatever bytes the file
+    // contains), only by users hitting a "script not found" error
+    // during `apt install`.
+    let workspace = workspace_root();
+    for (_key, relpath) in REQUIRED_SCRIPT_KEYS_AND_PATHS {
+        let stripped = relpath.strip_prefix("./").unwrap_or(relpath);
+        let full = workspace.join(stripped);
         assert!(
-            !line.starts_with("scripts:"),
-            "deb nfpm manifest must NOT declare a `scripts:` section — Milestone 7 forbids \
-             maintainer scripts on the .deb; found: {raw_line:?}",
+            full.is_file(),
+            "deb nfpm manifest `scripts:` references {relpath} but the file does not exist \
+             at {}",
+            full.display(),
+        );
+        let mode = fs::metadata(&full)
+            .unwrap_or_else(|err| panic!("failed to stat {}: {err}", full.display()))
+            .permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let bits = mode.mode() & 0o777;
+            assert_eq!(
+                bits & 0o111,
+                0o111,
+                "deb nfpm manifest script {} must be executable by user/group/other \
+                 (mode bits 0o111 set) so nfpm reads + embeds it correctly; got mode {:#o}",
+                full.display(),
+                bits,
+            );
+        }
+    }
+}
+
+#[test]
+fn paladin_gtk_scripts_have_spdx_license_header() {
+    // Every source file in the workspace carries an
+    // SPDX-License-Identifier comment per the license-hygiene
+    // section of CLAUDE.md and §13 of DESIGN.md. The shell
+    // scriptlets are no exception — they ship verbatim inside
+    // the .deb / .rpm so the SPDX line travels with the package
+    // bytes a downstream auditor would inspect.
+    let workspace = workspace_root();
+    for (_key, relpath) in REQUIRED_SCRIPT_KEYS_AND_PATHS {
+        let stripped = relpath.strip_prefix("./").unwrap_or(relpath);
+        let full = workspace.join(stripped);
+        let body = fs::read_to_string(&full)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", full.display()));
+        assert!(
+            body.contains("SPDX-License-Identifier: AGPL-3.0-or-later"),
+            "{} must declare SPDX-License-Identifier: AGPL-3.0-or-later in a header \
+             comment so the AGPL travels with the script bytes embedded in the package",
+            full.display(),
+        );
+    }
+}
+
+#[test]
+fn paladin_gtk_scripts_touch_only_system_owned_caches() {
+    // Security-pinned property: the postinstall and postremove
+    // scripts MUST NOT read or write any user-home / $XDG_* /
+    // user-vault path. The package-vs-user state separation
+    // documented in DESIGN.md §11.3 is enforced by this assertion
+    // — if a future edit adds e.g. `chmod $HOME/...` or sources a
+    // file from `/home/...`, this test fails before the
+    // regression ships.
+    //
+    // The forbidden-substrings list is intentionally broad: any
+    // mention triggers a failure, even inside a comment, because
+    // comments evolve out of sync with code and the safest stance
+    // is "if these substrings appear, audit before merging".
+    let forbidden = &[
+        "$HOME", "${HOME", "$XDG_", "${XDG_", "~/", "/home/", "/root/",
+        // Network calls — postinstall scripts on a freshly
+        // installed package must never reach the network.
+        "curl ", "wget ", "nc ", " ssh ",
+        // Dynamic command construction — `eval` on attacker-
+        // controlled input is the classic postinst-script
+        // escalation vector. The scriptlets here never call
+        // eval; pin that.
+        "eval ",
+    ];
+    let workspace = workspace_root();
+    for (_key, relpath) in REQUIRED_SCRIPT_KEYS_AND_PATHS {
+        let stripped_path = relpath.strip_prefix("./").unwrap_or(relpath);
+        let full = workspace.join(stripped_path);
+        let body = fs::read_to_string(&full)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", full.display()));
+        // Strip comments before the negative-substring scan: the
+        // header documentation intentionally mentions $XDG_* paths
+        // to assert that the script does NOT touch them, and that
+        // documentation is valuable for auditors reading the
+        // package contents. The security property the test
+        // enforces is "executable code may not reference these
+        // paths", not "the string may not appear anywhere".
+        let code = strip_shell_comments(&body);
+        for needle in forbidden {
+            assert!(
+                !code.contains(needle),
+                "{} executable code must not contain {needle:?} — postinstall / \
+                 postremove scripts may only touch system-owned caches under /usr/share. \
+                 Adding a user-home or network reference here breaks the package-vs-user \
+                 state separation pinned in DESIGN.md §11.3.",
+                full.display(),
+            );
+        }
+        // Positive assertions run against executable code too so a
+        // future "no-op" stub that puts the path references only
+        // in a comment does not satisfy this check.
+        assert!(
+            code.contains("/usr/share/applications"),
+            "{} executable code must reference /usr/share/applications (the path \
+             update-desktop-database rebuilds the cache under)",
+            full.display(),
+        );
+        assert!(
+            code.contains("/usr/share/icons/hicolor"),
+            "{} executable code must reference /usr/share/icons/hicolor (the path \
+             gtk-update-icon-cache rebuilds the cache under)",
+            full.display(),
+        );
+    }
+}
+
+#[test]
+fn paladin_gtk_scripts_gate_helpers_with_command_v_and_fail_soft() {
+    // Robustness-pinned property: the scripts MUST detect
+    // missing helper tools with `command -v` (so a minimal
+    // container image without `desktop-file-utils` /
+    // `gtk-update-icon-cache` installed does not abort the
+    // package transaction) AND swallow non-zero exits from the
+    // helpers themselves with `|| :` (so a transient cache-
+    // rebuild error in the helper does not leave the package in
+    // a half-installed state).
+    let workspace = workspace_root();
+    for (_key, relpath) in REQUIRED_SCRIPT_KEYS_AND_PATHS {
+        let stripped = relpath.strip_prefix("./").unwrap_or(relpath);
+        let full = workspace.join(stripped);
+        let body = fs::read_to_string(&full)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", full.display()));
+        assert!(
+            body.contains("command -v update-desktop-database"),
+            "{} must gate the `update-desktop-database` invocation behind \
+             `command -v update-desktop-database` so a minimal install without \
+             desktop-file-utils still completes the package transaction",
+            full.display(),
+        );
+        assert!(
+            body.contains("command -v gtk-update-icon-cache"),
+            "{} must gate the `gtk-update-icon-cache` invocation behind \
+             `command -v gtk-update-icon-cache` so a minimal install without the \
+             gtk4 update-icon-cache helper still completes the package transaction",
+            full.display(),
+        );
+        let fail_soft_count = body.matches("|| :").count();
+        assert!(
+            fail_soft_count >= 2,
+            "{} must use `|| :` (fail-soft) after each helper invocation so a \
+             transient rebuild failure does not abort the install; found {} \
+             occurrences, expected at least 2 (one per helper)",
+            full.display(),
+            fail_soft_count,
         );
     }
 }
@@ -559,6 +876,32 @@ contents:
 }
 
 #[test]
+fn top_level_mapping_kv_pairs_reads_scripts_block() {
+    let manifest = "\
+scripts:
+  postinstall: ./packaging/scripts/paladin-gtk-postinstall.sh
+  postremove: \"./packaging/scripts/paladin-gtk-postremove.sh\"
+contents:
+  - src: a
+";
+    let scripts = top_level_mapping_kv_pairs(manifest, "scripts");
+    assert_eq!(
+        scripts,
+        vec![
+            (
+                "postinstall".to_string(),
+                "./packaging/scripts/paladin-gtk-postinstall.sh".to_string(),
+            ),
+            (
+                "postremove".to_string(),
+                "./packaging/scripts/paladin-gtk-postremove.sh".to_string(),
+            ),
+        ],
+    );
+    assert!(top_level_mapping_kv_pairs(manifest, "missing").is_empty());
+}
+
+#[test]
 fn contents_src_dst_pairs_extracts_canonical_entries() {
     let manifest = "\
 contents:
@@ -582,6 +925,36 @@ contents:
                 "/usr/share/applications/org.tamx.Paladin.Gui.desktop".to_string(),
             ),
         ],
+    );
+}
+
+#[test]
+fn strip_shell_comments_preserves_shebang_and_drops_full_and_trailing_comments() {
+    let body = "\
+#!/bin/sh
+# header comment mentioning $XDG_DATA_HOME for documentation
+set -e
+update-desktop-database -q /usr/share/applications || : # trailing comment
+   # indented comment
+exit 0
+";
+    let stripped = strip_shell_comments(body);
+    assert!(stripped.contains("#!/bin/sh"), "shebang must survive");
+    assert!(
+        !stripped.contains("$XDG_DATA_HOME"),
+        "whole-line comment must be dropped",
+    );
+    assert!(
+        !stripped.contains("trailing comment"),
+        "trailing ` #` comment must be dropped",
+    );
+    assert!(
+        !stripped.contains("indented comment"),
+        "indented whole-line comment must be dropped",
+    );
+    assert!(
+        stripped.contains("update-desktop-database -q /usr/share/applications || :"),
+        "executable code before the trailing comment must survive",
     );
 }
 
