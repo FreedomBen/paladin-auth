@@ -102,6 +102,27 @@ contents:
     dst: /usr/share/icons/hicolor/48x48/apps/org.tamx.Paladin.Gui.png
     file_info:
       mode: 0644
+  # 64 / 128 / 256 / 512 cover the sizes GNOME Shell's app-drawer and
+  # search results actually request — without them, Shell falls
+  # through to the scalable SVG via librsvg and the launcher glyph
+  # can render blank because the SVG's base64-embedded PNG payload
+  # fails GdkPixbuf's icon-theme load path.
+  - src: crates/paladin-gtk/data/icons/hicolor/64x64/apps/org.tamx.Paladin.Gui.png
+    dst: /usr/share/icons/hicolor/64x64/apps/org.tamx.Paladin.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-gtk/data/icons/hicolor/128x128/apps/org.tamx.Paladin.Gui.png
+    dst: /usr/share/icons/hicolor/128x128/apps/org.tamx.Paladin.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-gtk/data/icons/hicolor/256x256/apps/org.tamx.Paladin.Gui.png
+    dst: /usr/share/icons/hicolor/256x256/apps/org.tamx.Paladin.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-gtk/data/icons/hicolor/512x512/apps/org.tamx.Paladin.Gui.png
+    dst: /usr/share/icons/hicolor/512x512/apps/org.tamx.Paladin.Gui.png
+    file_info:
+      mode: 0644
 
 # No `scripts:` section: paladin-gtk packages must not run preinst,
 # postinst, prerm, or postrm hooks. Vault files live under

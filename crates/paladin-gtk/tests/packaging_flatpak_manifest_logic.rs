@@ -96,6 +96,10 @@ const REQUIRED_INSTALL_DESTINATIONS: &[&str] = &[
     "/app/share/icons/hicolor/24x24/apps/org.tamx.Paladin.Gui.png",
     "/app/share/icons/hicolor/32x32/apps/org.tamx.Paladin.Gui.png",
     "/app/share/icons/hicolor/48x48/apps/org.tamx.Paladin.Gui.png",
+    "/app/share/icons/hicolor/64x64/apps/org.tamx.Paladin.Gui.png",
+    "/app/share/icons/hicolor/128x128/apps/org.tamx.Paladin.Gui.png",
+    "/app/share/icons/hicolor/256x256/apps/org.tamx.Paladin.Gui.png",
+    "/app/share/icons/hicolor/512x512/apps/org.tamx.Paladin.Gui.png",
 ];
 
 fn crate_root() -> PathBuf {

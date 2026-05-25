@@ -91,13 +91,22 @@ modules:
       # Stage the hicolor icon set. The scalable and symbolic SVGs
       # cover GTK4 / libadwaita icon-theme lookups; PNG sizes round
       # out the legacy launcher fallbacks the freedesktop icon-
-      # theme spec resolves.
+      # theme spec resolves. 64 / 128 / 256 / 512 cover the sizes
+      # GNOME Shell's app-drawer and search results actually request
+      # — without them, Shell falls through to the scalable SVG and
+      # the launcher glyph can render blank because the SVG's
+      # base64-embedded PNG payload fails GdkPixbuf's icon-theme
+      # load path.
       - install -Dm644 crates/paladin-gtk/data/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg /app/share/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg
       - install -Dm644 crates/paladin-gtk/data/icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg /app/share/icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg
       - install -Dm644 crates/paladin-gtk/data/icons/hicolor/16x16/apps/org.tamx.Paladin.Gui.png /app/share/icons/hicolor/16x16/apps/org.tamx.Paladin.Gui.png
       - install -Dm644 crates/paladin-gtk/data/icons/hicolor/24x24/apps/org.tamx.Paladin.Gui.png /app/share/icons/hicolor/24x24/apps/org.tamx.Paladin.Gui.png
       - install -Dm644 crates/paladin-gtk/data/icons/hicolor/32x32/apps/org.tamx.Paladin.Gui.png /app/share/icons/hicolor/32x32/apps/org.tamx.Paladin.Gui.png
       - install -Dm644 crates/paladin-gtk/data/icons/hicolor/48x48/apps/org.tamx.Paladin.Gui.png /app/share/icons/hicolor/48x48/apps/org.tamx.Paladin.Gui.png
+      - install -Dm644 crates/paladin-gtk/data/icons/hicolor/64x64/apps/org.tamx.Paladin.Gui.png /app/share/icons/hicolor/64x64/apps/org.tamx.Paladin.Gui.png
+      - install -Dm644 crates/paladin-gtk/data/icons/hicolor/128x128/apps/org.tamx.Paladin.Gui.png /app/share/icons/hicolor/128x128/apps/org.tamx.Paladin.Gui.png
+      - install -Dm644 crates/paladin-gtk/data/icons/hicolor/256x256/apps/org.tamx.Paladin.Gui.png /app/share/icons/hicolor/256x256/apps/org.tamx.Paladin.Gui.png
+      - install -Dm644 crates/paladin-gtk/data/icons/hicolor/512x512/apps/org.tamx.Paladin.Gui.png /app/share/icons/hicolor/512x512/apps/org.tamx.Paladin.Gui.png
     sources:
       # Upstream source: tagged release of the paladin workspace.
       # `tag:` + `commit:` are stamped by the release pipeline

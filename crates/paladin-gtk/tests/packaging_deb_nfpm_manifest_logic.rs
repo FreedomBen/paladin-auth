@@ -67,6 +67,10 @@ const REQUIRED_INSTALL_DESTINATIONS: &[&str] = &[
     "/usr/share/icons/hicolor/24x24/apps/org.tamx.Paladin.Gui.png",
     "/usr/share/icons/hicolor/32x32/apps/org.tamx.Paladin.Gui.png",
     "/usr/share/icons/hicolor/48x48/apps/org.tamx.Paladin.Gui.png",
+    "/usr/share/icons/hicolor/64x64/apps/org.tamx.Paladin.Gui.png",
+    "/usr/share/icons/hicolor/128x128/apps/org.tamx.Paladin.Gui.png",
+    "/usr/share/icons/hicolor/256x256/apps/org.tamx.Paladin.Gui.png",
+    "/usr/share/icons/hicolor/512x512/apps/org.tamx.Paladin.Gui.png",
 ];
 
 /// `src` paths each `dst` MUST source from. Indexed against
@@ -90,6 +94,10 @@ const REQUIRED_INSTALL_SOURCES: &[&str] = &[
     "crates/paladin-gtk/data/icons/hicolor/24x24/apps/org.tamx.Paladin.Gui.png",
     "crates/paladin-gtk/data/icons/hicolor/32x32/apps/org.tamx.Paladin.Gui.png",
     "crates/paladin-gtk/data/icons/hicolor/48x48/apps/org.tamx.Paladin.Gui.png",
+    "crates/paladin-gtk/data/icons/hicolor/64x64/apps/org.tamx.Paladin.Gui.png",
+    "crates/paladin-gtk/data/icons/hicolor/128x128/apps/org.tamx.Paladin.Gui.png",
+    "crates/paladin-gtk/data/icons/hicolor/256x256/apps/org.tamx.Paladin.Gui.png",
+    "crates/paladin-gtk/data/icons/hicolor/512x512/apps/org.tamx.Paladin.Gui.png",
 ];
 
 fn crate_root() -> PathBuf {

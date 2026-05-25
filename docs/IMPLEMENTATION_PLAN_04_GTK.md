@@ -1367,11 +1367,17 @@ the implementer can claim by ticking it.
   Flathub install-layout checks without per-format renaming. Symbolic
   variant at
   `…/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg` if the
-  Adwaita-style symbolic palette warrants it; a `16`/`24`/`32`/`48`
-  PNG fallback set named `org.tamx.Paladin.Gui.png` is shipped
-  under `/usr/share/icons/hicolor/<size>/apps/` for non-SVG icon
-  consumers. The packaging dry-run validates this layout in both the
-  native and Flatpak builds.
+  Adwaita-style symbolic palette warrants it; a
+  `16`/`24`/`32`/`48`/`64`/`128`/`256`/`512` PNG fallback set
+  named `org.tamx.Paladin.Gui.png` is shipped under
+  `/usr/share/icons/hicolor/<size>/apps/` for non-SVG icon
+  consumers. The 64 / 128 / 256 / 512 sizes cover what GNOME
+  Shell's app-drawer and search results actually request; without
+  them, Shell falls through to the scalable SVG and the launcher
+  glyph renders blank because the SVG's base64-embedded PNG
+  payload fails GdkPixbuf's icon-theme load path. The packaging
+  dry-run validates this layout in both the native and Flatpak
+  builds.
 - Adwaita-style CSS in `data/style.css`, scoped via `gtk::CssProvider`.
 
 ## Packaging (per §11)
@@ -5408,8 +5414,9 @@ sign-off.
     manifest stops installing `/usr/bin/paladin-gtk` (with
     `mode: 0755`), the desktop entry at `/usr/share/applications/`,
     the AppStream metainfo at `/usr/share/metainfo/`, or any of the
-    hicolor scalable / symbolic / 16x16 / 24x24 / 32x32 / 48x48
-    icon paths; if any `src` references a missing in-tree path; if
+    hicolor scalable / symbolic / 16x16 / 24x24 / 32x32 / 48x48 /
+    64x64 / 128x128 / 256x256 / 512x512 icon paths; if any `src`
+    references a missing in-tree path; if
     `depends:` drifts from the exact `libgtk-4-1 (>= 4.16)` /
     `libadwaita-1-0 (>= 1.6)` baseline pair; or if a `scripts:`
     section sneaks in.

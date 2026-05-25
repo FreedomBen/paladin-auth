@@ -6,7 +6,7 @@
 //! the Milestone 7 checklist entries:
 //!
 //! * `data/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg`
-//! * 16 / 24 / 32 / 48 PNG fallbacks under
+//! * 16 / 24 / 32 / 48 / 64 / 128 / 256 / 512 PNG fallbacks under
 //!   `data/icons/hicolor/<size>/apps/org.tamx.Paladin.Gui.png`
 //! * `data/icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg`
 //!
@@ -24,13 +24,16 @@ use paladin_gtk::APP_ID;
 
 /// Hicolor PNG fallback sizes per §"Linux desktop integration".
 ///
-/// The 16 / 24 / 32 / 48 set matches the GNOME HIG fallback ladder and
-/// the freedesktop icon-theme spec: 16 is the legacy menubar size, 24
-/// the toolbar size, 32 the dialog size, and 48 the launcher size.
-/// Consumers that cannot render the SVG (older GTK panels, certain
-/// embedded launchers) read the PNGs from the matching `<size>/apps/`
-/// directory.
-const HICOLOR_PNG_SIZES: &[u32] = &[16, 24, 32, 48];
+/// 16 / 24 / 32 / 48 are the GNOME HIG fallback ladder (legacy menubar,
+/// toolbar, dialog, launcher). 64 / 128 / 256 / 512 cover the sizes
+/// GNOME Shell's app-drawer and search results actually request on
+/// modern desktops — without them, Shell falls through to the
+/// scalable SVG via `librsvg`, and a base64-PNG-in-SVG payload can
+/// fail `GdkPixbuf`'s icon-theme path, leaving the launcher glyph
+/// blank. Consumers that cannot render the SVG (older GTK panels,
+/// certain embedded launchers) read the matching `<size>/apps/`
+/// PNG directly.
+const HICOLOR_PNG_SIZES: &[u32] = &[16, 24, 32, 48, 64, 128, 256, 512];
 
 fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

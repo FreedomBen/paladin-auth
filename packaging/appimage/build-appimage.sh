@@ -113,6 +113,23 @@ install -Dm644 \
 install -Dm644 \
   "${WORKSPACE_ROOT}/crates/paladin-gtk/data/icons/hicolor/48x48/apps/org.tamx.Paladin.Gui.png" \
   "${APPDIR}/usr/share/icons/hicolor/48x48/apps/org.tamx.Paladin.Gui.png"
+# 64 / 128 / 256 / 512 cover the sizes GNOME Shell's app-drawer and
+# search results actually request — without them, Shell falls
+# through to the scalable SVG and the launcher glyph can render
+# blank because the SVG's base64-embedded PNG payload fails
+# GdkPixbuf's icon-theme load path.
+install -Dm644 \
+  "${WORKSPACE_ROOT}/crates/paladin-gtk/data/icons/hicolor/64x64/apps/org.tamx.Paladin.Gui.png" \
+  "${APPDIR}/usr/share/icons/hicolor/64x64/apps/org.tamx.Paladin.Gui.png"
+install -Dm644 \
+  "${WORKSPACE_ROOT}/crates/paladin-gtk/data/icons/hicolor/128x128/apps/org.tamx.Paladin.Gui.png" \
+  "${APPDIR}/usr/share/icons/hicolor/128x128/apps/org.tamx.Paladin.Gui.png"
+install -Dm644 \
+  "${WORKSPACE_ROOT}/crates/paladin-gtk/data/icons/hicolor/256x256/apps/org.tamx.Paladin.Gui.png" \
+  "${APPDIR}/usr/share/icons/hicolor/256x256/apps/org.tamx.Paladin.Gui.png"
+install -Dm644 \
+  "${WORKSPACE_ROOT}/crates/paladin-gtk/data/icons/hicolor/512x512/apps/org.tamx.Paladin.Gui.png" \
+  "${APPDIR}/usr/share/icons/hicolor/512x512/apps/org.tamx.Paladin.Gui.png"
 
 # linuxdeploy-plugin-gtk reads these to copy GTK runtime files into
 # the AppDir. Pinned by the contract test
