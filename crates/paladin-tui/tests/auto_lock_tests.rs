@@ -261,22 +261,13 @@ fn non_key_input_in_encrypted_unlocked_also_rebases_idle_deadline() {
 // Tick-driven `Unlocked → Locked` transition
 // (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 3)
 //
-// Slice covered: on each `paladin_core::TICK_INTERVAL_MS` `Tick` the
-// reducer asks `IdlePolicy::is_expired(deadline, monotonic)` and, if
-// true, transitions `Unlocked → Locked { path }` so the in-memory
-// `Vault` / `Store` drop in place. Pre-deadline Ticks, `None`-deadline
-// Unlocked states (plaintext / disabled), and Ticks on non-`Unlocked`
-// screens are passthrough. Boundary case: `monotonic == deadline`
-// fires the lock because `IdlePolicy::is_expired` uses `now >= deadline`.
-//
-// The search-query discard slice is covered by
-// `tick_after_deadline_lock_discards_unlocked_search_query`, the
-// HOTP-reveal slice by
-// `tick_after_deadline_lock_discards_unlocked_hotp_reveal`, and the
-// modal-discard slice by
-// `tick_after_deadline_lock_discards_unlocked_modal` below. The
-// remaining tests here only assert the state-variant transition and
-// the `path` carry-over.
+// On each `paladin_core::TICK_INTERVAL_MS` `Tick` the reducer asks
+// `IdlePolicy::is_expired(deadline, monotonic)` and, if true, transitions
+// `Unlocked → Locked { path }` so the in-memory `Vault` / `Store` drop in
+// place. Pre-deadline Ticks, `None`-deadline Unlocked states (plaintext /
+// disabled), and Ticks on non-`Unlocked` screens are passthrough. Boundary
+// case: `monotonic == deadline` fires the lock because
+// `IdlePolicy::is_expired` uses `now >= deadline`.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -547,16 +538,6 @@ fn tick_after_deadline_lock_discards_unlocked_pending_chord_leader() {
 // unchanged through to the resulting `Locked` state — token,
 // captured bytes, and the scheduled wake-deadline all survive the
 // variant change.
-//
-// Wake-on-`Locked` slice (the "still fires only-if-unchanged" half):
-// covered by `clipboard_clear_event_on_locked_*` further down. A
-// matching-token `AppEvent::ClipboardClear` arriving on `Locked`
-// emits `Effect::ClearClipboard { value }` and clears
-// `pending_clipboard_clear`; a stale token or absent pending state
-// is a no-op. The executor-side "read the live clipboard, apply
-// `ClipboardClearPolicy::should_clear`, write empty if `true`"
-// decision is covered separately by `tests/clipboard_tests.rs` once
-// the clipboard adapter lands.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -675,25 +656,17 @@ fn tick_after_deadline_lock_with_no_pending_clipboard_clear_yields_none() {
 // `AppEvent::ClipboardClear` wake handler on `Locked`
 // (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 7, second half)
 //
-// Slice covered: when the clipboard auto-clear timer that survived the
+// When the clipboard auto-clear timer that survived the
 // `Unlocked → Locked` lock fires its delayed
 // `AppEvent::ClipboardClear { token, value }`, the reducer:
 //
 // * with a matching token on `pending_clipboard_clear`, emits a single
 //   [`Effect::ClearClipboard { value }`] carrying the captured bytes
-//   from state and clears `pending_clipboard_clear` to `None`. The
-//   actual live-clipboard read / `should_clear` / wipe lives in the
-//   effect executor (covered by `tests/clipboard_tests.rs` once the
-//   adapter lands);
-// * with a stale token (a fresher copy has issued a new token and
-//   replaced the pending state), drops the wake event with no state
-//   change and no effect;
-// * with no pending clear (the wake arrived after a clear had already
-//   fired or been superseded out), is a no-op.
-//
-// The pre-lock (`Unlocked`) wake path is covered by
-// `tests/clipboard_tests.rs`; the `Locked` path is here because it is
-// the path that directly enforces bullet 7's lock-survival contract.
+//   from state and clears `pending_clipboard_clear` to `None`;
+// * with a stale token (a fresher copy issued a new token and replaced
+//   the pending state), drops the wake event with no state change and
+//   no effect;
+// * with no pending clear, is a no-op.
 // ---------------------------------------------------------------------------
 
 fn clipboard_clear_event(token: ClipboardClearToken, value: Vec<u8>) -> AppEvent {
@@ -1101,25 +1074,13 @@ fn auto_lock_setting_persists_across_save_reopen_plaintext() {
 // fires only-if-unchanged
 // (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — last bullet)
 //
-// End-to-end shape: schedule a clipboard clear on `Unlocked` via
-// `ClipboardClearPolicy::schedule`, then let a `Tick` past the idle
-// deadline transition the state to `Locked` (the lock window comes
-// before the clear-deadline). The `pending_clipboard_clear` must
-// survive the variant change verbatim. When the deferred
-// `AppEvent::ClipboardClear { token, value }` fires after the lock,
-// the reducer on `Locked` must emit exactly one
-// `Effect::ClearClipboard { value }` carrying the captured bytes —
-// which is the input the executor needs to apply
-// `ClipboardClearPolicy::should_clear` against the live clipboard
-// ("only-if-unchanged"; executor side is covered by
-// `tests/clipboard_tests.rs` once the `arboard` adapter lands).
-//
-// The individual carry-across and wake-handler slices are pinned by
-// `tick_after_deadline_lock_carries_pending_clipboard_clear` and
-// `clipboard_clear_event_on_locked_with_matching_token_fires_wipe_and_clears_pending`
-// above; this test threads them into a single lifecycle so the
-// bullet's "survives lock AND still fires" intent is observable as one
-// scenario.
+// End-to-end shape: schedule a clipboard clear on `Unlocked`, let a `Tick`
+// past the idle deadline lock the state (the lock window comes before the
+// clear-deadline), and verify `pending_clipboard_clear` survives the variant
+// change verbatim. The deferred `AppEvent::ClipboardClear { token, value }`
+// on `Locked` must emit exactly one `Effect::ClearClipboard { value }`
+// carrying the captured bytes — the input the executor needs to apply
+// `ClipboardClearPolicy::should_clear` ("only-if-unchanged").
 // ---------------------------------------------------------------------------
 
 #[test]

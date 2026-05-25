@@ -925,21 +925,9 @@ fn run_with_components_returns_success_after_dispatch_quits_cleanly() {
     // Pin: the binary's top-level composer ties `build_initial_state` +
     // the supplied lifecycle backend + a successful `Terminal::new` into
     // a clean `ExitCode::SUCCESS` exit when dispatch returns through
-    // `Effect::Quit` (here driven by the one-shot Ctrl-C spawner).
-    // Asserts no stderr advisory is written on the happy path and the
-    // lifecycle guard's setup pair was driven so the production
-    // "raw mode + alt screen active during dispatch" contract is
-    // observable from this top layer.
-    //
-    // The vault path lives inside a `secure_test_tempdir()` so the
-    // path is guaranteed non-existent (→ `CreateVault` initial state,
-    // which is reducer-stable under Ctrl-C) and the parent dir's
-    // `0700` mode keeps `paladin_core::inspect` from tripping
-    // `unsafe_permissions`. The exact initial state does not matter
-    // to the assertions — every `AppState` variant funnels Ctrl-C
-    // through `Effect::Quit` — but pinning the path-class keeps the
-    // test deterministic across machines whose `/tmp` permissions
-    // differ.
+    // `Effect::Quit` (driven by the one-shot Ctrl-C spawner). Asserts
+    // no stderr advisory on the happy path and that the lifecycle
+    // guard's setup pair was driven.
     let tmp = secure_test_tempdir();
     let vault_path = tmp
         .path()

@@ -508,7 +508,7 @@ fn build_initial_state_resolver_skipped_when_vault_override_supplied() {
 
 // ---------------------------------------------------------------------------
 // Reducer quit-key behavior
-// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Keybindings (initial v0.1) +
+// (docs/IMPLEMENTATION_PLAN_03_TUI.md > Keybindings +
 //  docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer)
 //
 // Keybinding rules covered here:
@@ -4231,10 +4231,10 @@ fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
 
 #[test]
 fn pressing_ctrl_a_on_unlocked_does_not_open_add_modal() {
-    // `Ctrl-A` is not bound in `Keybindings (initial v0.1)`. The bare
-    // `a` opens the Add modal, but the same code with the Control
-    // modifier must not — otherwise common readline-style `Ctrl-A`
-    // (beginning-of-line) presses would silently open dialogs.
+    // `Ctrl-A` is not bound in `Keybindings`. The bare `a` opens the
+    // Add modal, but the same code with the Control modifier must not —
+    // otherwise common readline-style `Ctrl-A` (beginning-of-line)
+    // presses would silently open dialogs.
     let tmp = secure_tempdir();
     let (path, (vault, store)) = open_plaintext_pair(&tmp);
     let unlocked = AppState::Unlocked {
@@ -4376,10 +4376,10 @@ fn pressing_e_on_unlocked_with_no_modal_open_opens_export_modal() {
 
 #[test]
 fn pressing_lowercase_r_on_unlocked_with_no_modal_open_opens_remove_modal() {
-    // Per Keybindings (initial v0.1): `r` opens Remove confirmation;
-    // `R` (Shift+R) opens Rename. The lowercase / uppercase split is
-    // the only thing distinguishing the two bindings. `r` is a
-    // selection-gated opener, so the helper seeds an account first.
+    // Per Keybindings: `r` opens Remove confirmation; `R` (Shift+R)
+    // opens Rename. The lowercase / uppercase split is the only thing
+    // distinguishing the two bindings. `r` is a selection-gated opener,
+    // so the helper seeds an account first.
     assert_selection_gated_key_opens_modal(
         key(KeyCode::Char('r')),
         &Modal::Remove(RemoveModal::default()),
@@ -4846,16 +4846,6 @@ fn rename_modal_space_appends_to_draft() {
 // (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Remove modal; Modals (per
 //  §6) > Remove: *"confirmation modal. On confirm, wraps
 //  `Vault::remove` in `Vault::mutate_and_save`."*)
-//
-// Slice covered: while `Modal::Remove` is open, `Enter` emits a single
-// `Effect::Remove` carrying the snapshotted `account_id` and the
-// current vault path. Unlike Rename, Remove has no editable draft —
-// every other key (printable Chars, Backspace, arrows, Tab) is a
-// silent no-op so the modal-trap contract holds (bare-letter keys do
-// not leak into the list view). The modal stays open until the
-// `EffectResult::Remove` arrives; the success / save-error rollback
-// wiring lands in a subsequent slice. Esc is filtered upstream and
-// covered by `pressing_esc_on_unlocked_with_open_remove_modal_*`.
 // ---------------------------------------------------------------------------
 
 fn fresh_unlocked_with_remove_modal_open() -> (tempfile::TempDir, AccountId, PathBuf, AppState) {
@@ -7717,10 +7707,9 @@ fn pressing_k_mirrors_up_arrow() {
 
 #[test]
 fn pressing_ctrl_down_does_not_move_selection() {
-    // `Ctrl-Down` is not bound in `Keybindings (initial v0.1)`. The
-    // bare `Down` moves selection, but the same key with the Control
-    // modifier must not — readline-style Ctrl bindings should not
-    // silently navigate.
+    // `Ctrl-Down` is not bound in `Keybindings`. The bare `Down` moves
+    // selection, but the same key with the Control modifier must not —
+    // readline-style Ctrl bindings should not silently navigate.
     let tmp = secure_tempdir();
     let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
     let (state, effects) = reduce(state, ctrl(KeyCode::Down));
@@ -8138,9 +8127,9 @@ fn pressing_end_with_modal_open_does_not_move_selection() {
 
 #[test]
 fn pressing_ctrl_home_does_not_move_selection() {
-    // `Ctrl-Home` is not bound in `Keybindings (initial v0.1)`. The
-    // bare `Home` jumps to the first row, but the same key with the
-    // Control modifier must not silently navigate.
+    // `Ctrl-Home` is not bound in `Keybindings`. The bare `Home` jumps
+    // to the first row, but the same key with the Control modifier
+    // must not silently navigate.
     let tmp = secure_tempdir();
     let (state, [_a, _b, c]) = unlocked_with_three_accounts(&tmp);
     let unlocked = match state {
@@ -12854,19 +12843,14 @@ fn pressing_zz_chord_on_empty_filtered_set_is_silent_no_op() {
 // `Tab` / `Shift-Tab` — cycle focus between the search bar and the
 // account list (Unlocked).
 //
-// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings":
 //   "`Tab` `Shift-Tab` — Cycle focus between search bar and list
 //    (preserves active query when leaving search)".
 //
 // Top-level Unlocked has two focus surfaces (`Focus::List`,
-// `Focus::Search`), so `Tab` and `Shift-Tab` both swap. Outside
-// Unlocked the keys are silent (the other screens have no focus
-// model in v0.1). Modal dialogs trap focus while open, so `Tab`
-// with a modal open is a silent no-op — `Ctrl-N` / `Ctrl-P` inside
-// modals will land in a later slice for the modal-local navigation
-// rule. Focus changes clear any pending vim chord leader, mirroring
-// the `/`-after-`g` / `/`-after-`z` chord-clear rule from the slash
-// section above.
+// `Focus::Search`). Outside Unlocked the keys are silent. Modal
+// dialogs trap focus, so `Tab` with a modal open is a no-op. Focus
+// changes clear any pending vim chord leader.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -13150,8 +13134,8 @@ fn pressing_tab_after_z_clears_chord_and_moves_focus_to_search() {
 
 #[test]
 fn pressing_tab_on_create_vault_is_silent_no_op() {
-    // Non-Unlocked screens have no focus model in v0.1 — `Tab` is a
-    // silent no-op (no effects, state unchanged).
+    // Non-Unlocked screens have no focus model — `Tab` is a silent
+    // no-op (no effects, state unchanged).
     let state = missing("/nonexistent/vault");
     let (state, effects) = reduce(state, key(KeyCode::Tab));
     assert!(
@@ -13201,11 +13185,6 @@ fn pressing_tab_on_unlock_screen_is_silent_no_op() {
 // is shared by every modal-trapped key). When modal payloads grow
 // internal focus-cycling, the same handler must dispatch off both
 // pairs of keys.
-//
-// Modal-local scope is asserted by the top-level companion tests:
-// outside a modal, `Ctrl-N` / `Ctrl-P` are unbound (silent no-ops)
-// and must NOT flip top-level focus between list and search the way
-// `Tab` / `Shift-Tab` do.
 
 fn assert_ctrl_modal_alias_is_silent_no_op(modal_to_open: Modal, event: AppEvent, label: &str) {
     let tmp = secure_tempdir();
@@ -14985,16 +14964,6 @@ fn enter_in_uri_mode_with_empty_buffer_still_emits_effect_to_surface_parse_error
 // (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > "The follow-up
 //  'add anyway' confirmation inserts the pending validated account on
 //  the duplicate-allowed path with a fresh ID.")
-//
-// Slice covered: the reducer's Enter handler when
-// `AddModal::pending_duplicate_add.is_some()`. The duplicate-rejection
-// slice stashed a validated pending account; the user's follow-up
-// Enter must take that pending state out of the slot, clear the inline
-// `duplicate_account` error, and emit `Effect::AddAnyway` carrying the
-// pending validated account so the executor can insert it on the
-// duplicate-allowed path. The modal stays open until the executor's
-// `EffectResult::Add { Ok(_) }` delivery closes it (covered by the
-// `effect_result_add_ok_closes_modal` test).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -17255,11 +17224,6 @@ fn ctrl_modified_char_in_import_modal_does_not_append_to_path_text() {
 // (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" > "Explicit
 //  format overrides (`otpauth` / `aegis` / `paladin` / `qr`) route
 //  through `paladin_core::import::from_file`.")
-//
-// Reducer slice: each `ImportFormatSelector` variant translates to the
-// matching `Option<ImportFormat>` payload on `Effect::Import` via
-// `ImportFormatSelector::forced()`. The executor's forced-format
-// dispatch is covered in `effect_tests.rs` (`execute_import_with_forced_*`).
 // ---------------------------------------------------------------------------
 
 /// Drive the Import modal Enter handler with `selector` pre-set and
@@ -17339,17 +17303,6 @@ fn enter_in_import_modal_with_qr_selector_emits_import_effect_with_some_qr_image
 // (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" > "On-conflict
 //  policy (`skip` / `replace` / `append`) is forwarded to
 //  `Vault::import_accounts` and reflected in the report counts.")
-//
-// Reducer slice: the modal's `conflict` field — whatever value it
-// holds at submit time — must be carried verbatim onto the emitted
-// `Effect::Import` so the executor can hand it to
-// `Vault::import_accounts`. The default (`Skip`) is already locked in
-// by
-// `enter_in_import_modal_with_default_state_emits_import_effect_with_auto_format_and_skip_conflict`;
-// the two siblings below lock the `Replace` and `Append` variants.
-// The matching report-count contract is asserted on the executor side
-// in `effect_tests.rs`
-// (`execute_import_with_{skip,replace,append}_conflict_over_colliding_account_*`).
 // ---------------------------------------------------------------------------
 
 /// Drive the Import modal Enter handler with `policy` pre-set on
@@ -19712,18 +19665,6 @@ fn enter_in_encrypted_export_modal_with_matching_passphrases_emits_effect_and_ze
     // *"All passphrase-entry fields ... keep typed bytes in zeroizing
     // buffers, convert to `secrecy::SecretString` only for core calls,
     // and zeroize on submit, cancel, modal close, and auto-lock."*
-    //
-    // Enter on an encrypted Export modal that passes every gate
-    // (overwrite, twice-confirm, zero-length) must emit a single
-    // `Effect::Export` carrying the typed passphrase as a
-    // `SecretString` and leave both `new_passphrase` and
-    // `confirm_passphrase` empty (the bytes moved into the secret
-    // through `PassphraseBuffer::take` and the comparison sibling
-    // wiped through `PassphraseBuffer::clear`). Mirrors the Add
-    // modal's submit-axis coverage
-    // (`enter_in_add_modal_manual_mode_consumes_manual_secret_buffer`)
-    // and the Import modal's passphrase-phase submit
-    // (`enter_in_import_modal_passphrase_phase_emits_import_effect_with_typed_passphrase`).
     let tmp = secure_tempdir();
     let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
     let dest = tmp.path().join("bundle.paladin");
@@ -20450,13 +20391,6 @@ fn tick_past_idle_deadline_with_open_passphrase_modal_typed_buffers_locks_and_dr
     // place. Mirrors `tick_past_idle_deadline_with_open_add_modal_typed_manual_secret_locks_and_drops_buffer`,
     // `tick_past_idle_deadline_with_open_import_modal_typed_paladin_passphrase_locks_and_drops_buffer`,
     // and `tick_past_idle_deadline_with_open_export_modal_typed_passphrases_locks_and_drops_passphrase_buffers`.
-    //
-    // The `Change` sub-flow is exercised here because it is the only
-    // one valid on the encrypted vault that auto-lock requires (the
-    // idle policy only arms on encrypted vaults per
-    // `IdlePolicy::should_arm`). The buffer-drop contract is
-    // sub-flow-independent — the same `PassphraseBuffer` fields back
-    // all three sub-flows — so a single test covers the axis.
     let tmp = secure_tempdir();
     let path = tmp.path().join("vault.bin");
     let (mut vault, store) = create_encrypted_pair(&path, "current-pp");

@@ -164,10 +164,9 @@ fn desktop_entry_exec_is_paladin_gtk_binary_name() {
 fn desktop_entry_exec_has_no_file_or_uri_placeholders() {
     let entry = parse_desktop_entry_section(&read_desktop_file());
     let exec = entry.get("Exec").expect("Exec key present");
-    // v0.2 does not register a MIME type or URI handler; imports start
-    // inside `ImportDialog`. The launcher must never pass file or URI
-    // arguments to the binary, so reject every freedesktop placeholder
-    // (`%f`, `%F`, `%u`, `%U`, `%d`, `%D`, `%n`, `%N`, `%v`, `%m`, `%k`).
+    // No MIME type or URI handler is registered; imports start inside
+    // `ImportDialog`, so the launcher must never pass file or URI
+    // arguments. Reject every freedesktop placeholder.
     for placeholder in [
         "%f", "%F", "%u", "%U", "%d", "%D", "%n", "%N", "%v", "%m", "%k",
     ] {

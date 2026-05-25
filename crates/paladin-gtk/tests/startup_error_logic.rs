@@ -469,26 +469,11 @@ fn startup_error_carries_kind_for_consumers() {
 
 #[test]
 fn format_startup_error_icon_name_returns_dialog_error_symbolic() {
-    // The `StartupErrorComponent`'s `adw::StatusPage::set_icon_name`
-    // attribute is populated from this helper. The icon
-    // (`"dialog-error-symbolic"`) is the freedesktop-standard
-    // glyph for an error surface shipped by `adwaita-icon-theme`
-    // — resolving through the system icon theme so the wordless
-    // glyph matches every other GNOME app's error surface. The
-    // `-symbolic` suffix is required by the libadwaita HIG for
-    // `AdwStatusPage` icons so the glyph recolors with the theme.
-    // Pinning the icon name through a helper keeps the string in
-    // one place shared by the widget binding and the pure-logic
-    // tests.
-    //
-    // No TUI parity: the TUI is text-only and has no icon to
-    // mirror. Sibling of
-    // `paladin_gtk::unlock_dialog::format_unlock_dialog_icon_name`
-    // and
-    // `paladin_gtk::init_dialog::format_init_dialog_icon_name`
-    // on the dialog-status-icon side; together they pin every
-    // first-mount dialog's freedesktop glyph against a single
-    // source of truth.
+    // Pins the `AdwStatusPage` icon to the freedesktop-standard
+    // `dialog-error-symbolic` glyph — the `-symbolic` suffix is required
+    // by the libadwaita HIG so the icon recolors with the theme, and the
+    // helper keeps the string shared between the widget binding and the
+    // pure-logic tests (sibling of the unlock/init dialog icon helpers).
     use paladin_gtk::startup_error::format_startup_error_icon_name;
 
     assert_eq!(
@@ -516,27 +501,10 @@ fn format_startup_error_icon_name_ends_with_symbolic_suffix() {
 
 #[test]
 fn format_startup_error_title_returns_startup_error() {
-    // The `StartupErrorComponent`'s `adw::StatusPage::set_title`
-    // attribute is populated from this helper. The wording
-    // (`"Startup error"`) names the error class without
-    // restating the specific failure — the per-error rendered
-    // text lives in the StatusPage's description body, sourced
-    // from the typed `PaladinError::Display` impl through
-    // `StartupError::rendered`. Pinning the title through a
-    // helper keeps the wording in one place shared by the widget
-    // binding and the pure-logic tests in
-    // `tests/startup_error_logic.rs`.
-    //
-    // No TUI parity: the TUI renders the equivalent surface as
-    // its own block-titled view (`"Startup error"` is the GTK
-    // wording chosen to match the dialog-header convention used
-    // by every other dialog title in this crate). Sibling of
-    // `paladin_gtk::unlock_dialog::format_unlock_dialog_title`,
-    // `paladin_gtk::init_dialog::format_init_dialog_title`,
-    // `paladin_gtk::rename_dialog::format_rename_dialog_title`,
-    // and `paladin_gtk::add_account::format_add_dialog_title`
-    // on the dialog-header-title side; together they pin every
-    // dialog's titled surface against a single source of truth.
+    // Pins the `AdwStatusPage` title wording. The title names the error
+    // class without restating the failure (the typed `StartupError::rendered`
+    // text lives in the StatusPage description), keeping wording shared
+    // between the widget binding and pure-logic tests.
     use paladin_gtk::startup_error::format_startup_error_title;
 
     assert_eq!(
@@ -548,16 +516,10 @@ fn format_startup_error_title_returns_startup_error() {
 
 #[test]
 fn format_startup_error_retry_label_returns_retry() {
-    // Per §"Vault interaction": the `StartupErrorComponent`
-    // surfaces a Retry action that re-runs the
-    // path-resolution-then-inspect probe (the `retry` helper in
-    // the same module). The HIG-aligned label for the action
-    // button is the bare `"Retry"` verb — the same wording the
-    // GNOME stack uses for analogous probe re-runs on
-    // `AdwStatusPage` surfaces. Pinning the wording through a
-    // helper keeps the button label in one place shared by the
-    // widget binding and the pure-logic tests in
-    // `tests/startup_error_logic.rs`.
+    // Per §"Vault interaction": the Retry action re-runs the
+    // path-resolution-then-inspect probe; the HIG-aligned label is the bare
+    // `"Retry"` verb, pinned through a helper so the widget binding and
+    // pure-logic tests share one source.
     use paladin_gtk::startup_error::format_startup_error_retry_label;
 
     assert_eq!(
@@ -606,15 +568,10 @@ fn format_startup_error_retry_label_is_non_empty_single_line_distinct_from_title
 
 #[test]
 fn format_startup_error_quit_label_returns_quit() {
-    // Per §"Vault interaction": the `StartupErrorComponent`
-    // surfaces a Quit action alongside Retry; pressing it tears
-    // the application down via the primary `app.quit` action so
-    // the user can exit without resolving the startup error.
-    // The HIG-aligned label for that secondary action button is
-    // the bare verb `"Quit"` — the same wording the primary
-    // menu's Quit entry uses (see
-    // `format_app_menu_quit_label`) so the application's
-    // quit-action vocabulary stays consistent across surfaces.
+    // Per §"Vault interaction": the Quit action tears the app down via
+    // `app.quit` so the user can exit without resolving the error. The
+    // label matches `format_app_menu_quit_label` so quit-action vocabulary
+    // stays consistent across surfaces.
     use paladin_gtk::startup_error::format_startup_error_quit_label;
 
     assert_eq!(
@@ -626,13 +583,9 @@ fn format_startup_error_quit_label_returns_quit() {
 
 #[test]
 fn format_startup_error_quit_label_matches_primary_menu_quit_label() {
-    // Cross-check: the startup-error Quit button and the
-    // primary menu's Quit entry should render the exact same
-    // wording so the application's quit-action vocabulary stays
-    // consistent across surfaces. A drift between the two
-    // would surface as a confusing "Quit" vs "Exit" inconsistency
-    // when the same action is reached from two different
-    // surfaces.
+    // Cross-check: startup-error Quit and primary-menu Quit must render
+    // identical wording so a drift does not surface as a confusing
+    // "Quit" vs "Exit" inconsistency on the same action.
     use paladin_gtk::app::model::format_app_menu_quit_label;
     use paladin_gtk::startup_error::format_startup_error_quit_label;
 
@@ -707,15 +660,10 @@ fn startup_error_output_quit_variant_exists() {
 
 #[test]
 fn startup_error_output_is_exhaustively_retry_and_quit() {
-    // Display-only invariant: per §"Vault interaction", the
-    // `StartupErrorComponent` is the non-mutating startup / open
-    // error surface. Retry and Quit are the only actions it
-    // exposes; the component never creates, overwrites, repairs,
-    // chmods, or selects a different vault path in v0.2. The
-    // exhaustive `match` arms here lock the Output enum to exactly
-    // those two variants so adding a mutating variant (e.g. a
-    // "create vault here" affordance) fails to compile until the
-    // design decision is explicitly revisited.
+    // Display-only invariant per §"Vault interaction": Retry and Quit are
+    // the only actions; the component never creates, overwrites, repairs,
+    // chmods, or reroutes the vault path. Exhaustive match arms lock the
+    // Output enum so a mutating variant fails to compile.
     use paladin_gtk::startup_error::StartupErrorOutput;
     fn classify(out: StartupErrorOutput) -> &'static str {
         match out {
@@ -766,17 +714,10 @@ fn apply_startup_error_msg_quit_clicked_emits_quit_output() {
 
 #[test]
 fn dispatch_startup_error_output_quit_routes_to_app_msg_quit() {
-    // Per §"Vault interaction" the StartupErrorComponent's Quit
-    // button must tear the application down through the same
-    // application quit path the primary menu's Quit entry uses,
-    // so the application has one shutdown path through
-    // `relm4::main_application().quit()` regardless of which
-    // surface initiates Quit. Both `dispatch_startup_error_output`
-    // and the primary menu's Quit action must dispatch the same
-    // `AppMsg::Quit` variant — a drift between the two would
-    // surface as a confusing alternate quit path that bypasses
-    // the §"In-flight effect ownership" worker-deferred shutdown
-    // handling pinned on `AppMsg::Quit`.
+    // Per §"Vault interaction": both startup-error Quit and primary-menu
+    // Quit must dispatch the same `AppMsg::Quit` so the app has one
+    // shutdown path; a drift would bypass §"In-flight effect ownership"
+    // worker-deferred shutdown handling.
     use paladin_gtk::app::model::{
         dispatch_app_window_action, dispatch_startup_error_output,
         format_app_menu_quit_action_name, AppMsg,
@@ -816,14 +757,10 @@ fn dispatch_startup_error_output_retry_routes_to_startup_error_retry_app_msg() {
 
 #[test]
 fn dispatch_startup_error_output_is_exhaustive_retry_and_quit_only() {
-    // Display-only invariant on the dispatch side: the only two
-    // `AppMsg` variants the StartupErrorComponent can possibly
-    // dispatch are `Quit` (primary-menu shutdown path) and
-    // `StartupErrorRetry` (re-run startup probes). The match arms
-    // here lock the dispatch table so a future addition of a
-    // mutating Output variant fails to compile in `dispatch_startup_error_output`
-    // and in this test until the design decision is explicitly
-    // revisited per §"Vault interaction".
+    // Display-only invariant on the dispatch side: only `Quit` and
+    // `StartupErrorRetry` are valid; match arms lock the dispatch table so
+    // a future mutating Output variant fails to compile until §"Vault
+    // interaction" is explicitly revisited.
     use paladin_gtk::app::model::{dispatch_startup_error_output, AppMsg};
     use paladin_gtk::startup_error::StartupErrorOutput;
 

@@ -2065,14 +2065,6 @@ fn execute_import_with_mismatched_path_is_silently_dropped() {
 // docs/IMPLEMENTATION_PLAN_03_TUI.md > "Import modal" >
 // "Explicit format overrides (`otpauth` / `aegis` / `paladin` / `qr`)
 //  route through `paladin_core::import::from_file`."
-//
-// The reducer-side translation from `ImportFormatSelector` → forced
-// `Option<ImportFormat>` is locked in by `enter_in_import_modal_with_*`
-// in `reducer_tests.rs`. These executor tests prove the forced
-// `Some(format)` payload dispatches to the right importer inside
-// `paladin_core::import::from_file` and that a forced-format mismatch
-// surfaces `unsupported_import_format` inline without mutating the
-// vault.
 // ---------------------------------------------------------------------------
 
 /// Minimal valid Aegis plaintext export with a single TOTP entry.
@@ -2270,7 +2262,6 @@ fn execute_import_with_forced_format_mismatch_returns_unsupported_import_format_
 // Effect::Import — on-conflict policy is threaded into
 // `Vault::import_accounts` and the report counts reflect the chosen
 // merge action.
-// ---------------------------------------------------------------------------
 //
 // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" >
 // *"On-conflict policy (`skip` / `replace` / `append`) is forwarded to
@@ -2287,19 +2278,6 @@ fn execute_import_with_forced_format_mismatch_returns_unsupported_import_format_
 //   - Append: `appended += 1`, vault grows by one, a fresh
 //     `AccountId` distinct from the existing one lands in
 //     `ImportReport.accounts`.
-//
-// `add_totp_account` builds an `AccountInput` with `issuer: None`,
-// `secret: "JBSWY3DPEHPK3PXP"`, `algorithm: Sha1`, `digits: 6`,
-// `kind: Totp`. The otpauth URI `otpauth://totp/{label}?secret=JBSWY3DPEHPK3PXP`
-// parses to the matching triple (no `:` in the label → no issuer
-// prefix; no `issuer` query param → issuer stays `None`; missing
-// algorithm/digits → SHA1 / 6 defaults). Collisions are decided by
-// `Vault::import_accounts` on that exact triple per
-// `crates/paladin-core/src/vault.rs`.
-//
-// The non-colliding `Skip` happy path (no pre-existing account) is
-// covered by
-// `execute_import_with_auto_format_routes_through_import_from_file_for_otpauth_payload_and_persists_via_mutate_and_save`.
 
 fn unlocked_state_with_seeded_collision_target(
     tmp: &TempDir,
@@ -3397,31 +3375,10 @@ mod add_from_clipboard_qr {
     fn execute_add_from_clipboard_qr_with_oversized_rgba_buffer_sends_validation_image_too_large() {
         // `qr_image_bytes` rejects RGBA buffers above `QR_RGBA_MAX_BYTES`
         // (64 MiB) with `validation_error { field: "qr_image",
-        // reason: "image_too_large" }`. Reach the guard by seeding
-        // dimensions whose `w * h * 4` exceeds the cap. The seeded
-        // `rgba` length need only satisfy the dimensions check the
-        // adapter performs (none — production uses arboard's byte
-        // length verbatim), so we send the matching byte count via a
-        // sparse buffer constructed with `vec![0; ...]`.
-        //
-        // We pick a 5000x5000 image: 100 MiB > 64 MiB. Allocating that
-        // up-front would be wasteful, so we exploit the
-        // `seed_test_clipboard_image` contract — the fake stores the
-        // bytes verbatim and the production `read_image` would have
-        // already allocated them. To avoid the 100 MiB allocation in
-        // tests, the adapter validates dimensions internally; if not,
-        // `qr_image_bytes` would have done so via `validate_rgba_dims`.
-        // Here we send a 0-byte buffer with oversized dimensions so the
-        // `buffer_length_mismatch` route would fire instead of
-        // `image_too_large` — that breaks our test contract. Use
-        // dimensions just past the cap and matching byte count.
-        //
-        // Pick 4097x4097 → ~67.1 MiB, just above 64 MiB. To keep
-        // memory cheap in CI, the executor must run the
-        // size-vs-`QR_RGBA_MAX_BYTES` check before passing through to
-        // `qr_image_bytes` so the buffer length never has to match. The
-        // executor pre-screens the dimensions; see the
-        // `image_too_large` guard documented at the placeholder site.
+        // reason: "image_too_large" }`. Use 4097x4097 → ~67.1 MiB to
+        // trip the guard. The executor pre-screens dimensions so the
+        // backing buffer length never has to match — a zero-byte rgba
+        // is passed for memory-frugal CI.
         with_dryrun("1", || {
             let tmp = secure_tempdir();
             let path = tmp.path().join("vault.bin");

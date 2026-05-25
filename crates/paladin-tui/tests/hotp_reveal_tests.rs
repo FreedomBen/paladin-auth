@@ -784,16 +784,6 @@ fn hotp_reveal_debug_redacts_displayed_code_bytes() {
 //    new code in hand even though durability is in question. All other
 //    failures show a status-line error and leave the previous reveal state
 //    unchanged."
-//
-// The companion `_leaves_reveal_unchanged` tests above lock in the
-// visible-state-unchanged half for pre-commit and other errors. The
-// `save_durability_unconfirmed` row's reveals-on-failure behavior uses
-// the staged-code mechanism on `EffectResult::HotpAdvance` and is
-// covered by the dedicated `_with_staged_code_*` tests below. The
-// status-line tests below lock in the shared status-line surface for
-// every error kind the executor surfaces today (`save_not_committed`
-// from `Vault::hotp_advance`'s pre-rename failure, `invalid_state`
-// defensively, `save_durability_unconfirmed`).
 // ---------------------------------------------------------------------------
 
 #[test]

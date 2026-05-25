@@ -77,10 +77,7 @@ fn json_rejection_is_text_not_json_envelope() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// No positional arguments (plan "Global flags": "No positional file or URI
-// arguments are accepted in v0.2; imports start from ImportDialog.")
-// ---------------------------------------------------------------------------
+// No positional arguments: imports start from ImportDialog, not from CLI args.
 
 #[test]
 fn positional_file_argument_is_rejected() {

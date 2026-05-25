@@ -80,11 +80,10 @@ fn write_existing_encrypted_vault(path: &Path, passphrase: &str) {
 /// `InitPrecheck::Propagate`.
 ///
 /// `chmod 000` would be the more obvious injection, but CI runs the
-/// test suite as root inside `fedora:42` and root bypasses file-mode
-/// access checks — `open()` then succeeds, the 10-byte payload fails
-/// the magic check, and the classifier maps `InvalidHeader` to
-/// `Existing` instead of `Propagate`. The directory trick is
-/// UID-agnostic.
+/// test suite as root in a container and root bypasses file-mode access
+/// checks — `open()` then succeeds, the 10-byte payload fails the magic
+/// check, and the classifier maps `InvalidHeader` to `Existing` instead
+/// of `Propagate`. The directory trick is UID-agnostic.
 fn make_inspect_io_error_at(path: &Path) {
     std::fs::create_dir(path).expect("create directory at vault path");
 }

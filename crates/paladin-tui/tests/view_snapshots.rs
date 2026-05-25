@@ -573,12 +573,6 @@ fn snapshot_list_view_single_totp() {
     // pair, the formatted TOTP code, the period-progress gauge, and
     // the remaining-seconds suffix per `docs/DESIGN.md` §6's list-view
     // mock.
-    //
-    // `snapshot_now()` is 12 s into a 30-s TOTP window so 18 s remain
-    // and the gauge ends up 60% full — both values are encoded into
-    // the snapshot, so a regression that mishandles the
-    // `Code::seconds_remaining` math or the gauge ratio surfaces as
-    // a diff in this file.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -644,24 +638,6 @@ fn snapshot_list_view_mixed_totp_hotp_hidden_and_revealed() {
     // (TOTP, hidden HOTP, revealed HOTP) places one row of each
     // distinct shape onto the screen so the snapshot exercises every
     // branch of `render_rows` in a single grid:
-    //
-    //   * TOTP row: marker / title / code / progress gauge / remaining
-    //     seconds (the same shape as `snapshot_list_view_single_totp`,
-    //     but unselected so the marker column is blank).
-    //   * Hidden HOTP row: title carries the *stored next* counter
-    //     (`(#0)` here) and the right-side column shows the
-    //     `▸ press n to advance` prompt. The renderer must not call
-    //     into the OTP layer on this path — the snapshot would diff
-    //     if a regression ever made it leak the next-counter code.
-    //   * Revealed HOTP row: title carries `HotpReveal.counter_used`
-    //     (the *pre-advance* counter that produced the visible code,
-    //     `41` here while the stored next counter is `42`) and the
-    //     right-side column shows the visible code from the reveal
-    //     formatted by `format_code_digits` for parity with TOTP rows.
-    //
-    // The revealed HOTP is the selected row so the `▶` marker lands
-    // on a HOTP row and a regression that ever stops painting
-    // selection on HOTP rows surfaces as a diff in this snapshot.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -750,23 +726,6 @@ fn snapshot_list_view_search_active() {
     // Plan L1781: "Search-active list view." Drive `view::list` against a
     // vault holding three accounts where only two match a non-empty
     // search query (`"git"`) so the snapshot pins two contracts:
-    //
-    //   * The `Search:` line carries the active query bytes verbatim
-    //     so a regression that ever stops painting the query into the
-    //     search bar surfaces as a diff.
-    //   * `render_rows` honors the search-bar filter — only the
-    //     matching accounts (`GitHub`, `GitLab`) appear in the rows
-    //     pane; `Bank (savings)` is filtered out via
-    //     [`paladin_core::account_matches_search`] (case-insensitive
-    //     `"{issuer}:{label}"` substring match, the same predicate
-    //     used by the reducer's incremental-search slice).
-    //
-    // The selected row is the first match (`GitHub`) so the `▶` marker
-    // lands on a visible row — a regression that ever paints the
-    // marker on a filtered-out row would surface as a diff. The
-    // snapshot stays deterministic across hosts: the vault path itself
-    // is not rendered on the list view, and TOTP codes/gauges/seconds
-    // are pinned by `SNAPSHOT_NOW_SECS`.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -808,25 +767,6 @@ fn snapshot_list_view_after_zz_recenter() {
     // list that a centered viewport requires a non-zero
     // `viewport_offset` — pinning that the renderer honors
     // `viewport_offset` to slice the visible window.
-    //
-    // `viewport_height = 6` matches the rows pane height with a
-    // terminal height of 12; the 9th account (`Acct09 (u09)`,
-    // insertion-order index 8) is selected; and `viewport_offset = 5`
-    // is the value `recenter_viewport` would compute from
-    // `sel_pos.saturating_sub(viewport_height / 2)` (`8 - 3 = 5`).
-    // The snapshot therefore pins:
-    //   * Only insertion-order indices `[5..=10]`
-    //     (`Acct06`..`Acct11`) appear in the rows pane —
-    //     `Acct01`..`Acct05` are scrolled past the top, `Acct12` is
-    //     scrolled past the bottom.
-    //   * The selected row (`Acct09`) lands at viewport row position
-    //     3 (the 4th of 6 visible rows) so the `▶` marker sits in
-    //     the middle of the viewport, matching vim's `zz` semantics.
-    //
-    // A regression that ever stops applying `viewport_offset` would
-    // shift the visible window back to indices `[0..=5]`, leaving
-    // the selected row off-screen and the marker absent — surfacing
-    // as a diff in this snapshot.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -883,13 +823,6 @@ fn snapshot_list_view_status_line_error_after_rejected_copy() {
     // mirrors the reducer-level assertions in
     // `tests/reducer_tests.rs` (`expect a `selection_gated`
     // status-line error` fan-out).
-    //
-    // The vault holds a single TOTP account so the rows pane still
-    // renders a populated list — pinning that the status-line text
-    // takes over the keybinding-hint slot (per `docs/DESIGN.md` §6
-    // "errors surface inline in the active modal or in the status
-    // line") rather than appending a new row, and that the chrome
-    // around it is unchanged from `snapshot_list_view_single_totp`.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -930,17 +863,6 @@ fn snapshot_list_view_status_line_save_durability_unconfirmed_after_hotp_advance
     // `status_line` carries
     // `StatusLine::Error(render_error_message(
     //   &PaladinError::SaveDurabilityUnconfirmed))`.
-    //
-    // Routing the wording through `render_error_message` binds the
-    // snapshot to the core `Display` impl
-    // (`save durability unconfirmed`) rather than a hand-typed
-    // string, keeping the surfaced text in lockstep with the CLI's
-    // `save_durability_unconfirmed` envelope key and the GTK
-    // equivalent surface. The HotpReveal is seeded so the rows pane
-    // shows the revealed code under the pre-advance `(#N)` counter,
-    // pinning that the renderer paints the reveal alongside the
-    // durability warning rather than collapsing back to the hidden
-    // prompt.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -995,12 +917,6 @@ fn snapshot_list_view_status_line_clipboard_write_failed_after_failed_copy() {
     // source-of-truth string so a future rewording stays in sync
     // with the reducer-level `effect_result_copy_code_err_publishes_
     // clipboard_write_failed_status_line` assertion.
-    //
-    // The vault holds a single TOTP account so the rows pane renders
-    // a populated list around the status-line slot — pinning the
-    // delta from `snapshot_list_view_status_line_error_after_
-    // rejected_copy` is the message content alone, since both share
-    // the `StatusLine::Error` renderer branch.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1045,12 +961,6 @@ fn snapshot_list_view_status_line_after_manual_add() {
     // the renderer's `bottom_line` slot but route through the
     // `Confirmation` branch (green-tinted on live terminals; the
     // harness drops styling).
-    //
-    // The vault holds the just-added account so the rows pane
-    // renders a populated list around the status-line slot, with
-    // `selected = Some(id)` to reflect the §6 mock's "highlight the
-    // freshly-added row" behavior the reducer pins via the modal-
-    // open path.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1097,11 +1007,6 @@ fn snapshot_list_view_status_line_after_uri_add() {
     // against the reducer ever diverging the wording per AddMode
     // (e.g. "Imported {display}." for the URI path), in which case
     // only this snapshot will need to update.
-    //
-    // The just-added account uses an issuer / label combination
-    // typical of an `otpauth://totp/Example:alice@example.com?issuer=Example`
-    // payload so the bottom-row text differs visibly from the manual
-    // sibling above without invoking a different renderer branch.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1153,17 +1058,6 @@ fn snapshot_list_view_status_line_after_remove() {
     // snapshot to the shared label-formatting source of truth so
     // any wording change in `format_account_display_label`
     // surfaces here.
-    //
-    // To keep the snapshot a pure view test with no effect plumbing,
-    // the vault keeps the captured account live (rows pane renders
-    // a populated list around the status-line slot) and
-    // `selected = None` so no row gets the `▶` marker — visually
-    // representing "the user navigated away after a successful
-    // remove" rather than the literal post-remove vault contents.
-    // A reader of the snapshot sees the account in the rows pane
-    // alongside a `Removed X.` confirmation; the test is anchoring
-    // the bottom-row wording, not simulating a removal round-trip
-    // (which `tests/reducer_tests.rs` covers).
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1265,12 +1159,6 @@ fn snapshot_list_view_status_line_after_export() {
     // vault" doc in `reduce_export_result`), so the rows pane stays
     // identical to its pre-export state — only the bottom row
     // changes to show the confirmation.
-    //
-    // The path string is a tilde-style relative path that stays
-    // host-independent so the snapshot is deterministic across
-    // systems; long absolute paths would either truncate at the 80-
-    // col snapshot width or pull in a tempdir prefix that varies
-    // per run.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1346,12 +1234,10 @@ fn snapshot_list_view_status_line_after_passphrase_set() {
 
 #[test]
 fn snapshot_list_view_status_line_after_passphrase_change() {
-    // Plan L2890: "Status-line confirmation after Passphrase
-    // change." Sibling of `..._after_passphrase_set`: the
-    // `Change` sub-flow shares the same `reduce_passphrase_result`
-    // Ok-arm wording, so the rendered body is byte-identical until
-    // a future reducer divergence makes them differ. See the `_set`
-    // sibling for the full doc comment.
+    // Plan L2890: "Status-line confirmation after Passphrase change."
+    // The `Change` sub-flow shares the same `reduce_passphrase_result`
+    // Ok-arm wording, so the rendered body is byte-identical to the
+    // `_set` sibling.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1383,10 +1269,9 @@ fn snapshot_list_view_status_line_after_passphrase_change() {
 
 #[test]
 fn snapshot_list_view_status_line_after_passphrase_remove() {
-    // Plan L2891: "Status-line confirmation after Passphrase
-    // remove." Sibling of `..._after_passphrase_set` /
-    // `..._after_passphrase_change`: the `Remove` sub-flow shares
-    // the same Ok-arm wording.
+    // Plan L2891: "Status-line confirmation after Passphrase remove."
+    // The `Remove` sub-flow shares the same Ok-arm wording as
+    // `_set` / `_change`.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1465,12 +1350,6 @@ fn snapshot_list_view_status_line_after_manual_add_with_warnings() {
     // `format_validation_warning` over the carried warnings. The
     // snapshot is bound to `format_validation_warning` so any
     // wording change in the core warning text surfaces here.
-    //
-    // At 80-col snapshot width the warning text typically overflows
-    // the bottom row and ratatui truncates without wrapping — the
-    // truncation point itself is a useful regression sentinel: if
-    // the prefix or the joining literal change, the visible head
-    // shifts.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1522,11 +1401,11 @@ fn snapshot_list_view_status_line_after_manual_add_with_warnings() {
 #[test]
 fn snapshot_list_view_status_line_after_uri_add_with_warnings() {
     // Plan L2894: "URI Add status-line confirmation with validation
-    // warnings." Sibling of `..._manual_add_with_warnings`: the URI
-    // add flow shares `reduce_add_result`, so the warning-appended
-    // confirmation template is identical. A separate snapshot
-    // anchors the URI entry point against a future reducer
-    // divergence in wording per AddMode.
+    // warnings." The URI add flow shares `reduce_add_result`, so the
+    // warning-appended confirmation template is identical to the
+    // `_manual_add_with_warnings` sibling; a separate snapshot
+    // anchors the URI entry point against a future per-AddMode
+    // divergence in wording.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1586,16 +1465,6 @@ fn snapshot_add_modal_default() {
     // import / export / passphrase / settings" call-out and the
     // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add"
     // contract.
-    //
-    // The background vault is empty so the underlying list view
-    // settles into its `No accounts. Press `a` to add one.`
-    // prompt — the modal overlay's Clear-region then erases that
-    // prompt where it would otherwise show through, and the
-    // snapshot captures only the bordered list chrome
-    // (top border + search + divider above, divider + hint + bottom
-    // border below) framing the modal. Future slices land the URI /
-    // QR modes, duplicate "add anyway" gate, and post-import counts
-    // panel as their own snapshots.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1633,12 +1502,6 @@ fn snapshot_add_modal_save_not_committed() {
     // error through `render_error_message`" contract. Routing the
     // wording through the shared helper means the inline text matches
     // the rest of the TUI's error surface.
-    //
-    // The rest of the modal is at its default state (Manual mode,
-    // empty fields) so the snapshot reads as a delta from the
-    // `snapshot_add_modal_default` baseline: the inline error line
-    // appears inside the spacer area between the icon-hint row and
-    // the footer hint.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1745,26 +1608,6 @@ fn snapshot_add_modal_qr_no_clipboard_image() {
     // rendering 1:1 with the reducer-side coverage from
     // `effect_result_qr_import_no_clipboard_image_sets_inline_error_and_keeps_modal_open`
     // in `tests/reducer_tests.rs`.
-    //
-    // Routing the wording through `format_qr_import_failure` binds
-    // the snapshot to the shared TUI helper rather than a hand-typed
-    // string so any future rewording of the "QR import failed:
-    // clipboard does not contain an image …" prompt surfaces here as
-    // a diff. The `AddMode::Qr` selector also pins the segmented
-    // mode-selector row — a regression that ever wires the QR
-    // failure result against the wrong `AddMode` surfaces as a diff
-    // of the active mode wrapper (`▶ … ◀`).
-    //
-    // The rest of the modal is at its default state (empty Manual
-    // field stack — the Add view currently paints the Manual field
-    // column regardless of `AddMode`, with mode-specific rendering
-    // landing alongside its own slice) so the snapshot reads as a
-    // delta from `snapshot_add_modal_default` on two cells: the
-    // active mode selector wraps `QR` instead of `Manual`, and the
-    // inline-error row appears inside the spacer above the footer
-    // hint via the same `render_inline_error` branch the Add modal's
-    // `save_not_committed` / `save_durability_unconfirmed` slices
-    // exercise.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1826,22 +1669,6 @@ fn snapshot_add_modal_qr_image_decode_failure() {
     // rendering 1:1 with the reducer-side coverage from
     // `effect_result_qr_import_image_decode_failure_sets_inline_error_and_keeps_modal_open`
     // in `tests/reducer_tests.rs`.
-    //
-    // Routing the wording through `format_qr_import_failure` binds
-    // the snapshot to the shared TUI helper rather than a hand-typed
-    // string so any future rewording of the "QR import failed:
-    // clipboard image could not be decoded." prompt surfaces here as
-    // a diff. The `ImageDecodeFailure` arm of
-    // `format_qr_import_failure` returns a 56-char message that
-    // fits the ~60-col inline-error slot without truncation, unlike
-    // the longer `NoClipboardImage` companion slice — so this
-    // snapshot doubles as a regression guard that the renderer
-    // surfaces the full single-line message when it does fit.
-    //
-    // The rest of the modal is at its default state (Manual field
-    // stack; `AddMode::Qr` selector) so the snapshot reads as a
-    // delta from `snapshot_add_modal_qr_no_clipboard_image` on a
-    // single cell: the inline-error wording.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1899,21 +1726,6 @@ fn snapshot_add_modal_qr_no_qrs_decoded() {
     // coverage from
     // `effect_result_qr_import_no_qrs_decoded_sets_inline_error_via_render_error_message`
     // in `tests/reducer_tests.rs`.
-    //
-    // Routing through `format_qr_import_failure` (rather than
-    // `render_error_message` directly) pins that the QR-failure
-    // pipeline's `Import` arm continues to forward `PaladinError`
-    // wording verbatim — a regression that ever wraps the core
-    // wording in a "QR import failed:" prefix on this arm surfaces
-    // here as a diff, distinguishing it from the bespoke
-    // `NoClipboardImage` and `ImageDecodeFailure` arms above. The
-    // 20-char core wording fits the ~60-col inline-error slot
-    // without truncation.
-    //
-    // The rest of the modal is at its default state (Manual field
-    // stack; `AddMode::Qr` selector) so the snapshot reads as a
-    // delta from `snapshot_add_modal_qr_image_decode_failure` on a
-    // single cell: the inline-error wording.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -1972,20 +1784,6 @@ fn snapshot_add_modal_qr_oversized_rgba_buffer() {
     // (`effect_result_qr_import_oversized_rgba_buffer_sets_inline_error_via_render_error_message`
     // in `tests/reducer_tests.rs`) uses the same trigger so the
     // view-snapshot matrix stays 1:1 with the reducer matrix.
-    //
-    // Routing the wording through `format_qr_import_failure`'s
-    // `Import(err)` arm — which delegates to `render_error_message`
-    // and binds to the core `Display` impl (`validation error:
-    // qr_image: image_too_large`) — pins that this arm forwards
-    // `PaladinError` wording verbatim without a "QR import failed:"
-    // prefix, matching the `NoEntriesToImport` companion slice. The
-    // 43-char core wording fits the ~60-col inline-error slot
-    // without truncation.
-    //
-    // The rest of the modal is at its default state (Manual field
-    // stack; `AddMode::Qr` selector) so the snapshot reads as a
-    // delta from `snapshot_add_modal_qr_no_qrs_decoded` on a single
-    // cell: the inline-error wording.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -2047,30 +1845,6 @@ fn snapshot_add_modal_qr_invalid_qr_payload() {
     // reducer-side coverage from
     // `effect_result_qr_import_invalid_qr_payload_sets_inline_error_via_render_error_message`
     // in `tests/reducer_tests.rs`.
-    //
-    // Routing the wording through `format_qr_import_failure`'s
-    // `Import(err)` arm — which delegates to `render_error_message`
-    // and binds to the core `Display` impl — pins that this arm
-    // forwards `PaladinError` wording verbatim without a "QR import
-    // failed:" prefix, matching the `NoEntriesToImport` and
-    // oversized-RGBA companion slices. Constructing the
-    // `ValidationError` variant directly (rather than driving a real
-    // non-otpauth QR through `qr_image_bytes`) keeps the snapshot
-    // self-contained — the field / reason codes are stable per
-    // `docs/DESIGN.md` §5, and `crates/paladin-core/tests/import_qr.rs`'s
-    // `qr_image_bytes_with_non_otpauth_payload_rejects_with_source_index`
-    // already binds the real-API path. The 47-char core wording fits
-    // the ~60-col inline-error slot without truncation.
-    //
-    // `source_index: Some(0)` mirrors the value `payloads_to_accounts`
-    // tags on the first offending payload; the `Display` impl ignores
-    // the field, so this slot is locked here to document the
-    // attribution rather than influence the rendered text.
-    //
-    // The rest of the modal is at its default state (Manual field
-    // stack; `AddMode::Qr` selector) so the snapshot reads as a
-    // delta from `snapshot_add_modal_qr_oversized_rgba_buffer` on a
-    // single cell: the inline-error wording.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -2130,29 +1904,6 @@ fn snapshot_add_modal_qr_counts_panel() {
     // "Modals (per §6) > Add" checklist row: *"Clipboard QR import
     // uses `ImportConflict::Skip` and reports imported / skipped
     // counts."*
-    //
-    // Per `AddModal::counts_panel` and the [`CountsPanel`] doc, the
-    // clipboard-QR flow always runs with [`ImportConflict::Skip`], so
-    // `replaced` and `appended` are always `0` on this path; only
-    // `imported` and `skipped` carry meaningful counts. The snapshot
-    // still pins all four rows so the layout matches the Import modal's
-    // counts panel — which means a regression that ever hides the
-    // always-zero rows for the QR-add path (or paints a different
-    // label) surfaces as a diff. The `warnings` slot is empty here; the
-    // warnings-included variant lands in its own snapshot per the
-    // plan's "QR-add counts panel with validation-warning messages"
-    // checklist row at L2619.
-    //
-    // The carried counts (imported: 2, skipped: 1) are distinct from
-    // the Import modal's no-warnings (3 / 1 / 2 / 4) and warnings
-    // (2 / 0 / 0 / 0) snapshots so the three counts-panel snapshots
-    // read as deltas across the three flows; a regression that ever
-    // swaps two counts surfaces as a diff rather than staying silent
-    // under identical values.
-    //
-    // Background vault is empty so the underlying list view paints
-    // its `(no accounts yet)` empty-state row through the modal's
-    // clipped border, mirroring the other Add modal snapshots.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -2227,35 +1978,6 @@ fn snapshot_add_modal_qr_counts_panel_with_validation_warnings() {
     // helper here binds the snapshot to the core wording rather than a
     // hand-typed string — a future revision of the warning phrasing
     // stays in sync without an extra snapshot edit.
-    //
-    // Two warnings with distinct `decoded_len` values (5, 1) so a
-    // regression that ever swaps two warnings or collapses them onto a
-    // single line surfaces as a diff rather than staying silent under
-    // identical values. The carried counts (`imported: 1`, `skipped: 1`)
-    // are distinct from the no-warnings QR-add snapshot
-    // (`imported: 2`, `skipped: 1`) so the two snapshots read as deltas
-    // of the same panel — a future renderer change that ever hides the
-    // counts in the presence of warnings is caught. The clipboard-QR
-    // flow always runs with [`paladin_core::ImportConflict::Skip`], so
-    // `replaced` and `appended` are pinned to `0` on this path,
-    // matching the always-zero rows in the sibling snapshot.
-    //
-    // Mirrors `snapshot_import_modal_counts_panel_with_validation_warnings`
-    // so the QR-add and file-import warnings panels read as a matched
-    // pair: a regression that ever stops painting the warnings band
-    // for one surface but not the other surfaces as a diff. The Add
-    // modal's `MODAL_INNER_WIDTH` is 62 cells (vs the Import modal's
-    // 70), so the warnings strings rendered at this width fit on a
-    // single row each at the carried `decoded_len` values — the panel
-    // grows by exactly the warnings_rows count rather than wrapping.
-    // A wider 24-row TestBackend gives the modal vertical room to grow
-    // past the 16-row base height; `modal_height_for` in
-    // `crates/paladin-tui/src/view/add.rs` predicts the wrapped row
-    // count and allocates the modal rect accordingly.
-    //
-    // Background vault is empty so the underlying list view paints its
-    // empty-state prompt where the modal's clipped border does not
-    // erase it, mirroring the other Add modal snapshots.
     let warning_short = format_validation_warning(&ValidationWarning::ShortSecret {
         decoded_len: 5,
         recommended_min: 16,
@@ -2334,34 +2056,6 @@ fn snapshot_add_modal_duplicate_account() {
     // `Vault::find_duplicate(&validated)` before mutation. A collision
     // initially rejects with the existing account in the modal and
     // offers an 'add anyway' confirmation."*
-    //
-    // Routing the wording through `format_duplicate_account_message`
-    // pins the shared TUI renderer — the same one the reducer's
-    // `AddFailure::Duplicate` arm wires into `AddModal::error` per
-    // `effect_result_add_duplicate_stashes_pending_and_sets_inline_error`
-    // in `tests/reducer_tests.rs` — and binds the snapshot to the
-    // function's `"account already exists with the same (secret,
-    // issuer, label): {} (press Enter to add anyway)"` template. Any
-    // future wording change in the shared formatter surfaces as a
-    // diff here.
-    //
-    // The vault holds a single TOTP account labelled `github` (no
-    // issuer) so `format_account_display_label` returns the bare
-    // `github` form — the same shape exercised by the reducer-side
-    // test cited above — keeping the snapshot self-contained and
-    // independent of any specific `Vault::find_duplicate` invocation.
-    // `pending_duplicate_add` is intentionally left `None`: only the
-    // `error` slot reaches the renderer (see
-    // `crates/paladin-tui/src/view/add.rs:167`), and a follow-up "add
-    // anyway" confirmation snapshot lands as its own plan checklist
-    // row.
-    //
-    // The Manual mode keeps this as a sibling delta to
-    // `snapshot_add_modal_save_not_committed` /
-    // `snapshot_add_modal_save_durability_unconfirmed`: same field
-    // stack, same footer hint, only the inline-error row changes —
-    // a regression that ever swaps the duplicate wording for one of
-    // the save-failure templates surfaces as a diff.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -2424,25 +2118,6 @@ fn snapshot_add_modal_add_anyway_confirmation() {
     // (`tests/reducer_tests.rs`) and consumed by
     // `enter_with_pending_duplicate_add_in_manual_mode_emits_add_anyway_effect`
     // / `enter_with_pending_duplicate_add_in_uri_mode_emits_add_anyway_effect`.
-    //
-    // Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add":
-    // *"A collision initially rejects with the existing account in
-    // the modal and offers an 'add anyway' confirmation."* The
-    // initial rejection is locked by
-    // `snapshot_add_modal_duplicate_account` (siblings of this slice
-    // — same vault, same `format_duplicate_account_message` wording).
-    // This snapshot then pins the visual delta the user sees once
-    // the pending `ValidatedAccount` is stashed: the footer hint
-    // switches from the editable-modal default
-    // (`Tab cycles fields  ·  Enter submit  ·  Esc cancel`) to the
-    // confirmation form (`Enter add anyway  ·  Esc cancel`), since
-    // Tab-cycling fields no longer applies — the next Enter commits
-    // the pending account via `Effect::AddAnyway`, and Esc drops
-    // the stash. The truncated inline-error row is unchanged, so the
-    // diff against the duplicate-rejection sibling reads as a
-    // one-line footer swap, surfacing as a regression if the
-    // renderer ever stops branching on `pending_duplicate_add` or if
-    // the confirmation wording changes.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -2533,17 +2208,6 @@ fn snapshot_remove_modal_default() {
     // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Remove"
     // contract — *"confirmation modal. On confirm, wraps
     // `Vault::remove` in `Vault::mutate_and_save`."*
-    //
-    // The single account uses the same `GitHub` / `ben@example.com`
-    // issuer/label pair the single-TOTP list-view snapshot uses, so
-    // the `issuer:label` line painted inside the modal exercises the
-    // shared `format_account_display_label` rendering (identical
-    // wording to the duplicate-account inline error and the CLI's
-    // `display_label`). A future slice that re-wires the modal to a
-    // different display format then surfaces as a diff in this file.
-    // The inline `error` slot stays `None`; the
-    // `save_not_committed` / `save_durability_unconfirmed` variants
-    // land as their own snapshots per the plan's later checkboxes.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -2586,12 +2250,6 @@ fn snapshot_remove_modal_save_not_committed() {
     // contract. Routing the wording through the shared
     // `render_error_message` helper means the inline text matches
     // the rest of the TUI's error surface.
-    //
-    // The rest of the modal is at its default state (single TOTP
-    // account, `GitHub` / `ben@example.com`) so the snapshot reads
-    // as a delta from the `snapshot_remove_modal_default` baseline:
-    // the inline error line appears inside the spacer area between
-    // the account-label row and the footer hint.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -2688,18 +2346,6 @@ fn snapshot_rename_modal_default() {
     // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Rename"
     // contract — *"single text field pre-populated with the selected
     // account's current label."*
-    //
-    // The single account uses the same `GitHub` / `ben@example.com`
-    // issuer/label pair the Remove modal snapshot uses, so the
-    // `issuer:label` line painted inside the modal exercises the
-    // shared `format_account_display_label` rendering (identical
-    // wording to the duplicate-account inline error and the CLI's
-    // `display_label`). The `draft` is seeded with the account's
-    // current label so the snapshot pins that the renderer prefills
-    // the editable text-input from the reducer's modal-open path.
-    // The inline `error` slot stays `None`; the `save_not_committed`
-    // / `save_durability_unconfirmed` variants land as their own
-    // snapshots per the plan's later checkboxes.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -2742,13 +2388,6 @@ fn snapshot_rename_modal_save_not_committed() {
     // inline text matches the rest of the TUI's error surface — the
     // unlock screen's `decrypt_failed` line, the Add modal's
     // inline-error slot, and the Remove modal's inline-error slot.
-    //
-    // The rest of the modal is at its default state (single TOTP
-    // account, `GitHub` / `ben@example.com`, draft prefilled with
-    // the current label) so the snapshot reads as a delta from the
-    // `snapshot_rename_modal_default` baseline: the inline error
-    // line appears inside the spacer area between the draft field
-    // and the footer hint.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -2848,24 +2487,6 @@ fn snapshot_import_modal_default() {
     // reports imported/skipped/replaced/appended/warning counts"
     // contract and the `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
     // §6) > Import" checklist row.
-    //
-    // The background vault is empty so the underlying list view
-    // settles into its `No accounts. Press `a` to add one.` prompt
-    // — the modal overlay's Clear-region then erases that prompt
-    // where it would otherwise show through, and the snapshot
-    // captures only the bordered list chrome (top border + search +
-    // divider above, divider + hint + bottom border below) framing
-    // the modal. The `Source:` field renders as the editable
-    // `[ ... ]` text-input style mirroring the Add / Rename modals'
-    // editable rows; the `Format:` selector renders as the segmented
-    // `▶ Auto ◀  Otpauth  Aegis  Paladin  QR` line mirroring the Add
-    // modal's mode selector so a regression that ever swaps the
-    // active variant or stops painting the segmented selector
-    // surfaces as a diff; the `On conflict:` selector renders the
-    // same way over the three `ImportConflict` variants. Future
-    // slices land the inline-error / passphrase sub-phase / counts
-    // panel variants as their own snapshots per the plan's later
-    // checkboxes.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -2903,13 +2524,6 @@ fn snapshot_import_modal_save_not_committed() {
     // the rest of the TUI's error surface — the unlock screen's
     // `decrypt_failed` line and the Add / Remove / Rename modals'
     // inline-error slots.
-    //
-    // Every other ImportModal field stays at its default
-    // (empty `path_text`, `Auto` format, `Skip` conflict, no
-    // passphrase sub-phase, no counts panel) so the snapshot reads
-    // as a delta from the `snapshot_import_modal_default` baseline:
-    // the inline error line appears inside the spacer area between
-    // the conflict-selector row and the footer hint.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -3039,18 +2653,6 @@ fn render_import_modal_with_inline_error(err: &PaladinError, expected_substring:
 // Import modal — per-importer-error-kind inline rendering
 // (docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Insta snapshots:
 //  *"Import modal with each importer error kind."*)
-//
-// One snapshot per `PaladinError` variant the reducer's
-// `reduce_import_result` Err arm surfaces. Each pins the
-// `render_error_message`-formatted wording inside the spacer area
-// between the conflict-selector row and the footer hint, mirroring
-// the pre-commit / durability-unconfirmed snapshots above. The set
-// of variants matches the plan's "Importer errors" list (L1079–1084)
-// and the reducer tests'
-// `effect_result_import_err_*_renders_inline` coverage in
-// `tests/reducer_tests.rs` — keeping the view-snapshot matrix
-// 1:1 with the reducer matrix so a regression that ever changes
-// the rendered wording for one kind surfaces here as a diff.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -3193,20 +2795,6 @@ fn snapshot_import_modal_counts_panel() {
     // `paladin_core::format_validation_warning()` in a post-success
     // counts panel" contract and the `docs/IMPLEMENTATION_PLAN_03_TUI.md`
     // "Modals (per §6) > Import" checklist row.
-    //
-    // Every other ImportModal field stays at its default (empty
-    // `path_text`, `Auto` format, `Skip` conflict, no inline error,
-    // no passphrase sub-phase) so the snapshot reads as a delta from
-    // the `snapshot_import_modal_default` baseline: the input rows
-    // (Source / Format / On conflict / hint) are replaced with the
-    // counts summary panel. The `warnings` slot is empty here; the
-    // warnings-included variant lands in its own snapshot per the
-    // plan's next checklist row.
-    //
-    // The carried counts are deliberately distinct (3 / 1 / 2 / 4)
-    // so the snapshot pins each field to its slot — a regression
-    // that ever swaps two counts surfaces as a diff rather than
-    // staying silent under identical values.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -3276,14 +2864,6 @@ fn snapshot_import_modal_counts_panel_with_validation_warnings() {
     // binding the snapshot to the core wording rather than a
     // hand-typed string keeps the rendered text in sync with the core
     // library if the warning phrasing is ever revised.
-    //
-    // Two warnings with distinct `decoded_len` values (5, 1) so a
-    // regression that ever swaps two warnings or collapses them onto
-    // a single line surfaces as a diff rather than staying silent
-    // under identical values. The remaining counts (`imported: 2`) are
-    // distinct from the no-warnings snapshot so the two snapshots read
-    // as deltas of the same panel and a future renderer change that
-    // hides the counts in the presence of warnings is caught.
     let warning_short = format_validation_warning(&ValidationWarning::ShortSecret {
         decoded_len: 5,
         recommended_min: 16,
@@ -3354,24 +2934,6 @@ fn snapshot_export_modal_default() {
     // matched), refuses overwrite without explicit confirmation"
     // contract and the `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
     // §6) > Export" checklist row.
-    //
-    // The background vault is empty so the underlying list view
-    // settles into its `No accounts. Press `a` to add one.` prompt
-    // — the modal overlay's Clear-region then erases that prompt
-    // where it would otherwise show through. The `Destination:` field
-    // renders as the editable `[ ... ]` text-input style mirroring
-    // the Add / Rename / Import modals' editable rows; the `Format:`
-    // selector renders as the segmented `▶ Plaintext ◀  Encrypted`
-    // line mirroring the Add / Import modals' segmented selectors so
-    // a regression that ever swaps the active variant or stops
-    // painting the segmented selector surfaces as a diff; the
-    // plaintext-export warning rendering and the `[ ]` /
-    // `[x]` acknowledgement gate land in their own dedicated
-    // snapshot slices below (plan L1996 "Export modal plaintext-
-    // export warning."). Inline `confirmation_mismatch` /
-    // `zero_length` / refused-overwrite / writer-failure /
-    // `save_not_committed` / `save_durability_unconfirmed` variants
-    // land as their own snapshots per the plan's later checkboxes.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -3413,16 +2975,6 @@ fn snapshot_export_modal_refused_overwrite_gate() {
     // (`validation error: path: output_exists`) rather than a
     // hand-typed string so any future wording change in core surfaces
     // here as a diff.
-    //
-    // The rest of the modal is at its default state (empty
-    // `path_text`, `ExportFormat::Plaintext`, empty passphrase
-    // buffers, `plaintext_confirmed: false`) so the snapshot reads as
-    // a delta from the `snapshot_export_modal_default` baseline: the
-    // inline error line appears inside the spacer area between the
-    // segmented `Format:` selector row and the footer hint, mirroring
-    // the Add / Remove / Rename modals' inline-error slots and the
-    // unlock screen's `decrypt_failed` styling so every inline-error
-    // surface in the TUI reads the same way.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -3494,15 +3046,6 @@ fn snapshot_export_modal_confirmation_mismatch() {
     // core `Display` impl (`invalid passphrase: confirmation_mismatch`)
     // rather than a hand-typed string so any future wording change in
     // core surfaces here as a diff.
-    //
-    // The format selector reads `Encrypted` so the snapshot reads as
-    // an encrypted-path delta from the `snapshot_export_modal_default`
-    // baseline — the inline error line appears inside the spacer area
-    // between the segmented `Format:` selector row and the footer
-    // hint, mirroring the unlock screen's `decrypt_failed` styling and
-    // the Add / Remove / Rename modals' inline-error slots. The
-    // refused-overwrite gate's snapshot above already exercises the
-    // `Plaintext` selector with the same renderer.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -3567,15 +3110,6 @@ fn snapshot_export_modal_zero_length() {
     // (`invalid passphrase: zero_length`) rather than a hand-typed
     // string so any future wording change in core surfaces here as a
     // diff.
-    //
-    // The format selector reads `Encrypted` so the snapshot reads as
-    // an encrypted-path delta from the `snapshot_export_modal_default`
-    // baseline — the inline error line appears inside the spacer area
-    // between the segmented `Format:` selector row and the footer
-    // hint, sharing the same renderer branch the
-    // `confirmation_mismatch` snapshot above exercises. The
-    // refused-overwrite gate's snapshot already exercises the
-    // `Plaintext` selector with the same renderer.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -3634,17 +3168,6 @@ fn snapshot_export_modal_plaintext_export_warning() {
     // §6) and the GTK `ExportDialog`'s `plaintext_warning_body()`
     // checkbox label — any future wording change in core surfaces here
     // as a diff.
-    //
-    // The format selector reads `Plaintext` so the snapshot reads as a
-    // plaintext-path delta from the `snapshot_export_modal_default`
-    // baseline — the warning appears inside the spacer area between
-    // the segmented `Format:` selector row and the footer hint via the
-    // same `render_inline_error` branch the refused-overwrite,
-    // `confirmation_mismatch`, and `zero_length` snapshots exercise.
-    // The renderer paints a single line per `view/export.rs`'s
-    // `render_inline_error` (no `Wrap`), so the snapshot also pins the
-    // truncation behavior — a regression that ever swaps the slot for
-    // a multi-line `Wrap` widget surfaces here as a diff.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -3703,23 +3226,6 @@ fn snapshot_export_modal_io_error() {
     // with the reducer-side coverage from
     // `effect_result_export_err_io_error_surfaces_inline_and_keeps_modal_open`
     // in `tests/reducer_tests.rs`.
-    //
-    // Routing the wording through `render_error_message` binds the
-    // snapshot to the core `Display` impl (`I/O error during
-    // write_secret_file_atomic`) rather than a hand-typed string so
-    // any future wording change in core's `io_error` `Display` surfaces
-    // here as a diff. The operation tag mirrors the writer the export
-    // executor invokes; the underlying `std::io::ErrorKind` is
-    // deliberately `PermissionDenied` to match the reducer-side
-    // fixture and bind both surfaces to the same `Debug`-stable kind.
-    //
-    // The format selector stays at the `Plaintext` default so the
-    // snapshot reads as a plaintext-path delta from
-    // `snapshot_export_modal_default` — the inline error appears
-    // inside the spacer area between the segmented `Format:` selector
-    // row and the footer hint via the same `render_inline_error`
-    // branch the refused-overwrite, `confirmation_mismatch`,
-    // `zero_length`, and plaintext-export-warning snapshots exercise.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -3780,24 +3286,6 @@ fn snapshot_export_modal_save_not_committed() {
     // post-reduce rendering 1:1 with the reducer-side coverage from
     // `effect_result_export_err_save_not_committed_surfaces_inline_and_keeps_modal_open`
     // in `tests/reducer_tests.rs`.
-    //
-    // Routing the wording through `render_error_message` binds the
-    // snapshot to the core `Display` impl (`save not committed
-    // (committed=false)`) rather than a hand-typed string so any
-    // future wording change in core's `save_not_committed` `Display`
-    // surfaces here as a diff. The `committed: false, backup_path:
-    // None` shape mirrors the reducer-side fixture and the
-    // pre-rename failure path documented in §4.3 (the staging file
-    // never reached the destination, no `.bak` rotation ran).
-    //
-    // The format selector stays at the `Plaintext` default so the
-    // snapshot reads as a plaintext-path delta from
-    // `snapshot_export_modal_default` — the inline error appears
-    // inside the spacer area between the segmented `Format:`
-    // selector row and the footer hint via the same
-    // `render_inline_error` branch the refused-overwrite,
-    // `confirmation_mismatch`, `zero_length`, plaintext-export-
-    // warning, and `io_error` snapshots exercise.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -3860,29 +3348,6 @@ fn snapshot_export_modal_save_durability_unconfirmed() {
     // coverage from
     // `effect_result_export_err_save_durability_unconfirmed_surfaces_inline_and_keeps_modal_open`
     // in `tests/reducer_tests.rs`.
-    //
-    // Routing the wording through `render_error_message` binds the
-    // snapshot to the core `Display` impl (`save durability
-    // unconfirmed`) rather than a hand-typed string so any future
-    // wording change in core's `save_durability_unconfirmed`
-    // `Display` surfaces here as a diff. The variant is a unit
-    // (`PaladinError::SaveDurabilityUnconfirmed` carries no fields),
-    // mirroring the §4.3 contract — the destination file is in
-    // place on disk; only the parent-directory metadata sync is
-    // unconfirmed — so this slice deliberately differs from
-    // `save_not_committed` (pre-rename failure with `committed` /
-    // `backup_path` discriminators) in the rendered wording even
-    // though both surface inline through the same modal slot.
-    //
-    // The format selector stays at the `Plaintext` default so the
-    // snapshot reads as a plaintext-path delta from
-    // `snapshot_export_modal_default` — the inline error appears
-    // inside the spacer area between the segmented `Format:`
-    // selector row and the footer hint via the same
-    // `render_inline_error` branch the refused-overwrite,
-    // `confirmation_mismatch`, `zero_length`, plaintext-export-
-    // warning, `io_error`, and `save_not_committed` snapshots
-    // exercise.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -3935,22 +3400,6 @@ fn snapshot_passphrase_modal_set_default() {
     // `change`) are prompted twice and confirmed; mismatch returns
     // to the modal with an inline `invalid_passphrase`
     // (`reason: "confirmation_mismatch"`) error."*
-    //
-    // The background vault is empty (plaintext) so the underlying
-    // list view settles into its `No accounts. Press `a` to add
-    // one.` prompt — the modal overlay's Clear-region then erases
-    // that prompt where it would otherwise show through. The
-    // `Passphrase:` and `Confirm:` rows render as masked input
-    // slots mirroring the Add modal's `Secret:` field — `[ ]`
-    // empty, `[ ••• ]` non-empty — so the snapshot pins that the
-    // renderer never paints typed bytes (the buffers are zeroizing
-    // and the `Debug` impl is redacted, but the renderer is the
-    // last line of defense against onlookers reading the screen).
-    // Inline `confirmation_mismatch` / `zero_length` validation
-    // gates and `save_not_committed` / `save_durability_unconfirmed`
-    // variants land as their own snapshots per the plan's later
-    // checkboxes (L2002 / L2003), as do the `change` and `remove`
-    // sub-flow snapshots (L1969 / L1970).
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -3995,26 +3444,6 @@ fn snapshot_passphrase_modal_change_default() {
     // prompted twice and confirmed; mismatch returns to the modal
     // with an inline `invalid_passphrase` (`reason:
     // "confirmation_mismatch"`) error."*
-    //
-    // Compared to the `set` snapshot above, this snapshot's
-    // bordered-block title flips to ` Change passphrase ` and the
-    // one-line intent reads `Re-encrypts this vault under a new
-    // passphrase.` — so a regression that ever swaps the sub-flow
-    // wording (or paints the `set` intent on a `change` modal)
-    // surfaces as a diff in this snapshot rather than in a unit
-    // test against private helpers. The masked `Passphrase:` /
-    // `Confirm:` rows, the centered `Enter submit  ·  Esc cancel`
-    // hint, and the surrounding list-view chrome all match the
-    // `set` baseline so the snapshot pins that the body shape
-    // stays identical between the twice-confirm sub-flows.
-    //
-    // The renderer doesn't gate on vault state (the gate is enforced
-    // upstream by the modal-open reducer per the design's "available
-    // sub-flow is gated by `Vault::is_encrypted()`" rule); a
-    // plaintext-vault background therefore matches the `set` test
-    // and keeps this test focused on the renderer's contract. The
-    // `remove` sub-flow snapshot lands in its own slice below
-    // (plan L2003).
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -4056,28 +3485,6 @@ fn snapshot_passphrase_modal_remove_default() {
     // plaintext-storage warning and requires explicit confirmation
     // before mutation. Source the `passphrase remove` warning from
     // `paladin_core::format_plaintext_storage_warning()`."*
-    //
-    // Compared to the `set` / `change` twice-confirm sub-flow
-    // snapshots above, the `remove` body fans out into its own
-    // shape — the bordered block grows taller to fit the wrapped
-    // plaintext-storage warning sourced verbatim from
-    // [`paladin_core::format_plaintext_storage_warning`] (so the
-    // TUI wording stays byte-identical to the CLI `passphrase
-    // remove` / GTK `PassphraseDialog::remove_warning_body` paths),
-    // the masked `Passphrase:` / `Confirm:` input rows drop away
-    // entirely (the sub-flow takes no new secret), and the hint
-    // reads `Enter confirm  ·  Esc cancel` to flag the destructive
-    // mutation. A regression that ever paints the twice-confirm
-    // body on a `remove` modal (or drifts the warning wording from
-    // core) surfaces as a diff in this snapshot rather than in a
-    // unit test against private helpers.
-    //
-    // The renderer doesn't gate on vault state (the gate is
-    // enforced upstream by the modal-open reducer per the design's
-    // "available sub-flow is gated by `Vault::is_encrypted()`"
-    // rule); a plaintext-vault background therefore matches the
-    // `set` / `change` tests and keeps this snapshot focused on
-    // the renderer's contract.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -4128,17 +3535,6 @@ fn snapshot_passphrase_modal_confirmation_mismatch() {
     // the core `Display` impl (`invalid passphrase: confirmation_mismatch`)
     // rather than a hand-typed string so any future wording change in
     // core surfaces here as a diff.
-    //
-    // The sub-flow is `Set` so the snapshot reads as an inline-error
-    // delta from the `snapshot_passphrase_modal_set_default` baseline —
-    // the error line appears inside the spacer area between the masked
-    // `Confirm:` row and the centered footer hint, sharing the same
-    // `error` slot the `save_not_committed` /
-    // `save_durability_unconfirmed` snapshots exercise. The mismatch
-    // gate's renderer branch is identical for the `change` sub-flow
-    // (twice-confirm semantics are shared); a `Set` carrier here keeps
-    // the matrix focused on the validation slot's text. The `remove`
-    // sub-flow has no second prompt and so cannot enter this branch.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -4201,16 +3597,6 @@ fn snapshot_passphrase_modal_zero_length() {
     // the core `Display` impl (`invalid passphrase: zero_length`)
     // rather than a hand-typed string so any future wording change in
     // core surfaces here as a diff.
-    //
-    // The sub-flow is `Set` so the snapshot reads as a delta from the
-    // `snapshot_passphrase_modal_set_default` baseline — the inline
-    // error line appears inside the spacer area between the masked
-    // `Confirm:` row and the footer hint, sharing the same `error`
-    // slot the `confirmation_mismatch` snapshot above exercises. The
-    // `change` sub-flow runs the same renderer branch; a `Set`
-    // carrier here keeps the matrix focused on the validation slot's
-    // text. The `remove` sub-flow has no new-passphrase prompt and so
-    // cannot enter this branch.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -4264,13 +3650,6 @@ fn snapshot_passphrase_modal_set_save_not_committed() {
     // the rest of the TUI's error surface — the unlock screen's
     // `decrypt_failed` line and the Add / Remove / Rename / Import
     // modals' inline-error slots.
-    //
-    // Every other PassphraseModal field stays at its default (empty
-    // `new_passphrase` / `confirm_passphrase` buffers) so the
-    // snapshot reads as a delta from the
-    // `snapshot_passphrase_modal_set_default` baseline: the inline
-    // error line appears inside the spacer area between the
-    // `Confirm:` row and the footer hint.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -4542,30 +3921,6 @@ fn snapshot_settings_modal_default() {
     // `clipboard.clear_enabled`, spinners for `auto_lock.timeout_secs`
     // and `clipboard.clear_secs`. … The modal accumulates pending
     // edits in modal-local state and only commits on Confirm."*
-    //
-    // The modal's four pending-edit fields are seeded with the
-    // `paladin_core::VaultSettings::default()` values — both toggles
-    // off, `auto_lock.timeout_secs = 300`, `clipboard.clear_secs =
-    // 20` — so the snapshot mirrors what the production modal-open
-    // path produces against a freshly initialized vault rather than
-    // the doc-only `SettingsModal::default()` placeholder (which
-    // exists for reducer-test ergonomics and underflows the spinner
-    // bounds with `0`). A regression that ever drifts the toggle
-    // glyphs, the spinner formatting, or the row order from the
-    // documented "auto-lock toggle / auto-lock timeout / clipboard
-    // toggle / clipboard timeout" reading order surfaces as a diff
-    // in this snapshot rather than in a unit test against private
-    // helpers.
-    //
-    // Inline `save_not_committed` / `save_durability_unconfirmed`
-    // variants of this modal land alongside their own
-    // [`SettingsModal::error`](crate::app::state::SettingsModal::error)
-    // rendering slices per the plan's later checklist rows; the
-    // per-field focus marker fans out alongside the focus-paint
-    // slice (matching the Add modal's deferred focus-highlighting
-    // precedent), so this baseline keeps the body to the four
-    // labeled value rows plus the hint and pins only the layout
-    // contract.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -4609,13 +3964,6 @@ fn snapshot_settings_modal_save_not_committed() {
     // matches the rest of the TUI's error surface — the unlock
     // screen's `decrypt_failed` line and the Add / Remove / Rename /
     // Import / Passphrase modals' inline-error slots.
-    //
-    // Every other SettingsModal field stays at its default-snapshot
-    // baseline (toggles off, `auto_lock.timeout_secs = 300`,
-    // `clipboard.clear_secs = 20`) so the snapshot reads as a delta
-    // from the `snapshot_settings_modal_default` baseline: the inline
-    // error line appears inside the spacer area between the
-    // clipboard-spinner row and the footer hint.
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);
@@ -4713,21 +4061,6 @@ fn snapshot_help_overlay() {
     // table below; `Esc` closes the overlay and restores list
     // focus. The overlay has no inputs and never mutates vault
     // state."*
-    //
-    // The overlay's content is sourced from the workspace-wide
-    // `paladin_tui::keybindings::KEYBINDINGS` table — the same
-    // table the future `cargo xtask man` target will append into
-    // the man page after the clap-derived synopsis. Pinning the
-    // snapshot to that public table means any drift between the
-    // help-overlay wording and the man-page keybindings section
-    // surfaces as a diff here (and in the man-page golden test
-    // when that lands) rather than being silently introduced.
-    //
-    // A plaintext vault keeps the underlying list-view background
-    // deterministic and matches the modal-default snapshots above;
-    // the renderer doesn't gate on vault state (the gate is
-    // enforced upstream by the reducer's "list-focus only,
-    // no-modal" rule, per the design's "list-focus-only" line).
     let tmp = secure_test_tempdir();
     let path = tmp.path().join("vault.bin");
     create_plaintext_vault(&path);

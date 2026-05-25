@@ -74,7 +74,7 @@ fn has_icon_closure_receives_the_supplied_slug() {
 
 #[test]
 fn add_modal_icon_hint_input_uses_paladin_core_parse_icon_hint_token() {
-    // Documents the contract the v0.2 GTK add modal will follow when
+    // Documents the contract the GTK add modal will follow when
     // it lands: icon-hint text-field input routes through
     // `paladin_core::parse_icon_hint_token` so the slug /
     // default-for-empty / none-for-clear categories parse identically
