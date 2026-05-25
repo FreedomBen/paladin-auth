@@ -10,7 +10,7 @@ jobs:
     name: cargo fmt --check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain (rustup respects rust-toolchain.toml)
         run: rustup show
       - run: cargo fmt --all -- --check
@@ -36,7 +36,7 @@ jobs:
             git ca-certificates
           rustup-init -y --no-modify-path --default-toolchain none --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: rustup show
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -61,7 +61,7 @@ jobs:
             git ca-certificates
           rustup-init -y --no-modify-path --default-toolchain none --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: rustup show
       - run: cargo test --workspace --all-targets
 
@@ -69,7 +69,7 @@ jobs:
     name: cargo deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: rustup show
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny
@@ -79,7 +79,7 @@ jobs:
     name: cargo audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: rustup show
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit
@@ -89,7 +89,7 @@ jobs:
     name: cargo public-api snapshot
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install stable Rust toolchain (respects rust-toolchain.toml)
         run: rustup show
       - name: Install nightly toolchain (cargo-public-api needs rustdoc JSON)
@@ -170,7 +170,7 @@ jobs:
             curl tar git ca-certificates
           rustup-init -y --no-modify-path --default-toolchain none --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Show pinned toolchain
         run: rustup show
       - name: Install nfpm
@@ -234,7 +234,7 @@ jobs:
     # malformed `.desktop` or metainfo file fails CI before it reaches
     # a packaging build.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install desktop-file-utils + appstream
         run: |
           sudo apt-get update
