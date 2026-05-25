@@ -72,6 +72,16 @@ jobs:
           cargo build --release --locked \
             -p paladin-cli -p paladin-tui -p paladin-gtk
 
+      - name: Render + gzip man pages (CLI + TUI)
+        # `packaging/rpm/paladin.yaml` and `packaging/rpm/paladin-tui.yaml`
+        # reference `target/man/<name>.1.gz`. The xtask renders the raw
+        # `.1` files; gzip with `-n` strips the filename/timestamp from
+        # the header so the output stays deterministic (§11.6).
+        run: |
+          cargo run -p xtask --quiet -- man
+          gzip -n -9 -f target/man/paladin.1 target/man/paladin-tui.1
+          ls -l target/man/
+
       - name: Build .rpm packages via nfpm (CLI, TUI, GTK)
         run: |
           mkdir -p target/dist
