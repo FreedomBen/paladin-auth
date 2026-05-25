@@ -63,6 +63,14 @@ fn run_under_xvfb(args: &[&str]) -> std::process::Output {
         // server.
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY")
+        // xvfb has no real GPU. GTK4's default `ngl` GSK renderer
+        // pulls in `libGLESv2.so.2`, which is missing from the
+        // Fedora 42 CI container (and which would, even if present,
+        // abort during teardown because xvfb provides no DRI3
+        // device). Force the cairo software renderer so the
+        // EGL/GLES path is never touched and `--exit-after-startup`
+        // can tear down cleanly.
+        .env("GSK_RENDERER", "cairo")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
