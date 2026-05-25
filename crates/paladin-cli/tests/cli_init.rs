@@ -74,12 +74,19 @@ fn write_existing_encrypted_vault(path: &Path, passphrase: &str) {
     vault.save(&store).expect("save encrypted vault");
 }
 
-/// Make `path` unreadable to the current user so the next `inspect`
-/// call surfaces `io_error { operation: "read_vault_file" }` and
-/// classifies as `InitPrecheck::Propagate`.
-fn write_unreadable_vault(path: &Path) {
-    std::fs::write(path, b"unreadable").expect("write file before chmod");
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).expect("chmod 000");
+/// Make `path` a directory so the next `inspect` call's `File::open`
+/// succeeds but the first `read()` returns `EISDIR`, surfacing
+/// `io_error { operation: "read_vault_file" }` and classifying as
+/// `InitPrecheck::Propagate`.
+///
+/// `chmod 000` would be the more obvious injection, but CI runs the
+/// test suite as root inside `fedora:42` and root bypasses file-mode
+/// access checks — `open()` then succeeds, the 10-byte payload fails
+/// the magic check, and the classifier maps `InvalidHeader` to
+/// `Existing` instead of `Propagate`. The directory trick is
+/// UID-agnostic.
+fn make_inspect_io_error_at(path: &Path) {
+    std::fs::create_dir(path).expect("create directory at vault path");
 }
 
 // --- Existing no-prompt tests (KDF validation + vault_exists Plaintext) ----
@@ -282,21 +289,19 @@ fn json_existing_unsupported_format_version_rejects_with_vault_exists() {
 
 #[test]
 fn json_init_propagate_io_error_does_not_rewrite_as_vault_exists() {
-    // mode-000 file: `inspect` fails to read it and surfaces an
+    // Directory-at-vault-path: `inspect`'s `File::open` succeeds but
+    // the first `read()` returns `EISDIR`, so `inspect` surfaces an
     // `io_error`. `classify_init_precheck` maps that to
     // `Propagate(...)`, which the CLI must forward verbatim — never
     // rewrite as `vault_exists`. Locked by docs/IMPLEMENTATION_PLAN_02_CLI.md
     // "Vault interaction pattern".
     let (_dir, path) = fresh_vault_path();
-    write_unreadable_vault(&path);
+    make_inspect_io_error_at(&path);
     let assert = paladin()
         .args(["--json", "--vault", path.to_str().unwrap(), "init"])
         .assert()
         .failure();
     let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
-    // Restore perms so the TempDir destructor can clean up.
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .expect("restore perms for cleanup");
     let value: Value = serde_json::from_str(stderr.trim()).unwrap();
     assert_eq!(value["error_kind"], serde_json::json!("io_error"));
     assert_eq!(
