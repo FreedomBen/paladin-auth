@@ -127,7 +127,19 @@ pub fn run() -> ExitCode {
         exit_after_startup: args.exit_after_startup,
     };
 
-    RelmApp::new(APP_ID).run::<app::model::AppModel>(init);
+    // Clap owns the argument grammar for paladin-gtk; GApplication's
+    // built-in option parser doesn't know about `--vault` /
+    // `--no-color` / `--exit-after-startup` and would print
+    // "Unknown option ..." to stdout before relm4's startup signal
+    // fires (breaking `tests/gtk_smoke.rs`, which scrubs stdout for
+    // `startup_state=...` markers). Pass only argv[0] to GApplication
+    // so the secondary parse has nothing to choke on; clap has
+    // already extracted what we need into `args` above.
+    let app_argv: Vec<String> = std::env::args().take(1).collect();
+
+    RelmApp::new(APP_ID)
+        .with_args(app_argv)
+        .run::<app::model::AppModel>(init);
 
     ExitCode::SUCCESS
 }
