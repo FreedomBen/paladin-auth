@@ -88,6 +88,26 @@ overrides the default location.
 The default vault path follows XDG via `directories::ProjectDirs`
 (typically `~/.local/share/paladin/vault.bin` on Linux).
 
+## Using `paladin-core` as a library
+
+`paladin-core` holds all of the domain logic: OTP generation
+(TOTP / HOTP), vault storage in both plaintext and encrypted modes,
+Argon2id + XChaCha20-Poly1305 crypto, and the import / export
+pipelines. The three front-ends — `paladin`, `paladin-tui`, and
+`paladin-gtk` — are thin interfaces that delegate every operation to
+it; they hold no domain logic of their own, and the workspace enforces
+that they never reach into each other.
+
+This makes `paladin-core` a usable foundation for building alternative
+front-ends — a daemon, a browser-extension host, a different
+toolkit — without re-implementing OTP, vault storage, or crypto. The
+public API is snapshot-tested in
+[`crates/paladin-core/public-api.txt`](crates/paladin-core/public-api.txt)
+and CI fails the build on any unreviewed diff, so downstream consumers
+get a stable surface to build against. See
+[`docs/DESIGN.md`](docs/DESIGN.md) for the full type and module
+breakdown.
+
 ## Building
 
 ```sh
