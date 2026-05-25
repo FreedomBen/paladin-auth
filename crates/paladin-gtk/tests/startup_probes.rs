@@ -17,34 +17,89 @@
 //! smoke test in `tests/gtk_smoke.rs` greps for that line, so the
 //! string format is locked here.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::mpsc::{sync_channel, Sender};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
 
 use paladin_gtk::app::model::{run_startup_probes, startup_state_marker, StartupOutcome};
 use paladin_gtk::app::state::AppState;
 use paladin_gtk::startup_error::StartupErrorSource;
 
-/// Ensure `gtk4::init()` runs at most once for the lifetime of the
-/// test binary, regardless of how many tests need a live GTK
-/// environment.
+/// Run `f` on a single dedicated thread that owns `gtk4::init()`.
 ///
-/// `gtk4::init()` is documented as idempotent, but calling it
-/// repeatedly across multiple tests in a single thread (which is
-/// what `--test-threads=1` produces) interleaves with the
-/// just-dropped widgets from the prior test that have not yet had
-/// their pending `GLib` teardown messages flushed. The resulting
-/// memory state can SIGSEGV when the next `gtk4::Button::new()`
-/// touches the same global object pool. Caching the outcome in an
-/// [`OnceLock`] sidesteps the reentry entirely: every test reads the
-/// same `bool` and only the first call exercises the C-side init.
+/// GTK is thread-pinned: every widget construction and method
+/// invocation must happen on the thread that called `gtk_init()`.
+/// Cargo's default test runner parallelizes `#[test]` functions
+/// across multiple worker threads, so a `gtk_init()` call from the
+/// first GTK test reaches success but subsequent GTK tests panic
+/// with "GTK may only be used from the main thread" the moment
+/// they touch a widget constructor.
 ///
-/// Returns `true` when GTK is initialized on this process and tests
-/// may construct widgets, `false` when init failed (typically
-/// "no display server"; CI runs under `xvfb-run` per the Milestone
-/// 7 checklist) and callers should `return` rather than crash.
-fn ensure_gtk_initialized() -> bool {
-    static GTK_INIT: OnceLock<bool> = OnceLock::new();
-    *GTK_INIT.get_or_init(|| gtk4::init().is_ok())
+/// This helper lazily spawns one dedicated `gtk-test-thread` on
+/// first call, runs `gtk4::init()` there, and from then on every
+/// GTK test ships its body to that thread via a channel. Panics
+/// (typically `assert_eq!` / `assert!` failures) are caught and
+/// re-raised on the calling test thread so failures show up under
+/// the right test name with the right message.
+///
+/// Returns `false` when `gtk4::init()` failed — typically "no
+/// display server" on a developer workstation outside an X / Wayland
+/// session. Callers print a skip message and return; CI runs under
+/// `xvfb-run` per the Milestone 7 checklist (`tests/gtk_smoke.rs`)
+/// and `gtk_init` succeeds there.
+fn run_on_gtk_thread<F>(f: F) -> bool
+where
+    F: FnOnce() + Send + 'static,
+{
+    type GtkJob = Box<dyn FnOnce() + Send>;
+
+    static GTK_SENDER: OnceLock<Option<Mutex<Sender<GtkJob>>>> = OnceLock::new();
+    let sender = GTK_SENDER.get_or_init(|| {
+        let (job_tx, job_rx) = std::sync::mpsc::channel::<GtkJob>();
+        let (ready_tx, ready_rx) = sync_channel::<bool>(0);
+        thread::Builder::new()
+            .name("gtk-test-thread".to_string())
+            .spawn(move || {
+                let ok = gtk4::init().is_ok();
+                let _ = ready_tx.send(ok);
+                if !ok {
+                    return;
+                }
+                while let Ok(job) = job_rx.recv() {
+                    job();
+                }
+            })
+            .expect("failed to spawn dedicated GTK test thread");
+        match ready_rx.recv() {
+            Ok(true) => Some(Mutex::new(job_tx)),
+            _ => None,
+        }
+    });
+
+    let Some(sender) = sender else {
+        return false;
+    };
+
+    let (done_tx, done_rx) = sync_channel::<thread::Result<()>>(0);
+    let job: GtkJob = Box::new(move || {
+        let result = catch_unwind(AssertUnwindSafe(f));
+        let _ = done_tx.send(result);
+    });
+    sender
+        .lock()
+        .expect("dedicated GTK test thread sender mutex poisoned")
+        .send(job)
+        .expect("dedicated GTK test thread is gone");
+
+    let result = done_rx
+        .recv()
+        .expect("dedicated GTK test thread dropped the job mid-flight");
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+    true
 }
 
 /// Helper: create a plaintext vault at `<tempdir>/vault.bin` and
@@ -585,90 +640,85 @@ fn apply_app_search_button_visibility_updates_existing_button_for_a_new_state() 
     // with the new state's value without re-creating the
     // widget. Mirrors `apply_app_add_button_visibility` on
     // the `+` button side.
-    use libadwaita::prelude::*;
-    use paladin_core::ErrorKind;
-    use paladin_gtk::app::model::{
-        apply_app_search_button_visibility, format_app_search_button_visible,
-    };
-    use paladin_gtk::app::state::AppState;
-    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+    if !run_on_gtk_thread(|| {
+        use libadwaita::prelude::*;
+        use paladin_core::ErrorKind;
+        use paladin_gtk::app::model::{
+            apply_app_search_button_visibility, format_app_search_button_visible,
+        };
+        use paladin_gtk::app::state::AppState;
+        use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
 
-    // `gtk::init` must run before `gtk::ToggleButton::new`
-    // will construct successfully. On dev environments without
-    // a display server we skip rather than fail — CI runs
-    // under `xvfb-run` per the Milestone 7 checklist.
-    if !ensure_gtk_initialized() {
+        let button = gtk4::ToggleButton::new();
+        // Pre-set the button to the opposite of the starting
+        // expectation so the assertion proves the helper applies
+        // the rule rather than reading whatever the constructor
+        // happened to default to.
+        button.set_visible(false);
+
+        let unlocked = AppState::Unlocked {
+            path: std::path::PathBuf::from("/dev/null"),
+        };
+        apply_app_search_button_visibility(&button, &unlocked);
+        assert_eq!(
+            button.is_visible(),
+            format_app_search_button_visible(&unlocked),
+            "apply_app_search_button_visibility must apply format_app_search_button_visible for the Unlocked state",
+        );
+        assert!(
+            button.is_visible(),
+            "Unlocked state must show the search-toggle button per §\"Component tree\" > AccountListComponent",
+        );
+
+        let locked = AppState::Locked {
+            path: std::path::PathBuf::from("/dev/null"),
+        };
+        apply_app_search_button_visibility(&button, &locked);
+        assert_eq!(
+            button.is_visible(),
+            format_app_search_button_visible(&locked),
+            "apply_app_search_button_visibility must apply format_app_search_button_visible for the Locked state",
+        );
+        assert!(
+            !button.is_visible(),
+            "Locked state must hide the search-toggle button per §\"Component tree\" > AccountListComponent",
+        );
+
+        let busy = AppState::UnlockedBusy {
+            path: std::path::PathBuf::from("/dev/null"),
+        };
+        apply_app_search_button_visibility(&button, &busy);
+        assert_eq!(
+            button.is_visible(),
+            format_app_search_button_visible(&busy),
+            "apply_app_search_button_visibility must apply format_app_search_button_visible for the UnlockedBusy state",
+        );
+        assert!(
+            button.is_visible(),
+            "UnlockedBusy state must keep the search-toggle button visible — the SearchBar filter is non-mutating",
+        );
+
+        let errored = AppState::StartupError {
+            path: None,
+            error: StartupError {
+                source: StartupErrorSource::PathResolution,
+                kind: ErrorKind::IoError,
+                rendered: String::from("resolve_failed"),
+            },
+        };
+        apply_app_search_button_visibility(&button, &errored);
+        assert_eq!(
+            button.is_visible(),
+            format_app_search_button_visible(&errored),
+            "apply_app_search_button_visibility must apply format_app_search_button_visible for the StartupError state",
+        );
+        assert!(
+            !button.is_visible(),
+            "StartupError state must hide the search-toggle button — no vault is open to search",
+        );
+    }) {
         println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
-        return;
     }
-
-    let button = gtk4::ToggleButton::new();
-    // Pre-set the button to the opposite of the starting
-    // expectation so the assertion proves the helper applies
-    // the rule rather than reading whatever the constructor
-    // happened to default to.
-    button.set_visible(false);
-
-    let unlocked = AppState::Unlocked {
-        path: std::path::PathBuf::from("/dev/null"),
-    };
-    apply_app_search_button_visibility(&button, &unlocked);
-    assert_eq!(
-        button.is_visible(),
-        format_app_search_button_visible(&unlocked),
-        "apply_app_search_button_visibility must apply format_app_search_button_visible for the Unlocked state",
-    );
-    assert!(
-        button.is_visible(),
-        "Unlocked state must show the search-toggle button per §\"Component tree\" > AccountListComponent",
-    );
-
-    let locked = AppState::Locked {
-        path: std::path::PathBuf::from("/dev/null"),
-    };
-    apply_app_search_button_visibility(&button, &locked);
-    assert_eq!(
-        button.is_visible(),
-        format_app_search_button_visible(&locked),
-        "apply_app_search_button_visibility must apply format_app_search_button_visible for the Locked state",
-    );
-    assert!(
-        !button.is_visible(),
-        "Locked state must hide the search-toggle button per §\"Component tree\" > AccountListComponent",
-    );
-
-    let busy = AppState::UnlockedBusy {
-        path: std::path::PathBuf::from("/dev/null"),
-    };
-    apply_app_search_button_visibility(&button, &busy);
-    assert_eq!(
-        button.is_visible(),
-        format_app_search_button_visible(&busy),
-        "apply_app_search_button_visibility must apply format_app_search_button_visible for the UnlockedBusy state",
-    );
-    assert!(
-        button.is_visible(),
-        "UnlockedBusy state must keep the search-toggle button visible — the SearchBar filter is non-mutating",
-    );
-
-    let errored = AppState::StartupError {
-        path: None,
-        error: StartupError {
-            source: StartupErrorSource::PathResolution,
-            kind: ErrorKind::IoError,
-            rendered: String::from("resolve_failed"),
-        },
-    };
-    apply_app_search_button_visibility(&button, &errored);
-    assert_eq!(
-        button.is_visible(),
-        format_app_search_button_visible(&errored),
-        "apply_app_search_button_visibility must apply format_app_search_button_visible for the StartupError state",
-    );
-    assert!(
-        !button.is_visible(),
-        "StartupError state must hide the search-toggle button — no vault is open to search",
-    );
 }
 
 #[test]
@@ -2534,26 +2584,25 @@ fn format_app_window_accelerator_bindings_parse_via_gtk_accelerator_parse() {
     // assertions rather than failing (the `xvfb-run`-driven
     // `tests/gtk_smoke.rs` still covers the end-to-end
     // registration).
-    use gtk4::glib::translate::IntoGlib;
-    use paladin_gtk::app::model::format_app_window_accelerator_bindings;
+    if !run_on_gtk_thread(|| {
+        use gtk4::glib::translate::IntoGlib;
+        use paladin_gtk::app::model::format_app_window_accelerator_bindings;
 
-    if !ensure_gtk_initialized() {
+        for (accel, target) in format_app_window_accelerator_bindings() {
+            let parsed = gtk4::accelerator_parse(accel);
+            assert!(
+                parsed.is_some(),
+                "accelerator {accel:?} for target {target:?} must parse via gtk::accelerator_parse",
+            );
+            let (keyval, _mods) = parsed.unwrap();
+            assert_ne!(
+                keyval.into_glib(),
+                0,
+                "accelerator {accel:?} for target {target:?} parsed but its keyval is 0 (unknown keysym); gtk::accelerator_parse treats unknown keysyms as a silent zero",
+            );
+        }
+    }) {
         println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
-        return;
-    }
-
-    for (accel, target) in format_app_window_accelerator_bindings() {
-        let parsed = gtk4::accelerator_parse(accel);
-        assert!(
-            parsed.is_some(),
-            "accelerator {accel:?} for target {target:?} must parse via gtk::accelerator_parse",
-        );
-        let (keyval, _mods) = parsed.unwrap();
-        assert_ne!(
-            keyval.into_glib(),
-            0,
-            "accelerator {accel:?} for target {target:?} parsed but its keyval is 0 (unknown keysym); gtk::accelerator_parse treats unknown keysyms as a silent zero",
-        );
     }
 }
 
@@ -2789,159 +2838,151 @@ fn build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a
     // builder and the helpers (or between the helpers and the
     // setters' actual property names) would surface here as a
     // failing assertion.
-    use paladin_gtk::app::model::{
-        build_app_about_dialog, format_app_about_dialog_application_icon_name,
-        format_app_about_dialog_artists, format_app_about_dialog_comments,
-        format_app_about_dialog_copyright, format_app_about_dialog_debug_info,
-        format_app_about_dialog_debug_info_filename, format_app_about_dialog_designers,
-        format_app_about_dialog_developer_name, format_app_about_dialog_developers,
-        format_app_about_dialog_documenters, format_app_about_dialog_issue_url,
-        format_app_about_dialog_license_markup, format_app_about_dialog_license_type,
-        format_app_about_dialog_program_name, format_app_about_dialog_release_notes,
-        format_app_about_dialog_release_notes_version, format_app_about_dialog_support_url,
-        format_app_about_dialog_translator_credits, format_app_about_dialog_version,
-        format_app_about_dialog_website,
-    };
+    if !run_on_gtk_thread(|| {
+        use paladin_gtk::app::model::{
+            build_app_about_dialog, format_app_about_dialog_application_icon_name,
+            format_app_about_dialog_artists, format_app_about_dialog_comments,
+            format_app_about_dialog_copyright, format_app_about_dialog_debug_info,
+            format_app_about_dialog_debug_info_filename, format_app_about_dialog_designers,
+            format_app_about_dialog_developer_name, format_app_about_dialog_developers,
+            format_app_about_dialog_documenters, format_app_about_dialog_issue_url,
+            format_app_about_dialog_license_markup, format_app_about_dialog_license_type,
+            format_app_about_dialog_program_name, format_app_about_dialog_release_notes,
+            format_app_about_dialog_release_notes_version, format_app_about_dialog_support_url,
+            format_app_about_dialog_translator_credits, format_app_about_dialog_version,
+            format_app_about_dialog_website,
+        };
 
-    // `gtk::init` (and the libadwaita type registration it
-    // performs) must run before `adw::AboutDialog::new()` will
-    // construct successfully. CI installs `xvfb` (per the
-    // §"Smoke test" entry of the Milestone 7 checklist) so this
-    // init succeeds in CI; on a dev environment without a
-    // display server we skip the assertions rather than fail —
-    // the `xvfb-run`-driven `tests/gtk_smoke.rs` still covers
-    // the end-to-end dialog mount.
-    if !ensure_gtk_initialized() {
+        let dialog = build_app_about_dialog();
+        assert_eq!(
+            dialog.application_name(),
+            format_app_about_dialog_program_name(),
+            "AdwAboutDialog application_name must be sourced from format_app_about_dialog_program_name",
+        );
+        assert_eq!(
+            dialog.version(),
+            format_app_about_dialog_version(),
+            "AdwAboutDialog version must be sourced from format_app_about_dialog_version",
+        );
+        assert_eq!(
+            dialog.application_icon(),
+            format_app_about_dialog_application_icon_name(),
+            "AdwAboutDialog application_icon must be sourced from format_app_about_dialog_application_icon_name",
+        );
+        assert_eq!(
+            dialog.developer_name(),
+            format_app_about_dialog_developer_name(),
+            "AdwAboutDialog developer_name must be sourced from format_app_about_dialog_developer_name",
+        );
+        assert_eq!(
+            dialog.copyright(),
+            format_app_about_dialog_copyright(),
+            "AdwAboutDialog copyright must be sourced from format_app_about_dialog_copyright",
+        );
+        assert_eq!(
+            dialog.license_type(),
+            format_app_about_dialog_license_type(),
+            "AdwAboutDialog license_type must be sourced from format_app_about_dialog_license_type",
+        );
+        assert_eq!(
+            dialog.license(),
+            format_app_about_dialog_license_markup().as_str(),
+            "AdwAboutDialog license body must be sourced from format_app_about_dialog_license_markup (the markup-safe escape of the gresource-bundled AGPL-3.0-or-later text) so the dialog footer renders without a Pango markup parse failure",
+        );
+        assert_eq!(
+            dialog.website(),
+            format_app_about_dialog_website(),
+            "AdwAboutDialog website must be sourced from format_app_about_dialog_website",
+        );
+        assert_eq!(
+            dialog.issue_url(),
+            format_app_about_dialog_issue_url(),
+            "AdwAboutDialog issue_url must be sourced from format_app_about_dialog_issue_url",
+        );
+        assert_eq!(
+            dialog.support_url(),
+            format_app_about_dialog_support_url(),
+            "AdwAboutDialog support_url must be sourced from format_app_about_dialog_support_url",
+        );
+        assert_eq!(
+            dialog.comments(),
+            format_app_about_dialog_comments(),
+            "AdwAboutDialog comments must be sourced from format_app_about_dialog_comments",
+        );
+        let developers_actual: Vec<String> = dialog
+            .developers()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let developers_expected: Vec<String> = format_app_about_dialog_developers()
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert_eq!(
+            developers_actual, developers_expected,
+            "AdwAboutDialog developers must be sourced from format_app_about_dialog_developers",
+        );
+        let designers_actual: Vec<String> =
+            dialog.designers().iter().map(ToString::to_string).collect();
+        let designers_expected: Vec<String> = format_app_about_dialog_designers()
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert_eq!(
+            designers_actual, designers_expected,
+            "AdwAboutDialog designers must be sourced from format_app_about_dialog_designers",
+        );
+        let artists_actual: Vec<String> =
+            dialog.artists().iter().map(ToString::to_string).collect();
+        let artists_expected: Vec<String> = format_app_about_dialog_artists()
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert_eq!(
+            artists_actual, artists_expected,
+            "AdwAboutDialog artists must be sourced from format_app_about_dialog_artists",
+        );
+        let documenters_actual: Vec<String> = dialog
+            .documenters()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let documenters_expected: Vec<String> = format_app_about_dialog_documenters()
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert_eq!(
+            documenters_actual, documenters_expected,
+            "AdwAboutDialog documenters must be sourced from format_app_about_dialog_documenters",
+        );
+        assert_eq!(
+            dialog.translator_credits(),
+            format_app_about_dialog_translator_credits(),
+            "AdwAboutDialog translator_credits must be sourced from format_app_about_dialog_translator_credits",
+        );
+        assert_eq!(
+            dialog.release_notes_version(),
+            format_app_about_dialog_release_notes_version(),
+            "AdwAboutDialog release_notes_version must be sourced from format_app_about_dialog_release_notes_version",
+        );
+        assert_eq!(
+            dialog.release_notes(),
+            format_app_about_dialog_release_notes(),
+            "AdwAboutDialog release_notes must be sourced from format_app_about_dialog_release_notes",
+        );
+        assert_eq!(
+            dialog.debug_info(),
+            format_app_about_dialog_debug_info(),
+            "AdwAboutDialog debug_info must be sourced from format_app_about_dialog_debug_info",
+        );
+        assert_eq!(
+            dialog.debug_info_filename(),
+            format_app_about_dialog_debug_info_filename(),
+            "AdwAboutDialog debug_info_filename must be sourced from format_app_about_dialog_debug_info_filename",
+        );
+    }) {
         println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
-        return;
     }
-
-    let dialog = build_app_about_dialog();
-    assert_eq!(
-        dialog.application_name(),
-        format_app_about_dialog_program_name(),
-        "AdwAboutDialog application_name must be sourced from format_app_about_dialog_program_name",
-    );
-    assert_eq!(
-        dialog.version(),
-        format_app_about_dialog_version(),
-        "AdwAboutDialog version must be sourced from format_app_about_dialog_version",
-    );
-    assert_eq!(
-        dialog.application_icon(),
-        format_app_about_dialog_application_icon_name(),
-        "AdwAboutDialog application_icon must be sourced from format_app_about_dialog_application_icon_name",
-    );
-    assert_eq!(
-        dialog.developer_name(),
-        format_app_about_dialog_developer_name(),
-        "AdwAboutDialog developer_name must be sourced from format_app_about_dialog_developer_name",
-    );
-    assert_eq!(
-        dialog.copyright(),
-        format_app_about_dialog_copyright(),
-        "AdwAboutDialog copyright must be sourced from format_app_about_dialog_copyright",
-    );
-    assert_eq!(
-        dialog.license_type(),
-        format_app_about_dialog_license_type(),
-        "AdwAboutDialog license_type must be sourced from format_app_about_dialog_license_type",
-    );
-    assert_eq!(
-        dialog.license(),
-        format_app_about_dialog_license_markup().as_str(),
-        "AdwAboutDialog license body must be sourced from format_app_about_dialog_license_markup (the markup-safe escape of the gresource-bundled AGPL-3.0-or-later text) so the dialog footer renders without a Pango markup parse failure",
-    );
-    assert_eq!(
-        dialog.website(),
-        format_app_about_dialog_website(),
-        "AdwAboutDialog website must be sourced from format_app_about_dialog_website",
-    );
-    assert_eq!(
-        dialog.issue_url(),
-        format_app_about_dialog_issue_url(),
-        "AdwAboutDialog issue_url must be sourced from format_app_about_dialog_issue_url",
-    );
-    assert_eq!(
-        dialog.support_url(),
-        format_app_about_dialog_support_url(),
-        "AdwAboutDialog support_url must be sourced from format_app_about_dialog_support_url",
-    );
-    assert_eq!(
-        dialog.comments(),
-        format_app_about_dialog_comments(),
-        "AdwAboutDialog comments must be sourced from format_app_about_dialog_comments",
-    );
-    let developers_actual: Vec<String> = dialog
-        .developers()
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    let developers_expected: Vec<String> = format_app_about_dialog_developers()
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    assert_eq!(
-        developers_actual, developers_expected,
-        "AdwAboutDialog developers must be sourced from format_app_about_dialog_developers",
-    );
-    let designers_actual: Vec<String> =
-        dialog.designers().iter().map(ToString::to_string).collect();
-    let designers_expected: Vec<String> = format_app_about_dialog_designers()
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    assert_eq!(
-        designers_actual, designers_expected,
-        "AdwAboutDialog designers must be sourced from format_app_about_dialog_designers",
-    );
-    let artists_actual: Vec<String> = dialog.artists().iter().map(ToString::to_string).collect();
-    let artists_expected: Vec<String> = format_app_about_dialog_artists()
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    assert_eq!(
-        artists_actual, artists_expected,
-        "AdwAboutDialog artists must be sourced from format_app_about_dialog_artists",
-    );
-    let documenters_actual: Vec<String> = dialog
-        .documenters()
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    let documenters_expected: Vec<String> = format_app_about_dialog_documenters()
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    assert_eq!(
-        documenters_actual, documenters_expected,
-        "AdwAboutDialog documenters must be sourced from format_app_about_dialog_documenters",
-    );
-    assert_eq!(
-        dialog.translator_credits(),
-        format_app_about_dialog_translator_credits(),
-        "AdwAboutDialog translator_credits must be sourced from format_app_about_dialog_translator_credits",
-    );
-    assert_eq!(
-        dialog.release_notes_version(),
-        format_app_about_dialog_release_notes_version(),
-        "AdwAboutDialog release_notes_version must be sourced from format_app_about_dialog_release_notes_version",
-    );
-    assert_eq!(
-        dialog.release_notes(),
-        format_app_about_dialog_release_notes(),
-        "AdwAboutDialog release_notes must be sourced from format_app_about_dialog_release_notes",
-    );
-    assert_eq!(
-        dialog.debug_info(),
-        format_app_about_dialog_debug_info(),
-        "AdwAboutDialog debug_info must be sourced from format_app_about_dialog_debug_info",
-    );
-    assert_eq!(
-        dialog.debug_info_filename(),
-        format_app_about_dialog_debug_info_filename(),
-        "AdwAboutDialog debug_info_filename must be sourced from format_app_about_dialog_debug_info_filename",
-    );
 }
 
 #[test]
@@ -3567,95 +3608,94 @@ fn apply_app_add_button_sensitive_updates_existing_button_for_a_new_state() {
     // — sibling of `apply_app_add_button_visibility` on the
     // visibility side and `apply_app_add_action_sensitivity`
     // for the SimpleAction companion.
-    use libadwaita::prelude::*;
-    use paladin_core::ErrorKind;
-    use paladin_gtk::app::model::{
-        apply_app_add_button_sensitive, format_app_add_button_sensitive,
-    };
-    use paladin_gtk::app::state::AppState;
-    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+    if !run_on_gtk_thread(|| {
+        use libadwaita::prelude::*;
+        use paladin_core::ErrorKind;
+        use paladin_gtk::app::model::{
+            apply_app_add_button_sensitive, format_app_add_button_sensitive,
+        };
+        use paladin_gtk::app::state::AppState;
+        use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
 
-    if !ensure_gtk_initialized() {
-        println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
-        return;
-    }
+        let button = gtk4::Button::new();
+        // Pre-set the button to the opposite of the starting
+        // expectation so the assertion proves the helper applies
+        // the rule rather than reading whatever the constructor
+        // happened to default to.
+        button.set_sensitive(false);
 
-    let button = gtk4::Button::new();
-    // Pre-set the button to the opposite of the starting
-    // expectation so the assertion proves the helper applies
-    // the rule rather than reading whatever the constructor
-    // happened to default to.
-    button.set_sensitive(false);
-
-    let unlocked = AppState::Unlocked {
-        path: std::path::PathBuf::from("/dev/null"),
-    };
-    apply_app_add_button_sensitive(&button, &unlocked);
-    assert_eq!(
-        button.is_sensitive(),
-        format_app_add_button_sensitive(&unlocked),
-        "apply_app_add_button_sensitive must apply format_app_add_button_sensitive for the Unlocked state",
-    );
-    assert!(
-        button.is_sensitive(),
-        "Unlocked state must enable the + button per §\"libadwaita usage\"",
-    );
-
-    // Transitioning to UnlockedBusy (vault worker in flight)
-    // must disable the affordance even though the button
-    // stays visible — `format_app_add_button_visible`
-    // continues to return true for `UnlockedBusy`.
-    let busy = AppState::UnlockedBusy {
-        path: std::path::PathBuf::from("/dev/null"),
-    };
-    apply_app_add_button_sensitive(&button, &busy);
-    assert_eq!(
-        button.is_sensitive(),
-        format_app_add_button_sensitive(&busy),
-        "apply_app_add_button_sensitive must apply format_app_add_button_sensitive for the UnlockedBusy state",
-    );
-    assert!(
-        !button.is_sensitive(),
-        "UnlockedBusy state must disable the + button per §\"libadwaita usage\"",
-    );
-
-    // Locked / Missing / StartupError must also disable the
-    // affordance per the four-non-Unlocked-states rule.
-    for non_unlocked in [
-        AppState::Locked {
+        let unlocked = AppState::Unlocked {
             path: std::path::PathBuf::from("/dev/null"),
-        },
-        AppState::Missing {
-            path: std::path::PathBuf::from("/dev/null"),
-        },
-        AppState::StartupError {
-            path: None,
-            error: StartupError {
-                source: StartupErrorSource::PathResolution,
-                kind: ErrorKind::IoError,
-                rendered: String::from("resolve_failed"),
-            },
-        },
-    ] {
-        apply_app_add_button_sensitive(&button, &non_unlocked);
+        };
+        apply_app_add_button_sensitive(&button, &unlocked);
         assert_eq!(
             button.is_sensitive(),
-            format_app_add_button_sensitive(&non_unlocked),
-            "apply_app_add_button_sensitive must apply format_app_add_button_sensitive for {non_unlocked:?}",
+            format_app_add_button_sensitive(&unlocked),
+            "apply_app_add_button_sensitive must apply format_app_add_button_sensitive for the Unlocked state",
+        );
+        assert!(
+            button.is_sensitive(),
+            "Unlocked state must enable the + button per §\"libadwaita usage\"",
+        );
+
+        // Transitioning to UnlockedBusy (vault worker in flight)
+        // must disable the affordance even though the button
+        // stays visible — `format_app_add_button_visible`
+        // continues to return true for `UnlockedBusy`.
+        let busy = AppState::UnlockedBusy {
+            path: std::path::PathBuf::from("/dev/null"),
+        };
+        apply_app_add_button_sensitive(&button, &busy);
+        assert_eq!(
+            button.is_sensitive(),
+            format_app_add_button_sensitive(&busy),
+            "apply_app_add_button_sensitive must apply format_app_add_button_sensitive for the UnlockedBusy state",
         );
         assert!(
             !button.is_sensitive(),
-            "{non_unlocked:?} must disable the + button per §\"libadwaita usage\"",
+            "UnlockedBusy state must disable the + button per §\"libadwaita usage\"",
         );
-    }
 
-    // Re-applying for Unlocked must re-enable the button so
-    // the helper round-trips cleanly across state transitions.
-    apply_app_add_button_sensitive(&button, &unlocked);
-    assert!(
-        button.is_sensitive(),
-        "re-applying Unlocked state must re-enable the + button via apply_app_add_button_sensitive",
-    );
+        // Locked / Missing / StartupError must also disable the
+        // affordance per the four-non-Unlocked-states rule.
+        for non_unlocked in [
+            AppState::Locked {
+                path: std::path::PathBuf::from("/dev/null"),
+            },
+            AppState::Missing {
+                path: std::path::PathBuf::from("/dev/null"),
+            },
+            AppState::StartupError {
+                path: None,
+                error: StartupError {
+                    source: StartupErrorSource::PathResolution,
+                    kind: ErrorKind::IoError,
+                    rendered: String::from("resolve_failed"),
+                },
+            },
+        ] {
+            apply_app_add_button_sensitive(&button, &non_unlocked);
+            assert_eq!(
+                button.is_sensitive(),
+                format_app_add_button_sensitive(&non_unlocked),
+                "apply_app_add_button_sensitive must apply format_app_add_button_sensitive for {non_unlocked:?}",
+            );
+            assert!(
+                !button.is_sensitive(),
+                "{non_unlocked:?} must disable the + button per §\"libadwaita usage\"",
+            );
+        }
+
+        // Re-applying for Unlocked must re-enable the button so
+        // the helper round-trips cleanly across state transitions.
+        apply_app_add_button_sensitive(&button, &unlocked);
+        assert!(
+            button.is_sensitive(),
+            "re-applying Unlocked state must re-enable the + button via apply_app_add_button_sensitive",
+        );
+    }) {
+        println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
+    }
 }
 
 #[test]
@@ -3674,96 +3714,93 @@ fn apply_app_add_button_visibility_updates_existing_button_for_a_new_state() {
     // sensitivity-update side and
     // `apply_app_primary_menu_sensitivities` for the primary
     // menu's mutating entries.
-    use libadwaita::prelude::*;
-    use paladin_core::ErrorKind;
-    use paladin_gtk::app::model::{apply_app_add_button_visibility, format_app_add_button_visible};
-    use paladin_gtk::app::state::AppState;
-    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+    if !run_on_gtk_thread(|| {
+        use libadwaita::prelude::*;
+        use paladin_core::ErrorKind;
+        use paladin_gtk::app::model::{
+            apply_app_add_button_visibility, format_app_add_button_visible,
+        };
+        use paladin_gtk::app::state::AppState;
+        use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
 
-    // `gtk::init` must run before `gtk::Button::new` will
-    // construct successfully. On dev environments without a
-    // display server we skip rather than fail — CI runs under
-    // `xvfb-run` per the Milestone 7 checklist.
-    if !ensure_gtk_initialized() {
+        let button = gtk4::Button::new();
+        // Pre-set the button to the opposite of the starting
+        // expectation so the assertion proves the helper applies
+        // the rule rather than reading whatever the constructor
+        // happened to default to.
+        button.set_visible(false);
+
+        let unlocked = AppState::Unlocked {
+            path: std::path::PathBuf::from("/dev/null"),
+        };
+        apply_app_add_button_visibility(&button, &unlocked);
+        assert_eq!(
+            button.is_visible(),
+            format_app_add_button_visible(&unlocked),
+            "apply_app_add_button_visibility must apply format_app_add_button_visible for the Unlocked state",
+        );
+        assert!(
+            button.is_visible(),
+            "Unlocked state must show the + button per §\"libadwaita usage\"",
+        );
+
+        // Transitioning to Locked (auto-lock) must hide the
+        // affordance so users cannot trigger an OpenAddDialog race
+        // against a locked vault.
+        let locked = AppState::Locked {
+            path: std::path::PathBuf::from("/dev/null"),
+        };
+        apply_app_add_button_visibility(&button, &locked);
+        assert_eq!(
+            button.is_visible(),
+            format_app_add_button_visible(&locked),
+            "apply_app_add_button_visibility must apply format_app_add_button_visible for the Locked state",
+        );
+        assert!(
+            !button.is_visible(),
+            "Locked state must hide the + button per §\"libadwaita usage\"",
+        );
+
+        // UnlockedBusy keeps the affordance visible (but disabled
+        // — see apply_app_add_action_sensitivity) so the surface
+        // does not re-flow when a vault worker spawns.
+        let busy = AppState::UnlockedBusy {
+            path: std::path::PathBuf::from("/dev/null"),
+        };
+        apply_app_add_button_visibility(&button, &busy);
+        assert_eq!(
+            button.is_visible(),
+            format_app_add_button_visible(&busy),
+            "apply_app_add_button_visibility must apply format_app_add_button_visible for the UnlockedBusy state",
+        );
+        assert!(
+            button.is_visible(),
+            "UnlockedBusy state must keep the + button visible per §\"libadwaita usage\"",
+        );
+
+        // StartupError must hide the affordance — there is no
+        // vault path open to add an account into.
+        let errored = AppState::StartupError {
+            path: None,
+            error: StartupError {
+                source: StartupErrorSource::PathResolution,
+                kind: ErrorKind::IoError,
+                rendered: String::from("resolve_failed"),
+            },
+        };
+        apply_app_add_button_visibility(&button, &errored);
+        assert_eq!(
+            button.is_visible(),
+            format_app_add_button_visible(&errored),
+            "apply_app_add_button_visibility must apply format_app_add_button_visible for the StartupError state",
+        );
+        assert!(
+            !button.is_visible(),
+            "StartupError state must hide the + button per §\"libadwaita usage\"",
+        );
+    }) {
         println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
-        return;
     }
-
-    let button = gtk4::Button::new();
-    // Pre-set the button to the opposite of the starting
-    // expectation so the assertion proves the helper applies
-    // the rule rather than reading whatever the constructor
-    // happened to default to.
-    button.set_visible(false);
-
-    let unlocked = AppState::Unlocked {
-        path: std::path::PathBuf::from("/dev/null"),
-    };
-    apply_app_add_button_visibility(&button, &unlocked);
-    assert_eq!(
-        button.is_visible(),
-        format_app_add_button_visible(&unlocked),
-        "apply_app_add_button_visibility must apply format_app_add_button_visible for the Unlocked state",
-    );
-    assert!(
-        button.is_visible(),
-        "Unlocked state must show the + button per §\"libadwaita usage\"",
-    );
-
-    // Transitioning to Locked (auto-lock) must hide the
-    // affordance so users cannot trigger an OpenAddDialog race
-    // against a locked vault.
-    let locked = AppState::Locked {
-        path: std::path::PathBuf::from("/dev/null"),
-    };
-    apply_app_add_button_visibility(&button, &locked);
-    assert_eq!(
-        button.is_visible(),
-        format_app_add_button_visible(&locked),
-        "apply_app_add_button_visibility must apply format_app_add_button_visible for the Locked state",
-    );
-    assert!(
-        !button.is_visible(),
-        "Locked state must hide the + button per §\"libadwaita usage\"",
-    );
-
-    // UnlockedBusy keeps the affordance visible (but disabled
-    // — see apply_app_add_action_sensitivity) so the surface
-    // does not re-flow when a vault worker spawns.
-    let busy = AppState::UnlockedBusy {
-        path: std::path::PathBuf::from("/dev/null"),
-    };
-    apply_app_add_button_visibility(&button, &busy);
-    assert_eq!(
-        button.is_visible(),
-        format_app_add_button_visible(&busy),
-        "apply_app_add_button_visibility must apply format_app_add_button_visible for the UnlockedBusy state",
-    );
-    assert!(
-        button.is_visible(),
-        "UnlockedBusy state must keep the + button visible per §\"libadwaita usage\"",
-    );
-
-    // StartupError must hide the affordance — there is no
-    // vault path open to add an account into.
-    let errored = AppState::StartupError {
-        path: None,
-        error: StartupError {
-            source: StartupErrorSource::PathResolution,
-            kind: ErrorKind::IoError,
-            rendered: String::from("resolve_failed"),
-        },
-    };
-    apply_app_add_button_visibility(&button, &errored);
-    assert_eq!(
-        button.is_visible(),
-        format_app_add_button_visible(&errored),
-        "apply_app_add_button_visibility must apply format_app_add_button_visible for the StartupError state",
-    );
-    assert!(
-        !button.is_visible(),
-        "StartupError state must hide the + button per §\"libadwaita usage\"",
-    );
 }
 
 #[test]
