@@ -1,5 +1,3 @@
- Documenting paladin-core v0.0.1 (/home/ben/gitclone/paladin/crates/paladin-core)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.67s
 pub mod paladin_core
 pub mod paladin_core::export
 pub fn paladin_core::export::encrypted(vault: &paladin_core::Vault, options: paladin_core::EncryptionOptions) -> paladin_core::Result<alloc::vec::Vec<u8>>
