@@ -1477,6 +1477,21 @@ the implementer can claim by ticking it.
   produces `.deb`, `.rpm`, Flatpak, and AppImage artifacts and verifies
   `desktop-file-validate` passes on the installed `.desktop`
   entry.
+- **Release workflow.** `.github/workflows/release.yml` triggers on
+  `v*` tag pushes (and supports `workflow_dispatch` for dry-runs).
+  It builds inside the same `fedora:42` container as the CI
+  packaging-dry-run job, derives `PALADIN_VERSION` by stripping the
+  leading `v` from the tag, builds `paladin-cli`, `paladin-tui`, and
+  `paladin-gtk` with `cargo build --release --locked`, then runs
+  `nfpm` against the three `packaging/rpm/*.yaml` manifests plus
+  `packaging/deb/paladin-gtk.yaml`. The GTK `.deb` and `.rpm`
+  payloads are extracted and re-validated with
+  `desktop-file-validate` + `appstreamcli validate --no-net` before
+  publish, mirroring the CI dry-run gate. Artifacts upload to the
+  matching GitHub release via `softprops/action-gh-release@v2`;
+  tags containing `-` (e.g. `v0.2.0-rc1`) are auto-marked
+  prerelease. CLI/TUI `.deb` manifests and minisign signing per
+  §11.6 land in follow-up commits.
 
 ### libadwaita decision (2026-05-05, baseline raised 2026-05-06)
 
