@@ -16,17 +16,7 @@ source of truth for behavior and APIs.
 
 ## Status
 
-Implementation in progress. Design approved 2026-05-04.
-
-| Milestone               | Plan                                                     | State       |
-| ----------------------- | -------------------------------------------------------- | ----------- |
-| 1–3 Core OTP + storage  | [`docs/IMPLEMENTATION_PLAN_01_CORE.md`](docs/IMPLEMENTATION_PLAN_01_CORE.md) | Complete    |
-| 4 CLI (`paladin`)       | [`docs/IMPLEMENTATION_PLAN_02_CLI.md`](docs/IMPLEMENTATION_PLAN_02_CLI.md)   | Complete    |
-| 5 TUI (`paladin-tui`)   | [`docs/IMPLEMENTATION_PLAN_03_TUI.md`](docs/IMPLEMENTATION_PLAN_03_TUI.md)   | Active      |
-| 7 GUI (`paladin-gtk`)   | [`docs/IMPLEMENTATION_PLAN_04_GTK.md`](docs/IMPLEMENTATION_PLAN_04_GTK.md)   | Active (v0.2 target) |
-
-The CLI and core are usable today; the TUI and GTK GUI are
-under active development and ship pure-logic tests ahead of UI wiring.
+Paladin is currently under active development.  It's usable but may contain many bugs.  You're welcome to try it out, but always ensure you have a backup of your vault.  Once we're ready for beta testing, version number will increment to v0.1.x.
 
 ## Features
 
