@@ -1,10 +1,10 @@
 name: Release
 
 # Triggered by pushing a SemVer tag (`v0.2.0`, `v0.2.0-rc1`, ...) or manually
-# via workflow_dispatch. On a tag push, builds the .rpm set (paladin,
-# paladin-tui, paladin-gtk) + the paladin-gtk .deb and attaches them to the
-# matching GitHub release. workflow_dispatch runs the same build end-to-end
-# but skips the upload — useful for verifying packaging changes without
+# via workflow_dispatch. On a tag push, builds the .rpm and .deb sets
+# (paladin, paladin-tui, paladin-gtk) and attaches them to the matching
+# GitHub release. workflow_dispatch runs the same build end-to-end but
+# skips the upload — useful for verifying packaging changes without
 # cutting a release.
 on:
   push:
@@ -89,12 +89,12 @@ jobs:
           nfpm package -f packaging/rpm/paladin-tui.yaml  -p rpm -t target/dist/
           nfpm package -f packaging/rpm/paladin-gtk.yaml  -p rpm -t target/dist/
 
-      - name: Build .deb package via nfpm (GTK)
-        # Only the GTK deb manifest exists today — CLI/TUI deb manifests are
-        # follow-up work, so this stays asymmetric on purpose.
+      - name: Build .deb packages via nfpm (CLI, TUI, GTK)
         run: |
           mkdir -p target/dist
-          nfpm package -f packaging/deb/paladin-gtk.yaml -p deb -t target/dist/
+          nfpm package -f packaging/deb/paladin.yaml      -p deb -t target/dist/
+          nfpm package -f packaging/deb/paladin-tui.yaml  -p deb -t target/dist/
+          nfpm package -f packaging/deb/paladin-gtk.yaml  -p deb -t target/dist/
 
       - name: Extract paladin-gtk .deb payload for validation
         run: |

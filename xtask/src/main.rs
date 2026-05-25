@@ -7,13 +7,13 @@
 //! * `cargo xtask man` — render clap-derived man pages for `paladin`
 //!   and `paladin-tui` into `target/man/`. The packaging pipeline
 //!   sources the gzipped output from there.
-//! * `cargo xtask package --frontend <name> --format rpm` — build the
-//!   release binary, render + gzip the man page when applicable, and
-//!   produce a `.rpm` via `nfpm` running inside the
+//! * `cargo xtask package --frontend <name> --format rpm|deb` — build
+//!   the release binary, render + gzip the man page when applicable,
+//!   and produce a `.rpm` or `.deb` via `nfpm` running inside the
 //!   `docker.io/goreleaser/nfpm` image under rootless podman. Output
 //!   lands in `target/dist/`.
 //!
-//! `.deb`, Flatpak, and `AppImage` formats land alongside the matching
+//! Flatpak and `AppImage` formats land alongside the matching
 //! pipelines in follow-up Milestone 7 commits per
 //! `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
 

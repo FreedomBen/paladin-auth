@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `cargo xtask package --frontend <name> --format rpm` — orchestrate
-//! the release build and the `nfpm` invocation.
+//! `cargo xtask package --frontend <name> --format rpm|deb` —
+//! orchestrate the release build and the `nfpm` invocation.
 //!
 //! The actual `nfpm` run happens inside the official
 //! `docker.io/goreleaser/nfpm` container under rootless podman, so no
 //! host nfpm install is required. The container reads
-//! `packaging/rpm/<frontend>.yaml`, substitutes `${PALADIN_VERSION}`
-//! from the env this process exports, and writes the resulting
-//! `.rpm` to `target/dist/`.
+//! `packaging/<format>/<frontend>.yaml`, substitutes
+//! `${PALADIN_VERSION}` from the env this process exports, and writes
+//! the resulting `.rpm` / `.deb` to `target/dist/`.
 
 use std::env;
 use std::error::Error;
@@ -56,19 +56,21 @@ impl Frontend {
     }
 }
 
-/// Output formats xtask can produce. Only `rpm` is wired up in v0.2
-/// Milestone 7; `deb`, `flatpak`, and `appimage` join as their
-/// pipelines land per `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
+/// Output formats xtask can produce. `rpm` and `deb` are both wired
+/// up; `flatpak` and `appimage` join as their pipelines land per
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub(crate) enum Format {
     Rpm,
+    Deb,
 }
 
 impl Format {
     fn nfpm_packager(self) -> &'static str {
         match self {
             Self::Rpm => "rpm",
+            Self::Deb => "deb",
         }
     }
 }
@@ -312,5 +314,26 @@ mod tests {
             path,
             PathBuf::from("/workspace-root/packaging/rpm/paladin-gtk.yaml")
         );
+        let path = manifest_path(&workspace, Frontend::Paladin, Format::Deb);
+        assert_eq!(
+            path,
+            PathBuf::from("/workspace-root/packaging/deb/paladin.yaml")
+        );
+        let path = manifest_path(&workspace, Frontend::PaladinTui, Format::Deb);
+        assert_eq!(
+            path,
+            PathBuf::from("/workspace-root/packaging/deb/paladin-tui.yaml")
+        );
+        let path = manifest_path(&workspace, Frontend::PaladinGtk, Format::Deb);
+        assert_eq!(
+            path,
+            PathBuf::from("/workspace-root/packaging/deb/paladin-gtk.yaml")
+        );
+    }
+
+    #[test]
+    fn format_nfpm_packager_matches_directory_name() {
+        assert_eq!(Format::Rpm.nfpm_packager(), "rpm");
+        assert_eq!(Format::Deb.nfpm_packager(), "deb");
     }
 }

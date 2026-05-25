@@ -1005,16 +1005,25 @@ The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
   ~60-character synopsis display width (Debian Policy §5.6.13 caps the
   synopsis under 80); the long form is sourced from README.
 
-  *Implemented (v0.2 Milestone 7, `.rpm` only):*
+  *Implemented (v0.2 Milestone 7, `.rpm` + `.deb`):*
   `packaging/rpm/paladin.yaml` declares `name: paladin`, depends on
   `glibc` only (matching the headless-friendly footprint §11.3
   promises), installs `/usr/bin/paladin` + the gzipped
   `/usr/share/man/man1/paladin.1.gz`, and inherits `version:
-  ${PALADIN_VERSION}` from the release pipeline. The contract is
-  pinned by `crates/paladin-cli/tests/packaging_rpm_nfpm_manifest_logic.rs`
-  — `cargo test --workspace --all-targets` fails on regression even
-  when `nfpm` itself is not installed. `packaging/deb/paladin.yaml`
-  lands alongside the `.deb` pipeline in a follow-up commit.
+  ${PALADIN_VERSION}` from the release pipeline.
+  `packaging/deb/paladin.yaml` is the Debian analogue: it declares
+  `name: paladin`, `section: utils`, `priority: optional`, depends on
+  `libc6` only, installs the same `/usr/bin/paladin` +
+  `/usr/share/man/man1/paladin.1.gz` payload, and inherits the same
+  `${PALADIN_VERSION}`. Both contracts are pinned by
+  `crates/paladin-cli/tests/packaging_rpm_nfpm_manifest_logic.rs` and
+  `crates/paladin-cli/tests/packaging_deb_nfpm_manifest_logic.rs` —
+  `cargo test --workspace --all-targets` fails on regression even when
+  `nfpm` itself is not installed. `cargo xtask package --frontend
+  paladin --format deb` (or `make deb-paladin`) is the local entry
+  point; the release workflow at `.github/workflows/release.yml`
+  builds the `.deb` directly with `nfpm` and attaches it to the
+  GitHub release alongside the `.rpm`.
 - **Flatpak.** `packaging/flatpak/paladin.yml` declares
   `org.freedesktop.Platform//23.08`, no `--share=network`,
   filesystem access scoped to `xdg-data/paladin:create` plus

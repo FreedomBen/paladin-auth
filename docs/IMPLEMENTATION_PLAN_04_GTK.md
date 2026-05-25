@@ -1422,18 +1422,23 @@ the implementer can claim by ticking it.
   hicolor icon install layout; it does not add package-owned
   post-install hooks.
 
-  *Implemented (v0.2 Milestone 7, `.rpm` only):* the local entry
-  point is `cargo xtask package --frontend paladin-gtk --format
-  rpm` (or `make rpm-paladin-gtk`). The xtask runs `cargo build
-  --release --locked -p paladin-gtk`, then invokes `nfpm` inside
-  the `docker.io/goreleaser/nfpm` container under rootless podman
-  with `${PALADIN_VERSION}` exported. Output lands in
-  `target/dist/paladin-gtk-*.rpm`. The CI `packaging-dry-run` job
+  *Implemented (v0.2 Milestone 7, `.rpm` + `.deb`):* the local
+  entry points are `cargo xtask package --frontend paladin-gtk
+  --format rpm` (or `make rpm-paladin-gtk`) and `cargo xtask
+  package --frontend paladin-gtk --format deb` (or
+  `make deb-paladin-gtk`). The xtask runs `cargo build --release
+  --locked -p paladin-gtk`, then invokes `nfpm` inside the
+  `docker.io/goreleaser/nfpm` container under rootless podman with
+  `${PALADIN_VERSION}` exported. Output lands in
+  `target/dist/paladin-gtk-*.rpm` /
+  `target/dist/paladin-gtk_*.deb`. The CI `packaging-dry-run` job
   (`.github/workflows/ci.yml`) still runs the same `nfpm
-  package -f packaging/rpm/paladin-gtk.yaml` command directly so
-  the dry-run does not depend on xtask being green.
-  `packaging/deb/paladin-gtk.yaml` reuses the same xtask wiring
-  once `Format::Deb` lands.
+  package -f packaging/{rpm,deb}/paladin-gtk.yaml` commands
+  directly so the dry-run does not depend on xtask being green.
+  The CLI and TUI `.deb` manifests
+  (`packaging/deb/paladin.yaml`, `packaging/deb/paladin-tui.yaml`)
+  reuse the same `--format deb` xtask wiring and are built
+  alongside the GTK `.deb` by the tag-driven release workflow.
 - **Flatpak.** `packaging/flatpak/paladin-gtk.yml` declares
   `org.gnome.Platform//47` (and the matching SDK) — that runtime
   bundles GTK 4.16 and libadwaita 1.6, matching the
@@ -1483,15 +1488,15 @@ the implementer can claim by ticking it.
   packaging-dry-run job, derives `PALADIN_VERSION` by stripping the
   leading `v` from the tag, builds `paladin-cli`, `paladin-tui`, and
   `paladin-gtk` with `cargo build --release --locked`, then runs
-  `nfpm` against the three `packaging/rpm/*.yaml` manifests plus
-  `packaging/deb/paladin-gtk.yaml`. The GTK `.deb` and `.rpm`
+  `nfpm` against the three `packaging/rpm/*.yaml` manifests and the
+  three `packaging/deb/*.yaml` manifests. The GTK `.deb` and `.rpm`
   payloads are extracted and re-validated with
   `desktop-file-validate` + `appstreamcli validate --no-net` before
   publish, mirroring the CI dry-run gate. Artifacts upload to the
   matching GitHub release via `softprops/action-gh-release@v2`;
   tags containing `-` (e.g. `v0.2.0-rc1`) are auto-marked
-  prerelease. CLI/TUI `.deb` manifests and minisign signing per
-  §11.6 land in follow-up commits.
+  prerelease. Minisign signing per §11.6 lands in a follow-up
+  commit.
 
 ### libadwaita decision (2026-05-05, baseline raised 2026-05-06)
 

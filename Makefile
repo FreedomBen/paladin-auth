@@ -23,13 +23,18 @@ PROFILE ?= debug
 # Packaging defaults — overridable per-invocation, e.g.
 #     make PALADIN_VERSION=0.2.0-rc1 rpm
 #     make CONTAINER_RUNTIME=docker rpm-paladin
+#     make PALADIN_VERSION=0.2.0-rc1 deb
 # `PALADIN_VERSION` is interpolated into the `version:` field of the
 # nfpm manifests; defaults to a developer-build sentinel matching the
 # CI `packaging-dry-run` job in `.github/workflows/ci.yml`.
 PALADIN_VERSION   ?= 0.0.1-dev
 NFPM_IMAGE        ?= docker.io/goreleaser/nfpm:latest
 CONTAINER_RUNTIME ?= podman
+# Output directory for both .rpm and .deb artifacts. `RPM_OUTPUT_DIR`
+# stays as the canonical name for backward compatibility with existing
+# callers; both formats land under the same path.
 RPM_OUTPUT_DIR    ?= target/dist
+PKG_OUTPUT_DIR    ?= ${RPM_OUTPUT_DIR}
 
 ifeq (${PROFILE},release)
     PROFILE_FLAG := --release
@@ -59,7 +64,8 @@ GTK_BIN := paladin-gtk
         test test-all test-core test-cli test-tui test-gtk \
         fmt fmt-check clippy check \
         clean install \
-        man rpm rpm-paladin rpm-paladin-tui rpm-paladin-gtk
+        man rpm rpm-paladin rpm-paladin-tui rpm-paladin-gtk \
+        deb deb-paladin deb-paladin-tui deb-paladin-gtk
 
 help: ## Show this help
 	@awk 'BEGIN { \
@@ -79,6 +85,7 @@ help: ## Show this help
 	@printf "  NFPM_IMAGE=%s\n"                   "${NFPM_IMAGE}"
 	@printf "  CONTAINER_RUNTIME=%s\n"            "${CONTAINER_RUNTIME}"
 	@printf "  RPM_OUTPUT_DIR=%s\n"               "${RPM_OUTPUT_DIR}"
+	@printf "  PKG_OUTPUT_DIR=%s\n"               "${PKG_OUTPUT_DIR}"
 
 # --- Build -------------------------------------------------------------------
 
@@ -145,7 +152,7 @@ install: ## Install release binaries to ${DESTDIR}${BINDIR} (forces release)
 	install -m 0755 "target/release/${TUI_BIN}" "${DESTDIR}${BINDIR}/${TUI_BIN}"
 	install -m 0755 "target/release/${GTK_BIN}" "${DESTDIR}${BINDIR}/${GTK_BIN}"
 
-# --- Packaging (.rpm) --------------------------------------------------------
+# --- Packaging (.rpm / .deb) -------------------------------------------------
 #
 # All packaging targets delegate to `cargo xtask package`, which builds the
 # release binary, renders + gzips the clap-derived man page (CLI / TUI only),
@@ -153,34 +160,61 @@ install: ## Install release binaries to ${DESTDIR}${BINDIR} (forces release)
 # container under rootless podman per `docs/DESIGN.md` §11.3.
 #
 # Requirements: rootless podman (or set CONTAINER_RUNTIME=docker), network
-# access to pull NFPM_IMAGE the first time, and write access to RPM_OUTPUT_DIR.
-# The man-page-only `man` target needs neither podman nor network.
+# access to pull NFPM_IMAGE the first time, and write access to PKG_OUTPUT_DIR
+# (defaults to RPM_OUTPUT_DIR for backward compatibility). The man-page-only
+# `man` target needs neither podman nor network.
 
 man: ## Render clap-derived man pages into target/man/ (no packaging step)
 	${CARGO} run -p xtask --quiet -- man
 
 rpm: rpm-paladin rpm-paladin-tui rpm-paladin-gtk ## Build .rpm for every front-end (CLI + TUI + GTK)
 
-rpm-paladin: ## Build the paladin (CLI) .rpm into ${RPM_OUTPUT_DIR}
+rpm-paladin: ## Build the paladin (CLI) .rpm into ${PKG_OUTPUT_DIR}
 	${CARGO} run -p xtask --quiet -- package \
 		--frontend paladin --format rpm \
 		--version "${PALADIN_VERSION}" \
-		--output-dir "${RPM_OUTPUT_DIR}" \
+		--output-dir "${PKG_OUTPUT_DIR}" \
 		--nfpm-image "${NFPM_IMAGE}" \
 		--container-runtime "${CONTAINER_RUNTIME}"
 
-rpm-paladin-tui: ## Build the paladin-tui .rpm into ${RPM_OUTPUT_DIR}
+rpm-paladin-tui: ## Build the paladin-tui .rpm into ${PKG_OUTPUT_DIR}
 	${CARGO} run -p xtask --quiet -- package \
 		--frontend paladin-tui --format rpm \
 		--version "${PALADIN_VERSION}" \
-		--output-dir "${RPM_OUTPUT_DIR}" \
+		--output-dir "${PKG_OUTPUT_DIR}" \
 		--nfpm-image "${NFPM_IMAGE}" \
 		--container-runtime "${CONTAINER_RUNTIME}"
 
-rpm-paladin-gtk: ## Build the paladin-gtk .rpm into ${RPM_OUTPUT_DIR}
+rpm-paladin-gtk: ## Build the paladin-gtk .rpm into ${PKG_OUTPUT_DIR}
 	${CARGO} run -p xtask --quiet -- package \
 		--frontend paladin-gtk --format rpm \
 		--version "${PALADIN_VERSION}" \
-		--output-dir "${RPM_OUTPUT_DIR}" \
+		--output-dir "${PKG_OUTPUT_DIR}" \
+		--nfpm-image "${NFPM_IMAGE}" \
+		--container-runtime "${CONTAINER_RUNTIME}"
+
+deb: deb-paladin deb-paladin-tui deb-paladin-gtk ## Build .deb for every front-end (CLI + TUI + GTK)
+
+deb-paladin: ## Build the paladin (CLI) .deb into ${PKG_OUTPUT_DIR}
+	${CARGO} run -p xtask --quiet -- package \
+		--frontend paladin --format deb \
+		--version "${PALADIN_VERSION}" \
+		--output-dir "${PKG_OUTPUT_DIR}" \
+		--nfpm-image "${NFPM_IMAGE}" \
+		--container-runtime "${CONTAINER_RUNTIME}"
+
+deb-paladin-tui: ## Build the paladin-tui .deb into ${PKG_OUTPUT_DIR}
+	${CARGO} run -p xtask --quiet -- package \
+		--frontend paladin-tui --format deb \
+		--version "${PALADIN_VERSION}" \
+		--output-dir "${PKG_OUTPUT_DIR}" \
+		--nfpm-image "${NFPM_IMAGE}" \
+		--container-runtime "${CONTAINER_RUNTIME}"
+
+deb-paladin-gtk: ## Build the paladin-gtk .deb into ${PKG_OUTPUT_DIR}
+	${CARGO} run -p xtask --quiet -- package \
+		--frontend paladin-gtk --format deb \
+		--version "${PALADIN_VERSION}" \
+		--output-dir "${PKG_OUTPUT_DIR}" \
 		--nfpm-image "${NFPM_IMAGE}" \
 		--container-runtime "${CONTAINER_RUNTIME}"

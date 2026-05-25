@@ -3499,18 +3499,25 @@ terminal theme and survives `--no-color`.
   ~60-character synopsis display width (Debian Policy §5.6.13 caps the
   synopsis under 80); the long form is sourced from README.
 
-  *Implemented (v0.2 Milestone 7, `.rpm` only):*
+  *Implemented (v0.2 Milestone 7, `.rpm` + `.deb`):*
   `packaging/rpm/paladin-tui.yaml` declares `name: paladin-tui`,
   depends on `glibc` only (the TUI is terminal-only and never
   links GTK / libadwaita), installs `/usr/bin/paladin-tui` + the
   gzipped `/usr/share/man/man1/paladin-tui.1.gz`, and inherits
-  `version: ${PALADIN_VERSION}` from the release pipeline. The
-  contract is pinned by
+  `version: ${PALADIN_VERSION}` from the release pipeline.
+  `packaging/deb/paladin-tui.yaml` is the Debian analogue: it
+  declares `name: paladin-tui`, `section: utils`,
+  `priority: optional`, depends on `libc6` only (a guard in
+  `packaging_deb_nfpm_manifest_logic.rs` rejects any stray GTK /
+  libadwaita dep), installs the same payload, and inherits the same
+  `${PALADIN_VERSION}`. Both contracts are pinned by
   `crates/paladin-tui/tests/packaging_rpm_nfpm_manifest_logic.rs`
-  — including a `rpm_manifest_does_not_declare_gtk_or_libadwaita`
-  guard that catches a copy-paste from the `.gtk.yaml` manifest.
-  `packaging/deb/paladin-tui.yaml` lands alongside the `.deb`
-  pipeline in a follow-up commit.
+  and
+  `crates/paladin-tui/tests/packaging_deb_nfpm_manifest_logic.rs`.
+  `cargo xtask package --frontend paladin-tui --format deb` (or
+  `make deb-paladin-tui`) is the local entry point; the release
+  workflow builds the `.deb` directly with `nfpm` and attaches it
+  to the GitHub release alongside the `.rpm`.
 - **No desktop entry.** The TUI is launched from a terminal and does
   not register a `.desktop` file (§11.3 only ships one for
   `paladin-gtk`). No icon assets are required.
