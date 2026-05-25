@@ -189,9 +189,18 @@ jobs:
         # script's `cargo build --release --locked` fallback).
         run: cargo build --release --locked -p paladin-gtk
       - name: Build .deb via nfpm
-        run: nfpm package -f packaging/deb/paladin-gtk.yaml -p deb -t target/dist/
+        # `mkdir -p target/dist` must run first: nfpm v2.41.3's `-t`
+        # auto-naming only triggers when `os.Stat` finds the target as
+        # an existing directory. Without it, the bare `target/dist/`
+        # with a trailing slash fails the `os.Create` step with EISDIR
+        # on Linux.
+        run: |
+          mkdir -p target/dist
+          nfpm package -f packaging/deb/paladin-gtk.yaml -p deb -t target/dist/
       - name: Build .rpm via nfpm
-        run: nfpm package -f packaging/rpm/paladin-gtk.yaml -p rpm -t target/dist/
+        run: |
+          mkdir -p target/dist
+          nfpm package -f packaging/rpm/paladin-gtk.yaml -p rpm -t target/dist/
       - name: Extract .deb payload into target/dist/deb-extracted/
         run: |
           mkdir -p target/dist/deb-extracted
