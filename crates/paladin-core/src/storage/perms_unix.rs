@@ -266,6 +266,17 @@ mod tests {
         let grandparent = tmp.path().join("ro");
         fs::create_dir(&grandparent).unwrap();
         fs::set_permissions(&grandparent, Permissions::from_mode(0o500)).unwrap();
+
+        // Root (or CAP_DAC_OVERRIDE) bypasses DAC bits; CI containers
+        // commonly run as root. Probe by attempting a write under the
+        // 0500 parent — if it succeeds, skip the negative assertion.
+        let probe = grandparent.join(".paladin-root-probe");
+        if fs::create_dir(&probe).is_ok() {
+            let _ = fs::remove_dir(&probe);
+            fs::set_permissions(&grandparent, Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
         let target = grandparent.join("paladin");
 
         let err = ensure_vault_dir(&target).expect_err("mkdir into 0500 parent fails");

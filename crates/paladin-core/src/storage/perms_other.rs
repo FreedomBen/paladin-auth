@@ -163,7 +163,7 @@ mod tests {
         // (uid 0) bypasses these bits — skip the assertion in that
         // case rather than fail a CI runner that happens to be root.
         fs::set_permissions(&readonly_parent, fs::Permissions::from_mode(0o500)).unwrap();
-        if nix_running_as_root() {
+        if nix_can_write_into_readonly_dir(&readonly_parent) {
             // Restore so the tempdir Drop can clean up either way.
             fs::set_permissions(&readonly_parent, fs::Permissions::from_mode(0o700)).ok();
             return;
@@ -186,14 +186,18 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn nix_running_as_root() -> bool {
-        // Cheap, dependency-free uid check: re-derive via the libc
-        // syscall through `getuid`. The `libc` crate isn't a
-        // paladin-core dep, so use `std::os::unix::fs::MetadataExt`
-        // on a known-owned file to infer ownership match instead.
-        // Simpler: just consult $UID/$USER when set; fall back to
-        // assuming non-root.
-        std::env::var("USER").map(|u| u == "root").unwrap_or(false)
-            || std::env::var("UID").map(|u| u == "0").unwrap_or(false)
+    fn nix_can_write_into_readonly_dir(parent: &std::path::Path) -> bool {
+        // Probe empirically: if creating a child under a 0500 parent
+        // succeeds, the caller bypasses DAC bits (root, or has
+        // CAP_DAC_OVERRIDE). $USER/$UID aren't reliable inside CI
+        // containers, so attempt the operation and observe.
+        let probe = parent.join(".paladin-root-probe");
+        match fs::create_dir(&probe) {
+            Ok(()) => {
+                let _ = fs::remove_dir(&probe);
+                true
+            }
+            Err(_) => false,
+        }
     }
 }
