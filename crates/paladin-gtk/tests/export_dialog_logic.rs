@@ -2579,6 +2579,19 @@ mod worker_integration {
         let ro_parent = dir.path().join("readonly");
         fs::create_dir(&ro_parent).expect("create dir");
         fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o500)).expect("chmod 0500");
+
+        // Root (or CAP_DAC_OVERRIDE) bypasses DAC bits; CI containers
+        // commonly run as root. Probe by attempting a write under the
+        // 0500 parent — if it succeeds, the export worker will commit
+        // and the Inline-outcome assertion below is meaningless, so
+        // skip.
+        let probe = ro_parent.join(".paladin-root-probe");
+        if fs::write(&probe, b"").is_ok() {
+            let _ = fs::remove_file(&probe);
+            fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o700)).ok();
+            return;
+        }
+
         let dest = ro_parent.join("export.json");
 
         let input = ExportWorkerInput {

@@ -218,6 +218,16 @@ fn unreadable_file_returns_no_prompt() {
     let path = dir.path().join("unreadable.bin");
     fs::write(&path, b"PALADIN\0\x01\x01").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+
+    // Root (or CAP_DAC_READ_SEARCH) bypasses DAC bits; CI containers
+    // commonly run as root. Probe by attempting a read — if 0o000 still
+    // lets us in, the precheck will classify by content instead of
+    // returning NoPrompt, so skip the assertion.
+    if fs::read(&path).is_ok() {
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        return;
+    }
+
     let result = classify_paladin_import_precheck(&path, None);
     // Restore perms for cleanup before any assert can fail.
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();

@@ -978,6 +978,17 @@ fn write_secret_file_atomic_returns_save_not_committed_when_parent_is_read_only(
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o500)).unwrap();
 
+    // Root (or CAP_DAC_OVERRIDE) bypasses DAC bits; CI containers
+    // commonly run as root. Probe by attempting a write under the
+    // 0500 parent — if it succeeds, the atomic write will commit and
+    // the negative assertion below is meaningless, so skip.
+    let probe = dir.path().join(".paladin-root-probe");
+    if fs::write(&probe, b"").is_ok() {
+        let _ = fs::remove_file(&probe);
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
+
     let err = write_secret_file_atomic(&path, b"new-content-must-not-land").unwrap_err();
 
     // Restore perms before any further filesystem assertions so the
@@ -1104,6 +1115,18 @@ fn create_plaintext_when_mkdir_eacces_returns_create_vault_dir() {
     let grandparent = tmp.path().join("ro");
     fs::create_dir(&grandparent).unwrap();
     fs::set_permissions(&grandparent, fs::Permissions::from_mode(0o500)).unwrap();
+
+    // Root (or CAP_DAC_OVERRIDE) bypasses DAC bits; CI containers
+    // commonly run as root. Probe by attempting a mkdir under the
+    // 0500 grandparent — if it succeeds, Store::create will succeed
+    // and the negative assertion below is meaningless, so skip.
+    let probe = grandparent.join(".paladin-root-probe");
+    if fs::create_dir(&probe).is_ok() {
+        let _ = fs::remove_dir(&probe);
+        fs::set_permissions(&grandparent, fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
+
     let path = grandparent.join("paladin").join("vault.bin");
 
     let result = Store::create(&path, VaultInit::Plaintext);
