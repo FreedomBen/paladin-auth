@@ -508,16 +508,23 @@ dismiss deliberately.
        post-edit issuer via the §4.1 derivation rules);
     3. *No icon* →
        `Some(IconHintInput::Clear)`;
-    4. *Slug: <text>* — enables a sibling `tui-input` row pre-populated
-       with the prior `icon_hint` slug (or the empty string when the
-       prior value was `None`); submit routes
-       through `paladin_core::parse_icon_hint_token(slug)` so any
-       invalid slug surfaces inline as
-       `validation_error` (`field: "icon_hint"`, `reason: "invalid_slug"`)
-       and a successfully saved slug round-trips losslessly into the
-       buffer the next time the user opens the modal (invalid input
-       that never reached core is discarded on modal close along with
-       the other row buffers).
+    4. *Slug: <text>* — a sibling `tui-input` row, pre-populated at
+       modal open with the prior `icon_hint` slug (or the empty
+       string when the prior value was `None`) and kept disabled
+       until *Slug:* becomes the active selector option. Submit
+       routes through `paladin_core::validate_icon_hint_slug(slug)`
+       — a slug-only validator that runs the §4.1 `[a-z0-9_-]+`
+       check without the `parse_icon_hint_token` reserved-token
+       collapse, so a user who picks *Slug:* and types literal
+       `default` or `none` gets a real slug stored rather than
+       being silently rerouted to `IconHintInput::Default` /
+       `Clear` (those tri-state outcomes are reachable only via
+       the dedicated selector options above). Invalid slugs
+       surface inline as `validation_error` (`field: "icon_hint"`,
+       `reason: "invalid_slug"`); a successfully saved slug round-
+       trips losslessly into the buffer the next time the user
+       opens the modal (invalid input that never reached core is
+       discarded on modal close along with the other row buffers).
     The selector always defaults to *Leave unchanged* on open so the
     user must affirmatively pick a different mode to mutate
     `icon_hint`; this prevents the pre-fill from silently re-deriving
@@ -536,7 +543,13 @@ dismiss deliberately.
   `validate_account_edit` and surfacing the first failing field's
   typed `validation_error` inline beside its row without closing.
   Before emitting `Effect::EditAccountMetadata`, the reducer calls
-  `Vault::find_duplicate_after_edit(id, &edit)`; a hit rejects with
+  `Vault::find_duplicate_after_edit(id, &edit)` against the live
+  `Vault` carried in `AppState::Unlocked` (the same in-memory
+  source used for the preceding `validate_account_edit` pre-flight,
+  since neither call mutates state — the Add modal puts its
+  `Vault::find_duplicate` in the executor because `validate_manual`
+  needs to consume the `SecretString` atomically there, a constraint
+  the secret-free Edit modal does not share); a hit rejects with
   the inline `duplicate_account` message rendered via
   `format_duplicate_account_message(&existing_summary)` (parity
   with the Add modal's duplicate channel) and the modal stays open
@@ -2082,13 +2095,20 @@ ships in `paladin-core` and the TUI Edit modal lands.
   *Leave unchanged* → `AccountEdit.icon_hint = None`;
   *Default from issuer* → `Some(IconHintInput::Default)`;
   *No icon* → `Some(IconHintInput::Clear)`;
-  *Slug: <text>* with a valid slug → `Some(IconHintInput::Slug(...))`.
-  A fifth test asserts an invalid slug under *Slug:* surfaces the
-  inline `validation_error` (`field: "icon_hint"`,
-  `reason: "invalid_slug"`) and emits no effect. A sixth test
-  asserts that switching the selector away from *Slug:* and back
-  preserves the slug buffer's text (so the user does not lose
-  typed input by toggling modes).
+  *Slug: <text>* with a valid slug → `Some(IconHintInput::Slug(...))`
+  (routed through `paladin_core::validate_icon_hint_slug`, not
+  `parse_icon_hint_token`). A fifth test asserts an invalid slug
+  under *Slug:* surfaces the inline `validation_error`
+  (`field: "icon_hint"`, `reason: "invalid_slug"`) and emits no
+  effect. A sixth test asserts that switching the selector away
+  from *Slug:* and back preserves the slug buffer's text (so the
+  user does not lose typed input by toggling modes). A seventh
+  test pins the slug-only semantics: with the selector on *Slug:*
+  and the buffer containing literal `default` or `none`, submit
+  emits `Some(IconHintInput::Slug("default"))` /
+  `Some(IconHintInput::Slug("none"))` rather than collapsing to
+  `Default` / `Clear` — proving the reserved-token grammar of
+  `parse_icon_hint_token` does not leak into this row.
 - [ ] Opening Edit on an account whose prior `icon_hint` is `None`
   with a non-empty issuer, then pressing `Enter` without touching
   the selector, emits an effect whose `AccountEdit.icon_hint`
@@ -2100,6 +2120,17 @@ ships in `paladin-core` and the TUI Edit modal lands.
   contract); covered by an executor-side test that asserts the
   post-edit `Account::updated_at` strictly exceeds the pre-edit
   value.
+- [ ] Icon-hint same-as-prior edge case: opening Edit on an
+  account whose prior `icon_hint` is a slug already derived from
+  the current issuer (e.g. prior `Some("acme")` with issuer
+  `Some("Acme")`), then picking *Default from issuer* without
+  touching any other control, emits an effect carrying
+  `AccountEdit.icon_hint = Some(IconHintInput::Default)` and the
+  executor-side companion asserts the post-edit
+  `Account.icon_hint` remains `Some("acme")` while `updated_at`
+  still bumps. Proves the *Some-projection but identical
+  post-edit state* boundary holds for `icon_hint` specifically,
+  parallel to the label / issuer same-as-prior cases above.
 - [ ] Pre-commit `save_not_committed` restores the pre-edit
   account byte-for-byte and keeps the modal open with the inline
   error; the draft is preserved for retry. (Mirrors the existing
@@ -2120,7 +2151,10 @@ ships in `paladin-core` and the TUI Edit modal lands.
 - [ ] `?` from the list focus opens the help overlay including
   the new `Shift+E` row; the `keybindings::KEYBINDINGS` table is
   the single source so the overlay cannot drift from the
-  bindings.
+  bindings. Covered by re-locking the existing
+  `snapshot_help_overlay` insta fixture (with the `TestBackend`
+  height bumped one row if needed, the same way the QR Export
+  `Q` row was added).
 - [ ] Snapshot test for the Edit modal default layout
   (`tests/view_snapshots.rs::snapshot_edit_modal_default`),
   matching the Rename snapshot conventions (centered region,
@@ -2226,6 +2260,17 @@ ships in `paladin-core` and the TUI Edit modal lands.
   rollback on `save_not_committed` and the commit-then-warn on
   `save_durability_unconfirmed` per DESIGN §4.5). End-to-end mode/key
   transition rollback lives in the `paladin-core` plan.)*
+- [ ] Edit modal *(v0.2)*: `save_not_committed` restores the
+  pre-edit `Account` byte-for-byte (asserted via
+  `Vault::get(id)` against the pre-attempt snapshot) and keeps
+  the modal open with the inline `save_not_committed` wording;
+  `save_durability_unconfirmed` leaves the post-edit state in
+  memory while surfacing the `durability` warning. Bullets live
+  under the Edit modal reducer-tests section above
+  (`effect_result_edit_save_not_committed_*` /
+  `effect_result_edit_save_durability_unconfirmed_*`) — this
+  entry is the rollup parity bullet so the dedicated rollback
+  rollup matches the per-modal sections of Add / Remove / Rename.
 
 ### HOTP reveal window (`tests/hotp_reveal_tests.rs`)
 
@@ -4430,6 +4475,54 @@ terminal theme and survives `--no-color`.
     inline `save_not_committed` / `save_durability_unconfirmed`
     wording so any future change in `render_error_message`
     surfaces here as a diff.)*
+- [ ] **v0.2 — Edit modal** per the §"Modals (per §6)" `Edit`
+  entry and DESIGN §4.7 / §6 / §10 Milestone 9. Lands the
+  `Shift+E` keybinding, the `EditModal` state variant
+  (label / issuer / icon-hint controls with the four-option
+  segmented icon-hint selector and its sibling slug row),
+  `Effect::EditAccountMetadata` + executor wiring through
+  `Vault::mutate_and_save` → `Vault::edit_account_metadata`,
+  the reducer-side `Vault::find_duplicate_after_edit` pre-flight
+  with inline `duplicate_account` rendering (no edit-anyway
+  override), the slug-only `validate_icon_hint_slug` path for the
+  *Slug:* row, and the `EffectResult::EditAccountMetadata`
+  Ok-arm status-line confirmation
+  (`format!("Edited {}.", summary_display_label(&summary))`).
+  - [ ] Add an `EditModal` variant to the modal enum holding the
+    label buffer (`tui-input`), issuer buffer (`tui-input`),
+    icon-hint selector (four-option segmented), sibling slug
+    buffer (`tui-input`; pre-populated at open, enabled only
+    when the selector is on *Slug:*), per-row inline-error
+    slots, and the focus-cycle cursor; depends on the
+    `crates/paladin-tui/src/view/edit.rs` view module landing
+    in parallel.
+  - [ ] Wire `Shift+E` from list focus to the reducer arm that
+    opens `EditModal` against the focused `AccountSummary`;
+    silently reject `Shift+E` while any other modal is open
+    (mirrors the QR Export `Shift+Q` gate). Update
+    `crates/paladin-tui/src/keybindings.rs::KEYBINDINGS` and
+    re-lock the `snapshot_help_overlay` insta fixture so the
+    overlay picks up the new row.
+  - [ ] Wire `Effect::EditAccountMetadata { path, account_id,
+    edit }` and its executor through
+    `Vault::mutate_and_save` → `Vault::edit_account_metadata`,
+    routing `Ok` / `save_not_committed` /
+    `save_durability_unconfirmed` / `account_not_found` arms
+    into `EffectResult::EditAccountMetadata` with the post-edit
+    `AccountSummary` carried on the Ok-arm (built by the
+    executor via `Vault::get(id).map(Account::summary)` since
+    `edit_account_metadata` returns `Result<()>`).
+  - [ ] All `tests/reducer_tests.rs::edit_modal_*` bullets
+    ticked, the executor-side bullets in
+    `tests/effect_tests.rs::execute_edit_*` ticked, and the
+    Edit-modal insta snapshots
+    (`snapshot_edit_modal_default`,
+    `snapshot_edit_modal_validation_error`,
+    `snapshot_edit_modal_durability_warning`,
+    `snapshot_edit_modal_icon_hint_slug_mode`,
+    `snapshot_edit_modal_duplicate_account`,
+    `snapshot_edit_modal_status_line_confirmation`) locked in
+    `crates/paladin-tui/tests/view_snapshots.rs`.
 
 ## Definition of done
 
@@ -4437,9 +4530,9 @@ terminal theme and survives `--no-color`.
 - **Every Tests checklist item above is ticked** — including the
   reducer, vim-style navigation, search, auto-lock, clipboard
   auto-clear, terminal lifecycle, global args, every modal (Add,
-  Import, Export, **QR Export** (v0.2), Settings, Rename),
-  pre-commit save rollback, HOTP reveal window, sensitive UI
-  buffers, vault modes / startup, and every insta snapshot. The
+  Import, Export, **QR Export** (v0.2), **Edit** (v0.2), Settings,
+  Rename), pre-commit save rollback, HOTP reveal window, sensitive
+  UI buffers, vault modes / startup, and every insta snapshot. The
   "Add reducer, search, auto-lock, clipboard, HOTP reveal,
   terminal lifecycle, sensitive-buffer, and snapshot coverage"
   implementation-checklist item ticks only when this gate is met.
@@ -4450,6 +4543,21 @@ terminal theme and survives `--no-color`.
   overwrite gate, HOTP counters and `updated_at` are unchanged
   across modal open / close / save, and auto-lock drops the
   rendered buffers alongside the in-memory vault.
+- **v0.2 — Edit modal:** `Shift+E` from list focus opens the modal
+  with Label / Issuer / Icon-hint controls pre-populated from the
+  selected `AccountSummary`; submit routes the assembled
+  `AccountEdit` through `validate_account_edit` and (on a clean
+  pre-flight) the reducer's `Vault::find_duplicate_after_edit`
+  gate, then dispatches `Effect::EditAccountMetadata` which wraps
+  `Vault::edit_account_metadata` inside `Vault::mutate_and_save`.
+  Empty edits and duplicate collisions reject inline without
+  mutating the vault; successful saves close the modal and post
+  `StatusLine::Confirmation(format!("Edited {}.",
+  summary_display_label(&summary)))`. HOTP counters and the
+  account's secret bytes are unchanged across modal open / close
+  / save (the modal exposes no OTP-affecting fields), and
+  auto-lock drops the modal and its row buffers alongside the
+  in-memory vault.
 - Auto-lock + clipboard-clear are off by default and behave per §6 when
   enabled, including the plaintext-vault no-op.
 - HOTP reveal rows show the counter used for the visible code, then return

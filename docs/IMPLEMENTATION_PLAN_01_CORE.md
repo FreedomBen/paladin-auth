@@ -100,7 +100,7 @@ crates/paladin-core/
     ├── encrypted_tamper.rs              # encrypted header / ciphertext / tag tamper matrix (per-field named cases)
     ├── encryption_options.rs            # EncryptionOptions::new validation (empty passphrase rejection, Argon2 bounds)
     ├── aead_key_cache.rs                # cached AEAD key invalidation on passphrase transitions
-    ├── icon_hint_input.rs               # parse_icon_hint_token: empty → Default, case-insensitive `none` (Unicode-whitespace trim) → Clear, slug → Slug, invalid token → validation_error
+    ├── icon_hint_input.rs               # parse_icon_hint_token: empty → Default, case-insensitive `none` (Unicode-whitespace trim) → Clear, slug → Slug, invalid token → validation_error; validate_icon_hint_slug (Phase M): slug-only public wrapper for UI surfaces that have committed to the IconHintInput::Slug arm (TUI Edit *Slug:* row, GTK EditDialog slug input) — literal `default` / `none` round-trip as slugs rather than collapsing to the tri-state reserved tokens
     ├── match_key.rs                     # account_match_key + account_matches_search behavior (empty issuer keeps colon; case preserved)
     ├── query.rs                         # parse_account_query, matching_accounts, shortest_unique_id_prefix, select_after_filter
     ├── settings_grammar.rs              # parse_setting_key / parse_setting_patch + apply_setting_patch dotted key/value grammar
@@ -1810,6 +1810,30 @@ matching the existing `add` / `remove` / `rename` pattern.
   `"invalid_chars"`, etc., per `validate_slug` for the icon-hint
   case).
 
+- [ ] **`validate_icon_hint_slug(slug: &str) -> Result<IconHintInput>` free function.**
+  Slug-only public wrapper around `domain::slug::validate_slug`
+  for UI surfaces that have already committed to the
+  `IconHintInput::Slug` arm (the TUI Edit modal's *Slug:* row per
+  §6 / IMPLEMENTATION_PLAN_03_TUI.md, and the v0.2 GTK
+  EditDialog's slug input per IMPLEMENTATION_PLAN_04_GTK.md).
+  Runs the §4.1 `[a-z0-9_-]+` check and returns
+  `IconHintInput::Slug(slug.to_string())` on success; returns
+  `validation_error` (`field: "icon_hint"`,
+  `reason: "invalid_slug"`) on failure — same error site
+  `parse_icon_hint_token` uses for slug-shape failures. The
+  point of the separate entry is that `parse_icon_hint_token`
+  reserves the empty / `default` / `none` tokens for the
+  `IconHintInput::Default` / `Clear` tri-state outcomes;
+  surfaces that expose dedicated UI affordances for those
+  outcomes need a slug-only path so literal `default` / `none`
+  round-trip as slugs instead of being silently rerouted. The
+  free-form CLI `--icon-hint <token>` flag and the CLI / GTK Add
+  prompts continue to route through `parse_icon_hint_token`
+  unchanged. Internally `validate_icon_hint_slug` is a one-line
+  wrapper over the existing private slug helper that
+  `parse_icon_hint_token` and `validate_account_edit` already
+  reach for, so there is exactly one slug grammar in the crate.
+
 - [ ] **`Vault::edit_account_metadata(id, edit, now)` mutator.**
   Single public mutator. Routes through a private inner helper
   `fn edit_metadata_with_operation(&mut self, id: AccountId,
@@ -1953,7 +1977,8 @@ matching the existing `add` / `remove` / `rename` pattern.
   `cargo public-api --diff` against the prior snapshot and commit
   the regenerated `crates/paladin-core/public-api.txt`. The new
   surface entries (`AccountEdit`, `validate_account_edit`,
-  `Vault::edit_account_metadata`) and the new `invalid_state`
+  `validate_icon_hint_slug`, `Vault::edit_account_metadata`,
+  `Vault::find_duplicate_after_edit`) and the new `invalid_state`
   operation/state pair must appear; no unrelated public API may
   drift.
 

@@ -838,6 +838,20 @@ pub fn parse_setting_patch(key: &str, value: &str) -> Result<SettingPatch>;
 /// return `validation_error` with `field: "icon_hint"`.
 pub fn parse_icon_hint_token(token: &str) -> Result<IconHintInput>;
 
+/// Slug-only validator for callers that have already committed to
+/// the `IconHintInput::Slug` arm at the UI layer — used by the TUI
+/// Edit modal's *Slug:* row (§6) and the v0.2 GTK EditDialog's
+/// equivalent slug input. Runs the §4.1 `[a-z0-9_-]+` check
+/// without the `parse_icon_hint_token` reserved-token grammar, so
+/// literal `default` / `none` return `IconHintInput::Slug` rather
+/// than collapsing to `Default` / `Clear` (those tri-state
+/// outcomes are reachable only via the dedicated selector
+/// affordances those UIs provide). Invalid slugs return
+/// `validation_error` with `field: "icon_hint"`,
+/// `reason: "invalid_slug"`, matching the error site
+/// `parse_icon_hint_token` emits for slug-shape failures.
+pub fn validate_icon_hint_slug(slug: &str) -> Result<IconHintInput>;
+
 /// Classify the result of `inspect(path)` for the §5 init flow shared by
 /// CLI `init` and GUI `InitDialog`. `VaultStatus::Missing`
 /// → `InitPrecheck::Clear`; an existing primary file in any decodable shape
