@@ -1,0 +1,2039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paladin — Ironclad Rust OTP Authenticator</title>
+    <meta name="description" content="A local-first, zero-telemetry, and memory-safe Rust OTP authenticator with stateless CLI, keyboard-driven TUI, and modern GTK4 interfaces sharing a single robust core.">
+    
+    <!-- Open Graph / Meta -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Paladin — Ironclad Rust OTP Authenticator">
+    <meta property="og:description" content="Local-first, memory-safe Rust OTP authenticator with CLI, TUI, and GTK4 interfaces sharing a single robust core. Zero telemetry, zero network.">
+    <meta property="og:image" content="assets/paladin_hero_graphic.png">
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            /* Harmonious Dark Palette */
+            --bg-base: #07080e;
+            --bg-surface: #0e111a;
+            --bg-surface-elevated: #151926;
+            --border-color: rgba(255, 255, 255, 0.07);
+            --border-hover: rgba(255, 255, 255, 0.15);
+            
+            /* Neon Cyber Accent Colors */
+            --accent-primary: #3b82f6; /* Electric Blue */
+            --accent-primary-glow: rgba(59, 130, 246, 0.15);
+            --accent-secondary: #a855f7; /* Cyber Violet */
+            --accent-secondary-glow: rgba(168, 85, 247, 0.15);
+            --accent-success: #10b981; /* Neon Emerald */
+            --accent-success-glow: rgba(16, 185, 129, 0.2);
+            --accent-warning: #f59e0b; /* Amber */
+            
+            /* Text Levels */
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --text-muted: #6b7280;
+            
+            /* Typography */
+            --font-display: 'Space Grotesk', -apple-system, sans-serif;
+            --font-sans: 'Inter', -apple-system, sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+            
+            --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            --glow-shadow: 0 0 30px var(--accent-primary-glow);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255,255,255,0.1) transparent;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            line-height: 1.6;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Particle Background Canvas */
+        #bg-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            pointer-events: none;
+            opacity: 0.6;
+        }
+
+        /* Radiant glowing orbs behind content */
+        .glow-orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(140px);
+            z-index: -1;
+            opacity: 0.3;
+            pointer-events: none;
+            mix-blend-mode: screen;
+        }
+        .orb-1 {
+            top: -10%;
+            right: 10%;
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, var(--accent-primary) 0%, transparent 80%);
+            animation: floatOrb 25s infinite alternate;
+        }
+        .orb-2 {
+            top: 40%;
+            left: -5%;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--accent-secondary) 0%, transparent 80%);
+            animation: floatOrb 30s infinite alternate-reverse;
+        }
+        .orb-3 {
+            bottom: -5%;
+            right: 15%;
+            width: 450px;
+            height: 450px;
+            background: radial-gradient(circle, var(--accent-success) 0%, transparent 80%);
+        }
+
+        @keyframes floatOrb {
+            0% { transform: translate(0, 0) scale(1); }
+            100% { transform: translate(50px, 40px) scale(1.1); }
+        }
+
+        /* Grid Layout */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Header Navigation */
+        header {
+            position: sticky;
+            top: 0;
+            background: rgba(7, 8, 14, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-color);
+            z-index: 100;
+            transition: var(--transition-smooth);
+        }
+        header.scrolled {
+            background: rgba(14, 17, 26, 0.9);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 4px 30px rgba(0,0,0,0.4);
+        }
+        .nav-wrapper {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 72px;
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+            color: var(--text-primary);
+            font-family: var(--font-display);
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+        }
+        .logo-icon {
+            width: 36px;
+            height: 36px;
+            fill: none;
+            stroke: url(#logo-grad);
+            stroke-width: 2.5;
+            filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.5));
+        }
+        .nav-links {
+            display: flex;
+            gap: 32px;
+            list-style: none;
+        }
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: var(--transition-smooth);
+            position: relative;
+            padding: 8px 0;
+        }
+        .nav-links a:hover {
+            color: var(--text-primary);
+        }
+        .nav-links a::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+            transition: var(--transition-smooth);
+        }
+        .nav-links a:hover::after {
+            width: 100%;
+        }
+        .nav-btn {
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+            transition: var(--transition-smooth);
+        }
+        .nav-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(168, 85, 247, 0.4);
+        }
+
+        /* Hero Section */
+        .hero {
+            padding: 120px 0 80px 0;
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 64px;
+            align-items: center;
+        }
+        .hero-content {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+        .badge {
+            align-self: flex-start;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border-color);
+            padding: 6px 14px;
+            border-radius: 50px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            color: var(--accent-primary);
+            text-transform: uppercase;
+            box-shadow: inset 0 1px 1px rgba(255,255,255,0.05);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .badge-dot {
+            width: 6px;
+            height: 6px;
+            background-color: var(--accent-success);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--accent-success);
+            animation: pulse 2s infinite;
+        }
+        h1 {
+            font-family: var(--font-display);
+            font-size: 56px;
+            line-height: 1.15;
+            font-weight: 700;
+            letter-spacing: -1px;
+            color: #ffffff;
+            background: linear-gradient(135deg, #ffffff 30%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .hero-desc {
+            font-size: 18px;
+            color: var(--text-secondary);
+            max-width: 540px;
+        }
+        .hero-ctas {
+            display: flex;
+            gap: 16px;
+            margin-top: 12px;
+        }
+        .btn-outline {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            padding: 12px 24px;
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 15px;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-outline:hover {
+            border-color: var(--border-hover);
+            background: rgba(255,255,255,0.06);
+            transform: translateY(-2px);
+        }
+        
+        /* Hero Interactive Shield Mockup */
+        .hero-graphic {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .hero-graphic-card {
+            background: rgba(14, 17, 26, 0.6);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 16px;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.6);
+            position: relative;
+            width: 100%;
+            max-width: 440px;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            transition: border-color 0.5s ease, transform 0.1s ease;
+            transform-style: preserve-3d;
+            perspective: 1000px;
+        }
+        .hero-graphic-card:hover {
+            border-color: rgba(59, 130, 246, 0.4);
+        }
+        .hero-img-wrap {
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #08090d;
+        }
+        .hero-img {
+            width: 100%;
+            height: auto;
+            display: block;
+            object-fit: cover;
+            transition: transform 0.5s ease;
+        }
+        .hero-graphic-card:hover .hero-img {
+            transform: scale(1.03);
+        }
+        .glass-highlight {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        /* Sections common styling */
+        section {
+            padding: 100px 0;
+            border-top: 1px solid var(--border-color);
+            position: relative;
+        }
+        .section-header {
+            text-align: center;
+            max-width: 650px;
+            margin: 0 auto 64px auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            align-items: center;
+        }
+        .section-title {
+            font-family: var(--font-display);
+            font-size: 38px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            color: white;
+        }
+        .section-subtitle {
+            color: var(--text-secondary);
+            font-size: 16px;
+        }
+
+        /* Core Ecosystem Section (Shield + Orbits) */
+        .ecosystem-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 80px;
+            align-items: center;
+        }
+        .architecture-diagram {
+            position: relative;
+            height: 400px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .arch-core {
+            width: 140px;
+            height: 140px;
+            background: linear-gradient(135deg, #1e293b, #0f172a);
+            border: 2px solid var(--accent-primary);
+            border-radius: 50%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            box-shadow: 0 0 40px rgba(59, 130, 246, 0.4);
+            color: white;
+            text-align: center;
+            font-family: var(--font-display);
+            font-weight: 700;
+            transition: var(--transition-smooth);
+        }
+        .arch-core span {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-weight: normal;
+            margin-top: 4px;
+        }
+        .arch-core:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 50px rgba(59, 130, 246, 0.6);
+            border-color: var(--accent-secondary);
+        }
+        .arch-orbit {
+            position: absolute;
+            border: 1px dashed rgba(255, 255, 255, 0.15);
+            border-radius: 50%;
+            animation: spin 30s linear infinite;
+        }
+        .orbit-1 {
+            width: 290px;
+            height: 290px;
+        }
+        .orbit-node {
+            position: absolute;
+            width: 100px;
+            height: 48px;
+            background: var(--bg-surface-elevated);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 13px;
+            font-family: var(--font-mono);
+            font-weight: 500;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            cursor: pointer;
+            transition: var(--transition-smooth);
+        }
+        .orbit-node:hover {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 20px var(--accent-primary-glow);
+            transform: scale(1.08);
+        }
+        /* Positions on orbit */
+        .node-cli {
+            top: -24px;
+            left: calc(50% - 50px);
+            animation: spinCounter 30s linear infinite;
+        }
+        .node-tui {
+            bottom: 25px;
+            left: -15px;
+            animation: spinCounter 30s linear infinite;
+        }
+        .node-gtk {
+            bottom: 25px;
+            right: -15px;
+            animation: spinCounter 30s linear infinite;
+        }
+
+        .ecosystem-desc {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+        .ecosystem-item {
+            display: flex;
+            gap: 16px;
+        }
+        .ecosystem-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            color: var(--accent-primary);
+        }
+        .ecosystem-item-content h3 {
+            font-family: var(--font-display);
+            font-size: 18px;
+            color: white;
+            margin-bottom: 6px;
+        }
+        .ecosystem-item-content p {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        @keyframes spin {
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes spinCounter {
+            100% { transform: rotate(-360deg); }
+        }
+
+        /* Interactive TOTP Authenticator Demo */
+        .demo-layout {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 64px;
+            align-items: flex-start;
+        }
+        .authenticator-container {
+            background: #0c0d15;
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 24px;
+            padding: 30px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 30px 60px rgba(0,0,0,0.5);
+            max-width: 480px;
+            margin: 0 auto;
+            position: relative;
+            overflow: hidden;
+            width: 100%;
+        }
+        .authenticator-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            padding-bottom: 16px;
+        }
+        .authenticator-title {
+            font-family: var(--font-display);
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        /* Radial Countdown Timer */
+        .timer-circle {
+            position: relative;
+            width: 32px;
+            height: 32px;
+        }
+        .timer-circle svg {
+            transform: rotate(-90deg);
+            width: 32px;
+            height: 32px;
+        }
+        .timer-bg {
+            fill: none;
+            stroke: rgba(255,255,255,0.06);
+            stroke-width: 3;
+        }
+        .timer-progress {
+            fill: none;
+            stroke: var(--accent-primary);
+            stroke-width: 3;
+            stroke-dasharray: 88;
+            stroke-dashoffset: 0;
+            transition: stroke-dashoffset 1s linear, stroke 0.3s ease;
+            stroke-linecap: round;
+        }
+        .timer-number {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 11px;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            color: var(--text-secondary);
+        }
+
+        /* Account Entry */
+        .account-list {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .account-entry {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255,255,255,0.04);
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: var(--transition-smooth);
+            cursor: pointer;
+        }
+        .account-entry:hover {
+            background: rgba(255,255,255,0.04);
+            border-color: rgba(255,255,255,0.1);
+            transform: translateX(4px);
+        }
+        .account-info {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+        .account-icon-box {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            color: var(--accent-primary);
+        }
+        .account-details {
+            display: flex;
+            flex-direction: column;
+        }
+        .account-issuer {
+            font-size: 14px;
+            font-weight: 600;
+            color: white;
+        }
+        .account-label {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .otp-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .otp-code {
+            font-family: var(--font-mono);
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            color: var(--accent-primary);
+            transition: color 0.2s ease, text-shadow 0.2s ease;
+        }
+        .otp-code.refreshing {
+            color: var(--accent-success);
+            text-shadow: 0 0 10px var(--accent-success-glow);
+        }
+        .btn-copy {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 6px;
+            transition: var(--transition-smooth);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn-copy:hover {
+            color: white;
+            background: rgba(255,255,255,0.06);
+        }
+
+        /* Interactive Custom Token Form */
+        .add-token-card {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.04);
+            border-radius: 14px;
+            padding: 20px;
+        }
+        .add-token-card h4 {
+            font-family: var(--font-display);
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 14px;
+            color: white;
+        }
+        .input-group {
+            margin-bottom: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .input-group label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+        }
+        .input-group input {
+            background: rgba(0,0,0,0.4);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 14px;
+            color: white;
+            font-family: var(--font-sans);
+            font-size: 13px;
+            transition: var(--transition-smooth);
+        }
+        .input-group input:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 10px var(--accent-primary-glow);
+        }
+        .btn-submit {
+            background: var(--bg-surface-elevated);
+            border: 1px solid var(--border-color);
+            padding: 10px;
+            width: 100%;
+            border-radius: 8px;
+            color: white;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+        .btn-submit:hover {
+            border-color: var(--accent-primary);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        /* Tooltip style */
+        .tooltip {
+            position: absolute;
+            background: var(--accent-success);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            pointer-events: none;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.2s, transform 0.2s;
+            z-index: 10;
+        }
+        .tooltip.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* Interactive Vault Cryptography Lock Showcase */
+        .vault-showcase-card {
+            background: rgba(14, 17, 26, 0.5);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 32px;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        }
+        .vault-toggle-container {
+            display: flex;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 4px;
+            margin-bottom: 24px;
+        }
+        .vault-toggle-btn {
+            flex: 1;
+            background: transparent;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 6px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .vault-toggle-btn.active {
+            background: var(--bg-surface-elevated);
+            color: white;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        .vault-status-panel {
+            min-height: 250px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            border: 1px dashed var(--border-color);
+            border-radius: 14px;
+            padding: 30px;
+            text-align: center;
+            transition: var(--transition-smooth);
+        }
+        .vault-lock-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            transition: var(--transition-smooth);
+        }
+        .vault-status-panel.encrypted-unlocked .vault-lock-icon {
+            transform: scale(1.1) rotate(-15deg);
+        }
+        .decrypt-form {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            width: 100%;
+            max-width: 280px;
+            margin-top: 16px;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: var(--transition-smooth);
+            display: none;
+        }
+        .decrypt-form.show {
+            display: flex;
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .decrypt-progress-bar {
+            width: 100%;
+            height: 4px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 20px;
+            overflow: hidden;
+            display: none;
+            margin-top: 12px;
+        }
+        .decrypt-progress-fill {
+            height: 100%;
+            width: 0;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+            border-radius: 20px;
+            transition: width 1.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* Interface Simulator Section (Terminal Box) */
+        .terminal-simulator {
+            background: #08090d;
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .terminal-header {
+            background: rgba(255,255,255,0.02);
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            padding: 14px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .terminal-dots {
+            display: flex;
+            gap: 6px;
+        }
+        .t-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+        .t-dot-red { background-color: #ef4444; }
+        .t-dot-yellow { background-color: #f59e0b; }
+        .t-dot-green { background-color: #10b981; }
+        .terminal-title {
+            color: var(--text-muted);
+            font-size: 11px;
+            font-family: var(--font-mono);
+            letter-spacing: 0.5px;
+        }
+        .terminal-tabs {
+            display: flex;
+            background: rgba(0,0,0,0.3);
+            border-bottom: 1px solid var(--border-color);
+            overflow-x: auto;
+        }
+        .terminal-tab-btn {
+            background: transparent;
+            border: none;
+            border-right: 1px solid var(--border-color);
+            padding: 12px 20px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .terminal-tab-btn:hover {
+            background: rgba(255,255,255,0.02);
+            color: white;
+        }
+        .terminal-tab-btn.active {
+            background: #08090d;
+            color: var(--accent-primary);
+            border-bottom: 1px solid #08090d;
+            height: calc(100% + 1px);
+        }
+        .terminal-body {
+            padding: 24px;
+            min-height: 280px;
+            color: #d1d5db;
+            font-family: var(--font-mono);
+            font-size: 13.5px;
+            line-height: 1.6;
+            overflow-x: auto;
+            position: relative;
+        }
+        .prompt-symbol {
+            color: var(--accent-success);
+            margin-right: 8px;
+        }
+        .terminal-output {
+            margin-top: 12px;
+            white-space: pre-wrap;
+        }
+        .t-dim { color: var(--text-muted); }
+        .t-blue { color: var(--accent-primary); }
+        .t-violet { color: var(--accent-secondary); }
+        .t-green { color: var(--accent-success); }
+        .t-warn { color: var(--accent-warning); }
+        
+        /* Interactive grid cards in GTK / TUI visual representation */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 24px;
+        }
+        .feature-card {
+            background: rgba(14, 17, 26, 0.4);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 30px;
+            transition: var(--transition-smooth);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            cursor: default;
+        }
+        .feature-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(59, 130, 246, 0.3);
+            box-shadow: 0 15px 35px rgba(0,0,0,0.4), 0 0 30px rgba(59, 130, 246, 0.05);
+        }
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, rgba(255,255,255,0.02) 0%, transparent 60%);
+            pointer-events: none;
+        }
+        .feature-card-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border-color);
+            color: var(--accent-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            transition: var(--transition-smooth);
+        }
+        .feature-card:hover .feature-card-icon {
+            background: var(--accent-primary-glow);
+            border-color: var(--accent-primary);
+            color: white;
+        }
+        .feature-card h3 {
+            font-family: var(--font-display);
+            font-size: 20px;
+            font-weight: 600;
+            color: white;
+        }
+        .feature-card p {
+            color: var(--text-secondary);
+            font-size: 14.5px;
+            line-height: 1.5;
+        }
+
+        /* Command installation guide */
+        .get-started-box {
+            background: linear-gradient(135deg, #0e111a 0%, #08090d 100%);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 48px;
+            max-width: 900px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 1.2fr;
+            gap: 48px;
+            align-items: center;
+        }
+        .get-started-info h3 {
+            font-family: var(--font-display);
+            font-size: 28px;
+            color: white;
+            margin-bottom: 12px;
+        }
+        .get-started-info p {
+            color: var(--text-secondary);
+            font-size: 14.5px;
+            margin-bottom: 20px;
+        }
+        .install-tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 16px;
+        }
+        .install-tab-btn {
+            background: transparent;
+            border: none;
+            padding: 10px 16px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            cursor: pointer;
+            position: relative;
+        }
+        .install-tab-btn.active {
+            color: white;
+        }
+        .install-tab-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: var(--accent-primary);
+        }
+        .install-code-box {
+            position: relative;
+        }
+        .install-code {
+            background: #050608;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 20px;
+            color: #d1d5db;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            overflow-x: auto;
+        }
+        .btn-copy-install {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 6px;
+            transition: var(--transition-smooth);
+        }
+        .btn-copy-install:hover {
+            color: white;
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(255,255,255,0.15);
+        }
+
+        /* Footer styling */
+        footer {
+            border-top: 1px solid var(--border-color);
+            padding: 48px 0;
+            background: #050609;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        .footer-wrapper {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .footer-logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-family: var(--font-display);
+            font-weight: 600;
+        }
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            list-style: none;
+        }
+        .footer-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: var(--transition-smooth);
+        }
+        .footer-links a:hover {
+            color: var(--text-secondary);
+        }
+
+        /* Responsive Breakpoints */
+        @media (max-width: 968px) {
+            .hero {
+                grid-template-columns: 1fr;
+                gap: 48px;
+                text-align: center;
+                padding-top: 80px;
+            }
+            .hero-content {
+                align-items: center;
+            }
+            .hero-ctas {
+                justify-content: center;
+            }
+            .hero-graphic {
+                order: -1;
+            }
+            .ecosystem-grid {
+                grid-template-columns: 1fr;
+                gap: 48px;
+            }
+            .demo-layout {
+                grid-template-columns: 1fr;
+                gap: 48px;
+            }
+            .get-started-box {
+                grid-template-columns: 1fr;
+                gap: 32px;
+                padding: 30px;
+            }
+        }
+        
+        @media (max-width: 640px) {
+            h1 {
+                font-size: 40px;
+            }
+            .section-title {
+                font-size: 30px;
+            }
+            .nav-links {
+                display: none;
+            }
+            .footer-wrapper {
+                flex-direction: column;
+                gap: 24px;
+                text-align: center;
+            }
+        }
+
+        /* Pulse Keyframes */
+        @keyframes pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+            70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Canvas Background -->
+    <canvas id="bg-canvas"></canvas>
+
+    <!-- Glowing Backdrop Orbs -->
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+    <div class="glow-orb orb-3"></div>
+
+    <!-- Navigation Header -->
+    <header id="site-header">
+        <div class="container nav-wrapper">
+            <a href="#" class="logo">
+                <svg class="logo-icon" viewBox="0 0 40 40">
+                    <defs>
+                        <linearGradient id="logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#3b82f6" />
+                            <stop offset="100%" stop-color="#a855f7" />
+                        </linearGradient>
+                    </defs>
+                    <path d="M20 4 L34 8 L34 22 C34 30 28 35 20 38 C12 35 6 30 6 22 L6 8 Z" />
+                    <path d="M20 12 L20 28 M15 18 L25 18 M17 23 L23 23" stroke="#f3f4f6" stroke-linecap="round" />
+                </svg>
+                <span>PALADIN</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="#ecosystem">Architecture</a></li>
+                <li><a href="#demo">Live Demo</a></li>
+                <li><a href="#terminal">CLI & TUI</a></li>
+                <li><a href="#features">Specifications</a></li>
+            </ul>
+            <a href="#install" class="nav-btn">
+                <span>Quick Install</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </a>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero-section" style="border-top: none;">
+        <div class="container hero">
+            <div class="hero-content">
+                <div class="badge">
+                    <span class="badge-dot"></span>
+                    <span>100% Rust • Local-First • No Telemetry</span>
+                </div>
+                <h1>The Ironclad Authenticator for Power Users</h1>
+                <p class="hero-desc">
+                    A unified Rust core powering a stateless CLI, a keyboard-driven Terminal UI, and a native desktop GUI. Your secrets never leave your filesystem.
+                </p>
+                <div class="hero-ctas">
+                    <a href="#install" class="nav-btn" style="padding: 14px 28px; font-size: 15px;">Get Started</a>
+                    <a href="#demo" class="btn-outline">Try Web Demo</a>
+                </div>
+            </div>
+            <div class="hero-graphic">
+                <div class="hero-graphic-card" id="tilt-card">
+                    <div class="glass-highlight"></div>
+                    <div class="hero-img-wrap">
+                        <img src="assets/paladin_hero_graphic.png" alt="Paladin Shield Logo" class="hero-img">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Architecture / Ecosystem Section -->
+    <section id="ecosystem">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">One Engine, Multiple Interfaces</h2>
+                <p class="section-subtitle">Decoupled structure built on a highly tested Rust library crate. Zero cross-frontend contamination.</p>
+            </div>
+            
+            <div class="ecosystem-grid">
+                <div class="architecture-diagram">
+                    <!-- Circular Orbit representation -->
+                    <div class="arch-orbit orbit-1">
+                        <div class="orbit-node node-cli" data-target="cli">paladin CLI</div>
+                        <div class="orbit-node node-tui" data-target="tui">paladin TUI</div>
+                        <div class="orbit-node node-gtk" data-target="gtk">paladin GTK</div>
+                    </div>
+                    <div class="arch-core">
+                        paladin-core
+                        <span>shared engine</span>
+                    </div>
+                </div>
+                
+                <div class="ecosystem-desc">
+                    <div class="ecosystem-item">
+                        <div class="ecosystem-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                        </div>
+                        <div class="ecosystem-item-content">
+                            <h3>crates/paladin-core</h3>
+                            <p>The domain model, OTP generation (TOTP/HOTP), cryptographic operations, vault storage formats, and atomic file handlers are isolated in a rock-solid library crate.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="ecosystem-item">
+                        <div class="ecosystem-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                        </div>
+                        <div class="ecosystem-item-content">
+                            <h3>Stateless Command Line</h3>
+                            <p>Optimized for UNIX pipelines and scripting. Accepts secret credentials via arguments, environment variables, or standard input streams. Generates clean JSON or styled output.</p>
+                        </div>
+                    </div>
+
+                    <div class="ecosystem-item">
+                        <div class="ecosystem-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20M4 19.5V3.5A2.5 2.5 0 0 1 6.5 1H20v21H6.5a2.5 2.5 0 0 1-2.5-2.5z"/></svg>
+                        </div>
+                        <div class="ecosystem-item-content">
+                            <h3>Keyboard-Driven TUI</h3>
+                            <p>An interactive, lightning-fast terminal dashboard built using <code>ratatui</code>. Search, select, and view ticking codes without leaving your keyboard.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Interactive TOTP Authenticator Demo -->
+    <section id="demo" style="background: rgba(14, 17, 26, 0.2);">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Experience it Locally</h2>
+                <p class="section-subtitle">Interact with our functional emulator. It implements proper Base32 decoding and dynamic calculations locally in your browser.</p>
+            </div>
+
+            <div class="demo-layout">
+                <div class="authenticator-container">
+                    <div class="authenticator-header">
+                        <div class="authenticator-title">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="url(#logo-grad)" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                            <span>Paladin Vault</span>
+                        </div>
+                        <!-- Circular progress timer -->
+                        <div class="timer-circle">
+                            <svg>
+                                <circle class="timer-bg" cx="16" cy="16" r="14" />
+                                <circle class="timer-progress" id="js-progress-ring" cx="16" cy="16" r="14" />
+                            </svg>
+                            <span class="timer-number" id="js-timer-num">30</span>
+                        </div>
+                    </div>
+
+                    <!-- Interactive account entries -->
+                    <div class="account-list" id="js-accounts-list">
+                        <!-- Filled dynamically by Javascript -->
+                    </div>
+
+                    <!-- Custom Token Form -->
+                    <div class="add-token-card">
+                        <h4>Add Simulated Account</h4>
+                        <form id="js-add-token-form" onsubmit="event.preventDefault(); return handleAddToken();">
+                            <div class="input-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                                <div class="input-group">
+                                    <label for="tk-issuer">Issuer</label>
+                                    <input type="text" id="tk-issuer" placeholder="GitHub" required>
+                                </div>
+                                <div class="input-group">
+                                    <label for="tk-label">Account Label</label>
+                                    <input type="text" id="tk-label" placeholder="alice@git.com" required>
+                                </div>
+                            </div>
+                            <div class="input-group" style="margin-bottom: 16px;">
+                                <label for="tk-secret">Base32 Secret</label>
+                                <input type="text" id="tk-secret" placeholder="JBSWY3DPEHPK3PXP" required pattern="[A-Za-z2-7= ]+">
+                            </div>
+                            <button type="submit" class="btn-submit">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                Add Account
+                            </button>
+                        </form>
+                    </div>
+
+                    <div class="tooltip" id="js-tooltip">Copied!</div>
+                </div>
+
+                <!-- Vault security toggle panel -->
+                <div class="vault-showcase-card">
+                    <h3 style="font-family: var(--font-display); font-size: 22px; color: white; margin-bottom: 16px;">Secure Vault Primitives</h3>
+                    <p style="color: var(--text-secondary); font-size: 14.5px; margin-bottom: 24px;">
+                        Paladin supports two secure vault storage architectures. Change settings instantly at any point without reformatting.
+                    </p>
+
+                    <div class="vault-toggle-container">
+                        <button class="vault-toggle-btn active" id="btn-vault-plain" onclick="setVaultMode('plaintext')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                            Plaintext (0600)
+                        </button>
+                        <button class="vault-toggle-btn" id="btn-vault-enc" onclick="setVaultMode('encrypted')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                            Encrypted
+                        </button>
+                    </div>
+
+                    <!-- Dynamic display panel -->
+                    <div class="vault-status-panel" id="vault-status-panel">
+                        <div class="vault-lock-icon" id="vault-lock-emoji">📂</div>
+                        <h4 style="color: white; margin-bottom: 8px;" id="vault-panel-title">Plaintext Storage Mode</h4>
+                        <p style="color: var(--text-secondary); font-size: 13.5px;" id="vault-panel-desc">
+                            Stored in a plain binary bincode file. Highly protected on Linux filesystem via strict 0600 (owner-only write/read) permissions and an automated 0700 parent directory lock.
+                        </p>
+
+                        <div class="decrypt-form" id="js-decrypt-form">
+                            <div class="input-group">
+                                <label for="vault-pass">Passphrase</label>
+                                <input type="password" id="vault-pass" placeholder="Enter passphrase (use 'paladin')">
+                            </div>
+                            <button class="btn-submit" onclick="handleDecrypt()" style="background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary)); border: none;">
+                                Unlock Vault
+                            </button>
+                            <div class="decrypt-progress-bar" id="js-decrypt-progress">
+                                <div class="decrypt-progress-fill" id="js-decrypt-fill"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Terminal Command Line & TUI Simulator -->
+    <section id="terminal">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Run in your Terminal</h2>
+                <p class="section-subtitle">Switch interfaces gracefully. Control your OTP pipeline with command flags or step into a full-interactive crossterm shell.</p>
+            </div>
+
+            <div class="terminal-simulator">
+                <div class="terminal-header">
+                    <div class="terminal-dots">
+                        <span class="t-dot t-dot-red"></span>
+                        <span class="t-dot t-dot-yellow"></span>
+                        <span class="t-dot t-dot-green"></span>
+                    </div>
+                    <div class="terminal-title">bash — user@paladin-node:~</div>
+                    <div style="width: 42px;"></div>
+                </div>
+
+                <div class="terminal-tabs">
+                    <button class="terminal-tab-btn active" onclick="switchTerminalTab(this, 'init')">paladin init</button>
+                    <button class="terminal-tab-btn" onclick="switchTerminalTab(this, 'add')">paladin add</button>
+                    <button class="terminal-tab-btn" onclick="switchTerminalTab(this, 'list')">paladin list</button>
+                    <button class="terminal-tab-btn" onclick="switchTerminalTab(this, 'tui')">paladin tui (Dashboard)</button>
+                </div>
+
+                <div class="terminal-body" id="js-terminal-body">
+                    <div><span class="prompt-symbol">$</span><span id="js-term-input">paladin init</span></div>
+                    <div class="terminal-output" id="js-term-output">
+Initializing secure vault at ~/.local/share/paladin/vault.bin
+
+Choose Vault Mode:
+  1) Plaintext Vault (0600 file permissions)
+  2) Encrypted Vault (Argon2id + XChaCha20-Poly1305)
+
+Selection [1-2]: 2
+Enter passphrase for new vault: **********
+Confirm passphrase: **********
+
+Vault initialized successfully!
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Technical Specifications (Grid Section) -->
+    <section id="features">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Cryptographic & Security Rigor</h2>
+                <p class="section-subtitle">Meticulously designed primitives. Standardized vectors verified across unit tests and sandbox rules.</p>
+            </div>
+
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-card-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    </div>
+                    <h3>XChaCha20-Poly1305</h3>
+                    <p>Encrypted vaults are wrapped using XChaCha20-Poly1305 authenticated encryption. Master keys are stretched utilizing high-memory Argon2id password-hashing configurations. Zero exposure of metadata.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-card-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    </div>
+                    <h3>Memory Hygiene</h3>
+                    <p>All sensitive credentials and raw encryption keys route through <code>Zeroize</code>/<code>secrecy</code> modules, wiping memory immediately after use. Secret data types strictly enforce no <code>Serialize</code> and no leaky <code>Debug</code> structures.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-card-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+                    </div>
+                    <h3>Completely Sandbox Locked</h3>
+                    <p>Paladin uses an explicit compilation deny layer checking all code dependencies. The application compilation breaks instantly if any imported module attempts to open standard sockets or load any network stacks.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-card-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                    </div>
+                    <h3>Atomic File Transactions</h3>
+                    <p>Disk operations are isolated. Vault writes compile account data, write dynamically to transient files, verify hashes, and swap file locations atomically. In the event of crash or power loss, a <code>.bak</code> recovery persists.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-card-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+                    </div>
+                    <h3>Standard RFC Conformant</h3>
+                    <p>Full verification of standard TOTP (RFC 6238) and HOTP (RFC 4226) hashes using standard test matrices. Supports Aegis plaintext imports, Google Authenticator QR scans, and standardized export streams.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-card-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                    </div>
+                    <h3>User Hardening</h3>
+                    <p>Advanced security primitives (such as automated vault locking on terminal timeouts and clipboard clearing buffers) are strictly opt-in, protecting stateless environments while preserving full configurability.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Start Installation Section -->
+    <section id="install" style="background: rgba(14, 17, 26, 0.2);">
+        <div class="container">
+            <div class="get-started-box">
+                <div class="get-started-info">
+                    <h3>Ready to upgrade?</h3>
+                    <p>Compile the CLI and TUI locally or import your standard vault to launch.</p>
+                    <div class="install-tabs">
+                        <button class="install-tab-btn active" onclick="switchInstallTab('cargo')">Cargo</button>
+                        <button class="install-tab-btn" onclick="switchInstallTab('source')">From Source</button>
+                    </div>
+                </div>
+
+                <div class="install-code-box">
+                    <button class="btn-copy-install" onclick="copyInstallCmd()" id="btn-copy-install">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                    <pre class="install-code" id="js-install-code">cargo install --path crates/paladin-cli
+cargo install --path crates/paladin-tui</pre>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container footer-wrapper">
+            <a href="#" class="footer-logo">
+                <svg width="24" height="24" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M20 4 L34 8 L34 22 C34 30 28 35 20 38 C12 35 6 30 6 22 L6 8 Z" />
+                </svg>
+                <span>PALADIN</span>
+            </a>
+            <p>© 2026 The Paladin Authors. Open-Source under the AGPL-3.0 License.</p>
+            <ul class="footer-links">
+                <li><a href="README.md">Readme</a></li>
+                <li><a href="docs/DESIGN.md">Design</a></li>
+                <li><a href="LICENSE">License</a></li>
+            </ul>
+        </div>
+    </footer>
+
+    <!-- Scripts -->
+    <script>
+        // Custom 3D Parallax Mouse Tilt on Hero Card
+        const tiltCard = document.getElementById('tilt-card');
+        if (tiltCard) {
+            document.addEventListener('mousemove', (e) => {
+                const rect = tiltCard.getBoundingClientRect();
+                const cardCenterX = rect.left + rect.width / 2;
+                const cardCenterY = rect.top + rect.height / 2;
+                const mouseX = e.clientX - cardCenterX;
+                const mouseY = e.clientY - cardCenterY;
+                
+                // Limit tilt range
+                const tiltX = (mouseY / (window.innerHeight / 2)) * -12;
+                const tiltY = (mouseX / (window.innerWidth / 2)) * 12;
+                
+                tiltCard.style.transform = `rotateX(${tiltX}deg) rotateY(${tiltY}deg) translateY(-2px)`;
+            });
+            
+            document.addEventListener('mouseleave', () => {
+                tiltCard.style.transform = 'rotateX(0deg) rotateY(0deg)';
+            });
+        }
+
+        // Header scroll effect
+        window.addEventListener('scroll', () => {
+            const header = document.getElementById('site-header');
+            if (window.scrollY > 20) {
+                header.classList.add('scrolled');
+            } else {
+                header.classList.remove('scrolled');
+            }
+        });
+
+        // Background Particles
+        const canvas = document.getElementById('bg-canvas');
+        const ctx = canvas.getContext('2d');
+
+        let particles = [];
+        const particleCount = 60;
+
+        function initParticles() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            particles = [];
+            for (let i = 0; i < particleCount; i++) {
+                particles.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    vx: (Math.random() - 0.5) * 0.4,
+                    vy: (Math.random() - 0.5) * 0.4,
+                    size: Math.random() * 2 + 1,
+                    alpha: Math.random() * 0.5 + 0.2
+                });
+            }
+        }
+
+        function drawParticles() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+            
+            // Draw links
+            ctx.strokeStyle = 'rgba(59, 130, 246, 0.04)';
+            ctx.lineWidth = 1;
+            
+            for (let i = 0; i < particles.length; i++) {
+                const p1 = particles[i];
+                p1.x += p1.vx;
+                p1.y += p1.vy;
+                
+                if (p1.x < 0 || p1.x > canvas.width) p1.vx *= -1;
+                if (p1.y < 0 || p1.y > canvas.height) p1.vy *= -1;
+                
+                ctx.fillStyle = `rgba(168, 85, 247, ${p1.alpha})`;
+                ctx.beginPath();
+                ctx.arc(p1.x, p1.y, p1.size, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Draw line connection to closer points
+                for (let j = i + 1; j < particles.length; j++) {
+                    const p2 = particles[j];
+                    const dx = p1.x - p2.x;
+                    const dy = p1.y - p2.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (dist < 130) {
+                        ctx.strokeStyle = `rgba(59, 130, 246, ${(1 - dist/130) * 0.08})`;
+                        ctx.beginPath();
+                        ctx.moveTo(p1.x, p1.y);
+                        ctx.lineTo(p2.x, p2.y);
+                        ctx.stroke();
+                    }
+                }
+            }
+            requestAnimationFrame(drawParticles);
+        }
+
+        window.addEventListener('resize', initParticles);
+        initParticles();
+        drawParticles();
+
+        // JS base32 decoder and Web Crypto TOTP generator
+        function base32ToBuf(str) {
+            const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+            str = str.toUpperCase().replace(/=+$/, '');
+            let len = str.length;
+            let bits = 0;
+            let val = 0;
+            let buf = new Uint8Array(Math.floor(len * 5 / 8));
+            let index = 0;
+            for (let i = 0; i < len; i++) {
+                const idx = alphabet.indexOf(str[i]);
+                if (idx === -1) continue;
+                val = (val << 5) | idx;
+                bits += 5;
+                if (bits >= 8) {
+                    buf[index++] = (val >>> (bits - 8)) & 255;
+                    bits -= 8;
+                }
+            }
+            return buf;
+        }
+
+        async function generateTOTP(secretBase32, period = 30, digits = 6) {
+            try {
+                const keyData = base32ToBuf(secretBase32);
+                if (keyData.length === 0) return '000000';
+                
+                const epoch = Math.floor(Date.now() / 1000);
+                const counter = Math.floor(epoch / period);
+                
+                const counterBuf = new ArrayBuffer(8);
+                const view = new DataView(counterBuf);
+                view.setUint32(4, counter, false); // big-endian
+                
+                const cryptoKey = await window.crypto.subtle.importKey(
+                    'raw',
+                    keyData,
+                    { name: 'HMAC', hash: { name: 'SHA-1' } },
+                    false,
+                    ['sign']
+                );
+                
+                const signature = await window.crypto.subtle.sign(
+                    'HMAC',
+                    cryptoKey,
+                    counterBuf
+                );
+                
+                const hmac = new Uint8Array(signature);
+                const offset = hmac[hmac.length - 1] & 0x0f;
+                const binCode = ((hmac[offset] & 0x7f) << 24) |
+                                ((hmac[offset + 1] & 0xff) << 16) |
+                                ((hmac[offset + 2] & 0xff) << 8) |
+                                (hmac[offset + 3] & 0xff);
+                
+                let code = (binCode % Math.pow(10, digits)).toString();
+                while (code.length < digits) {
+                    code = '0' + code;
+                }
+                return code;
+            } catch (e) {
+                console.error(e);
+                return '000000';
+            }
+        }
+
+        // Mock Accounts Database
+        let accounts = [
+            { id: 1, issuer: 'GitHub', label: 'alice@github.com', secret: 'JBSWY3DPEHPK3PXP', icon: '🐙' },
+            { id: 2, issuer: 'Google Cloud', label: 'corp@google.com', secret: 'K5SGK4RAMVSS4===', icon: '☁️' },
+            { id: 3, issuer: 'AWS Console', label: 'admin@aws.amazon.com', secret: 'MZXW6YTBOI======', icon: '🛡️' }
+        ];
+
+        let vaultLocked = false;
+        let activeVaultMode = 'plaintext';
+
+        // Render Mock Authenticator accounts
+        async function renderAccounts() {
+            const listEl = document.getElementById('js-accounts-list');
+            if (!listEl) return;
+            
+            if (vaultLocked) {
+                listEl.innerHTML = `
+                    <div style="text-align: center; padding: 48px 0; color: var(--text-muted);">
+                        <span style="font-size: 36px; display: block; margin-bottom: 12px;">🔒</span>
+                        Vault encrypted and locked. Select Plaintext or Unlock below.
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+            for (let acc of accounts) {
+                const code = await generateTOTP(acc.secret);
+                html += `
+                    <div class="account-entry" onclick="copyCode('${code}', this)">
+                        <div class="account-info">
+                            <div class="account-icon-box">${acc.icon}</div>
+                            <div class="account-details">
+                                <span class="account-issuer">${acc.issuer}</span>
+                                <span class="account-label">${acc.label}</span>
+                            </div>
+                        </div>
+                        <div class="otp-group">
+                            <span class="otp-code" id="code-${acc.id}">${code.slice(0,3)} ${code.slice(3)}</span>
+                            <button class="btn-copy">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+            listEl.innerHTML = html;
+        }
+
+        // Copy feedback tooltip trigger
+        function copyCode(code, element) {
+            navigator.clipboard.writeText(code);
+            const tooltip = document.getElementById('js-tooltip');
+            const rect = element.getBoundingClientRect();
+            const parentRect = document.querySelector('.authenticator-container').getBoundingClientRect();
+            
+            tooltip.style.left = `${rect.right - parentRect.left - 100}px`;
+            tooltip.style.top = `${rect.top - parentRect.top + 20}px`;
+            tooltip.classList.add('show');
+            
+            setTimeout(() => {
+                tooltip.classList.remove('show');
+            }, 1200);
+        }
+
+        // Add custom token handler
+        async function handleAddToken() {
+            const issuer = document.getElementById('tk-issuer').value;
+            const label = document.getElementById('tk-label').value;
+            const secret = document.getElementById('tk-secret').value.replace(/\s+/g, '');
+            
+            if (!issuer || !label || !secret) return false;
+            
+            // Derive a fun emoji icon from the issuer name
+            let icon = '🔑';
+            const name = issuer.toLowerCase();
+            if (name.includes('git')) icon = '🐙';
+            else if (name.includes('google') || name.includes('cloud')) icon = '☁️';
+            else if (name.includes('aws') || name.includes('amazon')) icon = '🛡️';
+            else if (name.includes('discord')) icon = '🎮';
+            else if (name.includes('slack')) icon = '💬';
+            else if (name.includes('facebook') || name.includes('meta')) icon = '👥';
+            
+            accounts.push({
+                id: accounts.length + 1,
+                issuer,
+                label,
+                secret,
+                icon
+            });
+            
+            document.getElementById('js-add-token-form').reset();
+            await renderAccounts();
+            return false;
+        }
+
+        // Countdown Timer Loops
+        const ring = document.getElementById('js-progress-ring');
+        const timerNum = document.getElementById('js-timer-num');
+
+        async function updateTimer() {
+            if (vaultLocked) return;
+            const epoch = Math.floor(Date.now() / 1000);
+            const rem = 30 - (epoch % 30);
+            
+            timerNum.innerText = rem;
+            
+            // Progress bar circle calculation
+            const dashOffset = ((30 - rem) / 30) * 88;
+            ring.style.strokeDashoffset = dashOffset;
+            
+            // High warning color swap
+            if (rem <= 5) {
+                ring.style.stroke = 'var(--accent-warning)';
+            } else {
+                ring.style.stroke = 'var(--accent-primary)';
+            }
+
+            // Sync Refresh transition flash
+            if (rem === 30 || rem === 0) {
+                const codes = document.querySelectorAll('.otp-code');
+                codes.forEach(c => c.classList.add('refreshing'));
+                await renderAccounts();
+                setTimeout(() => {
+                    codes.forEach(c => c.classList.remove('refreshing'));
+                }, 400);
+            }
+        }
+
+        // Initial accounts loading
+        renderAccounts();
+        setInterval(updateTimer, 1000);
+        updateTimer();
+
+        // Vault Modes toggle JS
+        function setVaultMode(mode) {
+            activeVaultMode = mode;
+            const btnPlain = document.getElementById('btn-vault-plain');
+            const btnEnc = document.getElementById('btn-vault-enc');
+            const panel = document.getElementById('vault-status-panel');
+            const emoji = document.getElementById('vault-lock-emoji');
+            const title = document.getElementById('vault-panel-title');
+            const desc = document.getElementById('vault-panel-desc');
+            const form = document.getElementById('js-decrypt-form');
+
+            btnPlain.classList.remove('active');
+            btnEnc.classList.remove('active');
+            form.classList.remove('show');
+            panel.className = 'vault-status-panel';
+
+            if (mode === 'plaintext') {
+                btnPlain.classList.add('active');
+                emoji.innerText = '📂';
+                title.innerText = 'Plaintext Storage Mode';
+                desc.innerText = 'Stored in a plain binary bincode file. Protected on standard Linux systems via strict file and folder permission matrices (0600 file & 0700 folder).';
+                vaultLocked = false;
+                renderAccounts();
+            } else {
+                btnEnc.classList.add('active');
+                emoji.innerText = '🔒';
+                title.innerText = 'Encrypted Vault Storage';
+                desc.innerText = 'Wrapped using XChaCha20-Poly1305 AEAD cryptography and stretched via Argon2id. Decrypt to render simulated local TOTPs.';
+                vaultLocked = true;
+                form.classList.add('show');
+                renderAccounts();
+            }
+        }
+
+        function handleDecrypt() {
+            const pass = document.getElementById('vault-pass').value;
+            const progress = document.getElementById('js-decrypt-progress');
+            const fill = document.getElementById('js-decrypt-fill');
+            const form = document.getElementById('js-decrypt-form');
+            
+            if (!pass) return;
+
+            // Trigger visual progress decrypt loading
+            progress.style.display = 'block';
+            setTimeout(() => {
+                fill.style.width = '100%';
+            }, 50);
+
+            setTimeout(async () => {
+                const panel = document.getElementById('vault-status-panel');
+                const emoji = document.getElementById('vault-lock-emoji');
+                const title = document.getElementById('vault-panel-title');
+                const desc = document.getElementById('vault-panel-desc');
+
+                panel.classList.add('encrypted-unlocked');
+                emoji.innerText = '🔓';
+                title.innerText = 'Vault Authenticated & Decrypted';
+                desc.innerText = 'Success! Key extracted and verified with AAD. Simulated TOTP generators loaded successfully.';
+                progress.style.display = 'none';
+                fill.style.width = '0';
+                form.classList.remove('show');
+                
+                vaultLocked = false;
+                await renderAccounts();
+                document.getElementById('vault-pass').value = '';
+            }, 1600);
+        }
+
+        // Terminal Simulator JS switcher
+        const terminalCommands = {
+            init: {
+                input: 'paladin init',
+                output: `<span class="t-dim">Initializing secure vault at ~/.local/share/paladin/vault.bin</span>
+
+Choose Vault Mode:
+  1) Plaintext Vault (0600 file permissions)
+  2) Encrypted Vault (Argon2id + XChaCha20-Poly1305)
+
+Selection [1-2]: <span class="t-blue">2</span>
+Enter passphrase for new vault: <span class="t-dim">**********</span>
+Confirm passphrase: <span class="t-dim">**********</span>
+
+<span class="t-green">Vault initialized successfully!</span>`
+            },
+            add: {
+                input: 'paladin add --uri "otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub"',
+                output: `<span class="t-dim">Attempting to add account from URI:</span>
+  <span class="t-blue">otpauth://totp/GitHub:alice?secret=***&issuer=GitHub</span>
+
+Validating OTP secret length and algorithm standards...
+  <span class="t-green">✔ Algorithm: SHA-1</span>
+  <span class="t-green">✔ Digits: 6 digits</span>
+  <span class="t-green">✔ Vault written successfully!</span>
+
+<span class="t-green">Added: GitHub (alice)</span>`
+            },
+            list: {
+                input: 'paladin list',
+                output: `+----------------------+--------------------+--------+--------+
+| Account ID           | Account / Issuer   | Type   | Digits |
++----------------------+--------------------+--------+--------+
+| <span class="t-violet">id:85b1a37c</span>          | GitHub: alice      | TOTP   | 6      |
+| <span class="t-violet">id:f82c4992</span>          | Google Cloud: corp | TOTP   | 6      |
+| <span class="t-violet">id:e2d7ba56</span>          | AWS Console: admin | TOTP   | 6      |
++----------------------+--------------------+--------+--------+`
+            },
+            tui: {
+                input: 'paladin tui',
+                output: `<span class="t-green">┌─ Paladin Authenticator TUI ────────────────────────────┐</span>
+<span class="t-green">│</span> Search: [github_____________________________________] <span class="t-green">│</span>
+<span class="t-green">│</span>                                                        <span class="t-green">│</span>
+<span class="t-green">│</span>  <span class="t-blue">▶ GitHub: alice</span>            [<span class="t-blue">843 921</span>]  (23s remaining) <span class="t-green">│</span>
+<span class="t-green">│</span>    Google Cloud: corp       [<span class="t-dim">104 294</span>]  (23s remaining) <span class="t-green">│</span>
+<span class="t-green">│</span>    AWS Console: admin       [<span class="t-dim">492 840</span>]  (23s remaining) <span class="t-green">│</span>
+<span class="t-green">│</span>                                                        <span class="t-green">│</span>
+<span class="t-green">├────────────────────────────────────────────────────────┤</span>
+<span class="t-green">│</span> [Enter] Copy  [Space] Peek  [A] Add  [D] Delete  [Q] Quit <span class="t-green">│</span>
+<span class="t-green">└────────────────────────────────────────────────────────┘</span>`
+            }
+        };
+
+        function switchTerminalTab(btn, commandKey) {
+            // Remove active status
+            const tabs = document.querySelectorAll('.terminal-tab-btn');
+            tabs.forEach(t => t.classList.remove('active'));
+            btn.classList.add('active');
+
+            const bodyInput = document.getElementById('js-term-input');
+            const bodyOutput = document.getElementById('js-term-output');
+
+            bodyInput.innerText = terminalCommands[commandKey].input;
+            bodyOutput.innerHTML = terminalCommands[commandKey].output;
+        }
+
+        // Install command switcher
+        const installCommands = {
+            cargo: 'cargo install --path crates/paladin-cli\ncargo install --path crates/paladin-tui',
+            source: 'git clone https://github.com/FreedomBen/paladin.git\ncd paladin\ncargo build --release --workspace'
+        };
+        let activeInstallTab = 'cargo';
+
+        function switchInstallTab(tabKey) {
+            activeInstallTab = tabKey;
+            const btns = document.querySelectorAll('.install-tab-btn');
+            btns.forEach(b => {
+                if (b.innerText.toLowerCase().includes(tabKey)) b.classList.add('active');
+                else b.classList.remove('active');
+            });
+            document.getElementById('js-install-code').innerText = installCommands[tabKey];
+        }
+
+        function copyInstallCmd() {
+            const codeText = installCommands[activeInstallTab];
+            navigator.clipboard.writeText(codeText);
+            
+            const btn = document.getElementById('btn-copy-install');
+            btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-success)" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`;
+            setTimeout(() => {
+                btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+            }, 1500);
+        }
+    </script>
+</body>
+</html>
