@@ -791,7 +791,10 @@ impl SimpleComponent for UnlockDialogComponent {
         #[root]
         gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
-            set_spacing: 12,
+            set_spacing: 18,
+            set_margin_start: 18,
+            set_margin_end: 18,
+            set_margin_bottom: 18,
             set_hexpand: true,
             set_vexpand: true,
 
@@ -824,19 +827,39 @@ impl SimpleComponent for UnlockDialogComponent {
             // `classify_unlock_error`'s `InlinePassphrase` outcome
             // (decrypt_failed / invalid_passphrase) via the
             // `UnlockDialogMsg::OpenFailedInline` round trip; typing a
-            // new passphrase dismisses the prior message.
-            #[name = "error_label"]
-            gtk::Label {
-                set_xalign: 0.0,
-                set_wrap: true,
-                add_css_class: "error",
-                #[watch]
-                set_label: model
-                    .state
-                    .inline_error()
-                    .map_or("", |err| err.rendered.as_str()),
+            // new passphrase dismisses the prior message. The error
+            // glyph + caption-class label match the GNOME HIG inline
+            // form-error pattern: small red caption text paired with
+            // `dialog-error-symbolic` so the failure reads as a field-
+            // level message rather than a freestanding paragraph.
+            #[name = "error_box"]
+            gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 8,
+                set_margin_start: 6,
+                set_margin_end: 6,
                 #[watch]
                 set_visible: model.state.inline_error().is_some(),
+
+                gtk::Image {
+                    set_icon_name: Some("dialog-error-symbolic"),
+                    set_valign: gtk::Align::Start,
+                    add_css_class: "error",
+                },
+
+                #[name = "error_label"]
+                gtk::Label {
+                    set_xalign: 0.0,
+                    set_wrap: true,
+                    set_hexpand: true,
+                    add_css_class: "error",
+                    add_css_class: "caption",
+                    #[watch]
+                    set_label: model
+                        .state
+                        .inline_error()
+                        .map_or("", |err| err.rendered.as_str()),
+                },
             },
 
             gtk::Box {
