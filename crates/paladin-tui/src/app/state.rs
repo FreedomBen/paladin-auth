@@ -1214,6 +1214,109 @@ pub enum QrExportFocus {
     DoneButton,
 }
 
+/// Output format for the QR Export modal's save sub-flow.
+///
+/// [`Png`](Self::Png) routes through
+/// [`paladin_core::Vault::export_qr_png`]; [`Svg`](Self::Svg) routes
+/// through [`paladin_core::Vault::export_qr_svg`]. Both write the
+/// resulting bytes through [`paladin_core::write_secret_file_atomic`]
+/// (mode `0600`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QrSaveFormat {
+    /// PNG bytes from [`paladin_core::Vault::export_qr_png`].
+    Png,
+    /// SVG markup from [`paladin_core::Vault::export_qr_svg`].
+    Svg,
+}
+
+/// Sub-step within the QR Export modal's save sub-flow.
+///
+/// The sub-flow opens on [`EnterPath`](Self::EnterPath) when the
+/// user presses Enter on [`QrExportFocus::SavePngButton`] /
+/// [`QrExportFocus::SaveSvgButton`]. If Confirm fires against an
+/// existing destination, the sub-flow flips to
+/// [`OverwriteGate`](Self::OverwriteGate) so the user can either
+/// toggle the overwrite ack on and re-confirm, or `Esc` back to
+/// Page 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QrSaveStep {
+    /// User is typing the destination path. Confirm against a
+    /// non-existing path emits the save effect; Confirm against an
+    /// existing path flips the step to [`OverwriteGate`](Self::OverwriteGate).
+    EnterPath,
+    /// Destination exists. User must toggle the overwrite ack on
+    /// before Confirm will re-emit the save effect.
+    OverwriteGate,
+}
+
+/// Focusable control within the QR Export modal's save sub-flow.
+///
+/// On [`QrSaveStep::EnterPath`] the cycle covers
+/// [`PathField`](Self::PathField), [`Confirm`](Self::Confirm), and
+/// [`Cancel`](Self::Cancel). On [`QrSaveStep::OverwriteGate`] the
+/// cycle adds [`OverwriteAck`](Self::OverwriteAck) so the user can
+/// toggle the gate before re-confirming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QrSaveFocus {
+    /// Destination-path text input.
+    PathField,
+    /// Overwrite-ack checkbox (only reachable on
+    /// [`QrSaveStep::OverwriteGate`]).
+    OverwriteAck,
+    /// Confirm button — emits [`crate::app::event::Effect::QrExport`]
+    /// once validation passes.
+    Confirm,
+    /// Cancel button — drops the sub-flow back to Page 2.
+    Cancel,
+}
+
+/// State for the QR Export modal's save sub-flow.
+///
+/// Opened on Enter against [`QrExportFocus::SavePngButton`] /
+/// [`QrExportFocus::SaveSvgButton`]; closed by `Esc`, the Cancel
+/// button, modal close, ack-toggle-off, or auto-lock. Holds no
+/// secret bytes (the destination path is non-secret); the
+/// in-flight PNG / SVG buffer lives in the executor and never lands
+/// here, so this struct does not need `Zeroizing` wrappers.
+#[derive(Debug)]
+pub struct QrSaveSubFlow {
+    /// Output format. Captured from the `SavePng` / `SaveSvg`
+    /// button the user pressed Enter on.
+    pub format: QrSaveFormat,
+    /// Destination-path text buffer; trimmed and passed to
+    /// [`paladin_core::write_secret_file_atomic`] on Confirm.
+    pub path_text: String,
+    /// Sub-step within the sub-flow (typing vs overwrite-gate).
+    pub step: QrSaveStep,
+    /// Overwrite-ack flag. Set to `false` whenever the sub-flow
+    /// opens or the path is edited so a stale ack cannot apply to a
+    /// different destination.
+    pub overwrite_ack: bool,
+    /// Currently focused control within the sub-flow.
+    pub focus: QrSaveFocus,
+    /// Inline error from the most recent Confirm attempt, if any
+    /// (empty-path rejection, refused-overwrite gate, writer
+    /// failure, pre-commit / durability-unconfirmed save error).
+    pub error: Option<String>,
+}
+
+impl QrSaveSubFlow {
+    /// Construct a freshly opened sub-flow for `format` — empty
+    /// path, [`QrSaveStep::EnterPath`], overwrite-ack off, focus on
+    /// the path field, no inline error.
+    #[must_use]
+    pub fn new(format: QrSaveFormat) -> Self {
+        Self {
+            format,
+            path_text: String::new(),
+            step: QrSaveStep::EnterPath,
+            overwrite_ack: false,
+            focus: QrSaveFocus::PathField,
+            error: None,
+        }
+    }
+}
+
 /// State for the QR Export modal (v0.2; DESIGN §4.6 / §6).
 ///
 /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > QR Export:
@@ -1262,6 +1365,13 @@ pub struct QrExportModal {
     /// [`ack`](Self::ack) toggles on, dropped (zeroizing) when it
     /// toggles off, the modal closes, or auto-lock fires.
     pub staged_ansi: Option<Zeroizing<String>>,
+    /// Active save sub-flow (destination prompt + optional
+    /// overwrite gate). `None` while the user is on the bare
+    /// Page-2 button row; `Some(_)` once Enter on `Save as PNG…` /
+    /// `Save as SVG…` has opened the prompt. `Esc` from any
+    /// sub-flow step drops this back to `None` without dropping
+    /// `staged_ansi` so the user can re-attempt a save.
+    pub save_sub_flow: Option<QrSaveSubFlow>,
     /// Most recent successful save path (replace-only — a second
     /// successful save overwrites this slot rather than accumulating
     /// per-format entries; see the
@@ -1285,6 +1395,7 @@ impl QrExportModal {
             ack: false,
             focus: QrExportFocus::AckCheckbox,
             staged_ansi: None,
+            save_sub_flow: None,
             last_save_path: None,
             error: None,
         }

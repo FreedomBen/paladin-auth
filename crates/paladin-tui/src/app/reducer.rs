@@ -30,8 +30,9 @@ use crate::app::state::{
     format_qr_import_failure, initial_selection, render_error_message, AddManualFocus, AddModal,
     AddMode, AppState, ChordLeader, CountsPanel, ExportFormat, ExportModal, Focus, HotpReveal,
     ImportModal, Modal, PassphraseModal, PassphraseSubFlow, PendingClipboardClear,
-    PendingDuplicateAdd, QrExportFocus, QrExportModal, QrExportPage, RemoveModal, RenameModal,
-    SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    PendingDuplicateAdd, QrExportFocus, QrExportModal, QrExportPage, QrSaveFocus, QrSaveFormat,
+    QrSaveStep, QrSaveSubFlow, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
+    CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::prompt::PassphraseBuffer;
 use crate::search::{filtered_account_ids, select_after_search};
@@ -293,6 +294,7 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
         EffectResult::QrImport { result } => reduce_qr_import_result(state, result),
         EffectResult::Import { result } => reduce_import_result(state, result),
         EffectResult::Export { result } => reduce_export_result(state, result),
+        EffectResult::QrExport { result } => reduce_qr_export_result(state, result),
         EffectResult::Passphrase { result } => reduce_passphrase_result(state, result),
     }
 }
@@ -349,6 +351,59 @@ fn reduce_export_result(
                 }
                 Err(err) => {
                     export.error = Some(render_error_message(&err));
+                }
+            }
+        }
+    }
+    (state, Vec::new())
+}
+
+/// Handle the outcome of an [`Effect::QrExport`].
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+/// QR Export: *"Save-as-PNG / Save-as-SVG route through
+/// `write_secret_file_atomic` (0600) ... pre-commit /
+/// durability-unconfirmed save errors and writer failures stay in
+/// the modal as inline errors."*
+///
+/// On `Ok(target_path)` while `Modal::QrExport` is open with an
+/// active save sub-flow: the path replaces
+/// [`QrExportModal::last_save_path`] (replace-only — a second
+/// successful save overwrites this slot per the plan's
+/// "Inline success-path slot is replace-only" rule), the sub-flow
+/// closes, focus returns to the Page-2 button row, and no
+/// status-line confirmation is published (the inline success path
+/// surfaces in the modal body, not the status line).
+///
+/// On `Err(...)` the modal stays open with the sub-flow still
+/// active and the rendered error is stashed in
+/// [`QrSaveSubFlow::error`] so the user can fix the destination,
+/// filesystem condition, or retry. Because the executor never calls
+/// [`paladin_core::Vault::save`] on the QR export path, the live
+/// vault is byte-stable across both arms.
+///
+/// Results delivered while not on `Unlocked` or while a different
+/// modal is open are discarded.
+fn reduce_qr_export_result(
+    mut state: AppState,
+    result: Result<std::path::PathBuf, PaladinError>,
+) -> (AppState, Vec<Effect>) {
+    if let AppState::Unlocked { ref mut modal, .. } = state {
+        if let Some(Modal::QrExport(qr)) = modal.as_mut() {
+            match result {
+                Ok(target_path) => {
+                    qr.last_save_path = Some(target_path);
+                    qr.save_sub_flow = None;
+                    qr.focus = QrExportFocus::SavePngButton;
+                    qr.error = None;
+                }
+                Err(err) => {
+                    let rendered = render_error_message(&err);
+                    if let Some(sub) = qr.save_sub_flow.as_mut() {
+                        sub.error = Some(rendered);
+                    } else {
+                        qr.error = Some(rendered);
+                    }
                 }
             }
         }
@@ -1899,11 +1954,11 @@ fn route_modal_input(
             effects
         }
         Some(Modal::QrExport(qr)) => {
-            let close = route_qr_export_modal_input(qr, vault, key);
+            let (effects, close) = route_qr_export_modal_input(path, qr, vault, key);
             if close {
                 *modal = None;
             }
-            Vec::new()
+            effects
         }
         _ => Vec::new(),
     }
@@ -2752,30 +2807,42 @@ fn route_export_modal_input(
 /// [`QrExportFocus::DoneButton`] closes the modal. `Enter` on the
 /// Save buttons is reserved for the save sub-flow slice (currently a
 /// silent no-op so the modal-trap contract holds).
-fn route_qr_export_modal_input(qr: &mut QrExportModal, vault: &Vault, key: &KeyEvent) -> bool {
+fn route_qr_export_modal_input(
+    path: &std::path::Path,
+    qr: &mut QrExportModal,
+    vault: &Vault,
+    key: &KeyEvent,
+) -> (Vec<Effect>, bool) {
+    // Active sub-flow gets first crack at input — Tab/focus cycling
+    // and Enter/Space land on the sub-flow's controls, not the
+    // Page-2 button row.
+    if qr.save_sub_flow.is_some() {
+        return route_qr_save_sub_flow_input(path, qr, key);
+    }
+
     if is_modal_focus_next(key) {
         qr.focus = qr_export_focus_next(qr.focus, qr.page);
-        return false;
+        return (Vec::new(), false);
     }
     if is_modal_focus_prev(key) {
         qr.focus = qr_export_focus_prev(qr.focus, qr.page);
-        return false;
+        return (Vec::new(), false);
     }
     match qr.page {
         QrExportPage::WarningAck => match key.code {
             KeyCode::Char(' ') if qr.focus == QrExportFocus::AckCheckbox => {
                 toggle_qr_export_ack(qr, vault);
-                false
+                (Vec::new(), false)
             }
             KeyCode::Enter => match qr.focus {
                 QrExportFocus::AckCheckbox => {
                     toggle_qr_export_ack(qr, vault);
-                    false
+                    (Vec::new(), false)
                 }
-                QrExportFocus::CancelButton => true,
-                _ => false,
+                QrExportFocus::CancelButton => (Vec::new(), true),
+                _ => (Vec::new(), false),
             },
-            _ => false,
+            _ => (Vec::new(), false),
         },
         QrExportPage::QrAndActions => match key.code {
             KeyCode::Char(' ') if qr.focus == QrExportFocus::AckCheckbox => {
@@ -2785,10 +2852,199 @@ fn route_qr_export_modal_input(qr: &mut QrExportModal, vault: &Vault, key: &KeyE
                 // and a future redesign that surfaces the ack on
                 // Page 2 should not silently drop the bind).
                 toggle_qr_export_ack(qr, vault);
-                false
+                (Vec::new(), false)
             }
-            KeyCode::Enter if qr.focus == QrExportFocus::DoneButton => true,
-            _ => false,
+            KeyCode::Enter => match qr.focus {
+                QrExportFocus::DoneButton => (Vec::new(), true),
+                QrExportFocus::SavePngButton => {
+                    qr.save_sub_flow = Some(QrSaveSubFlow::new(QrSaveFormat::Png));
+                    qr.error = None;
+                    (Vec::new(), false)
+                }
+                QrExportFocus::SaveSvgButton => {
+                    qr.save_sub_flow = Some(QrSaveSubFlow::new(QrSaveFormat::Svg));
+                    qr.error = None;
+                    (Vec::new(), false)
+                }
+                _ => (Vec::new(), false),
+            },
+            _ => (Vec::new(), false),
+        },
+    }
+}
+
+/// QR Export modal save sub-flow input path.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+/// QR Export, the sub-flow is a two-step state machine:
+///
+/// * [`QrSaveStep::EnterPath`] — the user types a destination path.
+///   `Enter` on [`QrSaveFocus::Confirm`] validates the path: empty
+///   rejects inline; an existing path flips to
+///   [`QrSaveStep::OverwriteGate`] (no effect emitted); otherwise
+///   emits [`Effect::QrExport`].
+/// * [`QrSaveStep::OverwriteGate`] — the destination exists. The
+///   user toggles [`QrSaveSubFlow::overwrite_ack`] and re-confirms;
+///   refused acks reject inline and the existing file stays
+///   byte-stable. Editing the path returns the step to
+///   [`QrSaveStep::EnterPath`] so a stale ack cannot apply to a
+///   different destination.
+///
+/// `Esc` cancels the sub-flow back to Page 2 — handled upstream in
+/// [`apply_esc_dismiss`] so the typed buffer drops before any
+/// rendering pass. `Tab` / `Ctrl-N` advance focus and
+/// `Shift-Tab` / `Ctrl-P` retreat within the active step's control
+/// set.
+fn route_qr_save_sub_flow_input(
+    path: &std::path::Path,
+    qr: &mut QrExportModal,
+    key: &KeyEvent,
+) -> (Vec<Effect>, bool) {
+    let account_id = qr.account_id;
+    let Some(sub) = qr.save_sub_flow.as_mut() else {
+        return (Vec::new(), false);
+    };
+
+    if is_modal_focus_next(key) {
+        sub.focus = qr_save_focus_next(sub.focus, sub.step);
+        return (Vec::new(), false);
+    }
+    if is_modal_focus_prev(key) {
+        sub.focus = qr_save_focus_prev(sub.focus, sub.step);
+        return (Vec::new(), false);
+    }
+
+    match key.code {
+        KeyCode::Char(c) if sub.focus == QrSaveFocus::PathField => {
+            // Editing the path invalidates any prior overwrite ack
+            // so a stale ack cannot apply to a different
+            // destination.
+            sub.path_text.push(c);
+            sub.step = QrSaveStep::EnterPath;
+            sub.overwrite_ack = false;
+            sub.error = None;
+            (Vec::new(), false)
+        }
+        KeyCode::Backspace if sub.focus == QrSaveFocus::PathField => {
+            sub.path_text.pop();
+            sub.step = QrSaveStep::EnterPath;
+            sub.overwrite_ack = false;
+            sub.error = None;
+            (Vec::new(), false)
+        }
+        KeyCode::Char(' ') if sub.focus == QrSaveFocus::OverwriteAck => {
+            sub.overwrite_ack = !sub.overwrite_ack;
+            sub.error = None;
+            (Vec::new(), false)
+        }
+        KeyCode::Enter => match sub.focus {
+            QrSaveFocus::Cancel => {
+                qr.save_sub_flow = None;
+                qr.focus = QrExportFocus::SavePngButton;
+                (Vec::new(), false)
+            }
+            QrSaveFocus::OverwriteAck => {
+                sub.overwrite_ack = !sub.overwrite_ack;
+                sub.error = None;
+                (Vec::new(), false)
+            }
+            QrSaveFocus::PathField | QrSaveFocus::Confirm => {
+                submit_qr_save_sub_flow(path, qr, account_id)
+            }
+        },
+        _ => (Vec::new(), false),
+    }
+}
+
+/// Validate the sub-flow's path + overwrite-ack state and either
+/// emit [`Effect::QrExport`] or stash an inline error.
+fn submit_qr_save_sub_flow(
+    path: &std::path::Path,
+    qr: &mut QrExportModal,
+    account_id: AccountId,
+) -> (Vec<Effect>, bool) {
+    let Some(sub) = qr.save_sub_flow.as_mut() else {
+        return (Vec::new(), false);
+    };
+    let trimmed = sub.path_text.trim();
+    if trimmed.is_empty() {
+        sub.error = Some(render_error_message(&PaladinError::ValidationError {
+            field: "path",
+            reason: "empty_path".to_string(),
+            source_index: None,
+            decoded_len: None,
+            recommended_min: None,
+            entry_type: None,
+        }));
+        return (Vec::new(), false);
+    }
+    let target = std::path::PathBuf::from(trimmed);
+    let exists = matches!(target.try_exists(), Ok(true));
+    if exists && !sub.overwrite_ack {
+        // First Confirm against an existing path flips the sub-flow
+        // into the overwrite gate; a follow-up Confirm with the ack
+        // off rejects inline with the refused-overwrite wording.
+        if sub.step == QrSaveStep::EnterPath {
+            sub.step = QrSaveStep::OverwriteGate;
+            sub.focus = QrSaveFocus::OverwriteAck;
+            sub.error = None;
+            return (Vec::new(), false);
+        }
+        sub.error = Some(render_error_message(&PaladinError::ValidationError {
+            field: "path",
+            reason: "output_exists".to_string(),
+            source_index: None,
+            decoded_len: None,
+            recommended_min: None,
+            entry_type: None,
+        }));
+        return (Vec::new(), false);
+    }
+
+    let format = sub.format;
+    (
+        vec![Effect::QrExport {
+            path: path.to_path_buf(),
+            target_path: target,
+            account_id,
+            format,
+        }],
+        false,
+    )
+}
+
+/// Advance focus within the save sub-flow, wrapping at either end of
+/// the current step's control set.
+fn qr_save_focus_next(focus: QrSaveFocus, step: QrSaveStep) -> QrSaveFocus {
+    match step {
+        QrSaveStep::EnterPath => match focus {
+            QrSaveFocus::PathField => QrSaveFocus::Confirm,
+            QrSaveFocus::Confirm => QrSaveFocus::Cancel,
+            QrSaveFocus::Cancel | QrSaveFocus::OverwriteAck => QrSaveFocus::PathField,
+        },
+        QrSaveStep::OverwriteGate => match focus {
+            QrSaveFocus::PathField => QrSaveFocus::OverwriteAck,
+            QrSaveFocus::OverwriteAck => QrSaveFocus::Confirm,
+            QrSaveFocus::Confirm => QrSaveFocus::Cancel,
+            QrSaveFocus::Cancel => QrSaveFocus::PathField,
+        },
+    }
+}
+
+/// Retreat focus within the save sub-flow, wrapping at either end of
+/// the current step's control set.
+fn qr_save_focus_prev(focus: QrSaveFocus, step: QrSaveStep) -> QrSaveFocus {
+    match step {
+        QrSaveStep::EnterPath => match focus {
+            QrSaveFocus::Cancel => QrSaveFocus::Confirm,
+            QrSaveFocus::Confirm => QrSaveFocus::PathField,
+            QrSaveFocus::PathField | QrSaveFocus::OverwriteAck => QrSaveFocus::Cancel,
+        },
+        QrSaveStep::OverwriteGate => match focus {
+            QrSaveFocus::Cancel => QrSaveFocus::Confirm,
+            QrSaveFocus::Confirm => QrSaveFocus::OverwriteAck,
+            QrSaveFocus::OverwriteAck => QrSaveFocus::PathField,
+            QrSaveFocus::PathField => QrSaveFocus::Cancel,
         },
     }
 }
@@ -2813,9 +3069,11 @@ fn route_qr_export_modal_input(qr: &mut QrExportModal, vault: &Vault, key: &KeyE
 /// the modal on Page 1 with `ack = false`.
 fn toggle_qr_export_ack(qr: &mut QrExportModal, vault: &Vault) {
     if qr.ack {
-        // Toggle off: drop staged buffers and return to Page 1.
+        // Toggle off: drop staged buffers (and any in-flight save
+        // sub-flow) and return to Page 1.
         qr.ack = false;
         qr.staged_ansi = None;
+        qr.save_sub_flow = None;
         qr.page = QrExportPage::WarningAck;
         qr.focus = QrExportFocus::AckCheckbox;
         return;
@@ -3647,6 +3905,22 @@ fn apply_esc_dismiss(
     *pending_chord_leader = None;
     if *help_open {
         *help_open = false;
+    } else if let Some(Modal::QrExport(qr)) = modal {
+        // Esc inside the QR Export modal's save sub-flow only
+        // cancels the sub-flow — the Page-2 QR body survives so
+        // the user can re-attempt a save. Per
+        // `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+        // QR Export: *"`Esc` while focus is inside the Page-2
+        // destination-path sub-flow ... cancels only the sub-flow:
+        // the modal returns to the Page-2 QR body, the typed path
+        // buffer is zeroized, and the rendered ANSI body
+        // survives."*
+        if qr.save_sub_flow.is_some() {
+            qr.save_sub_flow = None;
+            qr.focus = QrExportFocus::SavePngButton;
+        } else {
+            *modal = None;
+        }
     } else if modal.is_some() {
         *modal = None;
     } else if *focus == Focus::Search {

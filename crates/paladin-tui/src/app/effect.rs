@@ -23,16 +23,17 @@ use std::time::{Instant, SystemTime};
 
 use paladin_core::{
     export as core_export, import as core_import, parse_icon_hint_token, parse_otpauth,
-    validate_manual, write_secret_file_atomic, Account, AccountInput, ClipboardClearPolicy,
-    EncryptionOptions, ImportConflict, ImportFormat, ImportOptions, PaladinError, SettingPatch,
-    Store, ValidatedAccount, Vault, VaultInit, VaultLock,
+    validate_manual, write_secret_file_atomic, Account, AccountId, AccountInput,
+    ClipboardClearPolicy, EncryptionOptions, ImportConflict, ImportFormat, ImportOptions,
+    PaladinError, QrRenderOptions, SettingPatch, Store, ValidatedAccount, Vault, VaultInit,
+    VaultLock,
 };
 
 use crate::app::event::{
     AddFailure, AddSuccess, AppEvent, CreateVaultInit, Effect, EffectResult, ImportFailure,
     ImportSuccess, QrImportFailure, QrImportSuccess,
 };
-use crate::app::state::{AppState, ExportFormat};
+use crate::app::state::{AppState, ExportFormat, QrSaveFormat};
 
 /// Outcome of executing a single [`Effect`].
 ///
@@ -443,6 +444,12 @@ pub fn execute(
             format,
             passphrase,
         } => execute_export(&path, &target_path, format, passphrase, state, sender),
+        Effect::QrExport {
+            path,
+            target_path,
+            account_id,
+            format,
+        } => execute_qr_export(&path, &target_path, account_id, format, state, sender),
         Effect::PassphraseSet {
             path,
             new_passphrase,
@@ -1054,6 +1061,76 @@ fn execute_export(
 
     let result = bytes_result.and_then(|bytes| write_secret_file_atomic(target_path, &bytes));
     let _ = sender.send(AppEvent::EffectResult(EffectResult::Export { result }));
+    EffectOutcome::Continue
+}
+
+/// Execute an [`Effect::QrExport`] for a QR-Export-modal Save-as-PNG /
+/// Save-as-SVG submit.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+/// QR Export and `docs/DESIGN.md` §4.6 / §6:
+///
+/// 1. Render the QR for `account_id`:
+///    [`QrSaveFormat::Png`] routes through
+///    [`paladin_core::Vault::export_qr_png`] (a `Zeroizing<Vec<u8>>`
+///    of PNG bytes); [`QrSaveFormat::Svg`] routes through
+///    [`paladin_core::Vault::export_qr_svg`] (a `Zeroizing<String>`
+///    of SVG markup).
+/// 2. Hand the bytes to [`paladin_core::write_secret_file_atomic`],
+///    which writes through a tmpfile + rename and enforces mode
+///    `0600` on the final file.
+/// 3. Post the outcome back through [`EffectResult::QrExport`] so
+///    the reducer can stash a success path in
+///    [`crate::app::state::QrExportModal::last_save_path`] or render
+///    the inline error.
+///
+/// QR Export does not mutate the vault — both
+/// [`paladin_core::Vault::export_qr_png`] and
+/// [`paladin_core::Vault::export_qr_svg`] take `&self`. The executor
+/// never calls `Vault::save`; HOTP counters and `updated_at` are
+/// guaranteed untouched across modal open / close / save per the
+/// read-only contract.
+///
+/// The path check protects against a stale effect emitted before an
+/// auto-lock or vault switch: if the live state is no longer
+/// `Unlocked` against the same path, drop the effect silently — the
+/// reducer would discard the corresponding `EffectResult::QrExport`
+/// anyway, and posting back would just synthesize an artificial
+/// mutation attempt against unrelated state.
+fn execute_qr_export(
+    path: &Path,
+    target_path: &Path,
+    account_id: AccountId,
+    format: QrSaveFormat,
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+) -> EffectOutcome {
+    let AppState::Unlocked {
+        path: state_path,
+        vault,
+        ..
+    } = state
+    else {
+        return EffectOutcome::Continue;
+    };
+    if state_path != path {
+        return EffectOutcome::Continue;
+    }
+
+    let opts = QrRenderOptions::default();
+    let bytes_result: Result<Vec<u8>, PaladinError> = match format {
+        QrSaveFormat::Png => vault
+            .export_qr_png(account_id, &opts)
+            .map(|zeroizing| zeroizing.to_vec()),
+        QrSaveFormat::Svg => vault
+            .export_qr_svg(account_id, &opts)
+            .map(|zeroizing| zeroizing.as_bytes().to_vec()),
+    };
+
+    let result = bytes_result
+        .and_then(|bytes| write_secret_file_atomic(target_path, &bytes))
+        .map(|()| target_path.to_path_buf());
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::QrExport { result }));
     EffectOutcome::Continue
 }
 

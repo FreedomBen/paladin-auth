@@ -535,6 +535,41 @@ pub enum EffectResult {
         result: Result<(), PaladinError>,
     },
 
+    /// Outcome of an [`Effect::QrExport`] attempt.
+    ///
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// QR Export: *"Save-as-PNG / Save-as-SVG route through
+    /// `write_secret_file_atomic` (0600) with the inline overwrite
+    /// gate ... pre-commit / durability-unconfirmed save errors and
+    /// writer failures stay in the modal as inline errors."* QR
+    /// Export does not mutate the vault, so there is no rollback
+    /// path — the executor's failure modes are pure I/O / encoder.
+    ///
+    /// On `Ok(target_path)` the reducer stashes the path in
+    /// [`crate::app::state::QrExportModal::last_save_path`] (replace-
+    /// only — a second successful save overwrites the slot), clears
+    /// the sub-flow's [`crate::app::state::QrSaveSubFlow::error`],
+    /// and returns the modal to the Page-2 button row.
+    ///
+    /// On `Err(...)` the modal stays open with the sub-flow still
+    /// active and the rendered error is stashed in
+    /// [`crate::app::state::QrSaveSubFlow::error`]. Writer failures
+    /// (`io_error`, `save_not_committed`, `save_durability_unconfirmed`)
+    /// and encoder failures (`data_too_long`, `account_not_found`)
+    /// all ride this channel.
+    ///
+    /// Results delivered while not on
+    /// [`crate::app::state::AppState::Unlocked`], while a different
+    /// modal is open, or after the QR Export modal closed are
+    /// discarded — the carried [`PaladinError`] drops without
+    /// mutating state.
+    QrExport {
+        /// The QR export outcome. `Ok(target_path)` means the
+        /// destination file is written; `Err` carries the writer /
+        /// encoder error for inline rendering.
+        result: Result<PathBuf, PaladinError>,
+    },
+
     /// Outcome of an `Effect::PassphraseSet` / `PassphraseChange` /
     /// `PassphraseRemove` attempt.
     ///
@@ -1278,6 +1313,46 @@ pub enum Effect {
         /// `format == ExportFormat::Encrypted`; the plaintext path
         /// passes [`None`].
         passphrase: Option<SecretString>,
+    },
+    /// Render the QR for `account_id` as PNG / SVG and write it to
+    /// `target_path` through
+    /// [`paladin_core::write_secret_file_atomic`] (mode `0600`).
+    ///
+    /// Per `docs/DESIGN.md` §4.6 / §6 and
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// QR Export: *"Save-as-PNG / Save-as-SVG route through
+    /// `write_secret_file_atomic` (0600) ... read-only — HOTP
+    /// counters and `updated_at` are unchanged across modal open /
+    /// close / save."* The executor calls
+    /// [`paladin_core::Vault::export_qr_png`] /
+    /// [`paladin_core::Vault::export_qr_svg`] (both `&self`,
+    /// neither mutates the vault), writes the bytes through
+    /// [`paladin_core::write_secret_file_atomic`], then surfaces
+    /// the outcome through
+    /// [`EffectResult::QrExport`](Self::QrExport) so the reducer can
+    /// stash a success path or render an inline error. No
+    /// `Vault::save` is issued; the vault is not mutated on either
+    /// the happy or failure path.
+    QrExport {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away (e.g.
+        /// auto-locked between submit and execute).
+        path: PathBuf,
+        /// Destination file path passed to
+        /// [`paladin_core::write_secret_file_atomic`].
+        target_path: PathBuf,
+        /// Account being exported. Captured at sub-flow open time
+        /// alongside the modal's `account_id` so a vault mutation
+        /// (account removed) between submit and execute surfaces as
+        /// `invalid_state { operation: "export_qr_png" / "_svg",
+        /// state: "account_not_found" }` rather than crashing.
+        account_id: AccountId,
+        /// Output format. [`crate::app::state::QrSaveFormat::Png`]
+        /// routes through [`paladin_core::Vault::export_qr_png`];
+        /// [`crate::app::state::QrSaveFormat::Svg`] routes through
+        /// [`paladin_core::Vault::export_qr_svg`].
+        format: crate::app::state::QrSaveFormat,
     },
     /// Apply a `Set` passphrase transition (plaintext → encrypted) to
     /// the open vault.
