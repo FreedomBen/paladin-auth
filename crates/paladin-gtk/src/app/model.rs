@@ -5133,12 +5133,50 @@ impl AppModel {
         // buffers (passphrase entries, add-account base32 secret,
         // duplicate `ValidatedAccount`, pending `VaultInit`) zeroize
         // in lockstep with the vault drop.
+        //
+        // Each `adw::Dialog` (or `adw::AlertDialog` /
+        // `adw::PreferencesDialog` descendant) is `force_close()`'d
+        // before its controller is taken so the widget detaches
+        // from its parent's dialog stack instead of surviving the
+        // lock as an orphan overlay on top of the unlock screen.
+        // `RenameDialogComponent` and `AddAccountComponent` use a
+        // `gtk::Box` root appended directly to `self.content`
+        // rather than a presented `adw::Dialog`, so they are
+        // removed from the content tree explicitly. Dialog button
+        // closures already route through `Sender::send` (the
+        // panic-safe pattern; see `import_dialog`'s Cancel button)
+        // so even a click that races the close is a benign no-op
+        // rather than a process abort. Without this dismissal step
+        // a click on the surviving widget could still race the
+        // controller drop (the source of the original
+        // `ImportDialog::Cancel` panic).
+        if let Some(controller) = self.rename_dialog.as_ref() {
+            self.content.remove(controller.widget());
+        }
         let rename_dialog = self.rename_dialog.take();
+        if let Some(controller) = self.remove_dialog.as_ref() {
+            controller.widget().force_close();
+        }
         let remove_dialog = self.remove_dialog.take();
+        if let Some(controller) = self.add_dialog.as_ref() {
+            self.content.remove(controller.widget());
+        }
         let add_dialog = self.add_dialog.take();
+        if let Some(controller) = self.settings_dialog.as_ref() {
+            controller.widget().force_close();
+        }
         let settings_dialog = self.settings_dialog.take();
+        if let Some(controller) = self.import_dialog.as_ref() {
+            controller.widget().force_close();
+        }
         let import_dialog = self.import_dialog.take();
+        if let Some(controller) = self.export_dialog.as_ref() {
+            controller.widget().force_close();
+        }
         let export_dialog = self.export_dialog.take();
+        if let Some(controller) = self.passphrase_dialog.as_ref() {
+            controller.widget().force_close();
+        }
         let passphrase_dialog = self.passphrase_dialog.take();
         // QR-export dialog: explicit `clear_for_lock` wipes the
         // staged PNG / SVG buffers and inline-error bodies on the
@@ -5148,6 +5186,7 @@ impl AppModel {
         // `clear_for_lock_drops_staged_buffers_and_paintable`.
         if let Some(controller) = self.export_qr_dialog.as_ref() {
             crate::export_qr_dialog::clear_for_lock(controller.state().get_mut().model.state_mut());
+            controller.widget().force_close();
         }
         let export_qr_dialog = self.export_qr_dialog.take();
 

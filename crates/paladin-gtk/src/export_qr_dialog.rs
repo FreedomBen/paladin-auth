@@ -1193,11 +1193,15 @@ fn open_save_file_dialog(sender: &relm4::ComponentSender<ExportQrDialogComponent
             if let Ok(file) = result {
                 if let Some(path) = file.path() {
                     let exists = path.try_exists().unwrap_or(true);
-                    sender_inner.input(ExportQrDialogMsg::SaveDestinationPicked {
-                        kind,
-                        path,
-                        exists,
-                    });
+                    // The `FileDialog::save` callback is long-lived
+                    // and may fire after the parent controller has
+                    // been dropped. Route through `Sender::send` so
+                    // a stray completion is a benign no-op rather
+                    // than a process abort (see `import_dialog`'s
+                    // Cancel button comment).
+                    let _ = sender_inner
+                        .input_sender()
+                        .send(ExportQrDialogMsg::SaveDestinationPicked { kind, path, exists });
                 }
             }
         },
@@ -1423,9 +1427,14 @@ fn build_staged_png_texture(state: &ExportQrDialogState) -> Option<gdk::Texture>
 fn wire_dismiss_controller(root: &adw::Dialog, sender: &ComponentSender<ExportQrDialogComponent>) {
     let controller = gtk::EventControllerKey::new();
     let dismiss_sender = sender.clone();
+    // See `import_dialog`'s Cancel button comment — route the
+    // Escape dispatch through `Sender::send` so a stray
+    // key-pressed signal after controller drop is a benign no-op.
     controller.connect_key_pressed(move |_, keyval, _, mods| {
         if crate::add_account::dispatch_root_dismiss_key(keyval, mods) {
-            dismiss_sender.input(ExportQrDialogMsg::CancelPressed);
+            let _ = dismiss_sender
+                .input_sender()
+                .send(ExportQrDialogMsg::CancelPressed);
             return glib::Propagation::Stop;
         }
         glib::Propagation::Proceed
@@ -1476,8 +1485,16 @@ impl SimpleComponent for ExportQrDialogComponent {
         adw::Dialog {
             set_title: format_export_qr_dialog_title(),
 
+            // `Sender::send` is used instead of
+            // `ComponentSender::input` (which `.expect`s on a
+            // closed channel) so a stray `closed` signal after the
+            // controller is dropped — e.g. `lock_on_auto_lock_expiry`
+            // taking the dialog into `UnlockedDiscards.modal` — is
+            // a benign no-op rather than a process abort. See
+            // `import_dialog`'s Cancel button for the canonical
+            // comment.
             connect_closed[sender] => move |_| {
-                sender.input(ExportQrDialogMsg::Close);
+                let _ = sender.input_sender().send(ExportQrDialogMsg::Close);
             },
 
             #[wrap(Some)]
@@ -1514,10 +1531,11 @@ impl SimpleComponent for ExportQrDialogComponent {
                                 set_subtitle: format_export_qr_dialog_ack_row_subtitle(),
                                 #[watch]
                                 set_active: model.state.ack_revealed,
+                                // See the `connect_closed` comment.
                                 connect_active_notify[sender] => move |row| {
-                                    sender.input(ExportQrDialogMsg::AckToggled(
-                                        row.is_active(),
-                                    ));
+                                    let _ = sender.input_sender().send(
+                                        ExportQrDialogMsg::AckToggled(row.is_active()),
+                                    );
                                 },
                             },
                         },
@@ -1547,8 +1565,11 @@ impl SimpleComponent for ExportQrDialogComponent {
                             #[name = "cancel_button"]
                             gtk::Button {
                                 set_label: format_export_qr_dialog_cancel_label(),
+                                // See the `connect_closed` comment.
                                 connect_clicked[sender] => move |_| {
-                                    sender.input(ExportQrDialogMsg::CancelPressed);
+                                    let _ = sender
+                                        .input_sender()
+                                        .send(ExportQrDialogMsg::CancelPressed);
                                 },
                             },
 
@@ -1558,8 +1579,9 @@ impl SimpleComponent for ExportQrDialogComponent {
                                 add_css_class: "suggested-action",
                                 #[watch]
                                 set_sensitive: compose_show_qr_button_sensitive(&model.state),
+                                // See the `connect_closed` comment.
                                 connect_clicked[sender] => move |_| {
-                                    sender.input(ExportQrDialogMsg::ShowQr);
+                                    let _ = sender.input_sender().send(ExportQrDialogMsg::ShowQr);
                                 },
                             },
                         },
@@ -1670,8 +1692,9 @@ impl SimpleComponent for ExportQrDialogComponent {
                                 set_subtitle: format_export_qr_dialog_overwrite_row_subtitle(),
                                 #[watch]
                                 set_active: model.state.overwrite_acknowledged,
+                                // See the `connect_closed` comment.
                                 connect_active_notify[sender] => move |row| {
-                                    sender.input(
+                                    let _ = sender.input_sender().send(
                                         ExportQrDialogMsg::OverwriteAcknowledged(row.is_active()),
                                     );
                                 },
@@ -1686,8 +1709,11 @@ impl SimpleComponent for ExportQrDialogComponent {
                             #[name = "save_as_png_button"]
                             gtk::Button {
                                 set_label: format_export_qr_dialog_save_as_png_label(),
+                                // See the `connect_closed` comment.
                                 connect_clicked[sender] => move |_| {
-                                    sender.input(ExportQrDialogMsg::SaveAsPngPressed);
+                                    let _ = sender
+                                        .input_sender()
+                                        .send(ExportQrDialogMsg::SaveAsPngPressed);
                                     open_save_file_dialog(&sender, SaveKind::Png);
                                 },
                             },
@@ -1695,8 +1721,11 @@ impl SimpleComponent for ExportQrDialogComponent {
                             #[name = "save_as_svg_button"]
                             gtk::Button {
                                 set_label: format_export_qr_dialog_save_as_svg_label(),
+                                // See the `connect_closed` comment.
                                 connect_clicked[sender] => move |_| {
-                                    sender.input(ExportQrDialogMsg::SaveAsSvgPressed);
+                                    let _ = sender
+                                        .input_sender()
+                                        .send(ExportQrDialogMsg::SaveAsSvgPressed);
                                     open_save_file_dialog(&sender, SaveKind::Svg);
                                 },
                             },
@@ -1720,8 +1749,11 @@ impl SimpleComponent for ExportQrDialogComponent {
                                 set_label: format_export_qr_dialog_copy_image_label(),
                                 #[watch]
                                 set_sensitive: compose_copy_image_button_sensitive(&model.state),
+                                // See the `connect_closed` comment.
                                 connect_clicked[sender] => move |_| {
-                                    sender.input(ExportQrDialogMsg::CopyImage);
+                                    let _ = sender
+                                        .input_sender()
+                                        .send(ExportQrDialogMsg::CopyImage);
                                 },
                             },
 
@@ -1729,8 +1761,9 @@ impl SimpleComponent for ExportQrDialogComponent {
                             gtk::Button {
                                 set_label: format_export_qr_dialog_done_label(),
                                 add_css_class: "suggested-action",
+                                // See the `connect_closed` comment.
                                 connect_clicked[sender] => move |_| {
-                                    sender.input(ExportQrDialogMsg::Close);
+                                    let _ = sender.input_sender().send(ExportQrDialogMsg::Close);
                                 },
                             },
                         },

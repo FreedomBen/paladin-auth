@@ -813,10 +813,17 @@ impl SimpleComponent for UnlockDialogComponent {
                     // `SecretEntry` shadow buffer tracks the live entry
                     // and Paladin-owned `Zeroizing<String>` is the only
                     // long-lived home for the cleartext bytes.
+                    // `Sender::send` is used instead of
+                    // `ComponentSender::input` (which `.expect`s on
+                    // a closed channel) so a stray callback after
+                    // the controller is dropped is a benign no-op
+                    // rather than a process abort. See
+                    // `import_dialog`'s Cancel button for the
+                    // canonical comment.
                     connect_changed[sender] => move |entry| {
-                        sender.input(UnlockDialogMsg::PassphraseChanged(
-                            entry.text().to_string(),
-                        ));
+                        let _ = sender.input_sender().send(
+                            UnlockDialogMsg::PassphraseChanged(entry.text().to_string()),
+                        );
                     },
                     // `entry-activated` fires when the user presses
                     // Enter inside the entry. Dispatching the same
@@ -827,8 +834,9 @@ impl SimpleComponent for UnlockDialogComponent {
                     // `invalid_passphrase` / `zero_length` rejection,
                     // matching the defense-in-depth path the button's
                     // sensitivity gate already documents.
+                    // See the `connect_changed` comment.
                     connect_entry_activated[sender] => move |_| {
-                        sender.input(UnlockDialogMsg::SubmitClicked);
+                        let _ = sender.input_sender().send(UnlockDialogMsg::SubmitClicked);
                     },
                 },
             },
@@ -899,8 +907,9 @@ impl SimpleComponent for UnlockDialogComponent {
                     add_css_class: "suggested-action",
                     #[watch]
                     set_sensitive: model.state.submit_button_sensitive(),
+                    // See the `connect_changed` comment.
                     connect_clicked[sender] => move |_| {
-                        sender.input(UnlockDialogMsg::SubmitClicked);
+                        let _ = sender.input_sender().send(UnlockDialogMsg::SubmitClicked);
                     },
                 },
             },

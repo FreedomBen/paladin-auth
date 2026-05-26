@@ -2139,8 +2139,19 @@ impl SimpleComponent for SettingsComponent {
                         set_sensitive: compose_settings_dialog_auto_lock_enabled_sensitive(
                             &model.state,
                         ),
+                        // `Sender::send` is used instead of
+                        // `ComponentSender::input` (which `.expect`s
+                        // on a closed channel) so a stray callback
+                        // after the controller is dropped — e.g.
+                        // `lock_on_auto_lock_expiry` taking the
+                        // dialog into `UnlockedDiscards.modal` — is
+                        // a benign no-op rather than a process
+                        // abort. See `import_dialog`'s Cancel
+                        // button for the canonical comment.
                         connect_active_notify[sender] => move |row| {
-                            sender.input(SettingsDialogMsg::AutoLockToggled(row.is_active()));
+                            let _ = sender
+                                .input_sender()
+                                .send(SettingsDialogMsg::AutoLockToggled(row.is_active()));
                         },
                     },
 
@@ -2170,10 +2181,13 @@ impl SimpleComponent for SettingsComponent {
                         set_sensitive: compose_settings_dialog_auto_lock_secs_sensitive(
                             &model.state,
                         ),
+                        // See the auto-lock-enabled-row `connect_active_notify` comment.
                         connect_changed[sender] => move |spin| {
                             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                             let secs = spin.value() as u32;
-                            sender.input(SettingsDialogMsg::AutoLockSecsSpinnerChanged(secs));
+                            let _ = sender
+                                .input_sender()
+                                .send(SettingsDialogMsg::AutoLockSecsSpinnerChanged(secs));
                         },
                     },
                 },
@@ -2239,8 +2253,11 @@ impl SimpleComponent for SettingsComponent {
                             compose_settings_dialog_clipboard_clear_enabled_sensitive(
                                 &model.state,
                             ),
+                        // See the auto-lock-enabled-row `connect_active_notify` comment.
                         connect_active_notify[sender] => move |row| {
-                            sender.input(SettingsDialogMsg::ClipboardClearToggled(row.is_active()));
+                            let _ = sender.input_sender().send(
+                                SettingsDialogMsg::ClipboardClearToggled(row.is_active()),
+                            );
                         },
                     },
 
@@ -2271,10 +2288,11 @@ impl SimpleComponent for SettingsComponent {
                         #[watch]
                         set_sensitive:
                             compose_settings_dialog_clipboard_clear_secs_sensitive(&model.state),
+                        // See the auto-lock-enabled-row `connect_active_notify` comment.
                         connect_changed[sender] => move |spin| {
                             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                             let secs = spin.value() as u32;
-                            sender.input(
+                            let _ = sender.input_sender().send(
                                 SettingsDialogMsg::ClipboardClearSecsSpinnerChanged(secs),
                             );
                         },

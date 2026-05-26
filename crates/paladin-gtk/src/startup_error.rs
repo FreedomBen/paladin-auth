@@ -453,16 +453,23 @@ impl SimpleComponent for StartupErrorComponent {
                     set_label: format_startup_error_retry_label(),
                     add_css_class: "suggested-action",
                     add_css_class: "pill",
+                    // `Sender::send` is used instead of
+                    // `ComponentSender::input` (which `.expect`s on
+                    // a closed channel) so a stray click after the
+                    // controller is dropped is a benign no-op rather
+                    // than a process abort. See `import_dialog`'s
+                    // Cancel button for the canonical comment.
                     connect_clicked[sender] => move |_| {
-                        sender.input(StartupErrorMsg::RetryClicked);
+                        let _ = sender.input_sender().send(StartupErrorMsg::RetryClicked);
                     },
                 },
 
                 gtk::Button {
                     set_label: format_startup_error_quit_label(),
                     add_css_class: "pill",
+                    // See the Retry button comment.
                     connect_clicked[sender] => move |_| {
-                        sender.input(StartupErrorMsg::QuitClicked);
+                        let _ = sender.input_sender().send(StartupErrorMsg::QuitClicked);
                     },
                 },
             },

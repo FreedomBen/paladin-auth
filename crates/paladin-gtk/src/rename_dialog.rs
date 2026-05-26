@@ -1036,8 +1036,20 @@ impl SimpleComponent for RenameDialogComponent {
                     // `connect_changed` fires on every keystroke so
                     // the cached `RenameDialogState::last_validation`
                     // tracks the live draft.
+                    // `Sender::send` is used instead of
+                    // `ComponentSender::input` (which `.expect`s on
+                    // a closed channel) so a stray callback after
+                    // the controller is dropped — e.g.
+                    // `lock_on_auto_lock_expiry` taking the dialog
+                    // into `UnlockedDiscards.modal` while the
+                    // `adw::Dialog` widget still lives — is a
+                    // benign no-op rather than a process abort. See
+                    // `import_dialog`'s Cancel button for the
+                    // canonical comment.
                     connect_changed[sender] => move |entry| {
-                        sender.input(RenameDialogMsg::DraftChanged(entry.text().to_string()));
+                        let _ = sender
+                            .input_sender()
+                            .send(RenameDialogMsg::DraftChanged(entry.text().to_string()));
                     },
                 },
             },
@@ -1064,8 +1076,9 @@ impl SimpleComponent for RenameDialogComponent {
                 #[name = "cancel_button"]
                 gtk::Button {
                     set_label: format_rename_dialog_cancel_label(),
+                    // See the `connect_changed` comment.
                     connect_clicked[sender] => move |_| {
-                        sender.input(RenameDialogMsg::Cancel);
+                        let _ = sender.input_sender().send(RenameDialogMsg::Cancel);
                     },
                 },
 
@@ -1075,8 +1088,9 @@ impl SimpleComponent for RenameDialogComponent {
                     add_css_class: "suggested-action",
                     #[watch]
                     set_sensitive: format_rename_dialog_save_button_sensitive(&model.state),
+                    // See the `connect_changed` comment.
                     connect_clicked[sender] => move |_| {
-                        sender.input(RenameDialogMsg::SubmitClicked);
+                        let _ = sender.input_sender().send(RenameDialogMsg::SubmitClicked);
                     },
                 },
             },

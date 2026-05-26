@@ -4408,9 +4408,16 @@ pub fn dispatch_root_dismiss_key(keyval: gtk::gdk::Key, mods: gtk::gdk::Modifier
 fn wire_dismiss_controller(root: &gtk::Box, sender: &ComponentSender<AddAccountComponent>) {
     let controller = gtk::EventControllerKey::new();
     let dismiss_sender = sender.clone();
+    // `Sender::send` is used instead of `ComponentSender::input`
+    // (which `.expect`s on a closed channel) so a stray key-pressed
+    // signal after the controller is dropped — e.g.
+    // `lock_on_auto_lock_expiry` taking the dialog into
+    // `UnlockedDiscards.modal` — is a benign no-op rather than a
+    // process abort. See `import_dialog`'s Cancel button for the
+    // canonical comment.
     controller.connect_key_pressed(move |_, keyval, _, mods| {
         if dispatch_root_dismiss_key(keyval, mods) {
-            dismiss_sender.input(AddAccountMsg::Cancel);
+            let _ = dismiss_sender.input_sender().send(AddAccountMsg::Cancel);
             return gtk::glib::Propagation::Stop;
         }
         gtk::glib::Propagation::Proceed
@@ -4472,28 +4479,43 @@ impl SimpleComponent for AddAccountComponent {
                         #[name = "manual_label_row"]
                         add = &adw::EntryRow {
                             set_title: format_manual_label_title(),
+                            // `Sender::send` is used instead of
+                            // `ComponentSender::input` (which
+                            // `.expect`s on a closed channel) so a
+                            // stray callback after the controller
+                            // is dropped — e.g.
+                            // `lock_on_auto_lock_expiry` taking the
+                            // dialog into `UnlockedDiscards.modal`
+                            // — is a benign no-op rather than a
+                            // process abort. See `import_dialog`'s
+                            // Cancel button for the canonical
+                            // comment.
                             connect_changed[sender] => move |entry| {
-                                sender.input(AddAccountMsg::ManualLabelChanged(
-                                    entry.text().to_string(),
-                                ));
+                                let _ = sender.input_sender().send(
+                                    AddAccountMsg::ManualLabelChanged(entry.text().to_string()),
+                                );
                             },
                         },
                         #[name = "manual_issuer_row"]
                         add = &adw::EntryRow {
                             set_title: format_manual_issuer_title(),
+                            // See the manual-label `connect_changed` comment.
                             connect_changed[sender] => move |entry| {
-                                sender.input(AddAccountMsg::ManualIssuerChanged(
-                                    entry.text().to_string(),
-                                ));
+                                let _ = sender.input_sender().send(
+                                    AddAccountMsg::ManualIssuerChanged(entry.text().to_string()),
+                                );
                             },
                         },
                         #[name = "manual_icon_hint_row"]
                         add = &adw::EntryRow {
                             set_title: format_manual_icon_hint_title(),
+                            // See the manual-label `connect_changed` comment.
                             connect_changed[sender] => move |entry| {
-                                sender.input(AddAccountMsg::ManualIconHintChanged(
-                                    entry.text().to_string(),
-                                ));
+                                let _ = sender.input_sender().send(
+                                    AddAccountMsg::ManualIconHintChanged(
+                                        entry.text().to_string(),
+                                    ),
+                                );
                             },
                         },
                     },
@@ -4508,10 +4530,11 @@ impl SimpleComponent for AddAccountComponent {
                         #[name = "manual_secret_row"]
                         add = &adw::PasswordEntryRow {
                             set_title: format_manual_secret_title(),
+                            // See the manual-label `connect_changed` comment.
                             connect_changed[sender] => move |entry| {
-                                sender.input(AddAccountMsg::ManualSecretChanged(
-                                    entry.text().to_string(),
-                                ));
+                                let _ = sender.input_sender().send(
+                                    AddAccountMsg::ManualSecretChanged(entry.text().to_string()),
+                                );
                             },
                         },
                     },
@@ -4536,11 +4559,14 @@ impl SimpleComponent for AddAccountComponent {
                             )),
                             #[watch]
                             set_selected: compose_manual_kind_selected(&model.state),
+                            // See the manual-label `connect_changed` comment.
                             connect_selected_notify[sender] => move |combo| {
                                 if let Some(kind) =
                                     parse_manual_kind_from_selected(combo.selected())
                                 {
-                                    sender.input(AddAccountMsg::ManualKindChanged(kind));
+                                    let _ = sender
+                                        .input_sender()
+                                        .send(AddAccountMsg::ManualKindChanged(kind));
                                 }
                             },
                         },
@@ -4552,13 +4578,14 @@ impl SimpleComponent for AddAccountComponent {
                             )),
                             #[watch]
                             set_selected: compose_manual_algorithm_selected(&model.state),
+                            // See the manual-label `connect_changed` comment.
                             connect_selected_notify[sender] => move |combo| {
                                 if let Some(algorithm) =
                                     parse_manual_algorithm_from_selected(combo.selected())
                                 {
-                                    sender.input(AddAccountMsg::ManualAlgorithmChanged(
-                                        algorithm,
-                                    ));
+                                    let _ = sender.input_sender().send(
+                                        AddAccountMsg::ManualAlgorithmChanged(algorithm),
+                                    );
                                 }
                             },
                         },
@@ -4579,10 +4606,13 @@ impl SimpleComponent for AddAccountComponent {
                             }),
                             #[watch]
                             set_value: compose_manual_digits_value(&model.state),
+                            // See the manual-label `connect_changed` comment.
                             connect_changed[sender] => move |spin| {
                                 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                                 let digits = spin.value() as u8;
-                                sender.input(AddAccountMsg::ManualDigitsChanged(digits));
+                                let _ = sender
+                                    .input_sender()
+                                    .send(AddAccountMsg::ManualDigitsChanged(digits));
                             },
                         },
                     },
@@ -4615,10 +4645,13 @@ impl SimpleComponent for AddAccountComponent {
                             set_value: compose_manual_period_secs_value(&model.state),
                             #[watch]
                             set_visible: compose_manual_period_secs_visible(&model.state),
+                            // See the manual-label `connect_changed` comment.
                             connect_changed[sender] => move |spin| {
                                 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                                 let period = spin.value() as u32;
-                                sender.input(AddAccountMsg::ManualPeriodChanged(period));
+                                let _ = sender
+                                    .input_sender()
+                                    .send(AddAccountMsg::ManualPeriodChanged(period));
                             },
                         },
                         #[name = "manual_counter_row"]
@@ -4640,10 +4673,13 @@ impl SimpleComponent for AddAccountComponent {
                             set_value: compose_manual_counter_value(&model.state),
                             #[watch]
                             set_visible: compose_manual_counter_visible(&model.state),
+                            // See the manual-label `connect_changed` comment.
                             connect_changed[sender] => move |spin| {
                                 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                                 let counter = spin.value() as u64;
-                                sender.input(AddAccountMsg::ManualCounterChanged(counter));
+                                let _ = sender
+                                    .input_sender()
+                                    .send(AddAccountMsg::ManualCounterChanged(counter));
                             },
                         },
                     },
@@ -4694,10 +4730,11 @@ impl SimpleComponent for AddAccountComponent {
                             set_title: format_uri_text_title(),
                             #[watch]
                             set_text: compose_uri_text_value(&model.state),
+                            // See the manual-label `connect_changed` comment.
                             connect_changed[sender] => move |entry| {
-                                sender.input(AddAccountMsg::UriTextChanged(
-                                    entry.text().to_string(),
-                                ));
+                                let _ = sender.input_sender().send(
+                                    AddAccountMsg::UriTextChanged(entry.text().to_string()),
+                                );
                             },
                         },
                     },
@@ -4748,8 +4785,11 @@ impl SimpleComponent for AddAccountComponent {
                         set_halign: gtk::Align::Center,
                         #[watch]
                         set_sensitive: compose_scan_clipboard_button_sensitive(&model.state),
+                        // See the manual-label `connect_changed` comment.
                         connect_clicked[sender] => move |_| {
-                            sender.input(AddAccountMsg::ScanClipboardClicked);
+                            let _ = sender
+                                .input_sender()
+                                .send(AddAccountMsg::ScanClipboardClicked);
                         },
                     },
                 },
@@ -4777,10 +4817,13 @@ impl SimpleComponent for AddAccountComponent {
                 // buffer (manual Base32 / URI text) and drops any
                 // pending duplicate-add `ValidatedAccount` per the
                 // §"Secret entry handling" contract.
+                // See the manual-label `connect_changed` comment.
                 connect_visible_child_notify[sender] => move |stack| {
                     if let Some(name) = stack.visible_child_name() {
                         if let Some(path) = parse_add_path_name(name.as_str()) {
-                            sender.input(AddAccountMsg::SwitchPath(path));
+                            let _ = sender
+                                .input_sender()
+                                .send(AddAccountMsg::SwitchPath(path));
                         }
                     }
                 },
@@ -4878,8 +4921,9 @@ impl SimpleComponent for AddAccountComponent {
                 #[name = "cancel_button"]
                 gtk::Button {
                     set_label: format_add_dialog_cancel_label(),
+                    // See the manual-label `connect_changed` comment.
                     connect_clicked[sender] => move |_| {
-                        sender.input(AddAccountMsg::Cancel);
+                        let _ = sender.input_sender().send(AddAccountMsg::Cancel);
                     },
                 },
 
@@ -4907,8 +4951,9 @@ impl SimpleComponent for AddAccountComponent {
                     add_css_class: "suggested-action",
                     #[watch]
                     set_sensitive: compose_save_button_sensitive(&model.state),
+                    // See the manual-label `connect_changed` comment.
                     connect_clicked[sender] => move |_| {
-                        sender.input(AddAccountMsg::SaveClicked);
+                        let _ = sender.input_sender().send(AddAccountMsg::SaveClicked);
                     },
                 },
             },
@@ -5029,11 +5074,17 @@ impl AddAccountComponent {
 
         let confirm_id_owned = confirm_id.to_string();
         let sender = sender.clone();
+        // See the manual-label `connect_changed` comment — route
+        // the alert response through `Sender::send` so a stray
+        // response after the parent controller has been torn down
+        // is a benign no-op.
         alert.connect_response(None, move |_dialog, response| {
             if response == confirm_id_owned {
-                sender.input(AddAccountMsg::ConfirmAddAnyway);
+                let _ = sender.input_sender().send(AddAccountMsg::ConfirmAddAnyway);
             } else {
-                sender.input(AddAccountMsg::DismissDuplicateAlert);
+                let _ = sender
+                    .input_sender()
+                    .send(AddAccountMsg::DismissDuplicateAlert);
             }
         });
 

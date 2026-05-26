@@ -997,20 +997,29 @@ impl SimpleComponent for PassphraseDialogComponent {
                         #[name = "new_passphrase_row"]
                         add = &adw::PasswordEntryRow {
                             set_title: "New passphrase",
+                            // See the Cancel button comment — route
+                            // through `Sender::send` so a stray
+                            // callback after the controller is
+                            // dropped is a benign no-op.
                             connect_changed[sender] => move |entry| {
-                                sender.input(PassphraseDialogMsg::NewPassphraseChanged(
-                                    entry.text().to_string(),
-                                ));
+                                let _ = sender.input_sender().send(
+                                    PassphraseDialogMsg::NewPassphraseChanged(
+                                        entry.text().to_string(),
+                                    ),
+                                );
                             },
                         },
 
                         #[name = "confirm_passphrase_row"]
                         add = &adw::PasswordEntryRow {
                             set_title: "Confirm passphrase",
+                            // See the Cancel button comment.
                             connect_changed[sender] => move |entry| {
-                                sender.input(PassphraseDialogMsg::ConfirmPassphraseChanged(
-                                    entry.text().to_string(),
-                                ));
+                                let _ = sender.input_sender().send(
+                                    PassphraseDialogMsg::ConfirmPassphraseChanged(
+                                        entry.text().to_string(),
+                                    ),
+                                );
                             },
                         },
                     },
@@ -1036,8 +1045,11 @@ impl SimpleComponent for PassphraseDialogComponent {
                         #[name = "remove_ack_row"]
                         add = &adw::SwitchRow {
                             set_title: "I understand the risk.",
+                            // See the Cancel button comment.
                             connect_active_notify[sender] => move |row| {
-                                sender.input(PassphraseDialogMsg::AcknowledgeRemove(row.is_active()));
+                                let _ = sender.input_sender().send(
+                                    PassphraseDialogMsg::AcknowledgeRemove(row.is_active()),
+                                );
                             },
                         },
                     },
@@ -1092,8 +1104,11 @@ impl SimpleComponent for PassphraseDialogComponent {
                             add_css_class: "suggested-action",
                             #[watch]
                             set_sensitive: model.state.submit_button_sensitive(),
+                            // See the Cancel button comment.
                             connect_clicked[sender] => move |_| {
-                                sender.input(PassphraseDialogMsg::SubmitClicked);
+                                let _ = sender
+                                    .input_sender()
+                                    .send(PassphraseDialogMsg::SubmitClicked);
                             },
                         },
                     },
@@ -1132,7 +1147,10 @@ impl SimpleComponent for PassphraseDialogComponent {
             let sender_clone = sender.clone();
             button.connect_toggled(move |b| {
                 if b.is_active() {
-                    sender_clone.input(PassphraseDialogMsg::SubFlowSelected(flow));
+                    // See the Cancel button comment.
+                    let _ = sender_clone
+                        .input_sender()
+                        .send(PassphraseDialogMsg::SubFlowSelected(flow));
                 }
             });
             widgets.sub_flow_box.append(&button);

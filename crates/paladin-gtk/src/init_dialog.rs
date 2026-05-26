@@ -1415,19 +1415,27 @@ impl SimpleComponent for InitDialogComponent {
                     // entry and Paladin-owned `Zeroizing<String>` is
                     // the only long-lived home for the cleartext
                     // bytes.
+                    // `Sender::send` is used instead of
+                    // `ComponentSender::input` (which `.expect`s on
+                    // a closed channel) so a stray callback after
+                    // the controller is dropped is a benign no-op
+                    // rather than a process abort. See
+                    // `import_dialog`'s Cancel button for the
+                    // canonical comment.
                     connect_changed[sender] => move |entry| {
-                        sender.input(InitDialogMsg::PassphraseChanged(
-                            entry.text().to_string(),
-                        ));
+                        let _ = sender
+                            .input_sender()
+                            .send(InitDialogMsg::PassphraseChanged(entry.text().to_string()));
                     },
                 },
                 #[name = "confirm_row"]
                 add = &adw::PasswordEntryRow {
                     set_title: format_init_dialog_confirm_passphrase_title(),
+                    // See the new-passphrase `connect_changed` comment.
                     connect_changed[sender] => move |entry| {
-                        sender.input(InitDialogMsg::ConfirmChanged(
-                            entry.text().to_string(),
-                        ));
+                        let _ = sender
+                            .input_sender()
+                            .send(InitDialogMsg::ConfirmChanged(entry.text().to_string()));
                     },
                 },
             },
@@ -1442,8 +1450,11 @@ impl SimpleComponent for InitDialogComponent {
             #[name = "warning_check"]
             gtk::CheckButton {
                 set_label: Some(format_init_dialog_plaintext_warning_label()),
+                // See the new-passphrase `connect_changed` comment.
                 connect_toggled[sender] => move |btn| {
-                    sender.input(InitDialogMsg::WarningToggled(btn.is_active()));
+                    let _ = sender
+                        .input_sender()
+                        .send(InitDialogMsg::WarningToggled(btn.is_active()));
                 },
             },
 
@@ -1490,8 +1501,9 @@ impl SimpleComponent for InitDialogComponent {
                     add_css_class: "suggested-action",
                     #[watch]
                     set_sensitive: model.state.submit_button_sensitive(),
+                    // See the new-passphrase `connect_changed` comment.
                     connect_clicked[sender] => move |_| {
-                        sender.input(InitDialogMsg::SubmitClicked);
+                        let _ = sender.input_sender().send(InitDialogMsg::SubmitClicked);
                     },
                 },
             },
@@ -1567,11 +1579,19 @@ impl InitDialogComponent {
 
         let confirm_id_owned = confirm_id.to_string();
         let sender = sender.clone();
+        // See the new-passphrase `connect_changed` comment — route
+        // the alert response through `Sender::send` so a stray
+        // response after the parent controller has been torn down
+        // is a benign no-op.
         alert.connect_response(None, move |_dialog, response| {
             if response == confirm_id_owned {
-                sender.input(InitDialogMsg::ForceConfirmClicked);
+                let _ = sender
+                    .input_sender()
+                    .send(InitDialogMsg::ForceConfirmClicked);
             } else {
-                sender.input(InitDialogMsg::ForceCancelClicked);
+                let _ = sender
+                    .input_sender()
+                    .send(InitDialogMsg::ForceCancelClicked);
             }
         });
 

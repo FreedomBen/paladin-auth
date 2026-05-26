@@ -1611,10 +1611,18 @@ impl SimpleComponent for ExportDialogComponent {
                             set_visible: compose_overwrite_gate_visible(&model.state),
                             #[watch]
                             set_active: model.state.is_overwrite_acknowledged(),
+                            // `Sender::send` is used instead of
+                            // `ComponentSender::input` (which
+                            // `.expect`s on a closed channel) so a
+                            // stray callback after the controller
+                            // is dropped is a benign no-op rather
+                            // than a process abort. See
+                            // `import_dialog`'s Cancel button for
+                            // the canonical comment.
                             connect_active_notify[sender] => move |row| {
-                                sender.input(ExportDialogMsg::OverwriteAcknowledged(
-                                    row.is_active(),
-                                ));
+                                let _ = sender.input_sender().send(
+                                    ExportDialogMsg::OverwriteAcknowledged(row.is_active()),
+                                );
                             },
                         },
                     },
@@ -1631,11 +1639,14 @@ impl SimpleComponent for ExportDialogComponent {
                             )),
                             #[watch]
                             set_selected: model.state.format().index(),
+                            // See the overwrite-gate `connect_active_notify` comment.
                             connect_selected_notify[sender] => move |row| {
                                 if let Some(choice) =
                                     format_choice_from_index(row.selected())
                                 {
-                                    sender.input(ExportDialogMsg::FormatChanged(choice));
+                                    let _ = sender
+                                        .input_sender()
+                                        .send(ExportDialogMsg::FormatChanged(choice));
                                 }
                             },
                         },
@@ -1669,8 +1680,9 @@ impl SimpleComponent for ExportDialogComponent {
                             set_subtitle: format_export_dialog_plaintext_warning_ack_subtitle(),
                             #[watch]
                             set_active: model.state.is_plaintext_warning_acknowledged(),
+                            // See the overwrite-gate `connect_active_notify` comment.
                             connect_active_notify[sender] => move |row| {
-                                sender.input(
+                                let _ = sender.input_sender().send(
                                     ExportDialogMsg::PlaintextWarningAcknowledged(
                                         row.is_active(),
                                     ),
@@ -1688,18 +1700,22 @@ impl SimpleComponent for ExportDialogComponent {
                         #[name = "passphrase_row"]
                         add = &adw::PasswordEntryRow {
                             set_title: format_export_dialog_passphrase_row_title(),
+                            // See the overwrite-gate `connect_active_notify` comment.
                             connect_changed[sender] => move |entry| {
-                                sender.input(ExportDialogMsg::PassphraseChanged(
-                                    entry.text().to_string(),
-                                ));
+                                let _ = sender.input_sender().send(
+                                    ExportDialogMsg::PassphraseChanged(
+                                        entry.text().to_string(),
+                                    ),
+                                );
                             },
                         },
 
                         #[name = "confirm_passphrase_row"]
                         add = &adw::PasswordEntryRow {
                             set_title: format_export_dialog_confirm_passphrase_row_title(),
+                            // See the overwrite-gate `connect_active_notify` comment.
                             connect_changed[sender] => move |entry| {
-                                sender.input(
+                                let _ = sender.input_sender().send(
                                     ExportDialogMsg::ConfirmPassphraseChanged(
                                         entry.text().to_string(),
                                     ),
@@ -1768,8 +1784,9 @@ impl SimpleComponent for ExportDialogComponent {
                         #[name = "cancel_button"]
                         gtk::Button {
                             set_label: format_export_dialog_cancel_label(),
+                            // See the overwrite-gate `connect_active_notify` comment.
                             connect_clicked[sender] => move |_| {
-                                sender.input(ExportDialogMsg::Cancel);
+                                let _ = sender.input_sender().send(ExportDialogMsg::Cancel);
                             },
                         },
 
@@ -1779,8 +1796,11 @@ impl SimpleComponent for ExportDialogComponent {
                             add_css_class: "suggested-action",
                             #[watch]
                             set_sensitive: compose_submit_button_sensitive(&model.state),
+                            // See the overwrite-gate `connect_active_notify` comment.
                             connect_clicked[sender] => move |_| {
-                                sender.input(ExportDialogMsg::SubmitClicked);
+                                let _ = sender
+                                    .input_sender()
+                                    .send(ExportDialogMsg::SubmitClicked);
                             },
                         },
                     },
@@ -1793,8 +1813,9 @@ impl SimpleComponent for ExportDialogComponent {
             // distinct so a future Close-only behavior (e.g. a
             // "Discard draft?" prompt) can attach to one dispatch arm
             // without affecting Cancel.
+            // See the overwrite-gate `connect_active_notify` comment.
             connect_closed[sender] => move |_| {
-                sender.input(ExportDialogMsg::Close);
+                let _ = sender.input_sender().send(ExportDialogMsg::Close);
             },
         }
     }
@@ -1842,7 +1863,17 @@ impl SimpleComponent for ExportDialogComponent {
                     if let Ok(file) = result {
                         if let Some(path) = file.path() {
                             let exists = path.try_exists().unwrap_or(true);
-                            sender_inner.input(ExportDialogMsg::DestinationPicked { path, exists });
+                            // The `FileDialog::save` callback is
+                            // long-lived (it survives across the
+                            // whole open dialog session) and may
+                            // fire after the parent controller has
+                            // been dropped. Route through
+                            // `Sender::send` so a stray completion
+                            // is a benign no-op rather than a
+                            // process abort.
+                            let _ = sender_inner
+                                .input_sender()
+                                .send(ExportDialogMsg::DestinationPicked { path, exists });
                         }
                     }
                 },

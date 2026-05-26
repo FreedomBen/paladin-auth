@@ -1047,11 +1047,21 @@ impl SimpleComponent for RemoveDialogComponent {
         // every response — see `init_dialog::present_destructive_alert`
         // for the sibling pattern.
         let response_sender = sender.clone();
+        // `Sender::send` is used instead of `ComponentSender::input`
+        // (which `.expect`s on a closed channel) so a stray
+        // response after the controller is dropped — e.g.
+        // `lock_on_auto_lock_expiry` taking the dialog into
+        // `UnlockedDiscards.modal` while the `adw::AlertDialog`
+        // widget still lives — is a benign no-op rather than a
+        // process abort. See `import_dialog`'s Cancel button for
+        // the canonical comment.
         root.connect_response(None, move |_dialog, response| {
             if response == format_remove_dialog_destructive_response_id() {
-                response_sender.input(RemoveDialogMsg::Confirm);
+                let _ = response_sender
+                    .input_sender()
+                    .send(RemoveDialogMsg::Confirm);
             } else if response == format_remove_dialog_cancel_response_id() {
-                response_sender.input(RemoveDialogMsg::Cancel);
+                let _ = response_sender.input_sender().send(RemoveDialogMsg::Cancel);
             }
         });
 
