@@ -2615,14 +2615,14 @@ artifacts side by side.
 - [ ] Manual test plan documented.
 
 ### Milestone 8 — Cross-front-end QR export *(v0.2)*
-- [ ] `paladin-core` QR rendering API: `QrRenderOptions`,
+- [x] `paladin-core` QR rendering API: `QrRenderOptions`,
   `Vault::export_qr_png` / `export_qr_svg` / `export_qr_ansi`,
   free functions `export::qr_png` / `qr_svg` / `qr_ansi`,
   `format_plaintext_qr_export_warning`, and the
   `QR_MODULE_SIZE_PX_*` constants. `qrcode` promoted from optional /
   dev-only to a regular dependency of `paladin-core`; the public-api
   snapshot is updated to match.
-- [ ] CLI `paladin qr <query>` command with `--out` / `--format` /
+- [x] CLI `paladin qr <query>` command with `--out` / `--format` /
   `--module-size-px` / `--force` flags, ANSI stdout default,
   parse-time rejection of binary formats without `--out`, and the
   JSON `{ "written", "format", "account" }` success shape gated on
