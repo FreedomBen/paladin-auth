@@ -111,7 +111,7 @@ valid custom KDF values are accepted but unused.
 | `copy <query>`                                         | Advances HOTP; copies to clipboard via `arboard`. **No auto-clear.** Single-match required. |
 | `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no confirmation prompt). Single-match required. |
 | `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. Label-only positional shorthand for the `edit` command below; after IMPLEMENTATION_PLAN_01_CORE.md Phase M ships, `Vault::rename` is reimplemented in core to delegate to `Vault::edit_account_metadata`, so both CLI commands share one core mutation path without any change to the CLI's `rename.rs`. |
-| `edit <query> [--label <label>] [--issuer <issuer> \| --no-issuer] [--icon-hint <slug> \| --no-icon-hint]` | v0.2 (DESIGN §5 Milestone 9). Edits an account's non-cryptographic metadata. Requires at least one of `--label` / `--issuer` / `--no-issuer` / `--icon-hint` / `--no-icon-hint`; a no-flag invocation rejects at parse time as `validation_error` (`field: "argv"`, `reason: "no_edit_fields"`). `--issuer` and `--no-issuer` are mutually exclusive; `--icon-hint` and `--no-icon-hint` are mutually exclusive (collisions reject at parse time as `validation_error` (`field: "argv"`, `reason: "mutually_exclusive"`)). `--label` populates `AccountEdit.label = Some(value)`; `--issuer` populates `issuer = Some(Some(value))` after §4.1 issuer normalization; `--no-issuer` populates `issuer = Some(None)`; `--icon-hint <slug>` parses through `paladin_core::parse_icon_hint_token(slug)` (so the empty / case-insensitive `none` / explicit-slug grammar matches `add`) and populates `icon_hint`; `--no-icon-hint` populates `icon_hint = Some(IconHintInput::Clear)`. Single-match cardinality (like `copy` / `remove` / `rename` / `qr`); ambiguous queries exit non-zero with the candidate list. Routes through `Vault::edit_account_metadata` inside `Vault::mutate_and_save`; bumps `updated_at`. Read-only on the secret bytes — never advances HOTP counters and never re-derives a slug from secret content. `--json` success shape `{ "account": AccountSummary }` mirrors `rename`. |
+| `edit <query> [--label <label>] [--issuer <issuer> \| --no-issuer] [--icon-hint <slug> \| --no-icon-hint] [--allow-duplicate]` | v0.2 (DESIGN §5 Milestone 9). Edits an account's non-cryptographic metadata. Requires at least one of `--label` / `--issuer` / `--no-issuer` / `--icon-hint` / `--no-icon-hint`; a no-flag invocation rejects at parse time as `validation_error` (`field: "argv"`, `reason: "no_edit_fields"`). `--issuer` and `--no-issuer` are mutually exclusive; `--icon-hint` and `--no-icon-hint` are mutually exclusive (collisions reject at parse time as `validation_error` (`field: "argv"`, `reason: "mutually_exclusive"`)). `--label` populates `AccountEdit.label = Some(value)`; `--issuer` populates `issuer = Some(Some(value))` after §4.1 issuer normalization (so `--issuer ""` normalizes to `Some(None)` and is functionally equivalent to `--no-issuer`); `--no-issuer` populates `issuer = Some(None)`; `--icon-hint <slug>` parses through `paladin_core::parse_icon_hint_token(slug)` (so the empty / case-insensitive `none` / explicit-slug grammar matches `add`) and populates `icon_hint`; `--no-icon-hint` populates `icon_hint = Some(IconHintInput::Clear)`. Single-match cardinality (like `copy` / `remove` / `rename` / `qr`); ambiguous queries exit non-zero with the candidate list. After per-field validation succeeds, the CLI calls `Vault::find_duplicate_after_edit(id, &edit)` and rejects a non-`None` result with `duplicate_account` (the existing collision's `AccountSummary` in the envelope's `account` field) unless `--allow-duplicate` is supplied — mirroring `paladin add`'s collision path. Routes through `Vault::edit_account_metadata` inside `Vault::mutate_and_save`; bumps `updated_at`. Read-only on the secret bytes — never advances HOTP counters and never re-derives a slug from secret content. `--json` success shape `{ "account": AccountSummary }` mirrors `rename`. |
 | `passphrase set | change | remove`                     | `set` and `change` accept the KDF flags above. `passphrase remove` first verifies that the vault is encrypted. In text mode, it then prints `paladin_core::format_plaintext_storage_warning()` and confirms unless `--yes` is passed; `--yes` skips only the confirmation. `--yes` is required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
 | `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints `paladin_core::format_plaintext_export_warning()` before writing unencrypted secrets; encrypted export accepts the KDF flags above. |
@@ -141,9 +141,14 @@ valid custom KDF values are accepted but unused.
    (HOTP-only, default 0), and optionally one of `--icon-hint <slug>` or
    `--no-icon-hint` (when both are omitted, derived from issuer per §4.1).
    Defaults: TOTP, SHA1, 6, 30s. Manual fields use §4.1 validation:
-   `--period` is 1..=300 seconds, `--icon-hint` matches `[a-z0-9_-]+`
-   up to 64 bytes, `--icon-hint` and `--no-icon-hint` are mutually
-   exclusive, and `--secret` is Base32 text.
+   `--period` is 1..=300 seconds; `--icon-hint <slug>` routes
+   through `paladin_core::parse_icon_hint_token` so flag-mode and
+   interactive-mode `add` share one grammar (empty token after
+   Unicode-whitespace trim → `IconHintInput::Default`; case-insensitive
+   `none` → `IconHintInput::Clear`; any other token validates as a
+   §4.1 slug — `[a-z0-9_-]+` up to 64 bytes — and maps to
+   `IconHintInput::Slug`); `--icon-hint` and `--no-icon-hint` are
+   mutually exclusive; and `--secret` is Base32 text.
    `--kind` is **not** inferred from `--period` or `--counter`: passing
    `--counter` without `--kind hotp` defaults to TOTP and rejects with
    `validation_error`. Passing `--period` without `--kind` is valid because
@@ -342,7 +347,10 @@ without changing the CLI's `rename.rs`). Implementation owes:
     runs in core via `validate_account_edit`.
   - `--issuer <issuer>` — sets the account's issuer. Raw value flows
     into `AccountEdit.issuer = Some(Some(value))`; §4.1 issuer
-    normalization and validation run in core.
+    normalization (Unicode whitespace trim; empty becomes `None`) and
+    validation run in core. Passing `--issuer ""` therefore normalizes
+    to `Some(None)` inside the validator and is functionally equivalent
+    to `--no-issuer`; the CLI does not special-case it at parse time.
   - `--no-issuer` — clears the account's issuer. Flows into
     `AccountEdit.issuer = Some(None)`.
   - `--icon-hint <slug>` — sets the icon-hint slug. The slug string
@@ -359,6 +367,15 @@ without changing the CLI's `rename.rs`). Implementation owes:
       `IconHintInput::Slug(token)`.
   - `--no-icon-hint` — clears the stored slug. Flows into
     `AccountEdit.icon_hint = Some(IconHintInput::Clear)`.
+  - `--allow-duplicate` — opt out of the post-validation
+    duplicate-account check (see below); submits the edit even if
+    the resulting `(secret, issuer, label)` triple collides with
+    another account. Off by default; parallel to
+    `paladin add --allow-duplicate`. Does not satisfy the
+    "at least one editable flag" requirement on its own — passing
+    `--allow-duplicate` without any of `--label` / `--issuer` /
+    `--no-issuer` / `--icon-hint` / `--no-icon-hint` still rejects
+    at parse time with `no_edit_fields`.
 
 - **Parse-time rejections.** Fire **before** vault inspection /
   unlock so an invalid invocation never prompts:
@@ -385,6 +402,27 @@ without changing the CLI's `rename.rs`). Implementation owes:
   non-zero with `no_match`; multiple matches exit non-zero with
   `multiple_matches` + the candidate list (each prefixed with
   `Vault::shortest_unique_id_prefix`).
+
+- **Duplicate-account check.** Mirrors `paladin add`'s collision
+  path. After per-field validation succeeds (either via a CLI-side
+  `paladin_core::validate_account_edit(&edit, prior, now)` call —
+  paralleling how `add` calls `paladin_core::validate_manual` — or,
+  at the implementer's discretion, by relying on the
+  `validate_account_edit` re-run that `Vault::edit_account_metadata`
+  performs internally), the CLI calls
+  `Vault::find_duplicate_after_edit(id, &edit)` and rejects a
+  non-`None` result with `duplicate_account` (the existing
+  collision's `AccountSummary` carried in the envelope's `account`
+  field) **unless** `--allow-duplicate` was supplied. The core
+  helper projects the would-be post-edit `(secret, issuer, label)`
+  triple — applying §4.1 normalization to issuer and label — and
+  skips the account at `id`, so an unchanged self-comparison never
+  reports a collision. The check fires **before**
+  `Vault::edit_account_metadata` is invoked, so a rejection leaves
+  the vault byte-identical to its pre-edit state. With
+  `--allow-duplicate`, the helper is not called and the mutator is
+  invoked unconditionally; the success envelope is the same
+  `{ "account": AccountSummary }` shape.
 
 - **Dispatch.** After parse-time validation and query resolution,
   the CLI builds an `AccountEdit` populated as above and calls
@@ -415,10 +453,11 @@ without changing the CLI's `rename.rs`). Implementation owes:
   account state in one shape regardless of which CLI surface
   (`rename` or `edit`) produced the mutation. Failure documents use
   the existing `validation_error` / `invalid_state` / `no_match` /
-  `multiple_matches` / `save_not_committed` /
-  `save_durability_unconfirmed` envelopes. The volatile
-  `updated_at` field is redacted in `cli_json_snapshots.rs` golden
-  fixtures.
+  `multiple_matches` / `duplicate_account` (with the existing
+  collision's `AccountSummary` in the `account` field, mirroring
+  `add`) / `save_not_committed` / `save_durability_unconfirmed`
+  envelopes. The volatile `updated_at` field is redacted in
+  `cli_json_snapshots.rs` golden fixtures.
 
 - **Where the work lives.** All `AccountEdit` validation and the
   mutation itself are `paladin-core`-owned (`validate_account_edit`,
@@ -782,8 +821,12 @@ with `counter_used: null`.
   `paladin_core::validate_manual(input, now)` so §4.1 validation
   (label / issuer / secret / digits / period / counter / icon-hint)
   lives in core; omitted icon flags map to `IconHintInput::Default`,
-  `--icon-hint <slug>` maps to `IconHintInput::Slug`, and
-  `--no-icon-hint` maps to `IconHintInput::Clear`; `--uri` routes
+  `--icon-hint <slug>` routes through
+  `paladin_core::parse_icon_hint_token` (empty token →
+  `IconHintInput::Default`, case-insensitive `none` →
+  `IconHintInput::Clear`, any other token validates as a §4.1 slug
+  and maps to `IconHintInput::Slug`), and `--no-icon-hint` maps to
+  `IconHintInput::Clear`; `--uri` routes
   through `paladin_core::parse_otpauth`;
   `--qr` routes through `paladin_core::import::from_file` with a fixed
   `ImportConflict::Skip` policy. The CLI never re-implements §4.1
@@ -856,13 +899,16 @@ with `counter_used: null`.
   command (v0.2)" section above and DESIGN §5 / §4.7 Milestone 9.
   Depends on IMPLEMENTATION_PLAN_01_CORE.md Phase M
   (`AccountEdit`, `validate_account_edit`,
-  `Vault::edit_account_metadata`).
+  `Vault::edit_account_metadata`, `Vault::find_duplicate_after_edit`).
   - [ ] Add the `edit` subcommand to the clap derive enum with the
     `<query>` positional and the `--label` / `--issuer` /
-    `--no-issuer` / `--icon-hint` / `--no-icon-hint` flags. The
-    flags are parsed and validated before any vault-touching call
-    so the parse-time rejections (`no_edit_fields`,
-    `mutually_exclusive`) fire first and never prompt.
+    `--no-issuer` / `--icon-hint` / `--no-icon-hint` /
+    `--allow-duplicate` flags. The flags are parsed and validated
+    before any vault-touching call so the parse-time rejections
+    (`no_edit_fields`, `mutually_exclusive`) fire first and never
+    prompt. `--allow-duplicate` alone does not satisfy the
+    "at least one editable flag" requirement (a no-edit-field
+    invocation still rejects with `no_edit_fields`).
   - [ ] Build a thin dispatch handler that resolves `<query>`
     through `paladin_core::parse_account_query` +
     `Vault::matching_accounts` with single-match cardinality (same
@@ -874,6 +920,16 @@ with `counter_used: null`.
     `Vault::edit_account_metadata` inside `Vault::mutate_and_save`.
     The CLI never re-implements §4.1 validation, issuer
     normalization, or slug derivation.
+  - [ ] Implement the post-validation duplicate-account check via
+    `Vault::find_duplicate_after_edit(id, &edit)` between
+    `AccountEdit` construction and `Vault::mutate_and_save`,
+    skipped when `--allow-duplicate` is supplied. On a non-`None`
+    result, surface `duplicate_account` with the existing
+    collision's `AccountSummary` in the envelope's `account` field
+    (parallel to the `paladin add` collision path) and leave the
+    vault byte-identical to its pre-edit state. The CLI never
+    re-implements the byte-for-byte comparison — core owns the
+    helper and the §4.1 normalization that feeds it.
   - [ ] Wire the JSON success shape `{ "account": AccountSummary }`
     through the existing `error-serde` envelope serializer so
     `--json` callers see the post-edit account state in one shape
@@ -1056,7 +1112,8 @@ can be ticked.
 
 ### `edit` (`tests/cli_edit.rs`)
 
-v0.2 (Phase M).
+v0.2 (DESIGN §5 Milestone 9; depends on
+IMPLEMENTATION_PLAN_01_CORE.md Phase M).
 
 - [ ] `edit --label <new>` succeeds and emits the
   `{ "account": AccountSummary }` envelope with the bumped
@@ -1076,6 +1133,13 @@ v0.2 (Phase M).
 - [ ] `edit --no-issuer` clears the issuer (`AccountSummary.issuer
   == null` in JSON; bare label in text); the prior label /
   icon_hint stay untouched.
+- [ ] `edit --issuer ""` normalizes to `Some(None)` via core's §4.1
+  issuer normalization (Unicode whitespace trim → empty → `None`),
+  producing the same end-state as `edit --no-issuer`. Pinned by
+  reading the persisted `AccountSummary.issuer == null`.
+- [ ] Invalid `--issuer` (overlong, e.g. >128 UTF-8 bytes per §4.1)
+  propagates a core `validation_error` (`field: "issuer"`,
+  `reason: "too_long"`).
 - [ ] `edit --icon-hint <slug>` validates the slug through
   `parse_icon_hint_token` and rejects an invalid slug with the
   core `validation_error` (`field: "icon_hint"`,
@@ -1101,6 +1165,12 @@ v0.2 (Phase M).
 - [ ] `edit --no-icon-hint` clears the stored slug
   (`AccountSummary.icon_hint == null` in JSON); the prior label /
   issuer stay untouched.
+- [ ] `edit --no-issuer --icon-hint ""` re-derives the slug against
+  the post-edit (now-cleared) issuer, producing
+  `AccountSummary.icon_hint == null` — functionally equivalent to
+  `--no-issuer --no-icon-hint` and pinning the
+  `IconHintInput::Default` derivation against a cleared issuer
+  parallel to the post-edit-issuer-derivation bullet below.
 - [ ] `edit --label <l> --issuer <i> --icon-hint <s>` happy path:
   all three fields land in a single `Vault::mutate_and_save` call;
   the JSON envelope reflects the combined post-edit summary.
@@ -1114,10 +1184,29 @@ v0.2 (Phase M).
   `reason: "mutually_exclusive"`).
 - [ ] Single-match cardinality: ambiguous query exits non-zero with
   the candidate list; `id:<hex>` prefix routes through the same
-  `select` helper as `copy` / `remove` / `rename`.
+  `select` helper as `copy` / `remove` / `rename` / `qr`.
 - [ ] Invalid `--label` (empty / overlong) propagates a core
   `validation_error` (`field: "label"`, `reason: "empty"` /
   `"too_long"`).
+- [ ] Duplicate `(secret, issuer, label)` rejection: seed two
+  accounts `A` and `B` with distinct `(issuer, label)` but the
+  same `secret`, then `paladin edit <query-of-A> --label
+  <B.label> --issuer <B.issuer>` rejects with `duplicate_account`
+  (the existing `B` account's `AccountSummary` in the envelope's
+  `account` field) and the persisted vault is byte-identical to
+  its pre-edit state (`A` keeps its original label / issuer /
+  `updated_at`). Mirrors the `paladin add --uri` collision bullet.
+- [ ] `edit --allow-duplicate` opts out of the duplicate check:
+  same seed setup as the previous bullet plus `--allow-duplicate`
+  succeeds, persists the collision, bumps `updated_at` on `A`, and
+  emits the `{ "account": AccountSummary }` envelope. The vault
+  now legitimately contains two accounts with identical
+  `(secret, issuer, label)` triples.
+- [ ] Self-edit no-collision: `paladin edit <query-of-A> --label
+  <A.label> --issuer <A.issuer>` (every field set to `A`'s prior
+  value) succeeds without a `duplicate_account` rejection because
+  `Vault::find_duplicate_after_edit` skips the account at `id`.
+  Folds into the no-op-`updated_at`-still-bumps bullet below.
 - [ ] No-op-but-non-empty edit (every field set to the prior value)
   still bumps `updated_at`, matching the `rename` same-label
   contract and the core mutator's documented behavior.
