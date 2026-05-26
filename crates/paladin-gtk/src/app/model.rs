@@ -122,7 +122,8 @@ use crate::export_dialog::{
     ExportDialogOutput, ExportWorkerCompletion,
 };
 use crate::export_qr_dialog::{
-    decide_export_qr_target, ExportQrDialogComponent, ExportQrDialogOutput,
+    decide_export_qr_target, render_show_qr_error_message, ExportQrDialogComponent,
+    ExportQrDialogMsg, ExportQrDialogOutput,
 };
 use crate::hotp_reveal::{
     apply_advance_decision, apply_advance_outcome, expired_reveals,
@@ -2983,6 +2984,37 @@ impl SimpleComponent for AppModel {
                                     .forward(sender.input_sender(), AppMsg::ExportQrDialogAction);
                                 controller.widget().present(Some(&self.content));
                                 self.export_qr_dialog = Some(controller);
+                            }
+                        }
+                    }
+                }
+            }
+            AppMsg::ExportQrDialogAction(ExportQrDialogOutput::ShowQrRequested(id)) => {
+                // Page-1 `Show QR` button press round trip — the
+                // dialog cannot reach the live `(Vault, Store)`
+                // pair directly, so it forwarded the account id
+                // through the Output channel; we run the
+                // `vault.export_qr_png(id, &QrRenderOptions::default())`
+                // render on the main loop (the encoder is sub-
+                // millisecond on realistic `otpauth://` URI
+                // lengths — see the "Thread isolation" callout in
+                // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"QR export
+                // dialog implementation") and forward the result
+                // back through the dialog's Input channel via
+                // `ExportQrDialogMsg::ShowQrSucceeded` /
+                // `ExportQrDialogMsg::ShowQrFailed`. The render is
+                // read-only (`Vault::export_qr_png` is `&self`), so
+                // HOTP counters and `updated_at` are unchanged.
+                if let Some(controller) = self.export_qr_dialog.as_ref() {
+                    if let Some((vault, _store)) = self.vault.as_ref() {
+                        match vault.export_qr_png(id, &paladin_core::QrRenderOptions::default()) {
+                            Ok(bytes) => {
+                                controller.emit(ExportQrDialogMsg::ShowQrSucceeded(bytes));
+                            }
+                            Err(err) => {
+                                controller.emit(ExportQrDialogMsg::ShowQrFailed(
+                                    render_show_qr_error_message(&err),
+                                ));
                             }
                         }
                     }

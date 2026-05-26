@@ -1653,28 +1653,49 @@ by ticking it.
   `apply_msg_ack_toggled_does_not_dispatch_show_qr` (toggling
   ack on/off only mutates `state.ack_revealed`; ShowQr is
   emitted exclusively by the button-press handler).
-* [ ] **Page 2 mount on Show-QR press.** On
+* [x] **Page 2 mount on Show-QR press.** On
   `ExportQrDialogMsg::ShowQr` (emitted by the Show-QR button's
-  `connect_clicked`, never by the ack switch), call
-  `vault.export_qr_png(account_id, QrRenderOptions::default())`
+  `connect_clicked`, never by the ack switch), the
+  `SimpleComponent` emits
+  `ExportQrDialogOutput::ShowQrRequested(account_id)` so
+  `AppModel` (the live `(Vault, Store)` owner) runs
+  `vault.export_qr_png(account_id, &QrRenderOptions::default())`
   on the main loop (the encoder is fast enough — see "Thread
-  isolation" above). The returned `Zeroizing<Vec<u8>>` is moved
-  into `state.staged_png`; build a
-  `gdk::Texture::from_bytes(&glib::Bytes::from(&bytes))` and bind
-  it onto the `gtk::Picture::set_paintable` setter on the
-  `AdwViewStack`'s `"qr"` child. Set the caption `gtk::Label`'s
-  text to `summary_display_label(&summary)` (the Label widget is
-  built into the `"qr"` child at init alongside the Picture with
-  the `title-3` style class; `ShowQr` only updates its text), then
-  call `view_stack.set_visible_child_name("qr")` to switch the
-  visible page. Toggling the ack back off (or hitting Cancel /
-  Escape) routes through `view_stack.set_visible_child_name("warning")`,
-  drops `state.staged_png` / `state.staged_svg`, and resets the
-  `gtk::Picture` paintable to `gdk::Paintable::new_empty`. Pin
-  `apply_msg_show_qr_renders_picture_paintable`,
-  `compose_visible_child_name_warning_before_show_qr`,
-  `apply_msg_show_qr_switches_visible_child_to_qr`, and
+  isolation" above) and forwards the result back through
+  `ExportQrDialogMsg::ShowQrSucceeded(Zeroizing<Vec<u8>>)` /
+  `ExportQrDialogMsg::ShowQrFailed(String)`. The reducer routes
+  Succeeded through `apply_msg_show_qr_succeeded` (moves the
+  bytes into `state.staged_png`) and Failed through
+  `apply_msg_show_qr_failed` (parks the rendered message in
+  `state.show_qr_error` for inline rendering on Page 1). The
+  view-stack visible-child name is `#[watch]`-bound to
+  `compose_visible_child_name(&state)` so populating
+  `staged_png` flips the page to `"qr"` and an ack-off / Cancel
+  reset flips it back to `"warning"`. The `gtk::Picture`'s
+  paintable is `#[watch]`-bound through `build_staged_png_texture(&state)`
+  which constructs a `gdk::Texture::from_bytes(&glib::Bytes::from(&bytes))`
+  from the staged PNG slot, so the paintable resets to `None`
+  (the equivalent of `gdk::Paintable::new_empty`) on every
+  buffer-wipe path. The caption `gtk::Label` is built into the
+  `"qr"` child at init alongside the Picture with the `title-3`
+  style class and bound to
+  `compose_export_qr_caption_text(&state)` → `summary_display_label(&summary)`.
+  Pins: `apply_msg_show_qr_renders_picture_paintable_from_png_bytes`,
+  `apply_msg_show_qr_button_press_calls_export_qr_png_with_default_options`,
+  `apply_msg_show_qr_switches_visible_child_to_qr`,
+  `apply_msg_show_qr_sets_caption_label_text_from_summary_display_label`,
+  `compose_export_qr_dialog_caption_widget_uses_title_3_style_class`,
+  `apply_msg_show_qr_invalid_state_account_not_found_renders_inline`,
+  `apply_msg_show_qr_validation_error_renders_inline`,
+  `apply_msg_show_qr_success_clears_prior_inline_error`,
+  `compose_visible_child_name_warning_before_show_qr`, and
   `apply_msg_ack_toggled_off_clears_staged_png_and_paintable_and_resets_visible_child`.
+  The four-button Page-2 footer
+  (`Save as PNG…` / `Save as SVG…` / `Copy image` / `Done`)
+  ships with only `Done` wired in this commit; the Save and
+  Copy buttons land in the subsequent
+  "Save-as-PNG / Save-as-SVG actions" and "Copy image action"
+  build-order entries.
 * [ ] **Save-as-PNG / Save-as-SVG actions.** Wire the two footer
   buttons to open a `gtk::FileDialog::save`, dispatch
   `ExportQrDialogMsg::SaveDestinationPicked { kind: PngOrSvg,
@@ -2465,32 +2486,40 @@ These run without a display server. Each lives under
 
 #### `tests/export_qr_dialog_logic.rs`
 
-- [ ] `format_export_qr_dialog_warning_body_matches_paladin_core_verbatim`
+- [x] `format_export_qr_dialog_warning_body_matches_paladin_core_verbatim`
   pins that the rendered warning body equals
   `paladin_core::format_plaintext_qr_export_warning()` exactly, so a
   future warning reword in core propagates to the GUI without an edit.
-- [ ] `compose_show_qr_button_sensitive_false_until_ack_revealed` and
+- [x] `compose_show_qr_button_sensitive_false_until_ack_revealed` and
   `compose_show_qr_button_sensitive_true_after_ack_toggled_on` pin the
   Page-1 button gate against `ExportQrDialogState::ack_revealed`.
-- [ ] `compose_visible_child_name_warning_before_show_qr` and
+- [x] `compose_visible_child_name_warning_before_show_qr` and
   `apply_msg_show_qr_switches_visible_child_to_qr` pin the
   `AdwViewStack` page switch: on init and after any
   ack-toggle-off / Cancel reset the visible child is `"warning"`;
   only a successful `ShowQr` render switches it to `"qr"`.
-- [ ] `apply_msg_ack_toggled_does_not_dispatch_show_qr` pins that
+- [x] `apply_msg_ack_toggled_does_not_dispatch_show_qr` pins that
   the ack `adw::SwitchRow` only mutates `state.ack_revealed` and
   never causes a `Vault::export_qr_png` call — `ShowQr` is
   dispatched exclusively by the Show-QR button's `connect_clicked`.
-- [ ] `apply_msg_show_qr_button_press_calls_export_qr_png_with_default_options`
+- [x] `apply_msg_show_qr_button_press_calls_export_qr_png_with_default_options`
   pins the button-press → render-call wiring: the Show-QR button
   on Page 1 dispatches `ExportQrDialogMsg::ShowQr` which calls
   `Vault::export_qr_png(account_id, QrRenderOptions::default())`.
-- [ ] `apply_msg_show_qr_renders_picture_paintable_from_png_bytes` pins
+  In production the `SimpleComponent` emits
+  `ExportQrDialogOutput::ShowQrRequested(account_id)` to `AppModel`
+  which performs the call and forwards bytes back through
+  `ExportQrDialogMsg::ShowQrSucceeded`; the pure helper
+  `apply_msg_show_qr(&mut state, &vault)` exercises the same outcome.
+- [x] `apply_msg_show_qr_renders_picture_paintable_from_png_bytes` pins
   that the staged PNG `Zeroizing<Vec<u8>>` becomes the `gdk::Texture`
   bound to the `gtk::Picture` (via
   `gdk::Texture::from_bytes(&glib::Bytes::from(&bytes))`) and that the
-  matching `state.staged_png` slot is populated.
-- [ ] `apply_msg_show_qr_sets_caption_label_text_from_summary_display_label`
+  matching `state.staged_png` slot is populated. The companion
+  `apply_msg_show_qr_success_clears_prior_inline_error` pins that a
+  successful render clears any stale `state.show_qr_error` from a
+  prior failed Show-QR press.
+- [x] `apply_msg_show_qr_sets_caption_label_text_from_summary_display_label`
   pins that the `gtk::Label` caption above the Picture has its
   text set to `paladin_core::summary_display_label(&summary)`
   exactly on `ShowQr`, so the issuer:label rendering matches CLI /
@@ -2499,7 +2528,7 @@ These run without a display server. Each lives under
   `compose_export_qr_dialog_caption_widget_uses_title_3_style_class`
   pins that the caption widget carries the `title-3` style class
   for the heading weight.
-- [ ] `apply_msg_ack_toggled_off_clears_staged_png_and_paintable_and_resets_visible_child`
+- [x] `apply_msg_ack_toggled_off_clears_staged_png_and_paintable_and_resets_visible_child`
   pins the reverse: toggling ack off drops `state.staged_png`,
   `state.staged_svg`, replaces the Picture's paintable with
   `gdk::Paintable::new_empty`, and calls
@@ -2509,7 +2538,11 @@ These run without a display server. Each lives under
   Escape-key path, though both flow through the same secret-wipe
   helper) emits `ExportQrDialogOutput::Cancel` with
   `state.staged_png` / `state.staged_svg` dropped before emit.
-- [ ] `apply_msg_show_qr_invalid_state_account_not_found_renders_inline`
+  (Functionally covered today by
+  `apply_msg_cancel_pressed_emits_cancel_output` and
+  `apply_msg_cancel_pressed_clears_staged_buffers`; the Escape-key
+  variant lands with the "Bubble-phase Escape dismissal" commit.)
+- [x] `apply_msg_show_qr_invalid_state_account_not_found_renders_inline`
   and `apply_msg_show_qr_validation_error_renders_inline` pin the two
   typed-error inline-rendering paths (defensive — production payloads
   fit comfortably inside QR version 10 with M-level ECC).

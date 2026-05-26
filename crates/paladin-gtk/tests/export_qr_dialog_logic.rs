@@ -24,18 +24,20 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use paladin_core::{
-    format_plaintext_qr_export_warning, validate_manual, AccountId, AccountInput, AccountKindInput,
-    AccountKindSummary, AccountSummary, Algorithm, IconHintInput, Store, Vault, VaultInit,
-    VaultLock,
+    format_plaintext_qr_export_warning, summary_display_label, validate_manual, AccountId,
+    AccountInput, AccountKindInput, AccountKindSummary, AccountSummary, Algorithm, IconHintInput,
+    PaladinError, QrRenderOptions, Store, Vault, VaultInit, VaultLock,
 };
 use paladin_gtk::export_qr_dialog::{
-    apply_msg, apply_msg_ack_toggled, compose_export_qr_warning_body,
+    apply_msg, apply_msg_ack_toggled, apply_msg_show_qr, compose_export_qr_caption_style_class,
+    compose_export_qr_caption_text, compose_export_qr_warning_body,
     compose_show_qr_button_sensitive, compose_visible_child_name, decide_export_qr_target,
     format_export_qr_dialog_copy_image_label, format_export_qr_dialog_done_label,
     format_export_qr_dialog_save_as_png_label, format_export_qr_dialog_save_as_svg_label,
     format_export_qr_dialog_save_success_toast, format_export_qr_dialog_show_qr_button_label,
-    format_export_qr_dialog_title, ExportQrDialogInit, ExportQrDialogMsg, ExportQrDialogOutput,
-    ExportQrDialogState, VIEW_STACK_QR_PAGE_NAME, VIEW_STACK_WARNING_PAGE_NAME,
+    format_export_qr_dialog_title, render_show_qr_error_message, ExportQrDialogInit,
+    ExportQrDialogMsg, ExportQrDialogOutput, ExportQrDialogState, VIEW_STACK_QR_PAGE_NAME,
+    VIEW_STACK_WARNING_PAGE_NAME,
 };
 
 /// Build a synthetic TOTP [`AccountSummary`] for the fixture used
@@ -174,6 +176,217 @@ fn apply_msg_ack_toggled_off_clears_staged_png_and_paintable_and_resets_visible_
     assert_eq!(
         compose_visible_child_name(&state),
         VIEW_STACK_WARNING_PAGE_NAME,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Group D — Page-2 mount (Show-QR render)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_show_qr_button_press_calls_export_qr_png_with_default_options() {
+    // The Page-1 `Show QR` button dispatches `ExportQrDialogMsg::ShowQr`,
+    // which the `SimpleComponent` routes through `apply_msg_show_qr`.
+    // The helper must call
+    // `vault.export_qr_png(state.account_id, &QrRenderOptions::default())`
+    // and stage the returned bytes in `state.staged_png` so the on-screen
+    // Picture bytes and the on-disk Save bytes are byte-identical by
+    // construction.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    let init = decide_export_qr_target(&vault, id).expect("known account id resolves");
+    let mut state = ExportQrDialogState::new(init);
+    state.ack_revealed = true;
+
+    apply_msg_show_qr(&mut state, &vault);
+
+    let expected = vault
+        .export_qr_png(id, &QrRenderOptions::default())
+        .expect("plaintext vault renders QR");
+    let staged = state
+        .staged_png
+        .as_ref()
+        .expect("Show-QR press must stage PNG bytes");
+    assert_eq!(staged.as_slice(), expected.as_slice());
+    assert!(state.show_qr_error.is_none());
+}
+
+#[test]
+fn apply_msg_show_qr_renders_picture_paintable_from_png_bytes() {
+    // After a successful Show-QR render the staged PNG bytes are the
+    // single source for both the on-screen `gtk::Picture` paintable
+    // (via `gdk::Texture::from_bytes(&glib::Bytes::from(&bytes))`)
+    // and the `Copy image` clipboard provider. Pin that `state.staged_png`
+    // becomes `Some(_)` with non-empty bytes — the widget layer builds
+    // the texture from this slot.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    let init = decide_export_qr_target(&vault, id).expect("known account id resolves");
+    let mut state = ExportQrDialogState::new(init);
+    state.ack_revealed = true;
+
+    apply_msg_show_qr(&mut state, &vault);
+
+    let staged = state
+        .staged_png
+        .as_ref()
+        .expect("Show-QR press must stage PNG bytes");
+    assert!(!staged.is_empty(), "staged PNG bytes must be non-empty");
+}
+
+#[test]
+fn apply_msg_show_qr_switches_visible_child_to_qr() {
+    // Only a successful `ShowQr` render switches the visible child
+    // to the QR page; the visible-child reducer keys off
+    // `state.staged_png.is_some()`, so the post-render state must
+    // report `VIEW_STACK_QR_PAGE_NAME`.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    let init = decide_export_qr_target(&vault, id).expect("known account id resolves");
+    let mut state = ExportQrDialogState::new(init);
+    state.ack_revealed = true;
+
+    apply_msg_show_qr(&mut state, &vault);
+
+    assert_eq!(compose_visible_child_name(&state), VIEW_STACK_QR_PAGE_NAME,);
+}
+
+#[test]
+fn apply_msg_show_qr_sets_caption_label_text_from_summary_display_label() {
+    // The Page-2 `<issuer>:<label>` caption must read from
+    // `paladin_core::summary_display_label(&state.account_summary)`
+    // so the issuer:label rendering matches the CLI / TUI parity
+    // rule and a future change to `summary_display_label` flows
+    // through one helper.
+    let summary = AccountSummary {
+        id: AccountId::new(),
+        issuer: Some("GitHub".to_string()),
+        label: "ben".to_string(),
+        kind: AccountKindSummary::Totp,
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        period: Some(30),
+        counter: None,
+        icon_hint: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+    let state = ExportQrDialogState::new(ExportQrDialogInit {
+        account_id: summary.id,
+        account_summary: summary.clone(),
+    });
+
+    assert_eq!(
+        compose_export_qr_caption_text(&state),
+        summary_display_label(&summary),
+    );
+    assert_eq!(compose_export_qr_caption_text(&state), "GitHub:ben");
+}
+
+#[test]
+fn compose_export_qr_dialog_caption_widget_uses_title_3_style_class() {
+    // The Page-2 caption widget carries the `title-3` style class so
+    // it renders at libadwaita's display-3 heading weight. Pinned via
+    // the `compose_export_qr_caption_style_class()` helper the
+    // `view!` macro binds.
+    assert_eq!(compose_export_qr_caption_style_class(), "title-3");
+}
+
+#[test]
+fn apply_msg_show_qr_invalid_state_account_not_found_renders_inline() {
+    // Defensive — production renders go through `decide_export_qr_target`
+    // which only mounts the dialog for known IDs, but if the account
+    // is removed between mount and a re-render the
+    // `Vault::export_qr_png` call returns
+    // `InvalidState { state: "account_not_found" }`. The reducer must
+    // surface that inline on Page 1 (a `show_qr_error` string), leave
+    // `staged_png` empty, and leave the visible child on `"warning"`.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    add_totp(&mut vault, &store, Some("GitHub"), "ben");
+
+    let stray_summary = fixture_summary();
+    let stray_id = stray_summary.id;
+    let mut state = ExportQrDialogState::new(ExportQrDialogInit {
+        account_id: stray_id,
+        account_summary: stray_summary,
+    });
+    state.ack_revealed = true;
+
+    apply_msg_show_qr(&mut state, &vault);
+
+    assert!(
+        state.staged_png.is_none(),
+        "render failure must not stage PNG bytes",
+    );
+    assert!(
+        state.show_qr_error.is_some(),
+        "render failure must surface an inline error",
+    );
+    assert_eq!(
+        compose_visible_child_name(&state),
+        VIEW_STACK_WARNING_PAGE_NAME,
+        "render failure keeps the visible child on the warning page",
+    );
+}
+
+#[test]
+fn apply_msg_show_qr_validation_error_renders_inline() {
+    // Defensive — today's `otpauth://` URIs fit inside QR version 10
+    // with M-level ECC comfortably, but if `qrcode` rejects a payload
+    // the reducer renders the `validation_error` inline rather than
+    // crashing. Exercise the renderer with a synthetic
+    // `PaladinError::ValidationError` so the wording wiring is pinned
+    // without inventing a too-long secret.
+    let err = PaladinError::ValidationError {
+        field: "qr_render",
+        reason: "payload_too_large".to_string(),
+        source_index: None,
+        decoded_len: None,
+        recommended_min: None,
+        entry_type: None,
+    };
+    let rendered = render_show_qr_error_message(&err);
+    assert!(
+        !rendered.is_empty(),
+        "renderer must produce a non-empty string",
+    );
+    assert!(
+        rendered.contains("qr_render") || rendered.contains("payload_too_large"),
+        "renderer must mention the failing field or reason: {rendered:?}",
+    );
+}
+
+#[test]
+fn apply_msg_show_qr_success_clears_prior_inline_error() {
+    // A stale inline error from a previous failed Show-QR press must
+    // not survive a subsequent successful render — Page 1 has no
+    // dismiss surface for the error label other than the next render.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    let init = decide_export_qr_target(&vault, id).expect("known account id resolves");
+    let mut state = ExportQrDialogState::new(init);
+    state.ack_revealed = true;
+    state.show_qr_error = Some("stale error".to_string());
+
+    apply_msg_show_qr(&mut state, &vault);
+
+    assert!(
+        state.staged_png.is_some(),
+        "successful render must stage PNG bytes",
+    );
+    assert!(
+        state.show_qr_error.is_none(),
+        "successful render must clear any prior inline error",
     );
 }
 
