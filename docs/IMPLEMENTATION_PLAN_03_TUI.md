@@ -523,6 +523,55 @@ dismiss deliberately.
   `invalid_passphrase`, and the refused overwrite gate stay in the
   modal as inline errors. Export does not mutate the vault, so there
   is no rollback path.
+- **QR Export** (v0.2; DESIGN §4.6 / §6) — single-account QR
+  modal opened with `Q` (Shift-q) on the focused list row. The
+  modal is a small two-page state machine:
+  * **Page 1 — Warning ack.** The modal opens on the warning
+    body rendered verbatim from
+    `paladin_core::format_plaintext_qr_export_warning()` (sourced
+    through the same helper the CLI / GUI use), a `[ ]` ack
+    `Checkbox` (default off), and two buttons: `Show QR` (enabled
+    only while the ack is checked) and `Cancel`. The ANSI QR is
+    **not** rendered on this page so a closing-terminal glimpse
+    cannot expose the secret.
+  * **Page 2 — QR + save actions.** Mounted only after the user
+    confirms Page 1. The body renders the Unicode half-block QR
+    via `paladin_core::Vault::export_qr_ansi(id)`, with the
+    account's `summary_display_label` caption on the line above
+    the QR (CLI / GUI parity). Two save buttons sit below the QR:
+    `Save as PNG…` and `Save as SVG…`, each routed through the
+    matching `Vault::export_qr_png` / `Vault::export_qr_svg` call
+    and `paladin_core::write_secret_file_atomic` (0600, tempfile
+    / fsync / rename). The save sub-flow prompts inline for a
+    destination path; an existing destination triggers an inline
+    overwrite gate (parity with the existing Export modal —
+    confirmation toggle inside the modal body). A `Done` button
+    closes the modal.
+  Read-only contract — the modal **never** routes through
+  `Vault::mutate_and_save`, the HOTP counter never advances, and
+  `updated_at` is never bumped. Saving never happens until the
+  user confirms the destination plus any overwrite gate; the
+  ANSI render lives only in the modal body. The PNG /
+  SVG / ANSI buffers returned by core are `Zeroizing<Vec<u8>>` /
+  `Zeroizing<String>`; the modal holds them only for the duration
+  the body is rendered (or the save worker is in flight) and
+  drops them on submit / cancel / `Esc` / modal close /
+  auto-lock. Toggling the Page-1 ack back off also drops the
+  Page-2 buffers and returns the body to Page 1, matching the
+  GTK `ExportQrDialog` behavior. Save failures
+  (`save_not_committed`, `save_durability_unconfirmed`,
+  `io_error`, `validation_error` from
+  `QrRenderOptions::validate`) stay inline in the modal as
+  the existing Export modal handles them. Encoder failures from
+  `qrcode` (defensive — v0.1 / v0.2 `otpauth://` URIs fit in QR
+  version 10 with M-level ECC, but the modal renders the typed
+  error inline rather than crashing) follow the same inline path.
+  The modal opens regardless of vault mode (plaintext or
+  encrypted); QR export does not require the vault to be in any
+  particular mode beyond `Unlocked`. The list-focus `Q`
+  keybinding is silently no-op'd while any modal is open
+  (including the Help overlay) so the modal cannot be opened on
+  top of another modal.
 - **Passphrase** — three sub-flows mirroring CLI's
   `passphrase set / change / remove`. The available sub-flow is gated
   by `Vault::is_encrypted()`: `set` is offered only on plaintext
@@ -705,6 +754,7 @@ reaches the primary-file commit point with durability still uncertain:
 | `R`                                | Open Rename modal (Shift+R; `r` stays bound to Remove)                                                |
 | `i`                                | Open Import modal                                                                                     |
 | `e`                                | Open Export modal                                                                                     |
+| `Q` (Shift-q)                      | Open QR Export modal for the focused row (v0.2; warning-ack gate, ANSI body, Save-as-PNG / Save-as-SVG); rejected silently while any other modal is open |
 | `/`                                | Focus search bar                                                                                      |
 | `Tab` `Shift-Tab`                  | Cycle focus between search bar and list (preserves active query when leaving search)                  |
 | `Ctrl-N` `Ctrl-P`                  | In modals: next / previous control (aliases for `Tab` / `Shift-Tab`); outside modals: see list-navigation row above |
@@ -1430,6 +1480,108 @@ end-to-end.
   writes to `ExportModal::error`, and the executor-side
   `execute_export` in `src/app/effect.rs` never calls
   `Vault::save`.)*
+
+### QR Export modal (`tests/reducer_tests.rs`, v0.2)
+
+The QR Export modal is the v0.2 entry point for DESIGN §4.6 per-account
+QR rendering from the TUI. It is read-only — neither the reducer nor
+the executor ever calls a mutating `Vault::*` method — so the test
+surface here is smaller than Export / Settings / Add. Pure-logic
+reducer slices and snapshot bullets are listed below; the live
+executor coverage rides with `tests/effect_tests.rs`'s
+`execute_qr_export_*` family enumerated alongside the existing
+`execute_export_*` family.
+
+- [ ] `Q` from list focus opens the modal with the warning-ack page
+  active (`QrExportModal::page = WarningAck`, `ack = false`). Pinned
+  by `pressing_q_from_list_focus_opens_qr_export_modal_on_warning_ack_page`.
+- [ ] `Q` from list focus while any other modal is open is a silent
+  no-op (`pressing_q_with_*_modal_open_is_silent_no_op` per modal
+  variant, mirroring the existing `pressing_a_with_*_modal_open_*`
+  family).
+- [ ] `Q` while the search bar is focused is consumed as text input
+  by the search field (parity with how `r` / `R` / `i` / `e` / etc.
+  are handled from search focus).
+- [ ] `Q` on the unlock, create-vault, and startup-error screens is
+  not bound (matches the help-overlay / list-action gating).
+- [ ] Pre-ack, the QR body is not rendered — assert that the modal
+  body string does not contain the half-block glyph alphabet
+  (`'▀'`, `'▄'`, `'█'`) before the ack is checked, even after the
+  user opens the modal. Pinned by
+  `qr_export_modal_pre_ack_body_does_not_render_qr_glyphs`.
+- [ ] Toggling the ack on (Space on the focused checkbox) advances
+  the modal to `Page::QrAndActions`; toggling it back off returns
+  to `Page::WarningAck` and **drops the rendered ANSI string** from
+  modal state. Pinned by
+  `qr_export_modal_ack_toggle_off_drops_rendered_qr` and
+  `qr_export_modal_ack_toggle_off_returns_to_warning_ack_page`.
+- [ ] The ANSI body matches `paladin_core::Vault::export_qr_ansi(id)`
+  output byte-for-byte (assert the rendered string equals the result
+  of a synchronous `Vault::export_qr_ansi(id).unwrap()` call against
+  the same fixture vault).
+- [ ] Read-only contract — opening the modal, toggling the ack on
+  and off, and `Esc`-closing it leave the HOTP counter and
+  `updated_at` byte-identical to the pre-open state. Pinned by
+  `qr_export_modal_open_and_close_does_not_advance_hotp_counter`.
+  Specifically: seed a vault with one HOTP account at a non-zero
+  counter, open the modal, toggle ack on, render the QR, toggle
+  ack off, close with `Esc`. After close, `vault.iter()` shows
+  the HOTP `counter()` and `updated_at()` unchanged, and the
+  on-disk primary file bytes are unchanged.
+- [ ] The warning body matches
+  `paladin_core::format_plaintext_qr_export_warning()` verbatim
+  (pinned via the same fixture-text approach the existing
+  `qr_export_modal_warning_text_matches_paladin_core_verbatim`
+  fixture uses; CLI / TUI / GUI share one source).
+- [ ] `Save as PNG…` from Page 2 dispatches a save effect that
+  prompts inline for the destination path. Empty path rejects
+  inline. Non-existent directory parent rejects inline with
+  `io_error`. Existing destination shows the overwrite gate.
+- [ ] Overwrite gate — typing a destination that already exists,
+  toggling overwrite ack on, and pressing Confirm writes the file
+  through `paladin_core::write_secret_file_atomic`. Bytes match
+  what `Vault::export_qr_png` returns; permissions are `0600`.
+- [ ] Overwrite gate — destination exists, overwrite ack off, Confirm
+  rejects inline with a wording that points at the gate. The
+  existing file is byte-unchanged.
+- [ ] `Save as SVG…` mirrors the PNG save path through
+  `Vault::export_qr_svg` and `write_secret_file_atomic`. The
+  resulting file is non-empty UTF-8 starting with `<?xml` / `<svg`.
+- [ ] Save effect failure routing —
+  `PALADIN_FAULT_INJECT=pre_commit` surfaces `save_not_committed`
+  inline in the modal body; `=post_commit` surfaces
+  `save_durability_unconfirmed`. The modal stays open in both
+  cases so the user can retry or cancel.
+- [ ] `Esc` from Page 1 closes the modal; `Esc` from Page 2 closes
+  the modal *and* drops the rendered ANSI / PNG / SVG buffers from
+  modal state without auto-saving. Pinned by
+  `qr_export_modal_esc_drops_rendered_buffers`.
+- [ ] Auto-lock with the QR Export modal open drops the modal, the
+  rendered ANSI / PNG / SVG buffers, **and** the in-memory vault,
+  then re-presents the unlock screen for encrypted vaults
+  (no-op on plaintext). Pinned by
+  `auto_lock_with_qr_export_modal_open_drops_modal_and_renders_buffers`.
+- [ ] HOTP account QR export — assert the rendered ANSI body
+  decodes back through `rqrr` (gated behind the existing
+  `qrcode` / `rqrr` dev-dependency that the other QR tests use)
+  to an `otpauth://hotp/...&counter=N` URI whose `counter`
+  equals the *current* stored counter. (TOTP rows decode to
+  `otpauth://totp/...` with the matching algorithm / digits /
+  period / secret.)
+- [ ] Insta snapshots — render the modal at each state:
+  `qr_export_modal_warning_ack_unchecked`,
+  `qr_export_modal_warning_ack_checked` (Page 1 with the ack on,
+  before navigating to Page 2),
+  `qr_export_modal_page2_totp` (Page 2 with a TOTP account's QR
+  rendered),
+  `qr_export_modal_page2_hotp` (Page 2 with a HOTP account),
+  `qr_export_modal_save_destination_prompt`,
+  `qr_export_modal_save_overwrite_gate`,
+  `qr_export_modal_save_succeeded`,
+  `qr_export_modal_save_failed_pre_commit`, and
+  `qr_export_modal_save_failed_durability_unconfirmed`. Locked
+  via `insta::assert_snapshot!` per the existing modal-snapshot
+  pattern.
 
 ### Settings modal (`tests/reducer_tests.rs`)
 
@@ -3736,6 +3888,47 @@ terminal theme and survives `--no-color`.
   `exec_paladin_tui` failure mode. `assert_cmd = "2.0"` is added to
   `crates/paladin-tui/Cargo.toml` `[dev-dependencies]`, matching the
   pin already in `paladin-cli`.)*
+- [ ] **v0.2 — QR Export modal** per the §"Modals (per §6)"
+  `QR Export` entry and DESIGN §4.6 / §6 / §10.
+  - [ ] Add a new `QrExportModal` variant to the modal enum,
+    holding `page: Page::{WarningAck, QrAndActions}`, `ack: bool`,
+    and `staged_buffers: Option<{ ansi: Zeroizing<String>, png:
+    Option<Zeroizing<Vec<u8>>>, svg: Option<Zeroizing<String>> }>`
+    (PNG / SVG are populated lazily when the user invokes the
+    matching save action). Wire the `Q` (Shift-q) keybinding from
+    list focus to the reducer arm that opens the modal on
+    `Page::WarningAck` against the focused account ID.
+  - [ ] Render the warning body verbatim from
+    `paladin_core::format_plaintext_qr_export_warning()` on Page 1
+    and the ANSI body from
+    `paladin_core::Vault::export_qr_ansi(id)` on Page 2; gate the
+    Page 2 mount on `ack == true` so a closing-terminal glimpse
+    cannot expose the secret.
+  - [ ] Wire `Save as PNG…` and `Save as SVG…` actions through
+    `paladin_core::Vault::export_qr_png` /
+    `paladin_core::Vault::export_qr_svg` and
+    `paladin_core::write_secret_file_atomic` (0600); reuse the
+    existing inline overwrite-gate UX from the Export modal so the
+    wording stays consistent.
+  - [ ] Drop staged ANSI / PNG / SVG buffers on submit, cancel,
+    `Esc`, modal close, ack-toggle-off, and auto-lock per
+    §"Modals (per §6)". The buffers live in `Zeroizing` wrappers
+    so the drop zeroes the bytes in place.
+  - [ ] Read-only invariant — the reducer's `QrExport`-related
+    arms never call any `&mut Vault` method, the executor's
+    `execute_qr_*` workers never call `Vault::save`, and the
+    save-action workers only call `write_secret_file_atomic` (not
+    `Vault::mutate_and_save`). Confirm via the
+    `qr_export_modal_open_and_close_does_not_advance_hotp_counter`
+    test below.
+  - [ ] Add `Q` to the shared keybindings table that backs the
+    Help overlay and (per the existing implementation-checklist
+    item) the `cargo xtask man` man page generator so the
+    keybinding surfaces consistently across all three surfaces.
+  - [ ] All `tests/reducer_tests.rs::qr_export_modal_*` bullets
+    ticked, the `tests/effect_tests.rs::execute_qr_export_*`
+    bullets ticked, and the insta snapshots listed in the
+    §"QR Export modal" Tests block locked.
 
 ## Definition of done
 
@@ -3743,12 +3936,19 @@ terminal theme and survives `--no-color`.
 - **Every Tests checklist item above is ticked** — including the
   reducer, vim-style navigation, search, auto-lock, clipboard
   auto-clear, terminal lifecycle, global args, every modal (Add,
-  Import, Export, Settings, Rename), pre-commit save rollback, HOTP
-  reveal window, sensitive UI buffers, vault modes / startup, and
-  every insta snapshot. The "Add reducer, search, auto-lock,
-  clipboard, HOTP reveal, terminal lifecycle, sensitive-buffer, and
-  snapshot coverage" implementation-checklist item ticks only when
-  this gate is met.
+  Import, Export, **QR Export** (v0.2), Settings, Rename),
+  pre-commit save rollback, HOTP reveal window, sensitive UI
+  buffers, vault modes / startup, and every insta snapshot. The
+  "Add reducer, search, auto-lock, clipboard, HOTP reveal,
+  terminal lifecycle, sensitive-buffer, and snapshot coverage"
+  implementation-checklist item ticks only when this gate is met.
+- **v0.2 — QR Export modal:** `Q` from list focus opens the modal,
+  the warning-ack gate prevents pre-ack rendering, the ANSI body
+  matches `Vault::export_qr_ansi(id)`, Save-as-PNG / Save-as-SVG
+  route through `write_secret_file_atomic` (0600) with the inline
+  overwrite gate, HOTP counters and `updated_at` are unchanged
+  across modal open / close / save, and auto-lock drops the
+  rendered buffers alongside the in-memory vault.
 - Auto-lock + clipboard-clear are off by default and behave per §6 when
   enabled, including the plaintext-vault no-op.
 - HOTP reveal rows show the counter used for the visible code, then return

@@ -414,7 +414,7 @@ want plaintext storage must use `remove_passphrase`.
 
 #### Export
 
-Two formats, user picks per invocation:
+Three formats, user picks per invocation:
 
 - **Plaintext (otpauth URI list).** A newline-separated list of
   `otpauth://` URIs, one URI per line, terminated by a trailing
@@ -443,6 +443,47 @@ Two formats, user picks per invocation:
   exists unless `--force` is given, matching plaintext export.
   The output file is written through `write_secret_file_atomic` and is
   created `0600`.
+- **QR code (per account).** Renders a single account's `otpauth://`
+  URI as a QR code, the same URI that would land in a plaintext URI
+  list export but for one row. The QR encoding is standard
+  `otpauth://` per the Google Authenticator key-URI format, so any
+  scanner that imports otpauth URIs can consume it; Paladin does not
+  define its own QR payload. Multi-account / vault-migration QR
+  payloads (e.g. the Google Authenticator `otpauth-migration://`
+  protobuf) are explicitly out of scope. HOTP exports encode the
+  *current* stored counter in the URI's `counter` parameter and **do
+  not** advance it; semantically a QR export is a `peek`, not a
+  `show`, so a user who scans the QR into a second device and then
+  continues using the original loses no codes to a phantom advance.
+  The CLI / TUI / GUI all render this warning verbatim, sourced from
+  `paladin_core::format_plaintext_qr_export_warning()`, before any
+  pixel of the QR is shown or written: the QR encodes the account
+  secret, anyone who sees or photographs it can clone the OTP, and
+  the user should treat it like the plaintext URI list above.
+  Three render targets are supported and all three live in
+  `paladin-core` so the front ends stay thin:
+    * **PNG bytes** — written to disk through `write_secret_file_atomic`
+      (CLI, TUI save action, GUI save action) or pushed to the GDK
+      clipboard (GUI only). The CLI / TUI refuse to overwrite a target
+      file without `--force` and the GUI runs the same inline overwrite
+      gate `ExportDialog` uses; saved files are `0600`.
+    * **SVG text** — same write contract as PNG. Useful for sharp
+      printing and for users who want a vector copy.
+    * **ANSI Unicode QR** — Unicode half-block rendering for terminals
+      (CLI default when no file output is selected, TUI modal body).
+      Stdout output is plain UTF-8 text; ANSI styling is disabled when
+      `--no-color` is set or stdout is not a TTY, matching §5.
+  Render parameters are bounded so a malformed `QrRenderOptions` value
+  cannot blow up the encoder: `module_size_px` is 1 to 64 inclusive
+  (default 8), `quiet_zone` is bool (default `true`), and the QR error-
+  correction level is fixed to **M** (the §9 `qrcode` crate default).
+  Encoder failures return `validation_error` with `field: "qr_render"`
+  and `reason` set to the encoder's stable rejection slug (e.g.
+  `data_too_long` if a far-future account format somehow exceeds the
+  largest QR version); v0.1 `otpauth://` URIs fit comfortably inside
+  QR version 10 with M-level ECC, so production payloads never trip
+  the size cap. The QR pipeline is read-only: it never calls into
+  storage, never advances a counter, and never mutates `updated_at`.
 
 `write_secret_file_atomic` is the shared export-writer primitive for the CLI,
 TUI, and GUI. It writes caller-supplied bytes to an arbitrary destination path
@@ -578,6 +619,7 @@ pub enum VaultInit { Plaintext, Encrypted(EncryptionOptions) }
 pub enum VaultStatus { Plaintext, Encrypted, Missing }
 pub struct Argon2Params { pub m_kib: u32, pub t: u32, pub p: u32 }
 pub struct EncryptionOptions { pub passphrase: SecretString, pub kdf_params: Argon2Params }
+pub struct QrRenderOptions { pub module_size_px: u32, pub quiet_zone: bool }
 pub enum ValidationWarning { ShortSecret { decoded_len: usize, recommended_min: usize } }
 pub struct ValidatedAccount { pub account: Account, pub warnings: Vec<ValidationWarning> }
 pub enum ImportConflict { Skip, Replace, Append }
@@ -589,6 +631,12 @@ pub enum InitPrecheck { Clear, Existing, Propagate(PaladinError) }
 pub enum PaladinImportPrecheck { NoPrompt, PromptForPassphrase, Reject(PaladinError) }
 pub const HOTP_REVEAL_SECS: u64 = 120;
 pub const QR_RGBA_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// QR-export render bounds, mirrored on the CLI `--module-size-px` flag and
+/// the GUI render path. The QR error-correction level is fixed at M and is
+/// not exposed as an option in v0.1.
+pub const QR_MODULE_SIZE_PX_MIN: u32 = 1;
+pub const QR_MODULE_SIZE_PX_MAX: u32 = 64;
+pub const QR_MODULE_SIZE_PX_DEFAULT: u32 = 8;
 /// Shared TUI / GUI tick cadence for TOTP gauge refresh and clipboard
 /// staleness checks. 250 ms keeps the TOTP "seconds remaining" display
 /// honest without burning CPU. Front ends consume this constant; they
@@ -673,6 +721,11 @@ impl EncryptionOptions {
     pub fn with_params(passphrase: SecretString, kdf_params: Argon2Params) -> Result<Self>;
 }
 
+impl Default for QrRenderOptions { /* module_size_px = QR_MODULE_SIZE_PX_DEFAULT, quiet_zone = true */ }
+impl QrRenderOptions {
+    pub fn validate(&self) -> Result<()>;                                  // enforces §4.6 QR bounds, returns validation_error with field "qr_render"
+}
+
 impl VaultSettings {
     pub fn auto_lock_enabled(&self) -> bool;
     pub fn auto_lock_timeout_secs(&self) -> u32;
@@ -712,6 +765,15 @@ pub fn format_plaintext_storage_warning() -> String;
 /// `ExportDialog` plaintext path before unencrypted secrets are
 /// written. Static text.
 pub fn format_plaintext_export_warning() -> String;
+
+/// Format the per-account QR-export warning shown by the CLI `qr`
+/// command, the TUI QR modal, and the GUI `ExportQrDialog` before
+/// the QR is rendered, written, or copied. Static text — calls out
+/// that the QR encodes the account secret, anyone who sees or
+/// photographs it can clone the OTP, and saved QR files should be
+/// treated like a plaintext export. Lives in `paladin-core` so all
+/// three front ends share one source.
+pub fn format_plaintext_qr_export_warning() -> String;
 
 /// Format a validation warning's stable human-readable message. JSON output
 /// includes this message, and text / UI surfaces use it verbatim so warning
@@ -843,6 +905,9 @@ impl Vault {
     pub fn totp_next_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;  // TOTP only; code for the next window (`((now/period)+1)*period`); errors on HOTP entries
     pub fn hotp_peek(&self, id: AccountId) -> Result<Code>;                        // HOTP only; does not advance
     pub fn hotp_advance(&mut self, store: &Store, id: AccountId, now: SystemTime) -> Result<Code>;  // HOTP only; advances counter, updates `updated_at`, and saves atomically
+    pub fn export_qr_png(&self, id: AccountId, options: QrRenderOptions) -> Result<Zeroizing<Vec<u8>>>;  // §4.6 QR export → PNG bytes; pure read, no counter advance, options validated
+    pub fn export_qr_svg(&self, id: AccountId, options: QrRenderOptions) -> Result<Zeroizing<String>>;   // §4.6 QR export → SVG text; pure read, no counter advance, options validated
+    pub fn export_qr_ansi(&self, id: AccountId) -> Result<Zeroizing<String>>;                            // §4.6 QR export → Unicode half-block render for terminals; pure read, no counter advance, no QrRenderOptions (terminal cells are fixed size)
     pub fn matching_accounts(&self, query: &AccountQuery) -> Vec<&Account>;         // shared selector matching; callers apply command-specific cardinality rules
     pub fn shortest_unique_id_prefix(&self, id: AccountId) -> Option<String>;       // minimum 8 hex chars; used in CLI candidate lists
     pub fn settings(&self) -> &VaultSettings;
@@ -908,6 +973,9 @@ pub mod import {
 pub mod export {
     pub fn otpauth_list(vault: &Vault) -> String;                               // newline-separated `otpauth://` URIs, one per line with trailing newline; empty vault → empty string. Infallible.
     pub fn encrypted(vault: &Vault, options: EncryptionOptions) -> Result<Vec<u8>>;  // Paladin encrypted bundle. Wraps `VaultPayload { accounts, settings: VaultSettings::default() }`; uses default or custom Argon2 params from `options`; `import::paladin` discards the settings field.
+    pub fn qr_png(account: &Account, options: QrRenderOptions) -> Result<Zeroizing<Vec<u8>>>;  // §4.6 QR PNG bytes for one account's `otpauth://` URI. Validates `options`; encoder failures return `validation_error` (`field: "qr_render"`).
+    pub fn qr_svg(account: &Account, options: QrRenderOptions) -> Result<Zeroizing<String>>;   // §4.6 QR SVG text for one account's `otpauth://` URI. Same validation contract as `qr_png`.
+    pub fn qr_ansi(account: &Account) -> Result<Zeroizing<String>>;                            // §4.6 Unicode half-block QR for one account's `otpauth://` URI. Terminal output; no options because cell size is fixed by the renderer.
 }
 ```
 
@@ -924,10 +992,11 @@ is `Send`. The CI-gated `Send` set covers `Vault`, `Store`, `Account`,
 `AccountId`, `AccountSummary`, `AccountKindSummary`, `Algorithm`,
 `Code`, `ValidatedAccount`, `ValidationWarning`, `ImportReport`,
 `ImportWarning`, `ImportConflict`, `ImportFormat`, `ImportOptions<'_>`,
-`EncryptionOptions`, `Argon2Params`, `VaultLock`, `VaultInit`,
-`VaultStatus`, `VaultSettings`, `SettingKey`, `SettingPatch`,
-`AccountKindInput`, `IconHintInput`, `AccountInput`, `AccountQuery`,
-`InitPrecheck`, `PaladinImportPrecheck`, and `PaladinError` — so
+`EncryptionOptions`, `Argon2Params`, `QrRenderOptions`, `VaultLock`,
+`VaultInit`, `VaultStatus`, `VaultSettings`, `SettingKey`,
+`SettingPatch`, `AccountKindInput`, `IconHintInput`, `AccountInput`,
+`AccountQuery`, `InitPrecheck`, `PaladinImportPrecheck`, and
+`PaladinError` — so
 `paladin-gtk` can drive
 encrypted `open` / `create` / `create_force` and any save-bearing
 operation inside `gio::spawn_blocking`, and `paladin-tui` can drive
@@ -937,9 +1006,9 @@ the build instead of silently breaking either front end.
 
 The non-secret projection types (`AccountSummary`, `Code`,
 `ImportReport`, `ImportWarning`, `VaultStatus`, `VaultSettings`,
-`Algorithm`, `AccountKindSummary`, `Argon2Params`, `SettingKey`,
-`SettingPatch`, `IconHintInput`, `AccountKindInput`, `AccountQuery`,
-`InitPrecheck`, `AccountId`) are also `Sync`. Secret-bearing types
+`Algorithm`, `AccountKindSummary`, `Argon2Params`, `QrRenderOptions`,
+`SettingKey`, `SettingPatch`, `IconHintInput`, `AccountKindInput`,
+`AccountQuery`, `InitPrecheck`, `AccountId`) are also `Sync`. Secret-bearing types
 (`Vault`, `Store`, `Account`, `Secret`, `EncryptionOptions`,
 `AccountInput`, `ValidatedAccount`, `VaultLock`, `VaultInit`,
 `PaladinError`) are deliberately *not* asserted `Sync` — `SecretString`
@@ -1026,6 +1095,9 @@ calling these methods:
 | `hotp_peek`    | `not_hotp`          | The account is TOTP.            |
 | `hotp_advance` | `account_not_found` | No account exists for the ID.   |
 | `hotp_advance` | `not_hotp`          | The account is TOTP.            |
+| `export_qr_png` | `account_not_found` | No account exists for the ID. |
+| `export_qr_svg` | `account_not_found` | No account exists for the ID. |
+| `export_qr_ansi` | `account_not_found` | No account exists for the ID. |
 
 Other core-owned `invalid_state` operation/state pairs are also stable:
 
@@ -1056,6 +1128,7 @@ Built with `clap` (derive). Commands:
 | `paladin passphrase remove`                 | Decrypt to plaintext. Warns and prompts for destructive confirmation unless `--yes` is passed. Required under `--json` (no confirmation prompt available). |
 | `paladin export --plaintext <out>`          | Write a newline-separated list of `otpauth://` URIs, one per line (Gnome Authenticator–compatible). Warns; refuses overwrite without `--force`; creates output `0600`. |
 | `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle. Refuses overwrite without `--force`; creates output `0600`. |
+| `paladin qr <query>`                        | Render one account's `otpauth://` URI as a QR code (§4.6). Resolves `<query>` with the same single-match cardinality as `copy`/`remove`/`rename`. Prints the QR-export warning (sourced from `paladin_core::format_plaintext_qr_export_warning()`) before any pixel is rendered or written. With `--out <path>`, writes the QR to disk through `write_secret_file_atomic` (0600, refuses overwrite without `--force`); without `--out`, renders ANSI Unicode half-blocks to stdout. `--format png\|svg\|ansi` selects the encoding (default `png` when `--out` is set, `ansi` when it is not). `--module-size-px <n>` (default 8) sets PNG/SVG pixels per QR module within `QR_MODULE_SIZE_PX_MIN..=QR_MODULE_SIZE_PX_MAX`. Read-only: never advances a HOTP counter, never mutates `updated_at`. |
 | `paladin import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
 | `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `paladin` (encrypted bundle only), `qr`.               |
 | `paladin settings get [key]`                | Show vault settings (auto-lock, clipboard-clear).                |
@@ -1185,6 +1258,34 @@ the command exits non-zero with `clipboard_write_failed`, `account`, and
 reflects the persisted post-advance counter. TOTP clipboard failures use
 the same error kind with `counter_used: null`.
 
+`qr` is read-only and never advances a HOTP counter, so the
+HOTP-export rule is "encode the current stored counter" — a user
+scanning the QR onto a second device and continuing to use the first
+loses no codes to a phantom advance, matching the §4.6 contract.
+Query cardinality is the same as `copy`/`remove`/`rename`: a single
+match is required, and multiple matches exit non-zero with the
+candidate list. With `--out <path>` the QR is rendered via
+`Vault::export_qr_png` or `Vault::export_qr_svg` (selected by
+`--format`, default `png`), written through `write_secret_file_atomic`
+(0600), and refused on an existing target without `--force`. Without
+`--out`, the QR is rendered via `Vault::export_qr_ansi` to stdout;
+`--format=png` or `--format=svg` without `--out` is rejected at parse
+time as `validation_error` (`field: "out"`, `reason: "required_for_binary_format"`)
+because binary blobs to a terminal are unhelpful. Under `--json`, an
+ANSI render to stdout is also rejected at parse time
+(`field: "out"`, `reason: "required_under_json"`) so the strict-mode
+"only the JSON envelope on stdout" rule (§5) is preserved. Render
+parameters are validated before the warning text is printed and
+before the account is resolved: `--module-size-px` outside
+`QR_MODULE_SIZE_PX_MIN..=QR_MODULE_SIZE_PX_MAX` returns
+`validation_error` (`field: "module_size_px"`). `--module-size-px`
+on `--format=ansi` is accepted but ignored — terminal cell size is
+fixed by the renderer. The QR-export plaintext warning is rendered
+in text mode and suppressed in `--json` mode (parallel to the
+`init --force`, plaintext-export, and `passphrase remove --yes`
+advisories), since the user opting into `--out <path>` plus
+`--json` has already opted into machine-readable output.
+
 With `--json`, commands write one JSON document to stdout on success and
 one JSON document to stderr on failure. To keep the CLI scriptable,
 `paladin` pre-scans argv for an exact `--json` token before clap parsing;
@@ -1263,6 +1364,7 @@ Success shapes:
 | `remove`                      | `{ "removed": AccountSummary }`                                                 |
 | `import`                      | `{ "imported": n, "skipped": n, "replaced": n, "appended": n, "accounts": [AccountSummary], "warnings": [Warning] }` |
 | `export`                      | `{ "written": "/path/to/out", "format": "otpauth_or_paladin" }`                |
+| `qr`                          | With `--out`: `{ "written": "/path/to/out", "format": "qr_png_or_qr_svg", "account": AccountSummary }`. Without `--out`: rejected at parse time under `--json` because ANSI stdout output cannot share the JSON envelope; `--json` callers must pass `--out`. |
 | `settings get`, `settings set` | `{ "settings": VaultSettings }` (always full settings; `[key]` on `get` only filters text-mode display, never the JSON shape) |
 | `init`, `passphrase *`        | `{ "ok": true, "status": "plaintext_or_encrypted" }`                           |
 | `--help` / subcommand help    | `{ "help": { "command": "paladin ...", "text": "..." } }`                      |
@@ -1620,8 +1722,8 @@ Layout (single-screen MVP):
   The flow never writes to disk before the user confirms in the
   final step, and never silently downgrades an encrypted choice
   to plaintext.
-- Modal dialogs for add / remove / rename / import / export / passphrase /
-  settings. Add supports manual entry, paste of an `otpauth://` URI
+- Modal dialogs for add / remove / rename / import / export / qr /
+  passphrase / settings. Add supports manual entry, paste of an `otpauth://` URI
   (decoded via `paladin_core::parse_otpauth`), and QR scan from
   clipboard image bytes; manual and URI duplicates use
   `Vault::find_duplicate` and reject with the existing account, while
@@ -1648,6 +1750,23 @@ Layout (single-screen MVP):
   clipboard-QR Add remain on a post-success counts panel so the
   imported/skipped/replaced/appended/warning counts stay visible until the
   user dismisses them.
+  The **QR modal** (opened with `Q` on the focused account row) renders
+  the §4.6 per-account QR via `Vault::export_qr_ansi(id)` after the user
+  acknowledges the QR-export warning sourced from
+  `paladin_core::format_plaintext_qr_export_warning()`. The modal body
+  shows the warning + ack gate first; on ack, the same modal switches
+  to the Unicode half-block QR plus the account's `issuer:label`
+  caption and two save actions, `Save as PNG…` and `Save as SVG…`, both
+  routed through `Vault::export_qr_png` / `export_qr_svg` and
+  `write_secret_file_atomic` (0600). Save targets prompt for a
+  destination path inside the modal, refuse overwrite without an
+  inline `--force`-equivalent confirmation, and surface the resulting
+  path inline on success. `Esc` closes the modal and drops the
+  rendered `Zeroizing` buffers; the modal is rejected on HOTP rows
+  only when the row has no decoded `Account` (defensive — the §4.6
+  QR pipeline is read-only and never advances HOTP). Auto-lock
+  during the modal lifecycle drops the rendered buffers before
+  switching to the unlock screen.
 - `?` from list focus opens a read-only Help overlay listing every
   keybinding; `Esc` closes it. The overlay never mutates state and is
   not bound on the unlock, create-vault, or startup-error screens.
@@ -1769,6 +1888,39 @@ Library: **Relm4** on **GTK4**. Component tree:
   warning before plaintext writes. Writes through
   `write_secret_file_atomic` and surfaces the `0600` output path on
   success.
+- `ExportQrDialog` — per-account QR export (§4.6). Opened from the
+  account row's kebab menu via a new `Show QR…` entry placed
+  between `Rename…` and `Remove…`. The dialog opens on a warning
+  page rendered verbatim from
+  `paladin_core::format_plaintext_qr_export_warning()` with an
+  `AdwSwitchRow` ack gate; the QR is **not** rendered until the
+  user toggles the ack on, so a closing-window glimpse can never
+  expose the secret. Once acknowledged the body switches to a
+  `gtk::Picture` bound to the PNG bytes returned by
+  `Vault::export_qr_png(id, QrRenderOptions::default())` (decoded
+  via `gdk::Texture::from_bytes`) plus the account's
+  `summary_display_label` caption and four actions:
+  *Save as PNG…*, *Save as SVG…*, *Copy image*, and *Done*. Save
+  actions open a `gtk::FileDialog::save`, run the same inline
+  overwrite gate `ExportDialog` uses, and write through
+  `write_secret_file_atomic` (0600) via
+  `Vault::export_qr_png` / `Vault::export_qr_svg` on
+  `gio::spawn_blocking` (the encoders are sub-millisecond; the
+  thread hop exists to keep `write_secret_file_atomic`'s `fsync`
+  chain off the main loop). *Copy image* pushes the PNG bytes onto
+  `gdk::Clipboard` via `gdk::ContentProvider::for_value` with MIME
+  type `image/png`; the clipboard auto-clear policy applies the
+  same only-if-unchanged byte-equality decision as code copies, but
+  no schedule arms because `clipboard.clear_enabled` covers the
+  code-copy path specifically (the dialog body still calls out the
+  clipboard-history risk in line with §8 bullet 6). The dialog
+  never mutates the vault — QR export is read-only — so there is
+  no `mutate_and_save` path and no save-rollback to consider. PNG
+  bytes, SVG text, and the rendered `gdk::Texture` are dropped
+  (and zeroized at the core boundary) when the dialog closes,
+  when the ack is toggled off, or when auto-lock fires. The dialog
+  is disabled on `UnlockedBusy` for parity with other dialog
+  surfaces.
 - `PassphraseDialog` — `set` / `change` / `remove` sub-flows mirroring the
   CLI; `set` is enabled only on plaintext vaults, `change` and `remove`
   only on encrypted vaults.
@@ -1858,7 +2010,14 @@ Concrete obligations and explicit user-controlled tradeoffs:
 8. **Plaintext export warns loudly.** The CLI prints a multi-line warning,
    refuses to overwrite an existing file without `--force`, and writes the
    output `0600`. Encrypted exports also refuse overwrite and create output
-   `0600`.
+   `0600`. **Per-account QR exports** (§4.6) carry a parallel warning
+   sourced from `paladin_core::format_plaintext_qr_export_warning()` and
+   ride the same `write_secret_file_atomic` + `--force` / inline-gate path,
+   because a QR is a plaintext encoding of an account secret — anyone who
+   can see or photograph it can clone the OTP. QR export is also
+   *read-only* (HOTP counters are encoded at their current value and
+   never advanced) so the original device retains code parity with a
+   second device that scanned the QR.
 9. **Imports are fully validated.** Each importer parses into validated
    account values without trusting the source's claimed structure — secrets are
    length-checked (rejected if shorter than 10 bytes / 80 bits or longer
@@ -1908,7 +2067,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 | `rpassword`                            | CLI passphrase prompt                                                                                                             |
 | `arboard`                              | CLI / TUI clipboard where needed; GUI uses GDK clipboard                                                                          |
 | `rqrr`, `image`                        | QR decode from files/buffers                                                                                                      |
-| `qrcode`                               | (Optional) display QR for setup                                                                                                   |
+| `qrcode`                               | Per-account QR export (§4.6) — PNG / SVG / ANSI rendering inside `paladin-core` so front ends stay thin                          |
 | `directories`                          | XDG / platform paths                                                                                                              |
 | `thiserror`, `anyhow`                  | Error types                                                                                                                       |
 | `base32`                               | Secret encoding                                                                                                                   |
@@ -2051,6 +2210,22 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     cases so CLI / TUI / GUI import dialogs share the same decision about
     whether to prompt for a Paladin bundle passphrase, reject a plaintext or
     malformed Paladin header, or continue through `import::from_file`.
+  - QR export (§4.6): `Vault::export_qr_png` / `export_qr_svg` /
+    `export_qr_ansi` and the parallel `export::qr_*` free functions
+    encode the same `otpauth://` URI that `export::otpauth_list`
+    emits for that account — pinned by re-decoding the rendered QR
+    through `rqrr` and asserting equality with the URI. Render
+    operations are pure reads: the HOTP counter is not advanced,
+    `updated_at` is not bumped, and the on-disk vault is byte-
+    identical before and after every render. `QrRenderOptions`
+    validation rejects `module_size_px` outside
+    `QR_MODULE_SIZE_PX_MIN..=QR_MODULE_SIZE_PX_MAX` with
+    `validation_error` (`field: "qr_render"`). Account-not-found
+    returns `invalid_state` with the matching `operation`. The
+    returned `Zeroizing<Vec<u8>>` / `Zeroizing<String>` zeroizes
+    its inner bytes on drop (asserted byte-precisely, matching the
+    existing zeroization posture). `format_plaintext_qr_export_warning`
+    returns non-empty static text.
 - **Property tests** (`proptest`) for the URI parser and base32 secret
   decoding.
 - **Integration tests** for each shipped binary using `assert_cmd` (CLI)
@@ -2076,6 +2251,19 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     rejection, and `--allow-duplicate`.
   - CLI query resolution, including `str::to_lowercase()` matching,
     no-normalization Unicode behavior, and `id:` prefix validation.
+  - CLI `qr <query>` (§4.6): single-match cardinality (multiple
+    matches exit non-zero with the candidate list, no-match exits
+    `no_match`), HOTP counter is not advanced across a render,
+    `--out <path>` writes PNG / SVG bytes via
+    `write_secret_file_atomic` (0600, `--force` overwrite gate),
+    stdout-default renders ANSI text, `--format=png|svg` without
+    `--out` rejects at parse time (`field: "out"`,
+    `reason: "required_for_binary_format"`), `--json` without
+    `--out` rejects at parse time (`field: "out"`,
+    `reason: "required_under_json"`),
+    `--module-size-px` outside the §4.7 bounds returns
+    `validation_error` (`field: "module_size_px"`), and the JSON
+    success shape carries `written` / `format` / `account`.
   - TUI HOTP copy behavior: hidden rows do not copy, revealed rows copy
     without advancing again, and revealed rows display the counter that
     produced the visible code rather than the stored post-advance counter.
@@ -2102,6 +2290,24 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     validation behavior as manual mode; rename modal round-trips
     through `Vault::rename`, including unchanged labels so `updated_at`
     matches CLI behavior, with prior-label restore on `save_not_committed`.
+  - TUI QR modal (§6, §4.6): `Q` on the focused row opens the modal
+    on the warning page; rendering / save actions are disabled until
+    the user acks the warning; ANSI body matches `Vault::export_qr_ansi`
+    output; Save-as-PNG / Save-as-SVG actions write through
+    `write_secret_file_atomic` with the inline overwrite gate; the
+    HOTP counter and `updated_at` are unchanged after the modal opens
+    and closes; `Esc` and auto-lock drop the rendered buffers.
+  - GUI QR dialog (§7, §4.6): `Show QR…` kebab entry opens
+    `ExportQrDialog`; the dialog opens on the warning page with the
+    ack `AdwSwitchRow` off and the QR `gtk::Picture` hidden; toggling
+    ack on renders the QR from `Vault::export_qr_png` bytes via
+    `gdk::Texture::from_bytes`; Save-as-PNG / Save-as-SVG run on
+    `gio::spawn_blocking`, surface the resulting 0600 path, and apply
+    the inline overwrite gate; `Copy image` pushes PNG bytes through
+    `gdk::ContentProvider::for_value` with MIME `image/png`; the
+    dialog never enters `Vault::mutate_and_save` (QR export is
+    read-only); dialog close, ack-off, and auto-lock drop the
+    rendered bytes. v0.2.
   - Plaintext-vault auto-lock is a no-op in TUI state handling now, with
     GUI parity when the GUI ships.
 - **CI:** `cargo fmt --check`, `cargo clippy -- -D warnings`,
@@ -2351,7 +2557,8 @@ artifacts side by side.
 ### Milestone 7 — GUI *(v0.2)*
 - [ ] Add the `paladin-gtk` crate to the workspace (placeholder for v0.2 work).
 - [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
-  Rename / Import / Export / Passphrase / Settings / StartupError).
+  Rename / Import / Export / ExportQr / Passphrase / Settings /
+  StartupError).
 - [ ] In-app vault initialization (`InitDialog`) for missing vaults —
   plaintext + encrypted paths, explicit confirmation, in-dialog
   `create_force` clobber confirmation when a vault already exists.
@@ -2359,11 +2566,39 @@ artifacts side by side.
   paste path (parity with CLI `rename` and `add --uri`).
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
+- [ ] Per-account QR export (`ExportQrDialog`) reachable from the row
+  kebab menu — warning-ack gate, on-screen render via
+  `Vault::export_qr_png`, Save-as-PNG / Save-as-SVG via
+  `Vault::export_qr_png` / `Vault::export_qr_svg` +
+  `write_secret_file_atomic`, Copy image to GDK clipboard. Read-only:
+  HOTP counters never advance.
 - [ ] Linux desktop file + icon (consumed by the §11.3 native packages
   and the §11.4 Flatpak manifest).
 - [x] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
 - [ ] Manual test plan documented.
+
+### Milestone 8 — Cross-front-end QR export *(v0.2)*
+- [ ] `paladin-core` QR rendering API: `QrRenderOptions`,
+  `Vault::export_qr_png` / `export_qr_svg` / `export_qr_ansi`,
+  free functions `export::qr_png` / `qr_svg` / `qr_ansi`,
+  `format_plaintext_qr_export_warning`, and the
+  `QR_MODULE_SIZE_PX_*` constants. `qrcode` promoted from optional /
+  dev-only to a regular dependency of `paladin-core`; the public-api
+  snapshot is updated to match.
+- [ ] CLI `paladin qr <query>` command with `--out` / `--format` /
+  `--module-size-px` / `--force` flags, ANSI stdout default,
+  parse-time rejection of binary formats without `--out`, and the
+  JSON `{ "written", "format", "account" }` success shape gated on
+  `--out` per §5.
+- [ ] TUI QR modal opened with `Q` on the focused row — warning-ack
+  gate, ANSI body from `Vault::export_qr_ansi`, Save-as-PNG /
+  Save-as-SVG via `write_secret_file_atomic` with the inline
+  overwrite gate; auto-lock and `Esc` drop the rendered buffers.
+- [ ] GTK `ExportQrDialog` per Milestone 7's bullet.
+- [ ] Tests covering core rendering, CLI command, TUI modal, GUI
+  dialog, and the read-only invariant (HOTP counters and `updated_at`
+  are unchanged across every render path).
 
 ## 13. Open questions
 
@@ -2482,6 +2717,45 @@ artifacts side by side.
   surrounding Unicode whitespace; any other response exits before mutation.
 - Encrypted-write KDF flags are validated before vault inspection, unlock
   prompts, wrong-state checks, or command-specific prompts.
+
+**Decided during QR-export planning (2026-05-26):**
+- Per-account QR export is the v0.2 scope; multi-account / vault-
+  migration QR formats (Google Authenticator `otpauth-migration://`
+  protobuf) are explicitly out of scope.
+- QR rendering lives in `paladin-core` (`Vault::export_qr_*` plus
+  `export::qr_*`) so the thinness contract on `paladin-gtk` (no
+  direct `image` / `rqrr` / `qrcode` use) stays intact. The CLI
+  and TUI also call core's renderers, even though they could pull
+  `qrcode` themselves, so render parameters, secret-handling, and
+  warning text cannot drift across front ends.
+- QR export is **read-only**: `Vault::export_qr_*` is `&self`, the
+  HOTP counter is encoded at its current value, and `updated_at` is
+  not bumped. Semantically a QR export is a `peek`, not a `show`.
+- Three render targets, locked at the core boundary: PNG bytes
+  (returned `Zeroizing<Vec<u8>>`), SVG text
+  (returned `Zeroizing<String>`), and Unicode half-block ANSI text
+  (returned `Zeroizing<String>`). QR error-correction level is fixed
+  to **M** in v0.1; `QrRenderOptions` exposes only `module_size_px`
+  (bounded 1..=64, default 8) and `quiet_zone` (default `true`).
+- Warning text is shared via
+  `paladin_core::format_plaintext_qr_export_warning()`. CLI / TUI /
+  GUI all render it verbatim before any pixel of the QR is shown,
+  written, or copied.
+- The CLI surfaces the feature as a new top-level command
+  `paladin qr <query>` rather than overloading `paladin export`,
+  so the dual-positional `<query> + <out>` shape stays parseable
+  and the `--out` / `--format` / `--module-size-px` flags read
+  naturally.
+- Under `--json`, an ANSI render to stdout is rejected at parse
+  time; the user must pass `--out` so the JSON envelope owns
+  stdout. Binary formats without `--out` are also rejected at
+  parse time.
+- The GTK dialog opens on a warning-ack gate and renders the QR
+  only after the user toggles the gate on, so a closing-window
+  glimpse cannot expose the secret. Dialog close, ack-off, and
+  auto-lock all drop the rendered bytes.
+- The kebab menu order becomes Rename… / Show QR… / Remove…,
+  inserting `Show QR…` between the existing entries.
 
 **Decided during final implementation-plan review (2026-05-07):**
 - `EncryptionOptions::new` returns `Result<Self>` and validates the same
