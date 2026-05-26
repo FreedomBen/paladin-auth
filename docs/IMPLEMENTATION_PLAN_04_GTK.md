@@ -1932,8 +1932,8 @@ red until that ships.
   This menu replaces the existing
   `account_row::build_kebab_menu_model()` once the work lands;
   the kebab `gtk::MenuButton`, the row-body right-click popover,
-  and the keyboard `popup-menu` path all bind the **same**
-  `gio::Menu` and the **same** per-row
+  and the keyboard `gtk::ShortcutController` path all bind the
+  **same** `gio::Menu` and the **same** per-row
   `gio::SimpleActionGroup`. Section header rows are non-selectable
   and never raise the menu.
 * **Action targets are the existing per-row group.**
@@ -1961,13 +1961,18 @@ red until that ships.
   clicks the kebab, right-clicks the row, or uses the keyboard.
   Section rows (`RowItem::is_section() == true`) early-return
   from the gesture's press handler and never pop the menu.
-* **Keyboard parity via `popup-menu`.** Account-row containers
-  connect to the `popup-menu` signal (raised by GTK on
-  `Menu` key / `Shift+F10`). The handler pops the same
-  `gtk::PopoverMenu`, anchored to the row container's content
-  rectangle so a keyboard-driven user sees the menu attached to
-  the focused row. The signal handler returns `true` so the
-  default fallback (no menu) does not run.
+* **Keyboard parity via `gtk::ShortcutController`.** Account-row
+  containers install a single `gtk::ShortcutController` hosting
+  three `gtk::Shortcut` entries: `Menu` and `Shift+F10` both
+  trigger a `gtk::CallbackAction` that pops the shared
+  `gtk::PopoverMenu` anchored to the row container's content
+  rectangle, so a keyboard-driven user sees the menu attached
+  to the focused row; `Shift+E` triggers a
+  `gtk::NamedAction("row.edit")` for TUI parity (DESIGN §6) so
+  the user can open EditDialog directly without going through
+  the menu. The controller's propagation phase is `capture`
+  so the row consumes the trigger before any window-level
+  handler runs. Section rows do not install the controller.
 * **One popover at a time.** The account list keeps a single
   `Option<gtk::PopoverMenu>` in `AccountListComponent` state; a
   fresh popup unparents and drops any prior popover before
@@ -1988,23 +1993,34 @@ red until that ships.
       kebab today).
 * **EditDialog widget surface.** `EditDialog` is an `adw::Dialog`
   (matching `RenameDialog`'s shell) hosting three `AdwEntryRow`
-  widgets in an `AdwPreferencesGroup`:
+  widgets in an `AdwPreferencesGroup`. Each row is
+  pre-populated from the focused account's `AccountSummary`
+  (the projection `AppModel` already holds for the row):
     1. *Label* — required; pre-populated from
-       `Account::label()`. Validates through
+       `AccountSummary::label`. Validates through
        `paladin_core::validate_label` on each keystroke; the
        row's `error_message` is cleared / set on transition.
     2. *Issuer* — optional; pre-populated from
-       `Account::issuer().unwrap_or("")`. An inline
+       `AccountSummary::issuer.as_deref().unwrap_or("")`.
+       Validates through `paladin_core::validate_issuer` on
+       each keystroke; the row's `error_message` is cleared /
+       set on transition. An inline
        `Adw.EntryRow::add_suffix(gtk::Button)` clears the row
-       (sets `AccountEdit.issuer = Some(None)`); leaving the row
-       at the prior issuer text means `None` (leave untouched).
+       (sets `AccountEdit.issuer = Some(None)`); leaving the
+       row at the prior issuer text means `None` (leave
+       untouched).
     3. *Icon hint slug* — optional free-form text;
        pre-populated from
-       `Account::icon_hint().unwrap_or("")`. Empty /
+       `AccountSummary::icon_hint.as_deref().unwrap_or("")`.
+       Empty /
        case-insensitive `none` / explicit slug parses through
-       `paladin_core::parse_icon_hint_token` on submit. An
-       inline suffix `gtk::Image` previews the resolved icon
-       via `crate::icon_resolution::resolve_display_icon`.
+       `paladin_core::parse_icon_hint_token` on each keystroke
+       (driving the inline `error_message`, Save sensitivity,
+       and the icon-preview suffix); the resolved
+       `IconHintInput` is assembled into `AccountEdit` on
+       submit. An inline suffix `gtk::Image` previews the
+       resolved icon via
+       `crate::icon_resolution::resolve_display_icon`.
   Footer: `Cancel` (always sensitive) and `Save`
   (`suggested-action`, sensitive only when the assembled
   `AccountEdit` is non-empty *and* every populated field
@@ -2012,9 +2028,12 @@ red until that ships.
   `AccountEdit`, posts
   `Effect::EditAccountMetadata { path, account_id, edit, now }`
   through the shared `effect_ownership` slot, and waits for the
-  `EffectResult` like `RenameDialog` does today. On `Ok`,
-  the dialog closes and posts an `adw::Toast` reading
-  `Edited {display}`. On `save_durability_unconfirmed`, the
+  `EffectResult` like `RenameDialog` does today. On `Ok`, the
+  dialog closes and posts an `adw::Toast` reading
+  `Edited {summary_display_label}` rendered over the post-edit
+  `AccountSummary` (parity with RemoveDialog's
+  `summary_display_label` use — e.g. `Edited GitHub:work`).
+  On `save_durability_unconfirmed`, the
   dialog stays open with an inline warning body and the
   post-edit state visible. On `save_not_committed` /
   `validation_error` / `invalid_state`, the dialog stays open
@@ -2034,8 +2053,9 @@ red until that ships.
 * **OTP-affecting fields stay out.** `EditDialog` deliberately
   exposes no controls for `secret`, `algorithm`, `digits`,
   `kind`, `period`, or `counter`. The dialog body carries a
-  short footnote pointing users at Add + Remove for those
-  changes. The contract matches the core `AccountEdit` field
+  short footnote pointing users at remove + re-add for those
+  changes (matching DESIGN §7). The contract matches the core
+  `AccountEdit` field
   list — the GTK widget cannot drift out of sync because there
   is no `AccountEdit` field to bind for those values.
 
@@ -2080,29 +2100,35 @@ the test fixture provides through `paladin-core`'s
    `classify_submit(state, prior) -> SubmitOutcome`,
    `classify_post_effect_error(err) -> PostEffectOutcome`) and
    the widget binding. Wire `AppModel` to mount `EditDialog` on
-   `AccountListOutput::OpenEditDialog`; the legacy `RenameDialog`
-   stays available behind the kebab's secondary `Rename…`
-   alias-action until the cleanup slice. All new tests in
-   `tests/edit_dialog_logic.rs` cover the validator and post-
-   effect routing.
-5. **Right-click `gtk::GestureClick`** — Extend the account
-   column's cell factory `bind` to install a secondary-button
-   gesture and a `popup-menu` signal handler on the row
-   container. The handler routes through a new
+   `AccountListOutput::OpenEditDialog`; the `rename_dialog.rs`
+   source stays in the tree (and its tests stay live) until
+   slice 6, but nothing routes to it from the menu, the per-row
+   `gio::SimpleActionGroup`, or `AppModel` once this slice
+   lands. All new tests in `tests/edit_dialog_logic.rs` cover
+   the validator and post-effect routing.
+5. **Right-click `gtk::GestureClick` + `gtk::ShortcutController`**
+   — Extend the account column's cell factory `bind` to install
+   a secondary-button `gtk::GestureClick` and a single
+   `gtk::ShortcutController` on the row container. The
+   controller hosts the `Menu` / `Shift+F10` (context menu) and
+   `Shift+E` (direct Edit, via
+   `gtk::NamedAction("row.edit")`) shortcuts described in the
+   design contract. The gesture and the menu-popping shortcuts
+   both route through a new
    `account_list::pop_row_context_menu(account_id, anchor)`
    that mounts the shared menu against the row's
-   `gio::SimpleActionGroup`. Section rows early-return. The
-   `Option<gtk::PopoverMenu>` lives on `AccountListComponent`
-   state for the single-popover invariant. New tests in
-   `tests/row_context_menu_logic.rs` pin the pure-logic
-   decisions (pop / suppress for section / unparent prior).
-6. **RenameDialog retirement** — Remove the legacy `Rename…`
-   kebab alias action, drop `rename_dialog.rs`, and migrate the
-   `tests/rename_dialog_logic.rs` coverage of the validation /
-   save-rollback / durability-warning contracts into
-   `tests/edit_dialog_logic.rs` where the same logic now lives.
-   `Vault::rename` (and `paladin rename` and the TUI Rename
-   modal) stay — only the GTK rename surface is retired.
+   `gio::SimpleActionGroup`. Section rows early-return and do
+   not install the controller. The `Option<gtk::PopoverMenu>`
+   lives on `AccountListComponent` state for the single-popover
+   invariant. New tests in `tests/row_context_menu_logic.rs`
+   pin the pure-logic decisions (pop / suppress for section /
+   unparent prior / `Shift+E` activates `row.edit`).
+6. **RenameDialog retirement** — Drop `rename_dialog.rs`, and
+   migrate the `tests/rename_dialog_logic.rs` coverage of the
+   validation / save-rollback / durability-warning contracts
+   into `tests/edit_dialog_logic.rs` where the same logic now
+   lives. `Vault::rename` (and `paladin rename` and the TUI
+   Rename modal) stay — only the GTK rename surface is retired.
 7. **Docs sync** — Update `DESIGN.md` §7 / §12 / §13 and this
    plan's checklists to reflect the final shape; tick the
    Milestone 9 entries as each slice lands.
@@ -2122,7 +2148,7 @@ the test fixture provides through `paladin-core`'s
   to a separate v0.3+ surface.
 * **OTP-affecting field edits.** Out of scope by core contract
   (Phase M field list). The dialog footnote points users at
-  Add + Remove.
+  remove + re-add.
 * **Per-account icon picker.** Out of scope. The icon-hint
   row stays a free-form slug entry (matching the Add modal);
   a visual picker belongs to a separate v0.3+ feature.
@@ -2724,8 +2750,9 @@ These run without a display server. Each lives under
 v0.2 (DESIGN §7 Milestone 9). All bullets are red until Phase M
 ships in `paladin-core` and the GTK EditDialog lands.
 
-- [ ] Pre-populates the three rows from `Account::summary()`
-  (label, issuer-or-empty-string, icon-hint slug-or-empty-string).
+- [ ] Pre-populates the three rows from the focused account's
+  `AccountSummary` (label, issuer-or-empty-string, icon-hint
+  slug-or-empty-string).
 - [ ] Per-row text editing rebuilds the `AccountEdit` projection on
   each keystroke; rows that match the prior value map to `None`
   (leave untouched), and rows that diverge map to
@@ -2790,16 +2817,24 @@ right-click gesture slice lands.
   against the menu's `n_items()` and per-position attribute
   pair (`label`, `action`).
 - [ ] `pop_row_context_menu_decision(row_kind, busy, hidden_hotp)`
-  returns `Pop` for account rows in non-busy state, `Suppress`
-  for section rows, and `Pop { copy_sensitive: false }` for
-  hidden HOTP rows. The widget binding uses this decision so
-  the unit test can pin the per-state enablement table without
-  spinning up GTK.
+  returns `Suppress` for section rows and
+  `Pop { copy_sensitive, actions_sensitive }` for account
+  rows, with `copy_sensitive = !hidden_hotp` and
+  `actions_sensitive = !busy`. Pinned by a table-driven test
+  across all four `(busy, hidden_hotp)` cells so the per-state
+  enablement matrix is covered without spinning up GTK.
 - [ ] `account_list::install_row_context_menu_controllers` (the
   pure-logic decision shadow) returns the expected controller
-  set (secondary-button `gtk::GestureClick` + `popup-menu`
-  signal handler) for an account row container and the empty
-  set for a section row container.
+  set (secondary-button `gtk::GestureClick` + a single
+  `gtk::ShortcutController` carrying three triggers: `Menu`,
+  `Shift+F10`, and `Shift+E`) for an account row container and
+  the empty set for a section row container.
+- [ ] `Shift+E` on a focused account row activates `row.edit`
+  through the row's `gtk::ShortcutController` /
+  `gtk::NamedAction` binding and emits
+  `AccountListOutput::OpenEditDialog(account_id)`; section
+  rows do not install the controller, so the trigger does not
+  fire from a section row.
 - [ ] `AccountListComponent::pop_row_popover(account_id, anchor)`
   unparents and drops any prior popover before mounting a fresh
   one — pinned via the pure-logic
