@@ -1709,3 +1709,124 @@ fn clear_for_lock_on_fresh_state_is_a_noop() {
     assert!(!state.ack_revealed);
     assert_eq!(compose_visible_child_name(&state), initial_visible);
 }
+
+// ---------------------------------------------------------------------------
+// Group M — Read-only invariant (HOTP counter / updated_at unchanged)
+// ---------------------------------------------------------------------------
+
+fn add_hotp(
+    vault: &mut Vault,
+    store: &Store,
+    issuer: Option<&str>,
+    label: &str,
+    counter: u64,
+) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: issuer.map(str::to_string),
+        secret: SecretString::new("JBSWY3DPEHPK3PXP".to_string().into()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Hotp,
+        period_secs: None,
+        counter: Some(counter),
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::now()).expect("HOTP account input validates");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added HOTP account");
+    id
+}
+
+fn snapshot_hotp(vault: &Vault, id: AccountId) -> (Option<u64>, u64) {
+    let summary = vault
+        .summaries()
+        .find(|s| s.id == id)
+        .expect("HOTP account is in the vault");
+    (summary.counter, summary.updated_at)
+}
+
+#[test]
+fn export_qr_dialog_does_not_advance_hotp_counter() {
+    // Read-only invariant: every QR-export code path must leave
+    // `account.counter()` and `account.updated_at()` untouched.
+    // The dialog must never enter `Vault::mutate_and_save`, never
+    // call `Vault::hotp_advance`, and never bump `updated_at`. This
+    // test drives every read-only code path the dialog reaches in
+    // a single run-through and asserts both fields are byte-equal
+    // before vs after.
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    let dir = secure_tempdir();
+    let vault_path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&vault_path);
+    let id = add_hotp(
+        &mut vault,
+        &store,
+        Some("HotpIssuer"),
+        "hotp@example.com",
+        42,
+    );
+
+    let (counter_before, updated_at_before) = snapshot_hotp(&vault, id);
+    assert_eq!(counter_before, Some(42));
+
+    // 1. Show-QR render via the dialog reducer (calls
+    //    `Vault::export_qr_png` under the hood).
+    let init = decide_export_qr_target(&vault, id).expect("HOTP account resolves");
+    let mut state = ExportQrDialogState::new(init);
+    state.ack_revealed = true;
+    apply_msg_show_qr(&mut state, &vault);
+    assert!(
+        state.staged_png.is_some(),
+        "ShowQr must stage PNG bytes for the HOTP account"
+    );
+
+    // 2. Save-as-PNG worker run against a tempfile destination —
+    //    PNG path reuses the already-staged bytes (no second
+    //    `vault.export_qr_png` invocation) and only writes the
+    //    file.
+    let png_dest = NamedTempFile::new_in(dir.path())
+        .expect("create png dest")
+        .into_temp_path();
+    let png_path: PathBuf = png_dest.to_path_buf();
+    drop(png_dest);
+    let _ = fs::remove_file(&png_path);
+    let staged_png = state
+        .staged_png
+        .as_ref()
+        .map(|b| Zeroizing::new(b.to_vec()))
+        .expect("staged PNG present after ShowQr");
+    let _ = run_export_qr_save_worker(ExportQrSaveWorkerInput::Png {
+        path: png_path.clone(),
+        bytes: staged_png,
+        vault,
+        store,
+    });
+
+    // The worker moved `(vault, store)` into the writer. Re-open
+    // from disk so the post-export snapshot reads what is
+    // actually persisted (and confirms no mutate-and-save
+    // happened behind the scenes).
+    let (vault, _store) =
+        Store::open(&vault_path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    let (counter_after, updated_at_after) = snapshot_hotp(&vault, id);
+    assert_eq!(
+        counter_after, counter_before,
+        "QR-export must never advance the HOTP counter (was {counter_before:?}, now {counter_after:?})"
+    );
+    assert_eq!(
+        updated_at_after, updated_at_before,
+        "QR-export must never bump the HOTP account's updated_at"
+    );
+
+    // 3. clear_for_lock is pure-state, but exercise it as a
+    //    belt-and-suspenders check: it must not need any vault
+    //    access nor leave anything secret behind.
+    clear_for_lock(&mut state);
+    let (counter_post_lock, updated_at_post_lock) = snapshot_hotp(&vault, id);
+    assert_eq!(counter_post_lock, counter_before);
+    assert_eq!(updated_at_post_lock, updated_at_before);
+}

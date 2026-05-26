@@ -2626,15 +2626,18 @@ These run without a display server. Each lives under
   `state.staged_svg`, replaces the Picture's paintable with
   `gdk::Paintable::new_empty`, and calls
   `AdwViewStack::set_visible_child_name("warning")`.
-- [ ] `apply_msg_page_1_cancel_button_emits_cancel_output_and_wipes_staged_buffers`
+- [x] `apply_msg_page_1_cancel_button_emits_cancel_output_and_wipes_staged_buffers`
   pins that the Page-1 footer Cancel button (distinct from the
   Escape-key path, though both flow through the same secret-wipe
   helper) emits `ExportQrDialogOutput::Cancel` with
   `state.staged_png` / `state.staged_svg` dropped before emit.
-  (Functionally covered today by
-  `apply_msg_cancel_pressed_emits_cancel_output` and
-  `apply_msg_cancel_pressed_clears_staged_buffers`; the Escape-key
-  variant lands with the "Bubble-phase Escape dismissal" commit.)
+  *Implementation note:* shipped as the pair
+  `apply_msg_cancel_pressed_emits_cancel_output` +
+  `apply_msg_cancel_pressed_clears_staged_buffers` (Phase 3).
+  The Escape-key path lands with Phase 7's
+  `escape_dismissal_routes_through_cancel_pressed_msg` plus the
+  `dispatch_root_dismiss_key_*` truth-table pins, all routing
+  through the same `CancelPressed` reducer arm.
 - [x] `apply_msg_show_qr_invalid_state_account_not_found_renders_inline`
   and `apply_msg_show_qr_validation_error_renders_inline` pin the two
   typed-error inline-rendering paths (defensive — production payloads
@@ -2762,15 +2765,31 @@ These run without a display server. Each lives under
   `clear_for_lock_preserves_account_id_and_summary` and
   `clear_for_lock_on_fresh_state_is_a_noop` cover identity
   preservation and the noop-when-unopened path.
-- [ ] `export_qr_dialog_does_not_advance_hotp_counter` exercises a
+- [x] `export_qr_dialog_does_not_advance_hotp_counter` exercises a
   tempfile-backed HOTP-account vault: capture `account.counter()`
   before and after `Vault::export_qr_png` + save-as-PNG + auto-lock,
   and assert equality (and that `account.updated_at()` is unchanged).
   Read-only invariant pin.
-- [ ] `export_qr_dialog_output_cancel_is_distinct_from_close` and
+  *Implementation note (Phase 9):* the test adds a HOTP account
+  with `counter=42`, snapshots `(counter, updated_at)`, runs
+  Show-QR (`apply_msg_show_qr`) + Save-as-PNG via
+  `run_export_qr_save_worker(ExportQrSaveWorkerInput::Png{..})` +
+  `clear_for_lock(&mut state)`, re-opens the vault from disk to
+  read what is actually persisted, and asserts both fields are
+  byte-equal before vs after. Sibling helpers `add_hotp` and
+  `snapshot_hotp` cover the HOTP-fixture setup and the
+  `summaries().find(...)` projection.
+- [x] `export_qr_dialog_output_cancel_is_distinct_from_close` and
   `dispatch_root_dismiss_key` coverage pin the cancel / close /
   Escape paths.
-- [ ] `format_export_qr_dialog_title_is_non_empty`,
+  *Implementation note:* `export_qr_dialog_output_cancel_is_distinct_from_close`
+  ships from Phase 3; Phase 7 adds
+  `dispatch_root_dismiss_key_routes_bare_escape_to_cancel_pressed`,
+  `dispatch_root_dismiss_key_ignores_escape_with_chord_modifiers`,
+  `dispatch_root_dismiss_key_ignores_other_keys`, and
+  `escape_dismissal_routes_through_cancel_pressed_msg`. All three
+  paths share the same secret-wipe helper.
+- [x] `format_export_qr_dialog_title_is_non_empty`,
   `format_export_qr_dialog_show_qr_button_label_is_non_empty`,
   `format_export_qr_dialog_save_as_png_label_is_non_empty`,
   `format_export_qr_dialog_save_as_svg_label_is_non_empty`,
@@ -2778,7 +2797,9 @@ These run without a display server. Each lives under
   `format_export_qr_dialog_done_label_is_non_empty`, and
   `format_export_qr_dialog_save_success_toast_is_non_empty` pin the
   user-facing wording helpers so a future relabel routes through one
-  source.
+  source. Phase 6 added the parallel
+  `format_export_qr_dialog_copy_image_success_toast_is_non_empty` /
+  `*_renders_image_copied` pair for the `Image copied` toast.
 
 #### `tests/passphrase_dialog_logic.rs`
 
@@ -5050,11 +5071,11 @@ sign-off.
     `apply_msg_submit_clicked_proceed_encrypted_emits_submit_and_clears_passphrase_buffers`,
     `apply_msg_cancel_clears_passphrase_buffers`, and
     `apply_msg_close_clears_passphrase_buffers`.)
-- [ ] `ExportQrDialogComponent` full implementation (per DESIGN §4.6 /
+- [x] `ExportQrDialogComponent` full implementation (per DESIGN §4.6 /
   §7 / the §"QR export dialog implementation" build-order section).
   Read-only feature, no `Vault::mutate_and_save` involvement, no
   GSettings key, no window-level accelerator.
-  - [ ] Promote `qrcode` from `[dev-dependencies]` to
+  - [x] Promote `qrcode` from `[dev-dependencies]` to
     `[dependencies]` in `crates/paladin-core/Cargo.toml` and land the
     §4.7 surface (`QrRenderOptions`, `QR_MODULE_SIZE_PX_*`,
     `Vault::export_qr_png` / `export_qr_svg` / `export_qr_ansi`,
@@ -5062,7 +5083,7 @@ sign-off.
     `format_plaintext_qr_export_warning`). Update
     `crates/paladin-core/public-api.txt` to match. Core tests land
     in the same commit per DESIGN §10's QR-export bullet.
-  - [ ] Extend `account_list::build_kebab_menu_model` to insert
+  - [x] Extend `account_list::build_kebab_menu_model` to insert
     `Show QR…` between `Rename…` and `Remove…`, targeting a new
     `row.show-qr` action; rename
     `build_kebab_menu_model_exposes_rename_and_remove_in_order` to
@@ -5071,12 +5092,12 @@ sign-off.
     per-row `gio::SimpleActionGroup` in `install_row_action_group`
     so its closure emits the new
     `AccountListOutput::OpenExportQrDialog(AccountId)` variant.
-  - [ ] Add `AccountListOutput::OpenExportQrDialog(AccountId)`,
+  - [x] Add `AccountListOutput::OpenExportQrDialog(AccountId)`,
     `AppMsg::OpenExportQrDialog(AccountId)`, and the
     `AccountListAction` arm in `AppModel::update` that mounts
     `ExportQrDialogComponent` against the live `(Vault, Store)`
     pair, silent-no-op when `AppModel` is not `Unlocked`.
-  - [ ] Build `src/export_qr_dialog.rs` carrying
+  - [x] Build `src/export_qr_dialog.rs` carrying
     `ExportQrDialogComponent` (`relm4::SimpleComponent`),
     `ExportQrDialogInit`, `ExportQrDialogMsg`,
     `ExportQrDialogOutput` (`Cancel` / `Close` distinct
@@ -5084,7 +5105,7 @@ sign-off.
     `ack_revealed: bool`, `staged_png: Option<Zeroizing<Vec<u8>>>`,
     `staged_svg: Option<Zeroizing<String>>`, and save-target
     state mirroring `ExportDialogState`.
-  - [ ] Mount the two-page state machine as an `AdwViewStack`
+  - [x] Mount the two-page state machine as an `AdwViewStack`
     inside an `adw::Dialog`. Page 1 (`AdwViewStack` child name
     `"warning"`): warning body bound to
     `compose_export_qr_warning_body()` (verbatim from
@@ -5106,7 +5127,7 @@ sign-off.
     (`AdwViewStack::set_visible_child_name`) — no
     `AdwViewSwitcher` is paired with the stack, so the user
     cannot bypass the warning by tab-clicking.
-  - [ ] Wire `Save as PNG…` / `Save as SVG…` through
+  - [x] Wire `Save as PNG…` / `Save as SVG…` through
     `gtk::FileDialog::save` and the same inline overwrite gate
     `ExportDialog` uses; dispatch
     `run_export_qr_save_worker` on `gio::spawn_blocking`. The PNG
@@ -5118,34 +5139,34 @@ sign-off.
     and writes via `paladin_core::write_secret_file_atomic`.
     Surface the 0600 output path inline and via an `adw::Toast`
     on the shared overlay.
-  - [ ] Wire `Copy image` through
+  - [x] Wire `Copy image` through
     `gdk::ContentProvider::for_value` on a `glib::Bytes` of the
     staged PNG (MIME `image/png`) handed to
     `gdk::Clipboard::set_content`. No clipboard auto-clear arms;
     the dialog body still calls out clipboard-history risk via
     DESIGN §8 bullet 6 wording.
-  - [ ] Install a bubble-phase `gtk::EventControllerKey` on the
+  - [x] Install a bubble-phase `gtk::EventControllerKey` on the
     dialog root reusing `dispatch_root_dismiss_key` so bare
     Escape routes to the Cancel path.
-  - [ ] Register `crate::export_qr_dialog::clear_for_lock` with
+  - [x] Register `crate::export_qr_dialog::clear_for_lock` with
     the lock-transition pruning so auto-lock drops the staged
     PNG / SVG buffers and the `gtk::Picture` paintable before
     `(Vault, Store)` is destroyed.
-  - [ ] Inline error rendering for
+  - [x] Inline error rendering for
     `invalid_state { state: "account_not_found" }` (defensive),
     `validation_error { field: "qr_render" }` (defensive — see
     §"Open decisions"), `io_error`, `save_not_committed`, and
     `save_durability_unconfirmed` via
     `classify_export_qr_save_error`; the dialog never closes on
     failure (parity with `ExportDialog`).
-  - [ ] All `tests/export_qr_dialog_logic.rs` bullets ticked
+  - [x] All `tests/export_qr_dialog_logic.rs` bullets ticked
     (see §"Pure-logic unit tests" above) and the renamed
     `build_kebab_menu_model_exposes_rename_show_qr_and_remove_in_order`
     bullet asserted in `tests/account_list_logic.rs`.
-  - [ ] `tests/manual/MANUAL_TEST_PLAN.md` updated with the five
+  - [x] `tests/manual/MANUAL_TEST_PLAN.md` updated with the five
     QR scenarios listed in the §"QR export dialog implementation"
     Build order.
-  - [ ] `tests/thinness.rs` passes — no `image` / `rqrr` /
+  - [x] `tests/thinness.rs` passes — no `image` / `rqrr` /
     `qrcode` imports in `crates/paladin-gtk/src/`.
 - [x] `PassphraseDialogComponent` full implementation (`set` /
   `change` / `remove` sub-flows, gating, validation, error

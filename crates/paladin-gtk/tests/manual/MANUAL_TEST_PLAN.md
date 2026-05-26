@@ -335,6 +335,108 @@ Exports:
     `show-next-code-column` coverage,
     `tests/account_list_logic.rs` column-visibility routing.
 
+## 12. Per-account QR export (`ExportQrDialog`, DESIGN §4.6)
+
+- [ ] Open the kebab menu on a TOTP row → `Show QR…` is the
+  second entry between `Rename…` and `Remove…`; the dialog opens
+  on the warning page with the ack switch off and the QR not
+  visible.
+  * Expected: the kebab menu lists three rows in the pinned order
+    `Rename…` / `Show QR…` / `Remove…`. Selecting `Show QR…`
+    presents an `adw::Dialog` titled `Show QR code`; the body
+    starts on the `warning` page of the inner `AdwViewStack`
+    carrying the verbatim
+    `paladin_core::format_plaintext_qr_export_warning()` body,
+    the `I understand — show the QR` ack switch is off, the
+    `Cancel` button is sensitive, the `Show QR` button is
+    desensitized, and no `gtk::Picture` is visible. Closing via
+    the window-manager close button (or Escape) leaves the
+    vault untouched.
+  * Tied to: `tests/account_list_logic.rs`
+    `build_kebab_menu_model_exposes_rename_show_qr_and_remove_in_order`;
+    `tests/export_qr_dialog_logic.rs`
+    `compose_show_qr_button_sensitive_false_until_ack_revealed`,
+    `format_export_qr_dialog_warning_body_matches_paladin_core_verbatim`.
+- [ ] Toggle the ack switch on → the `Show QR` button becomes
+  sensitive; press it → the dialog advances to Page 2 showing
+  the rendered QR and the `<issuer>:<label>` caption. Scanning
+  the QR with a second authenticator imports the same account.
+  * Expected: flipping the ack `AdwSwitchRow` on enables the
+    `Show QR` button; pressing it switches the view stack to
+    the `qr` page, fills the `gtk::Picture` with a
+    `gdk::Texture` rendered from `Vault::export_qr_png(id,
+    &QrRenderOptions::default())`, displays the
+    `<issuer>:<label>` caption in the `title-3` style class, and
+    surfaces the four-button footer
+    (`Save as PNG…` / `Save as SVG…` / `Copy image` / `Done`)
+    with `Copy image` sensitive. A second authenticator scanning
+    the rendered QR imports the same account (same secret,
+    algorithm, digits). Toggling the ack back off drops the
+    Picture paintable, wipes the staged bytes, and resets the
+    view to the warning page.
+  * Tied to: `tests/export_qr_dialog_logic.rs`
+    `apply_msg_show_qr_button_press_calls_export_qr_png_with_default_options`,
+    `apply_msg_show_qr_switches_visible_child_to_qr`,
+    `apply_msg_ack_toggled_off_clears_staged_png_and_paintable_and_resets_visible_child`.
+- [ ] Press `Save as PNG…` and `Save as SVG…` → both write
+  `0600`-mode files at the chosen path; the inline status reads
+  `QR saved to <path>` after each save. Reopening the PNG in an
+  image viewer shows the QR; opening the SVG in a text editor
+  shows an `<svg>…</svg>` document.
+  * Expected: each Save button opens a `gtk::FileDialog::save`
+    pre-populated with `qr.png` / `qr.svg`. On commit the file
+    lands at the chosen path with mode `0600`, owned by the
+    invoking user. The inline `QR saved to <path>` label appears
+    on Page 2 and an `adw::Toast` echoes the same wording. A
+    second save against an existing destination reveals the
+    inline `Overwrite the existing file` switch; toggling it on
+    fires the save without an extra confirm step. The HOTP
+    counter, if applicable, is unchanged on disk (pinned by
+    `export_qr_dialog_does_not_advance_hotp_counter`).
+  * Tied to: `tests/export_qr_dialog_logic.rs`
+    `run_export_qr_save_worker_plaintext_png_succeeds_and_writes_0600_file`,
+    `run_export_qr_save_worker_plaintext_svg_succeeds_and_writes_0600_file`,
+    `run_export_qr_save_worker_svg_reuses_staged_svg_on_second_save`,
+    `compose_save_target_overwrite_gate_visible_visible_when_destination_exists`.
+- [ ] Press `Copy image` → paste into an image editor → the QR
+  shows up as a PNG image; the in-window toast reads
+  `Image copied`. The clipboard is **not** auto-cleared (image
+  copies are not OTP codes — `clipboard.clear_enabled` does not
+  apply).
+  * Expected: pressing `Copy image` builds a
+    `gdk::ContentProvider::for_bytes("image/png", ...)` from the
+    staged PNG bytes and calls
+    `gdk::Clipboard::set_content(...)`. Pasting into an image
+    editor (GIMP, Krita) or an image-paste-accepting chat
+    (Slack, Signal) yields the QR PNG. The `Image copied` toast
+    appears; the clipboard retains the image indefinitely and
+    no `PendingClipboardClear` is armed (verify by waiting
+    longer than the configured clipboard-clear timeout — the
+    paste still works). Repeating the press works without a
+    re-show.
+  * Tied to: `tests/export_qr_dialog_logic.rs`
+    `apply_msg_copy_image_routes_through_set_content_with_image_png_mime`,
+    `apply_msg_copy_image_failure_does_not_arm_clipboard_clear`,
+    `format_export_qr_dialog_copy_image_success_toast_renders_image_copied`.
+- [ ] With the QR visible, wait for auto-lock to fire → the
+  dialog disappears, the staged PNG / SVG buffers are dropped,
+  and the post-lock unlock leaves no QR carry-over.
+  * Expected: enable auto-lock (Preferences → Security → Auto-lock
+    after) with a short timeout (e.g. 30 s), press `Show QR`,
+    then leave the window idle. When auto-lock fires the QR
+    dialog closes with the rest of the unlocked UI, the staged
+    PNG / SVG `Zeroizing<...>` buffers are dropped (the Picture
+    paintable disappears along with the widget tree), and the
+    auto-lock landing page (unlock dialog for encrypted vaults
+    / list view for plaintext) shows no QR remnants. Re-opening
+    the QR dialog after unlock starts on the warning page with
+    the ack off — never on Page 2 with a still-visible QR.
+  * Tied to: `tests/export_qr_dialog_logic.rs`
+    `clear_for_lock_drops_staged_buffers_and_paintable`,
+    `clear_for_lock_preserves_account_id_and_summary`;
+    `crates/paladin-gtk/src/app/model.rs` `lock_on_auto_lock_expiry`
+    routing through `clear_for_lock` before the controller drop.
+
 ## Reporting
 
 If a step fails, file a bug with:
