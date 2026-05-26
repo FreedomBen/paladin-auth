@@ -803,6 +803,15 @@ pub fn account_match_key(account: &Account) -> String;
 /// locale-specific casing. An empty query matches every account.
 pub fn account_matches_search(account: &Account, query: &str) -> bool;
 
+/// Format an account's display label used by CLI status text, the TUI
+/// QR modal caption, the GTK `ExportQrDialog` caption, and the GTK
+/// rename / remove dialog subtitles. Renders `"{issuer}:{label}"` when
+/// `issuer` is `Some(_)` and non-empty; renders the bare label
+/// otherwise (so accounts without an issuer display as just the
+/// label, not a stray leading colon). Lives in `paladin-core` so CLI,
+/// TUI, and GUI render identical wording without re-implementing it.
+pub fn summary_display_label(s: &AccountSummary) -> String;
+
 /// Parse the CLI query grammar's shared account-selector syntax. Plain text
 /// becomes `AccountQuery::Search`; `id:` selectors are validated here so the
 /// 8..=32 hex rule is not reimplemented in the CLI. Invalid `id:` selectors
@@ -1585,10 +1594,10 @@ reimplementing the comparison.
 
 - `show` prints **all** matching entries when every match is TOTP. If any
   matched entry is HOTP, `show` requires a single match — the same rule
-  as `copy`/`remove`/`rename` below — so a substring query cannot
+  as `copy`/`remove`/`rename`/`qr` below — so a substring query cannot
   silently advance multiple HOTP counters.
 - `peek` prints **all** matching entries unconditionally (no state mutation).
-- `copy`, `remove`, and `rename` require a single match. On multiple
+- `copy`, `remove`, `rename`, and `qr` require a single match. On multiple
   matches they exit non-zero and list the candidates, each prefixed with
   the shortest unique `id:<hex>` form taken from the UUID, with a minimum
   length of 8 hex chars. The user can re-run with that exact-id form
@@ -1920,10 +1929,10 @@ Library: **Relm4** on **GTK4**. Component tree:
   thread hop exists to keep `write_secret_file_atomic`'s `fsync`
   chain off the main loop). *Copy image* pushes the PNG bytes onto
   `gdk::Clipboard` via `gdk::ContentProvider::for_value` with MIME
-  type `image/png`; the clipboard auto-clear policy applies the
-  same only-if-unchanged byte-equality decision as code copies, but
-  no schedule arms because `clipboard.clear_enabled` covers the
-  code-copy path specifically (the dialog body still calls out the
+  type `image/png`. No auto-clear schedule arms for QR image
+  copies — `clipboard.clear_enabled` covers the code-copy path
+  only, so QR image copies persist on the clipboard until the user
+  replaces or clears them (the dialog body calls out the
   clipboard-history risk in line with §8 bullet 6). The dialog
   never mutates the vault — QR export is read-only — so there is
   no `mutate_and_save` path and no save-rollback to consider. PNG
@@ -2226,8 +2235,9 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     encode the same `otpauth://` URI that `export::otpauth_list`
     emits for that account. PNG output is round-tripped through
     `rqrr` and asserted equal to the URI; SVG output is asserted
-    well-formed (starts with `<?xml` / `<svg`, parses through a
-    `quick-xml`-style sanity check) and carries the URI as alt-text;
+    well-formed (starts with `<?xml` / `<svg` and passes an XML
+    well-formedness check — the SVG path catches encoder regressions
+    even though `rqrr` cannot decode vector graphics);
     Unicode half-block output is asserted to consist only of the
     `Dense1x2` glyph alphabet (`' '`, `'▀'`, `'▄'`, `'█'`, `'\n'`).
     Render operations are pure reads: the HOTP counter is not

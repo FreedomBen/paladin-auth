@@ -1153,7 +1153,7 @@ end-to-end.
 - [x] Manual / URI Add status-line confirmations include validation
   warning text.
   *(`reduce_add_result`'s `Ok` arm composes
-  `Added <format_account_display_label>.` plus a
+  `Added <summary_display_label>.` plus a
   `warning: <format_validation_warning(w); …>` trailer for any
   `AddSuccess::warnings`, joining multiple rendered warnings with
   `; ` so the status line stays single-line and matches the CLI's
@@ -2333,7 +2333,7 @@ Modals and overlays:
   backdrop, with the `Remove the following account?` prompt on the
   first inner line, the targeted account's display label on line
   three (resolved via the shared
-  `format_account_display_label(&summary)` — same wording as the
+  `summary_display_label(&summary)` — same wording as the
   duplicate-account inline error and the CLI's `display_label`), a
   flexible spacer, and a centered `Enter confirms  ·  Esc cancels`
   hint near the bottom border. `view::render` was extended in the
@@ -2362,7 +2362,7 @@ Modals and overlays:
   `Clear`-then-bordered ` Rename account ` block over the list-view
   backdrop, with the `Renaming the following account:` prompt on the
   first inner line, the targeted account's display label on line two
-  (resolved via the shared `format_account_display_label(&summary)` —
+  (resolved via the shared `summary_display_label(&summary)` —
   same wording as the duplicate-account inline error, the Remove
   modal, and the CLI's `display_label`), a blank, the editable
   `New label:` text-input row carrying the `RenameModal::draft`
@@ -3372,10 +3372,10 @@ Status-line states:
   *(`snapshot_list_view_status_line_after_manual_add` in
   `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
   against an `Unlocked` state whose `status_line` carries
-  `StatusLine::Confirmation(format!("Added {}.", format_account_display_label(&summary)))`
+  `StatusLine::Confirmation(format!("Added {}.", summary_display_label(&summary)))`
   — the exact wording `reduce_add_result` publishes on the
   no-warnings Ok-arm of `EffectResult::Add`. Routing through
-  `format_account_display_label` binds the snapshot to the shared
+  `summary_display_label` binds the snapshot to the shared
   CLI / TUI label-formatting source of truth so any wording change
   in `issuer:label` rendering surfaces here. Reads as a bottom-row
   delta from the `StatusLine::Error` siblings above — both share
@@ -3389,7 +3389,7 @@ Status-line states:
   pattern as the manual-add sibling: the URI add flow shares
   `reduce_add_result`, so the published wording is the same
   `Added {display}.` template against
-  `format_account_display_label`. A separate snapshot anchors the
+  `summary_display_label`. A separate snapshot anchors the
   URI entry point against a future reducer divergence in wording
   per `AddMode`. The just-added account uses an issuer / label
   combination typical of an
@@ -3401,11 +3401,11 @@ Status-line states:
   *(`snapshot_list_view_status_line_after_remove` in
   `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
   against an `Unlocked` state whose `status_line` carries
-  `StatusLine::Confirmation(format!("Removed {}.", format_account_display_label(&summary)))`
+  `StatusLine::Confirmation(format!("Removed {}.", summary_display_label(&summary)))`
   — the exact wording `reduce_remove_result` publishes on the
   Ok-arm of `EffectResult::Remove`. The reducer plugs the carried
   display-label `String` directly into the format template; that
-  string is built by the executor via `format_account_display_label`
+  string is built by the executor via `summary_display_label`
   in the `effect.rs` Remove closure, so the snapshot is bound to
   the shared label-formatting source of truth. To keep the
   snapshot a pure view test with no effect plumbing, the vault

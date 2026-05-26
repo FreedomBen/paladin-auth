@@ -709,13 +709,12 @@ inclusion.
       `gio::spawn_blocking`. `Copy image` builds a
       `gdk::ContentProvider::for_value` carrying a
       `glib::Bytes` of the PNG payload with MIME `image/png` and
-      hands it to `gdk::Clipboard::set_content`; the
-      clipboard-clear policy reuses the existing only-if-unchanged
-      byte-equality decision but does not arm a schedule because
-      `clipboard.clear_enabled` covers the code-copy path
-      specifically (the dialog body still calls out the clipboard-
-      history risk via DESIGN §8 bullet 6 wording). `Done` closes
-      the dialog.
+      hands it to `gdk::Clipboard::set_content`. No auto-clear
+      schedule arms for QR image copies — `clipboard.clear_enabled`
+      covers the code-copy path only, so QR image copies persist
+      on the clipboard until the user replaces or clears them (the
+      dialog body still calls out the clipboard-history risk via
+      DESIGN §8 bullet 6 wording). `Done` closes the dialog.
   `ExportQrDialog` is read-only — it never enters
   `Vault::mutate_and_save`, never advances a HOTP counter, and never
   mutates `updated_at`. PNG bytes, SVG text, and the rendered
@@ -1499,10 +1498,10 @@ re-deriving the touch points.
   are the same `Vault::export_qr_png` output that the on-screen
   `Picture` renders; the staged `Zeroizing<Vec<u8>>` is consumed
   by both surfaces inside the same handler so the bytes do not
-  outlive the dialog. The clipboard auto-clear policy applies its
-  only-if-unchanged byte-equality decision but does **not** arm a
-  schedule because `clipboard.clear_enabled` covers OTP code
-  copies specifically; the dialog body still calls out the
+  outlive the dialog. No auto-clear schedule arms for QR image
+  copies — `clipboard.clear_enabled` covers OTP code copies only,
+  so QR image copies persist on the clipboard until the user
+  replaces or clears them; the dialog body still calls out the
   clipboard-history risk in line with DESIGN §8 bullet 6 wording.
 * **Save semantics.** Save-as-PNG and Save-as-SVG open a
   `gtk::FileDialog::save` for the destination, run the same inline
@@ -1599,7 +1598,7 @@ by ticking it.
   a `gdk::Texture::from_bytes(&glib::Bytes::from(&bytes))` and
   bind it onto the `gtk::Picture::set_paintable` setter. Mount
   the caption row above the Picture from
-  `account_summary_display_label(&summary)`. Pin
+  `summary_display_label(&summary)`. Pin
   `apply_msg_show_qr_renders_picture_paintable`,
   `compose_picture_visible_false_before_ack`,
   `compose_picture_visible_true_after_ack`, and

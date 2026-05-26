@@ -1614,12 +1614,25 @@ land before the GTK / CLI / TUI work or alongside it.
   counter and do not advance — the user's existing device retains
   code parity with a second device that scanned the QR.
 
+- [ ] **`summary_display_label(&AccountSummary) -> String`.** Add
+  to `src/ui_contract.rs` (or the matching account-projection
+  module) so the CLI status text, the TUI QR modal caption, the
+  GTK `ExportQrDialog` caption, and the GTK rename / remove
+  dialog subtitles all render identical wording. Returns
+  `"{issuer}:{label}"` when `issuer` is `Some(_)` and non-empty;
+  returns the bare label otherwise (no stray leading colon).
+  Pinned by a fixture test pairing
+  (`summary_display_label_renders_issuer_colon_label` and
+  `summary_display_label_with_empty_issuer_collapses_to_bare_label`)
+  so the wording stays locked across front ends.
+
 - [ ] **Public-api snapshot update.** After landing the surface
   above, regenerate `crates/paladin-core/public-api.txt` via
   `cargo public-api`. The diff should add exactly: the three
   `Vault::export_qr_*` methods, the three `export::qr_*` free
   functions, `QrRenderOptions` + its `Default` and `validate`
-  impls, `format_plaintext_qr_export_warning`, and the
+  impls, `format_plaintext_qr_export_warning`,
+  `summary_display_label`, and the
   `QR_MODULE_SIZE_PX_{MIN, MAX, DEFAULT}` constants. The Send /
   Sync assertions in `tests/api_send_sync.rs` (Phase J) grow to
   cover `QrRenderOptions` (both `Send` and `Sync`).
@@ -1633,10 +1646,11 @@ land before the GTK / CLI / TUI work or alongside it.
   assert the decoded payload equals the row's substring of
   `export::otpauth_list(&vault)`. The HOTP row's decoded URI must
   carry the *current* `counter` parameter. Add the matching
-  `export_qr_svg_renders_a_well_formed_svg_carrying_the_otpauth_uri`
+  `export_qr_svg_renders_a_well_formed_svg`
   (the SVG cannot be `rqrr`-decoded; instead assert it starts
-  with `<?xml` / `<svg`, contains the URI as an alt-text /
-  comment, and parses through a `quick-xml`-style sanity check)
+  with `<?xml` / `<svg` and passes an XML well-formedness check —
+  the SVG path catches encoder regressions even though we cannot
+  round-trip the URI through `rqrr`)
   and `export_qr_ansi_renders_a_unicode_half_block_grid`
   (assert non-empty UTF-8 text containing only the
   `qrcode::render::unicode::Dense1x2` glyph alphabet).
