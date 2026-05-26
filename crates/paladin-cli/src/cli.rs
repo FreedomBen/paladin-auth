@@ -76,7 +76,9 @@ pub enum Command {
     Init(InitArgs),
     /// Add an account (interactive, --uri, manual flags, or --qr).
     Add(AddArgs),
-    /// List accounts (no codes).
+    /// List accounts with the current TOTP code, seconds remaining,
+    /// and the next TOTP code (HOTP rows render the code columns as
+    /// dashes / `null`).
     List,
     /// Print the current code (advances HOTP and persists before printing).
     Show(QueryArgs),

@@ -148,6 +148,13 @@ fn snapshot_list_populated_vault_envelope() {
         ".accounts[].id" => "[uuid]",
         ".accounts[].created_at" => "[timestamp]",
         ".accounts[].updated_at" => "[timestamp]",
+        // TOTP code / window fields depend on wall-clock time at the
+        // moment `list` ran; redact to keep the snapshot stable. HOTP
+        // rows always have `null` for these fields and remain
+        // un-redacted so the snapshot still pins HOTP semantics.
+        ".accounts[0].code" => "[totp-code]",
+        ".accounts[0].next_code" => "[totp-code]",
+        ".accounts[0].seconds_remaining" => "[seconds-remaining]",
     });
 }
 

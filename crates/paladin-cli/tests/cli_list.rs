@@ -149,6 +149,63 @@ fn json_populated_vault_returns_account_summaries_in_insertion_order() {
 }
 
 #[test]
+fn json_totp_row_includes_code_seconds_remaining_and_next_code() {
+    let (_dir, path) = fresh_vault_path();
+    create_populated_plaintext_vault(&path);
+
+    let assert = paladin()
+        .args(["--json", "--vault", path.to_str().unwrap(), "list"])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let value: Value = serde_json::from_str(stdout.trim()).unwrap();
+    let arr = value["accounts"].as_array().expect("accounts is array");
+
+    let totp = &arr[0];
+    let code = totp["code"].as_str().expect("totp code is string");
+    assert_eq!(code.len(), 6, "expected 6-digit code, got {code:?}");
+    assert!(
+        code.chars().all(|c| c.is_ascii_digit()),
+        "code is not all digits: {code:?}",
+    );
+    let next = totp["next_code"]
+        .as_str()
+        .expect("totp next_code is string");
+    assert_eq!(next.len(), 6, "expected 6-digit next code, got {next:?}");
+    assert!(
+        next.chars().all(|c| c.is_ascii_digit()),
+        "next_code is not all digits: {next:?}",
+    );
+    let secs = totp["seconds_remaining"]
+        .as_u64()
+        .expect("totp seconds_remaining is integer");
+    assert!(
+        (1..=30).contains(&secs),
+        "seconds_remaining out of TOTP-window range: {secs}",
+    );
+}
+
+#[test]
+fn json_hotp_row_renders_code_fields_as_null() {
+    let (_dir, path) = fresh_vault_path();
+    create_populated_plaintext_vault(&path);
+
+    let assert = paladin()
+        .args(["--json", "--vault", path.to_str().unwrap(), "list"])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let value: Value = serde_json::from_str(stdout.trim()).unwrap();
+    let arr = value["accounts"].as_array().expect("accounts is array");
+
+    let hotp = &arr[1];
+    assert_eq!(hotp["kind"], serde_json::json!("hotp"));
+    assert_eq!(hotp["code"], serde_json::Value::Null);
+    assert_eq!(hotp["seconds_remaining"], serde_json::Value::Null);
+    assert_eq!(hotp["next_code"], serde_json::Value::Null);
+}
+
+#[test]
 fn text_populated_vault_emits_one_line_per_account_in_insertion_order() {
     let (_dir, path) = fresh_vault_path();
     create_populated_plaintext_vault(&path);
@@ -161,18 +218,46 @@ fn text_populated_vault_emits_one_line_per_account_in_insertion_order() {
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 2, "expected one line per account: {stdout:?}");
 
-    // Row 0: TOTP alice with issuer; period rendered as `30s`.
-    assert!(lines[0].contains("Acme:alice"), "row 0 = {:?}", lines[0]);
-    assert!(lines[0].contains("totp/sha1/6"), "row 0 = {:?}", lines[0]);
-    assert!(lines[0].contains("30s"), "row 0 = {:?}", lines[0]);
-    assert!(lines[0].contains("id:"), "row 0 missing id prefix");
-
-    // Row 1: HOTP bob without issuer; counter rendered as `c=42`.
-    assert!(lines[1].contains("bob"), "row 1 = {:?}", lines[1]);
+    // Row 0: TOTP alice with issuer; period rendered as `30s`, then
+    // current code, seconds remaining (`Ns`), next code, label.
+    let row0_cols: Vec<&str> = lines[0].split('\t').collect();
+    assert_eq!(row0_cols.len(), 7, "row 0 columns: {row0_cols:?}");
+    assert!(row0_cols[0].starts_with("id:"), "row 0 = {:?}", lines[0]);
+    assert_eq!(row0_cols[1], "totp/sha1/6");
+    assert_eq!(row0_cols[2], "30s");
+    assert_eq!(row0_cols[3].len(), 6, "current code: {:?}", row0_cols[3]);
     assert!(
-        !lines[1].contains(":bob"),
-        "bare label must not have issuer prefix"
+        row0_cols[3].chars().all(|c| c.is_ascii_digit()),
+        "current code not all digits: {:?}",
+        row0_cols[3],
     );
-    assert!(lines[1].contains("hotp/sha1/6"), "row 1 = {:?}", lines[1]);
-    assert!(lines[1].contains("c=42"), "row 1 = {:?}", lines[1]);
+    assert!(
+        row0_cols[4].ends_with('s'),
+        "remaining missing 's' suffix: {:?}",
+        row0_cols[4],
+    );
+    let secs: u32 = row0_cols[4]
+        .trim_end_matches('s')
+        .parse()
+        .expect("remaining is integer");
+    assert!((1..=30).contains(&secs), "remaining out of range: {secs}",);
+    assert_eq!(row0_cols[5].len(), 6, "next code: {:?}", row0_cols[5]);
+    assert!(
+        row0_cols[5].chars().all(|c| c.is_ascii_digit()),
+        "next code not all digits: {:?}",
+        row0_cols[5],
+    );
+    assert_eq!(row0_cols[6], "Acme:alice");
+
+    // Row 1: HOTP bob without issuer; counter rendered as `c=42`, and
+    // the three TOTP code columns render as `-`.
+    let row1_cols: Vec<&str> = lines[1].split('\t').collect();
+    assert_eq!(row1_cols.len(), 7, "row 1 columns: {row1_cols:?}");
+    assert!(row1_cols[0].starts_with("id:"));
+    assert_eq!(row1_cols[1], "hotp/sha1/6");
+    assert_eq!(row1_cols[2], "c=42");
+    assert_eq!(row1_cols[3], "-");
+    assert_eq!(row1_cols[4], "-");
+    assert_eq!(row1_cols[5], "-");
+    assert_eq!(row1_cols[6], "bob");
 }

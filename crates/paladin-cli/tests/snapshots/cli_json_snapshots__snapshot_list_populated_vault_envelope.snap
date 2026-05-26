@@ -1,11 +1,12 @@
 ---
 source: crates/paladin-cli/tests/cli_json_snapshots.rs
-expression: parse_stdout_json(&assert)
+expression: parse_stdout_json(&out)
 ---
 {
   "accounts": [
     {
       "algorithm": "sha1",
+      "code": "[totp-code]",
       "counter": null,
       "created_at": "[timestamp]",
       "digits": 6,
@@ -14,11 +15,14 @@ expression: parse_stdout_json(&assert)
       "issuer": "Acme",
       "kind": "totp",
       "label": "alice",
+      "next_code": "[totp-code]",
       "period": 30,
+      "seconds_remaining": "[seconds-remaining]",
       "updated_at": "[timestamp]"
     },
     {
       "algorithm": "sha1",
+      "code": null,
       "counter": 42,
       "created_at": "[timestamp]",
       "digits": 6,
@@ -27,7 +31,9 @@ expression: parse_stdout_json(&assert)
       "issuer": null,
       "kind": "hotp",
       "label": "bob",
+      "next_code": null,
       "period": null,
+      "seconds_remaining": null,
       "updated_at": "[timestamp]"
     }
   ]

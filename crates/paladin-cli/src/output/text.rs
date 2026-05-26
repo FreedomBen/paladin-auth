@@ -35,19 +35,36 @@ pub fn write_init_success(
 /// `Vault::shortest_unique_id_prefix`) so list output and the
 /// `multiple_matches` candidate lines share a single disambiguator
 /// shape.
+///
+/// TOTP rows additionally carry the current TOTP code, the seconds
+/// remaining in the current window, and the next code. HOTP rows
+/// leave those fields `None` — `list` never advances or peeks an
+/// HOTP counter.
 pub struct ListRow<'a> {
     pub disambiguator: &'a str,
     pub summary: &'a AccountSummary,
+    /// Current TOTP code, zero-padded to `summary.digits`. `None` for
+    /// HOTP rows.
+    pub current_code: Option<&'a str>,
+    /// Seconds remaining in the current TOTP window. `None` for HOTP
+    /// rows.
+    pub seconds_remaining: Option<u32>,
+    /// Next TOTP code, zero-padded to `summary.digits`. `None` for
+    /// HOTP rows.
+    pub next_code: Option<&'a str>,
 }
 
-/// Print account metadata for `paladin list` to stdout. An empty
-/// `rows` slice writes zero bytes — the §5 contract is "no codes, no
-/// rows for an empty vault".
+/// Print account metadata plus the current TOTP code, the seconds
+/// remaining in the current TOTP window, and the next TOTP code for
+/// `paladin list` to stdout. An empty `rows` slice writes zero bytes
+/// — the §5 contract is "no rows for an empty vault".
 ///
 /// Format: tab-separated, one line per account, mirroring how
 /// command-line tools like `kubectl get` or `column -t` consume
 /// output. Fields: `<id-prefix>` `<kind>/<alg>/<digits>`
-/// `<period|counter>` `<issuer:label>`.
+/// `<period|counter>` `<code>` `<remaining>` `<next-code>`
+/// `<issuer:label>`. The three TOTP code columns render as `-` for
+/// HOTP rows so the column count stays uniform.
 pub fn write_account_list(rows: &[ListRow<'_>], mut out: impl Write) -> std::io::Result<()> {
     for row in rows {
         let s = row.summary;
@@ -69,11 +86,20 @@ pub fn write_account_list(rows: &[ListRow<'_>], mut out: impl Write) -> std::io:
             // core bug, so render a placeholder rather than panicking.
             _ => "-".to_string(),
         };
+        let current = row
+            .current_code
+            .map_or_else(|| "-".to_string(), str::to_string);
+        let remaining = row
+            .seconds_remaining
+            .map_or_else(|| "-".to_string(), |s| format!("{s}s"));
+        let next = row
+            .next_code
+            .map_or_else(|| "-".to_string(), str::to_string);
         let label = display_label(s);
         writeln!(
             out,
-            "{}\t{}\t{}\t{}",
-            row.disambiguator, kind_field, period_or_counter, label
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            row.disambiguator, kind_field, period_or_counter, current, remaining, next, label
         )?;
     }
     Ok(())
@@ -320,27 +346,36 @@ mod tests {
     }
 
     #[test]
-    fn totp_row_renders_period_in_seconds_and_issuer_label() {
+    fn totp_row_renders_period_code_remaining_next_and_issuer_label() {
         let acct = make_totp("alice", Some("Acme"));
         let summary = acct.summary();
         let rows = [ListRow {
             disambiguator: "id:abcdef01",
             summary: &summary,
+            current_code: Some("123456"),
+            seconds_remaining: Some(25),
+            next_code: Some("654321"),
         }];
         let s = render_list(&rows);
-        assert_eq!(s, "id:abcdef01\ttotp/sha1/6\t30s\tAcme:alice\n");
+        assert_eq!(
+            s,
+            "id:abcdef01\ttotp/sha1/6\t30s\t123456\t25s\t654321\tAcme:alice\n",
+        );
     }
 
     #[test]
-    fn hotp_row_renders_counter_marker_and_bare_label_when_no_issuer() {
+    fn hotp_row_renders_counter_marker_dashes_and_bare_label_when_no_issuer() {
         let acct = make_hotp("bob", None, 42);
         let summary = acct.summary();
         let rows = [ListRow {
             disambiguator: "id:fedcba98",
             summary: &summary,
+            current_code: None,
+            seconds_remaining: None,
+            next_code: None,
         }];
         let s = render_list(&rows);
-        assert_eq!(s, "id:fedcba98\thotp/sha1/6\tc=42\tbob\n");
+        assert_eq!(s, "id:fedcba98\thotp/sha1/6\tc=42\t-\t-\t-\tbob\n");
     }
 
     #[test]
@@ -614,16 +649,26 @@ mod tests {
             ListRow {
                 disambiguator: "id:11111111",
                 summary: &sa,
+                current_code: Some("111111"),
+                seconds_remaining: Some(5),
+                next_code: Some("222222"),
             },
             ListRow {
                 disambiguator: "id:22222222",
                 summary: &sb,
+                current_code: None,
+                seconds_remaining: None,
+                next_code: None,
             },
         ];
         let s = render_list(&rows);
         let lines: Vec<&str> = s.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("Acme:alice"));
+        assert!(lines[0].contains("111111"));
+        assert!(lines[0].contains("\t5s\t"));
+        assert!(lines[0].contains("222222"));
         assert!(lines[1].contains("Beta:bob"));
+        assert!(lines[1].contains("\t-\t-\t-\t"));
     }
 }

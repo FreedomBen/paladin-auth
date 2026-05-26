@@ -33,16 +33,39 @@ pub fn write_ok_status(mode: VaultMode, mut out: impl Write) -> std::io::Result<
     Ok(())
 }
 
-/// `paladin list` success envelope: `{ "accounts": [AccountSummary] }`
+/// One row in the `paladin list` success envelope. Each row is an
+/// [`AccountSummary`] flattened with three optional code fields. TOTP
+/// rows fill `code`, `seconds_remaining`, and `next_code`; HOTP rows
+/// set all three to `null` because `list` never advances or peeks an
+/// HOTP counter (see docs/DESIGN.md §5).
+#[derive(Debug, Serialize)]
+pub struct ListAccountRow<'a> {
+    #[serde(flatten)]
+    pub account: &'a AccountSummary,
+    /// Current TOTP code, zero-padded to the entry's `digits`. `None`
+    /// (serialized as `null`) for HOTP rows.
+    pub code: Option<&'a str>,
+    /// Seconds remaining in the current TOTP window. `None` for HOTP
+    /// rows.
+    pub seconds_remaining: Option<u32>,
+    /// Next TOTP code, zero-padded to the entry's `digits`. `None`
+    /// for HOTP rows.
+    pub next_code: Option<&'a str>,
+}
+
+/// `paladin list` success envelope: `{ "accounts": [ListAccountRow] }`
 /// per the §5 JSON shape table. The slice is serialized in insertion
 /// order; an empty vault renders `{ "accounts": [] }`.
 #[derive(Debug, Serialize)]
 struct AccountList<'a> {
-    accounts: &'a [AccountSummary],
+    accounts: &'a [ListAccountRow<'a>],
 }
 
 /// Render the `paladin list` success envelope.
-pub fn write_account_list(accounts: &[AccountSummary], mut out: impl Write) -> std::io::Result<()> {
+pub fn write_account_list(
+    accounts: &[ListAccountRow<'_>],
+    mut out: impl Write,
+) -> std::io::Result<()> {
     let env = AccountList { accounts };
     serde_json::to_writer(&mut out, &env).map_err(std::io::Error::other)?;
     writeln!(out)?;
@@ -268,7 +291,7 @@ mod tests {
         assert_eq!(v, serde_json::json!({ "ok": true, "status": "encrypted" }));
     }
 
-    fn render_account_list(accounts: &[AccountSummary]) -> serde_json::Value {
+    fn render_account_list(accounts: &[ListAccountRow<'_>]) -> serde_json::Value {
         let mut buf: Vec<u8> = Vec::new();
         write_account_list(accounts, &mut buf).expect("render");
         let s = String::from_utf8(buf).expect("utf-8");
@@ -283,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn account_list_envelope_contains_summaries_under_accounts_key() {
+    fn account_list_envelope_flattens_summary_with_code_fields_for_totp() {
         use paladin_core::parse_otpauth;
         use std::time::{Duration, SystemTime};
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
@@ -293,8 +316,14 @@ mod tests {
         )
         .unwrap()
         .account;
-        let summaries = vec![acct.summary()];
-        let v = render_account_list(&summaries);
+        let summary = acct.summary();
+        let rows = [ListAccountRow {
+            account: &summary,
+            code: Some("123456"),
+            seconds_remaining: Some(25),
+            next_code: Some("654321"),
+        }];
+        let v = render_account_list(&rows);
         let arr = v["accounts"].as_array().expect("accounts is array");
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["label"], serde_json::json!("alice"));
@@ -303,6 +332,36 @@ mod tests {
         assert_eq!(arr[0]["digits"], serde_json::json!(6));
         assert_eq!(arr[0]["period"], serde_json::json!(30));
         assert_eq!(arr[0]["counter"], serde_json::Value::Null);
+        assert_eq!(arr[0]["code"], serde_json::json!("123456"));
+        assert_eq!(arr[0]["seconds_remaining"], serde_json::json!(25));
+        assert_eq!(arr[0]["next_code"], serde_json::json!("654321"));
+    }
+
+    #[test]
+    fn account_list_envelope_renders_null_code_fields_for_hotp() {
+        use paladin_core::parse_otpauth;
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let acct = parse_otpauth(
+            "otpauth://hotp/Beta:bob?secret=JBSWY3DPEHPK3PXP&digits=6&counter=42",
+            now,
+        )
+        .unwrap()
+        .account;
+        let summary = acct.summary();
+        let rows = [ListAccountRow {
+            account: &summary,
+            code: None,
+            seconds_remaining: None,
+            next_code: None,
+        }];
+        let v = render_account_list(&rows);
+        let arr = v["accounts"].as_array().expect("accounts is array");
+        assert_eq!(arr[0]["kind"], serde_json::json!("hotp"));
+        assert_eq!(arr[0]["counter"], serde_json::json!(42));
+        assert_eq!(arr[0]["code"], serde_json::Value::Null);
+        assert_eq!(arr[0]["seconds_remaining"], serde_json::Value::Null);
+        assert_eq!(arr[0]["next_code"], serde_json::Value::Null);
     }
 
     fn render_add_success(

@@ -103,7 +103,7 @@ valid custom KDF values are accepted but unused.
 |--------------------------------------------------------|-------|
 | `init [--force]`                                       | The pre-check routes `paladin_core::inspect(path)` through `paladin_core::classify_init_precheck`, which returns `InitPrecheck::{ Clear, Existing, Propagate(err) }`; the CLI surfaces `vault_exists` (or, with `--force`, the clobber path) on `Existing` and propagates verbatim on `Propagate`. Without `--force`, `Existing` surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` in text mode before any prompt whenever the pre-check returns `Existing` (Paladin or not), then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old file verbatim to `.bak`, overwriting any existing backup). The verbatim rotation matches `create_force`'s file-type-agnostic semantics. Accepts and validates the KDF flags above before prompting; valid custom KDF values are used only when the new-vault passphrase is non-empty. If the first passphrase entry is empty, text mode prints `paladin_core::format_plaintext_storage_warning()` before creating the plaintext vault. |
 | `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. Under `--json`, interactive mode is rejected at parse time — one of `--uri`, `--qr`, or a complete manual flag set (`--label` and `--secret`, plus optional manual fields) must be supplied. |
-| `list`                                                 | Account metadata only — no codes. |
+| `list`                                                 | Account metadata plus the current TOTP code, seconds remaining in the current TOTP window, and the next TOTP code. Time is sampled once per invocation from `SystemTime::now()` and reused for every TOTP row so all rows share the same window. TOTP codes come from `Vault::totp_code(id, now)` and `Vault::totp_next_code(id, now)`; HOTP rows leave the code columns empty (`-` in text mode, `null` under `--json`) because `list` never advances or peeks an HOTP counter. |
 | `show <query>`                                         | Advances HOTP; persists before printing. Matching queries print all matches when every match is TOTP; if any match is HOTP, requires a single match. |
 | `peek <query>`                                         | Never advances. Prints all matches unconditionally. |
 | `copy <query>`                                         | Advances HOTP; copies to clipboard via `arboard`. **No auto-clear.** Single-match required. |
@@ -823,10 +823,21 @@ can be ticked.
 - [x] Empty vault returns `{ "accounts": [] }` under `--json`.
 - [x] Empty vault produces no rows in text mode.
 - [x] Populated vault returns insertion-order `AccountSummary` values
-  with no secret bytes and no codes.
+  with no secret bytes.
 - [x] HOTP and TOTP rows expose the kind-specific `period` /
   `counter` shape from §5 (`period` set + `counter: null` for TOTP,
   vice versa for HOTP).
+- [x] TOTP rows under `--json` carry a non-null `code` (string of
+  `digits` characters), a `seconds_remaining` integer in
+  `1..=period`, and a `next_code` string distinct from `code`.
+- [x] HOTP rows under `--json` carry `code: null`,
+  `seconds_remaining: null`, and `next_code: null` — `list` never
+  advances or peeks an HOTP counter.
+- [x] TOTP rows in text mode include the current code, a
+  `<seconds_remaining>s` field, and the next code as three tab columns
+  between the period column and the label.
+- [x] HOTP rows in text mode render the three new code columns as
+  `-` so the column count matches TOTP rows.
 
 ### `show` / `peek` / `copy` (`tests/cli_show_peek_copy.rs`)
 

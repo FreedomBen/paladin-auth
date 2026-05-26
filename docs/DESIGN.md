@@ -1126,7 +1126,7 @@ Built with `clap` (derive). Commands:
 | `paladin init [--force]`                    | Create a new vault. Without `--force`, checks for an existing primary and returns `vault_exists` before prompting for a new-vault passphrase. Prompts: passphrase? (empty = plaintext; text mode prints the plaintext-storage warning). Refuses to clobber an existing vault unless `--force` (which stages the new vault first, then rotates the old file to `vault.bin.bak`, overwriting any existing backup). The rotated `.bak` is preserved verbatim — a plaintext-to-encrypted clobber leaves plaintext secrets in `.bak` until the user removes it manually. |
 | `paladin add`                               | Add an account interactively (or via flags / URI).               |
 | `paladin add --qr <path>`                   | Add by scanning a QR image file. Every decoded QR in the image is added (errors if none decode); collisions use the default `import` merge policy (`skip`). For other policies, use `import --format=qr`. |
-| `paladin list`                              | List accounts (no codes).                                        |
+| `paladin list`                              | List accounts with the current TOTP code, seconds remaining in the current TOTP window, and the next TOTP code (matching the TUI/GTK list view). HOTP rows render the code columns as dashes in text mode and `null` under `--json` — `list` never advances or peeks an HOTP counter. |
 | `paladin show <query>`                      | Print the current code. **Advances HOTP counter.**               |
 | `paladin peek <query>`                      | Print the current code without advancing the HOTP counter; for TOTP, identical to `show`. |
 | `paladin copy <query>`                      | Copy code to clipboard. For HOTP, advances and saves before attempting the clipboard write. (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see security consideration 6.) |
@@ -1364,7 +1364,7 @@ Success shapes:
 
 | Command family                | JSON shape                                                                      |
 | ----------------------------- | ------------------------------------------------------------------------------- |
-| `list`                        | `{ "accounts": [AccountSummary] }`                                              |
+| `list`                        | `{ "accounts": [AccountSummary + { "code", "seconds_remaining", "next_code" }] }` — each row is an `AccountSummary` flattened with three optional fields. TOTP rows fill `code` (string), `seconds_remaining` (integer 1..=period), and `next_code` (string); HOTP rows set all three to `null` (`list` does not advance or peek an HOTP counter). |
 | `show`, `peek`                | `{ "codes": [CodeResult] }`                                                     |
 | `copy`                        | `{ "copied": true, "account": AccountSummary, "counter_used": number_or_null }` |
 | `add` (single)                | `{ "account": AccountSummary, "warnings": [Warning] }`                          |
