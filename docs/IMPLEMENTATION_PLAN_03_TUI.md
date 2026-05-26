@@ -531,12 +531,16 @@ dismiss deliberately.
     body rendered verbatim from
     `paladin_core::format_plaintext_qr_export_warning()` (sourced
     through the same helper the CLI / GUI use), a `[ ]` ack
-    `Checkbox` (default off), and two buttons: `Show QR` (enabled
-    only while the ack is checked) and `Cancel`. The ANSI QR is
-    **not** rendered on this page so a closing-terminal glimpse
-    cannot expose the secret.
+    `Checkbox` (default off, initial focus), and a `Cancel`
+    button. Toggling the checkbox on (Space) immediately
+    advances the modal to Page 2; toggling it back off returns
+    to Page 1 and drops the Page-2 buffers (matching DESIGN §6
+    "on ack, the same modal switches"). Pressing `Cancel` (or
+    `Esc`) closes the modal. The ANSI QR is **not** rendered on
+    this page so a closing-terminal glimpse cannot expose the
+    secret.
   * **Page 2 — QR + save actions.** Mounted only after the user
-    confirms Page 1. The body renders the Unicode half-block QR
+    toggles the Page-1 ack on. The body renders the Unicode half-block QR
     via `paladin_core::Vault::export_qr_ansi(id)`, with the
     account's `summary_display_label` caption on the line above
     the QR (CLI / GUI parity). Two save buttons sit below the QR:
@@ -574,12 +578,14 @@ dismiss deliberately.
   Page-2 buffers and returns the body to Page 1, matching the
   GTK `ExportQrDialog` behavior. Save failures
   (`save_not_committed`, `save_durability_unconfirmed`,
-  `io_error`, `validation_error` from
-  `QrRenderOptions::validate`) stay inline in the modal as
-  the existing Export modal handles them. Encoder failures from
-  `qrcode` (defensive — today's `otpauth://` URIs fit in QR
-  version 10 with M-level ECC, but the modal renders the typed
-  error inline rather than crashing) follow the same inline path.
+  `io_error`) stay inline in the modal as the existing Export
+  modal handles them. `validation_error` (`field: "qr_render"`)
+  is also handled inline as a defensive path — the modal hard-pins
+  `QrRenderOptions::default()` so `QrRenderOptions::validate`
+  never trips, but the `qrcode` encoder can return
+  `data_too_long` on a payload past QR version 40 (today's
+  `otpauth://` URIs fit comfortably in version 10 with M-level
+  ECC). Both validation reasons render inline rather than crashing.
   The modal opens regardless of vault mode (plaintext or
   encrypted) and regardless of OTP kind: TOTP and HOTP rows
   both qualify because §4.6 is read-only, so HOTP rows do not
@@ -755,7 +761,10 @@ reaches the primary-file commit point with durability still uncertain:
   overwrite gate stay in the Export modal as inline errors. Export does
   not mutate the vault, so save-error rollback does not apply.
 
-## Keybindings (initial v0.1)
+## Keybindings
+
+The table below lists every binding for both v0.1 and v0.2 surfaces;
+v0.2-only rows are marked inline.
 
 | Key                                | Action                                                                                                |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -1541,11 +1550,15 @@ alongside the existing `execute_export_*` family.
   modal state. Pinned by
   `qr_export_modal_ack_toggle_off_drops_rendered_qr` and
   `qr_export_modal_ack_toggle_off_returns_to_warning_ack_page`.
-- [ ] The ANSI body matches `paladin_core::Vault::export_qr_ansi(id)`
-  output byte-for-byte (assert the rendered string equals the result
-  of a synchronous `Vault::export_qr_ansi(id).unwrap()` call against
-  the same fixture vault). Pinned by
-  `qr_export_modal_page2_body_matches_export_qr_ansi_byte_for_byte`.
+- [ ] The cached ANSI render in modal state
+  (`QrExportModal::rendered_qr`, populated on ack-toggle-on)
+  byte-matches `paladin_core::Vault::export_qr_ansi(id)` against
+  the same fixture vault. The test compares the *stored render
+  slot*, not the rendered terminal frame — the modal body also
+  carries the `summary_display_label` caption above the QR, so a
+  full-body equality would not hold. Frame-level appearance is
+  pinned by the insta snapshots below. Pinned by
+  `qr_export_modal_rendered_qr_slot_matches_export_qr_ansi_byte_for_byte`.
 - [ ] Read-only contract — opening the modal, toggling the ack on
   and off, and `Esc`-closing it leave the HOTP counter and
   `updated_at` byte-identical to the pre-open state. Pinned by
@@ -1565,17 +1578,25 @@ alongside the existing `execute_export_*` family.
 - [ ] `Save as PNG…` from Page 2 opens the inline destination-path
   sub-flow (modal state moves to a `Save { format: Png, .. }`
   variant); the save effect itself is not dispatched until the
-  user pressses Confirm with a non-empty path that either does
+  user presses Confirm with a non-empty path that either does
   not exist or passes the overwrite gate. Empty path on Confirm
-  rejects inline. Non-existent parent directory rejects inline
-  with `io_error`. Existing destination on Confirm flips the
-  modal into the inline overwrite gate (rather than dispatching
-  the save effect). Pinned by
+  rejects inline (pure reducer check, no effect emitted).
+  Existing destination on Confirm flips the modal into the
+  inline overwrite gate (rather than dispatching the save
+  effect). Pinned by
   `pressing_save_as_png_button_opens_destination_prompt`,
   `qr_export_modal_save_with_empty_destination_path_rejects_inline`,
-  `qr_export_modal_save_with_missing_parent_dir_rejects_inline_with_io_error`,
   and
   `qr_export_modal_save_with_existing_destination_shows_overwrite_gate`.
+- [ ] Reducer routes a synthetic `EffectResult::QrExport(Err(io_error))`
+  (the variant the executor returns when
+  `write_secret_file_atomic` fails on a missing parent
+  directory, ENOSPC, EACCES, etc.) inline in the modal body and
+  leaves the modal open. Pinned by
+  `effect_result_qr_export_err_io_error_surfaces_inline_and_keeps_modal_open`.
+  (The fs-level production of `io_error` is covered executor-side
+  in `tests/effect_tests.rs` by
+  `execute_qr_export_png_with_missing_parent_dir_returns_io_error`.)
 - [ ] Overwrite gate — typing a destination that already exists,
   toggling overwrite ack on, and pressing Confirm writes the file
   through `paladin_core::write_secret_file_atomic`. Bytes match
@@ -1600,9 +1621,19 @@ alongside the existing `execute_export_*` family.
   and
   `effect_result_qr_export_err_save_durability_unconfirmed_surfaces_inline_and_keeps_modal_open`.
 - [ ] `Esc` from Page 1 closes the modal; `Esc` from the Page-2
-  root closes the modal *and* drops the rendered ANSI / PNG /
-  SVG buffers from modal state without auto-saving. Pinned by
+  root closes the modal *and* drops the rendered ANSI / any
+  in-flight PNG / SVG buffers from modal state without
+  auto-saving. Pinned by
   `qr_export_modal_esc_drops_rendered_buffers`.
+- [ ] Pressing the Page-1 `Cancel` button (Enter on the focused
+  button or click) closes the modal without advancing to Page 2,
+  even when the ack is on at the moment of cancel. Pinned by
+  `qr_export_modal_page1_cancel_button_closes_modal_without_advance`.
+- [ ] Pressing the Page-2 `Done` button (Enter on the focused
+  button) closes the modal and drops the rendered ANSI / any
+  in-flight PNG / SVG buffers (parity with `Esc` from Page-2
+  root). Pinned by
+  `qr_export_modal_page2_done_button_closes_modal_and_drops_rendered_buffers`.
 - [ ] `Esc` while focus is inside the Page-2 destination-path
   sub-flow (text field or overwrite-gate confirmation) cancels
   only the sub-flow: the modal returns to the Page-2 QR body,
@@ -1611,11 +1642,11 @@ alongside the existing `execute_export_*` family.
   `qr_export_modal_esc_in_destination_prompt_cancels_save_subflow_and_preserves_page2`
   and
   `qr_export_modal_esc_in_overwrite_gate_cancels_save_subflow_and_preserves_page2`.
-- [ ] Auto-lock with the QR Export modal open drops the modal, the
-  rendered ANSI / PNG / SVG buffers, **and** the in-memory vault,
-  then re-presents the unlock screen for encrypted vaults
-  (no-op on plaintext). Pinned by
-  `auto_lock_with_qr_export_modal_open_drops_modal_and_renders_buffers`.
+- [ ] Auto-lock (encrypted vaults only, per `IdlePolicy::should_arm`)
+  with the QR Export modal open drops the modal, the rendered
+  ANSI / any in-flight PNG / SVG buffers, **and** the in-memory
+  vault, then re-presents the unlock screen. Pinned by
+  `auto_lock_with_qr_export_modal_open_drops_modal_and_rendered_buffers`.
 - [ ] HOTP account QR export — assert the PNG that the
   `Save as PNG…` worker writes for a HOTP row decodes back through
   `rqrr` (gated behind the existing `qrcode` / `rqrr` dev-dependency
