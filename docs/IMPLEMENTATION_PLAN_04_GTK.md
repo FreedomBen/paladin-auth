@@ -1746,7 +1746,7 @@ by ticking it.
   commit. Inline overwrite-ack row mirrors `ExportDialog`'s
   Switch surface and stays hidden when `destination_exists` is
   `false`.
-* [ ] **Copy image action.** Add a `Copy image` footer button
+* [x] **Copy image action.** Add a `Copy image` footer button
   wired to dispatch `ExportQrDialogMsg::CopyImage`. The handler
   builds a `gdk::ContentProvider::for_value` carrying a
   `glib::Bytes::from(&state.staged_png)` of MIME `image/png` and
@@ -1760,6 +1760,32 @@ by ticking it.
   `apply_msg_copy_image_routes_through_set_content_with_image_png_mime`
   and the failure-no-arm path
   `apply_msg_copy_image_failure_does_not_arm_clipboard_clear`.
+  *Implementation note (Phase 6):* shipped via the new
+  `ExportQrDialogMsg::{CopyImage, CopyImageSucceeded, CopyImageFailed}`
+  variants, `ExportQrDialogOutput::CopyImageRequested(Zeroizing<Vec<u8>>)`,
+  and the `compose_copy_image_request_output` /
+  `apply_msg_copy_image_succeeded` / `apply_msg_copy_image_failed`
+  helpers. The Page-2 `copy_image_button` binds
+  `set_sensitive: compose_copy_image_button_sensitive(&model.state)`
+  and `connect_clicked` dispatches `ExportQrDialogMsg::CopyImage`;
+  the `SimpleComponent::update` arm forwards the
+  `CopyImageRequested(bytes)` output via
+  `compose_copy_image_request_output`. `AppModel` consumes the
+  output by building
+  `gtk::gdk::ContentProvider::for_bytes(COPY_IMAGE_CLIPBOARD_MIME_TYPE, &glib::Bytes::from(...))`
+  and calling `clipboard.set_content(Some(&provider))`; success
+  raises the `Image copied` toast (via
+  `format_export_qr_dialog_copy_image_success_toast`) and
+  forwards `ExportQrDialogMsg::CopyImageSucceeded`; failure
+  forwards `ExportQrDialogMsg::CopyImageFailed(err.to_string())`
+  which parks the body in `state.copy_image_error` for inline
+  rendering. The failure arm returns `None` from `apply_msg` so
+  no output ever lands on `AppModel` that would route into
+  `clipboard_clear::schedule_copy` — image copies are not OTP
+  codes and must not arm the `PendingClipboardClear` timer.
+  `drop_staged_buffers` / `apply_msg_ack_toggled(false)` /
+  `CancelPressed` / `Close` all clear `copy_image_error` so a
+  stale failure never survives a re-acked retry.
 * [ ] **Bubble-phase Escape dismissal.** Install a
   `gtk::EventControllerKey` mirroring
   `dispatch_root_dismiss_key` so bare `Escape` (no modifiers)
@@ -2661,17 +2687,30 @@ These run without a display server. Each lives under
   pins that `apply_msg(SaveDestinationPicked{exists:false})`
   emits `Output::SaveRequested(ExportQrSaveRequest{…})` with
   the staged PNG bytes cloned verbatim into the request.
-- [ ] `apply_msg_copy_image_routes_through_set_content_with_image_png_mime`
+- [x] `apply_msg_copy_image_routes_through_set_content_with_image_png_mime`
   pins that `Copy image` builds a `gdk::ContentProvider::for_value`
   carrying a `glib::Bytes` of the staged PNG bytes with content type
   `image/png`, and that the provider is handed to
   `gdk::Clipboard::set_content` (rather than `set_text`, which would
   serialize the bytes as garbled text).
-- [ ] `apply_msg_copy_image_failure_does_not_arm_clipboard_clear` pins
+  *Implementation note (Phase 6):* the pure-logic surface is the
+  `compose_copy_image_request_output` helper (returns
+  `Some(ExportQrDialogOutput::CopyImageRequested(bytes))` when
+  `state.staged_png.is_some()`) paired with the
+  `COPY_IMAGE_CLIPBOARD_MIME_TYPE = "image/png"` const. The
+  imperative side uses `gtk::gdk::ContentProvider::for_bytes(...)`
+  rather than `for_value(...)` — `for_bytes` is the GTK4 idiom for
+  publishing typed bytes; semantically identical, mime check is
+  pinned by the const.
+- [x] `apply_msg_copy_image_failure_does_not_arm_clipboard_clear` pins
   that a `set_content` failure surfaces an inline error and does not
   schedule a clipboard auto-clear timer (parity with the existing
   `CopyCode` failure branch — `clipboard.clear_enabled` covers OTP code
   copies specifically, not image copies).
+  *Implementation note (Phase 6):* the `CopyImageFailed` reducer
+  arm parks the message in `state.copy_image_error` and returns
+  `None` from `apply_msg`, so no output ever lands on `AppModel`
+  that would route into `clipboard_clear::schedule_copy`.
 - [ ] `clear_for_lock_drops_staged_buffers_and_paintable` pins that
   the auto-lock pruning helper drops `state.staged_png`,
   `state.staged_svg`, and the Picture paintable before the

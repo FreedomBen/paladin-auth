@@ -50,9 +50,9 @@ fn source_files_have_no_forbidden_crate_references() {
     let mut offenses = Vec::new();
     walk_rs_files(&src, &mut |path, contents| {
         for (lineno, raw_line) in contents.lines().enumerate() {
-            let code = strip_line_comment(raw_line);
+            let code = strip_string_literals(strip_line_comment(raw_line));
             for forbidden in FORBIDDEN {
-                if contains_word(code, forbidden) {
+                if contains_word(&code, forbidden) {
                     offenses.push(format!(
                         "  {}:{}: forbidden `{}` reference\n    {}",
                         path.display(),
@@ -122,6 +122,44 @@ fn strip_line_comment(line: &str) -> &str {
         Some(idx) => &line[..idx],
         None => line,
     }
+}
+
+/// Replace the contents of every double-quoted string literal on `line`
+/// with empty quotes so the forbidden-crate scan does not match
+/// user-facing strings (e.g. the `"image/png"` MIME literal published
+/// to the GDK clipboard for `Copy image`). The thinness contract is
+/// about forbidden crate references at the Rust source level, not
+/// substrings of arbitrary user-visible text.
+///
+/// Handles the common `\"` escape so a literal that embeds a quote does
+/// not split mid-string. Raw string literals (`r"..."`, `r#"..."#`) and
+/// byte strings are not used in `paladin-gtk` as of this commit; if a
+/// future change introduces one whose body contains a forbidden token,
+/// the test will surface it and the contributor should refactor.
+fn strip_string_literals(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            out.push('"');
+            while let Some(inner) = chars.next() {
+                if inner == '\\' {
+                    // Skip the escape sequence's payload char (covers
+                    // the `\"` case so the inner quote doesn't close the
+                    // string early).
+                    chars.next();
+                    continue;
+                }
+                if inner == '"' {
+                    out.push('"');
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Return `true` if `needle` appears in `haystack` with a word
@@ -221,6 +259,34 @@ fn strip_line_comment_drops_doc_and_trailing_comments() {
     assert_eq!(strip_line_comment("//! argon2 is forbidden"), "");
     assert_eq!(strip_line_comment("let _ = 1; // argon2"), "let _ = 1; ");
     assert_eq!(strip_line_comment("let x = 1;"), "let x = 1;");
+}
+
+#[test]
+fn strip_string_literals_blanks_quoted_payloads_but_keeps_code() {
+    // The MIME literal `"image/png"` must not be misread as a
+    // reference to the `image` crate — string-literal contents are
+    // user-facing strings, not Rust identifiers.
+    assert_eq!(
+        strip_string_literals(r#"const X: &str = "image/png";"#),
+        r#"const X: &str = "";"#,
+    );
+    // Escaped quotes must not split the literal early.
+    assert_eq!(
+        strip_string_literals(r#"let s = "argon2 \" escape";"#),
+        r#"let s = "";"#,
+    );
+    // Lines with no quoted strings pass through unchanged.
+    assert_eq!(
+        strip_string_literals("use argon2::Argon2;"),
+        "use argon2::Argon2;",
+    );
+    // The check must not snag on identifier substrings outside of
+    // strings — a `use image::Foo` reference should survive
+    // stripping so the outer word-boundary scan flags it.
+    assert_eq!(
+        strip_string_literals("use image::Foo;"),
+        "use image::Foo;",
+    );
 }
 
 #[test]

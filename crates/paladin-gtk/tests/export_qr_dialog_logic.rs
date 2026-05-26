@@ -29,19 +29,21 @@ use paladin_core::{
     PaladinError, QrRenderOptions, Store, Vault, VaultInit, VaultLock,
 };
 use paladin_gtk::export_qr_dialog::{
-    apply_msg, apply_msg_ack_toggled, apply_msg_overwrite_acknowledged, apply_msg_save_completed,
-    apply_msg_save_destination_picked, apply_msg_show_qr, classify_export_qr_save_error,
-    compose_export_qr_caption_style_class, compose_export_qr_caption_text,
-    compose_export_qr_warning_body, compose_save_can_fire,
+    apply_msg, apply_msg_ack_toggled, apply_msg_copy_image_failed, apply_msg_copy_image_succeeded,
+    apply_msg_overwrite_acknowledged, apply_msg_save_completed, apply_msg_save_destination_picked,
+    apply_msg_show_qr, classify_export_qr_save_error, compose_copy_image_button_sensitive,
+    compose_copy_image_request_output, compose_export_qr_caption_style_class,
+    compose_export_qr_caption_text, compose_export_qr_warning_body, compose_save_can_fire,
     compose_save_target_overwrite_gate_visible, compose_show_qr_button_sensitive,
     compose_visible_child_name, decide_export_qr_target, format_export_qr_dialog_copy_image_label,
-    format_export_qr_dialog_done_label, format_export_qr_dialog_save_as_png_label,
-    format_export_qr_dialog_save_as_svg_label, format_export_qr_dialog_save_success_toast,
-    format_export_qr_dialog_show_qr_button_label, format_export_qr_dialog_title,
-    render_show_qr_error_message, run_export_qr_save_worker, ExportQrDialogInit, ExportQrDialogMsg,
-    ExportQrDialogOutput, ExportQrDialogState, ExportQrSaveCompletion, ExportQrSaveOutcome,
-    ExportQrSaveRequest, ExportQrSaveWorkerCompletion, ExportQrSaveWorkerInput, SaveKind,
-    SaveTarget, VIEW_STACK_QR_PAGE_NAME, VIEW_STACK_WARNING_PAGE_NAME,
+    format_export_qr_dialog_copy_image_success_toast, format_export_qr_dialog_done_label,
+    format_export_qr_dialog_save_as_png_label, format_export_qr_dialog_save_as_svg_label,
+    format_export_qr_dialog_save_success_toast, format_export_qr_dialog_show_qr_button_label,
+    format_export_qr_dialog_title, render_show_qr_error_message, run_export_qr_save_worker,
+    ExportQrDialogInit, ExportQrDialogMsg, ExportQrDialogOutput, ExportQrDialogState,
+    ExportQrSaveCompletion, ExportQrSaveOutcome, ExportQrSaveRequest, ExportQrSaveWorkerCompletion,
+    ExportQrSaveWorkerInput, SaveKind, SaveTarget, COPY_IMAGE_CLIPBOARD_MIME_TYPE,
+    VIEW_STACK_QR_PAGE_NAME, VIEW_STACK_WARNING_PAGE_NAME,
 };
 
 /// Build a synthetic TOTP [`AccountSummary`] for the fixture used
@@ -1294,4 +1296,230 @@ fn export_qr_save_request_round_trips_through_save_requested_output() {
         Some(vec![0xCAu8, 0xFE, 0xBA, 0xBE]),
         "request must carry the staged PNG bytes verbatim"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Group J — Copy image (Phase 6)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn copy_image_clipboard_mime_type_is_image_png() {
+    // Pin the mime type the dialog asks `AppModel` to publish the
+    // staged PNG bytes under. Any scanner / image-paste surface
+    // (GIMP, Slack, file pickers, …) keys off this string, so a
+    // typo or drift away from `image/png` silently breaks paste.
+    assert_eq!(COPY_IMAGE_CLIPBOARD_MIME_TYPE, "image/png");
+}
+
+#[test]
+fn format_export_qr_dialog_copy_image_success_toast_is_non_empty() {
+    // The success toast surfaces on `gdk::Clipboard::set_content`
+    // success; a bare empty body would flash an empty toast.
+    assert!(!format_export_qr_dialog_copy_image_success_toast().is_empty());
+}
+
+#[test]
+fn format_export_qr_dialog_copy_image_success_toast_renders_image_copied() {
+    // Pin the verbatim user-facing wording so a future i18n /
+    // string-table refactor preserves the existing semantics.
+    assert_eq!(
+        format_export_qr_dialog_copy_image_success_toast(),
+        "Image copied"
+    );
+}
+
+#[test]
+fn compose_copy_image_button_sensitive_false_without_staged_png() {
+    // Page 2 is only mounted after a successful `ShowQr` render, so
+    // the helper acts as a defensive guard against the dialog being
+    // driven into an impossible state.
+    let mut state = fixture_state();
+    state.staged_png = None;
+    assert!(!compose_copy_image_button_sensitive(&state));
+}
+
+#[test]
+fn compose_copy_image_button_sensitive_true_with_staged_png() {
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![0x89, b'P', b'N', b'G']));
+    assert!(compose_copy_image_button_sensitive(&state));
+}
+
+#[test]
+fn compose_copy_image_request_output_returns_none_without_staged_png() {
+    // No staged PNG → no output. The view-layer button is
+    // desensitized in this state, so the message should not reach
+    // the reducer; the defensive `None` return keeps the dialog
+    // honest if it does.
+    let mut state = fixture_state();
+    state.staged_png = None;
+    assert!(compose_copy_image_request_output(&state).is_none());
+}
+
+#[test]
+fn compose_copy_image_request_output_returns_some_when_staged_png_set() {
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A]));
+    let out = compose_copy_image_request_output(&state)
+        .expect("staged PNG must yield CopyImageRequested output");
+    let ExportQrDialogOutput::CopyImageRequested(bytes) = out else {
+        panic!("expected CopyImageRequested variant");
+    };
+    assert_eq!(
+        bytes.as_slice(),
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A][..],
+        "output must carry the staged PNG bytes verbatim"
+    );
+}
+
+#[test]
+fn apply_msg_copy_image_routes_through_set_content_with_image_png_mime() {
+    // Pin the contract the plan calls out: `ExportQrDialogMsg::CopyImage`
+    // routes through an output the `SimpleComponent`'s `update` arm
+    // turns into a `gdk::Clipboard::set_content(...)` call carrying
+    // a `gdk::ContentProvider` keyed under MIME `image/png`. The
+    // pure-logic surface is the `compose_copy_image_request_output`
+    // helper paired with the `COPY_IMAGE_CLIPBOARD_MIME_TYPE`
+    // constant — together they pin both the bytes and the mime
+    // string the imperative side hands to GDK.
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![0xCA, 0xFE, 0xBA, 0xBE]));
+
+    // 1. The mime constant is `image/png` (pinned separately above).
+    assert_eq!(COPY_IMAGE_CLIPBOARD_MIME_TYPE, "image/png");
+
+    // 2. The `CopyImage` reducer arm itself is a no-op (the output
+    //    routing happens in the `SimpleComponent::update` arm using
+    //    `compose_copy_image_request_output`, mirroring the
+    //    `ShowQr` / `ShowQrRequested` round-trip).
+    let before_png = state.staged_png.as_ref().map(|b| b.to_vec());
+    let out = apply_msg(&mut state, ExportQrDialogMsg::CopyImage);
+    assert!(out.is_none(), "CopyImage reducer arm must be a no-op");
+    assert_eq!(
+        state.staged_png.as_ref().map(|b| b.to_vec()),
+        before_png,
+        "CopyImage must not mutate staged PNG bytes"
+    );
+
+    // 3. The output the `SimpleComponent::update` arm dispatches to
+    //    AppModel carries the staged PNG bytes verbatim; AppModel
+    //    wraps them in `glib::Bytes` + `gdk::ContentProvider` keyed
+    //    under `COPY_IMAGE_CLIPBOARD_MIME_TYPE` and calls
+    //    `gdk::Clipboard::set_content(Some(&provider))`.
+    let out = compose_copy_image_request_output(&state)
+        .expect("staged PNG must yield CopyImageRequested output");
+    let ExportQrDialogOutput::CopyImageRequested(bytes) = out else {
+        panic!("expected CopyImageRequested variant");
+    };
+    assert_eq!(bytes.as_slice(), &[0xCAu8, 0xFE, 0xBA, 0xBE][..]);
+}
+
+#[test]
+fn apply_msg_copy_image_failure_does_not_arm_clipboard_clear() {
+    // Image copies are user-initiated paste-ables, not OTP codes —
+    // they must not arm the `PendingClipboardClear` timer the
+    // `CopyCode` path uses. The dialog reducer enforces this by
+    // returning `None` from the `CopyImageFailed` arm so no output
+    // ever lands on AppModel that would route into
+    // `clipboard_clear::schedule_copy`. Pinning the empty-output
+    // contract here keeps a future drift (e.g. an "arm clear on
+    // copy" feature ported from CopyCode) from silently rearming
+    // clipboard-clear on the Show-QR surface.
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![0x89, b'P', b'N', b'G']));
+
+    let out = apply_msg(
+        &mut state,
+        ExportQrDialogMsg::CopyImageFailed("set_content failed".to_string()),
+    );
+
+    assert!(
+        out.is_none(),
+        "CopyImageFailed must NOT emit any output (would arm clipboard_clear on AppModel)"
+    );
+    assert_eq!(
+        state.copy_image_error.as_deref(),
+        Some("set_content failed"),
+        "failure parks the message inline on the dialog"
+    );
+    // Staged bytes are untouched — the user can retry without a
+    // fresh Show-QR press.
+    assert!(state.staged_png.is_some());
+}
+
+#[test]
+fn apply_msg_copy_image_succeeded_clears_prior_copy_image_error() {
+    // A successful follow-up must clear any prior inline failure
+    // body so a stale error never survives a retry.
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![0x89]));
+    state.copy_image_error = Some("prior failure".to_string());
+
+    apply_msg_copy_image_succeeded(&mut state);
+
+    assert!(state.copy_image_error.is_none());
+}
+
+#[test]
+fn apply_msg_copy_image_succeeded_does_not_emit_output() {
+    // The success toast is raised by AppModel directly (it owns
+    // the `adw::ToastOverlay`); the dialog reducer arm has no
+    // output to dispatch.
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![0x89]));
+    let out = apply_msg(&mut state, ExportQrDialogMsg::CopyImageSucceeded);
+    assert!(out.is_none());
+}
+
+#[test]
+fn apply_msg_copy_image_failed_records_inline_error_body() {
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![0x89]));
+    apply_msg_copy_image_failed(&mut state, "io_error".to_string());
+    assert_eq!(state.copy_image_error.as_deref(), Some("io_error"));
+}
+
+#[test]
+fn apply_msg_copy_image_succeeded_keeps_staged_png_for_repeated_copies() {
+    // A successful `Copy image` must not drop the staged bytes —
+    // the user may need to paste several times.
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![0x89, b'P', b'N', b'G']));
+    apply_msg_copy_image_succeeded(&mut state);
+    assert!(state.staged_png.is_some());
+}
+
+#[test]
+fn apply_msg_ack_toggled_off_clears_copy_image_error() {
+    // Re-acking after a failed copy resets the dialog to the
+    // warning page; the prior inline error must not survive into
+    // the next reveal cycle.
+    let mut state = fixture_state();
+    state.ack_revealed = true;
+    state.staged_png = Some(Zeroizing::new(vec![0x89]));
+    state.copy_image_error = Some("io_error".to_string());
+
+    apply_msg_ack_toggled(&mut state, false);
+
+    assert!(state.copy_image_error.is_none());
+}
+
+#[test]
+fn apply_msg_cancel_pressed_clears_copy_image_error() {
+    // Pressing Cancel must drop the inline copy-image error along
+    // with the staged buffers — a re-open starts fresh.
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![0x89]));
+    state.copy_image_error = Some("io_error".to_string());
+    let _ = apply_msg(&mut state, ExportQrDialogMsg::CancelPressed);
+    assert!(state.copy_image_error.is_none());
+}
+
+#[test]
+fn apply_msg_close_clears_copy_image_error() {
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![0x89]));
+    state.copy_image_error = Some("io_error".to_string());
+    let _ = apply_msg(&mut state, ExportQrDialogMsg::Close);
+    assert!(state.copy_image_error.is_none());
 }

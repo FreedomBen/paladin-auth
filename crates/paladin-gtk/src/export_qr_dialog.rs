@@ -83,6 +83,17 @@ pub const VIEW_STACK_QR_PAGE_NAME: &str = "qr";
 /// [`compose_export_qr_dialog_caption_widget_uses_title_3_style_class`].
 pub const CAPTION_STYLE_CLASS: &str = "title-3";
 
+/// MIME type the Page-2 `Copy image` button publishes the staged
+/// PNG bytes under via [`gdk::ContentProvider`] +
+/// [`gdk::Clipboard::set_content`].
+///
+/// Pinned here so the runtime imperative side and the pure-logic
+/// `apply_msg_copy_image_routes_through_set_content_with_image_png_mime`
+/// test share one source of truth. Any drift away from `image/png`
+/// silently breaks paste into GIMP, Slack, file pickers, and other
+/// image-paste surfaces that key off this mime string.
+pub const COPY_IMAGE_CLIPBOARD_MIME_TYPE: &str = "image/png";
+
 /// Selector identifying which QR render format a Page-2 save target
 /// is committing.
 ///
@@ -420,6 +431,34 @@ pub enum ExportQrDialogMsg {
     /// [`ExportQrDialogState::staged_svg`] so a subsequent SVG
     /// save reuses it without re-rendering.
     SaveCompleted(ExportQrSaveCompletion),
+    /// User clicked the Page-2 `Copy image` footer button. The
+    /// reducer is a no-op at this layer; the `SimpleComponent`'s
+    /// `update` arm emits [`ExportQrDialogOutput::CopyImageRequested`]
+    /// (carrying a clone of [`ExportQrDialogState::staged_png`])
+    /// so `AppModel` (which owns the live `gdk::Clipboard` handle)
+    /// can wrap the bytes in a [`gdk::ContentProvider`] keyed
+    /// under [`COPY_IMAGE_CLIPBOARD_MIME_TYPE`] and call
+    /// `gdk::Clipboard::set_content(...)` on the main loop. The
+    /// completion round-trips back as [`Self::CopyImageSucceeded`]
+    /// (raising the `Image copied` toast) or
+    /// [`Self::CopyImageFailed`] (parking the error inline).
+    CopyImage,
+    /// `AppModel` reported that `gdk::Clipboard::set_content`
+    /// returned `Ok(())`. The reducer clears
+    /// [`ExportQrDialogState::copy_image_error`] so a stale failure
+    /// body cannot survive the retry; the success toast itself is
+    /// raised by `AppModel` against its `adw::ToastOverlay`.
+    CopyImageSucceeded,
+    /// `AppModel` reported that `gdk::Clipboard::set_content`
+    /// returned an error. The reducer parks the message in
+    /// [`ExportQrDialogState::copy_image_error`] for inline
+    /// rendering on Page 2; `staged_png` is left untouched so the
+    /// user can retry without a fresh Show-QR press. The reducer
+    /// arm returns `None` so no output ever lands on `AppModel`
+    /// that would route into `clipboard_clear::schedule_copy` —
+    /// image copies are not OTP codes and must not arm the
+    /// `PendingClipboardClear` timer.
+    CopyImageFailed(String),
 }
 
 /// Output messages the dialog emits back to `AppModel`.
@@ -455,6 +494,20 @@ pub enum ExportQrDialogOutput {
     /// `Output`-then-Input round trip the Show-QR path uses keeps
     /// the dialog vault-handle-free.
     SaveRequested(ExportQrSaveRequest),
+    /// User clicked the Page-2 `Copy image` footer button. The
+    /// dialog cannot reach the live `gdk::Clipboard` handle, so
+    /// it hands the staged PNG bytes to `AppModel` through this
+    /// variant; `AppModel` wraps them in `glib::Bytes` +
+    /// `gdk::ContentProvider::for_bytes(COPY_IMAGE_CLIPBOARD_MIME_TYPE, ...)`
+    /// and calls `gdk::Clipboard::set_content(...)` on the main
+    /// loop, then forwards the result via
+    /// [`ExportQrDialogMsg::CopyImageSucceeded`] /
+    /// [`ExportQrDialogMsg::CopyImageFailed`]. The bytes ride in a
+    /// [`Zeroizing<Vec<u8>>`] so the payload buffer zeroes on
+    /// drop. The staged bytes stay parked on
+    /// [`ExportQrDialogState::staged_png`] so a follow-up copy
+    /// reuses them without a fresh Show-QR press.
+    CopyImageRequested(Zeroizing<Vec<u8>>),
 }
 
 /// Mutable state held by the `ExportQrDialogComponent` reducer.
@@ -541,6 +594,15 @@ pub struct ExportQrDialogState {
     /// crash"). Cleared on the next successful save and on every
     /// `SaveDestinationPicked` reducer arm.
     pub save_warning: Option<String>,
+    /// Inline `Copy image` error body rendered on Page 2 after a
+    /// failed [`gdk::Clipboard::set_content`] round-trip. The body
+    /// is a plain `String` because the failure path stays in GDK
+    /// (the message wording is non-secret — it names the failing
+    /// surface, never the staged PNG bytes). Cleared on the next
+    /// successful copy, on every `drop_staged_buffers` reset, and
+    /// on every ack-toggled-off transition so a stale error never
+    /// survives a re-acked retry.
+    pub copy_image_error: Option<String>,
 }
 
 impl ExportQrDialogState {
@@ -565,6 +627,7 @@ impl ExportQrDialogState {
             show_qr_error: None,
             save_error: None,
             save_warning: None,
+            copy_image_error: None,
         }
     }
 }
@@ -672,6 +735,7 @@ pub fn apply_msg_ack_toggled(state: &mut ExportQrDialogState, active: bool) {
         state.destination_exists = false;
         state.overwrite_acknowledged = false;
         state.show_qr_error = None;
+        state.copy_image_error = None;
     }
 }
 
@@ -799,6 +863,81 @@ pub fn format_export_qr_dialog_done_label() -> &'static str {
 #[must_use]
 pub fn format_export_qr_dialog_save_success_toast() -> &'static str {
     "QR saved to"
+}
+
+/// Toast text raised by `AppModel` when
+/// [`gdk::Clipboard::set_content`] returns `Ok(())` for a
+/// `Copy image` press. Kept as a `&'static str` so the imperative
+/// side can build an `adw::Toast::new(...)` without a heap
+/// allocation per press.
+#[must_use]
+pub fn format_export_qr_dialog_copy_image_success_toast() -> &'static str {
+    "Image copied"
+}
+
+/// Returns `true` when the Page-2 `Copy image` footer button is
+/// sensitive.
+///
+/// The button is mounted on Page 2 only, and Page 2 is only mounted
+/// after a successful Show-QR render — so in practice
+/// [`ExportQrDialogState::staged_png`] is always `Some(_)` when the
+/// button is reachable. The helper still guards against the
+/// reverse — a future state machine drift that leaves the button
+/// reachable without staged bytes desensitizes it rather than
+/// dispatches a doomed `set_content` round-trip.
+#[must_use]
+pub fn compose_copy_image_button_sensitive(state: &ExportQrDialogState) -> bool {
+    state.staged_png.is_some()
+}
+
+/// Build the [`ExportQrDialogOutput::CopyImageRequested`] payload
+/// the `SimpleComponent`'s `update` arm dispatches to `AppModel`
+/// for a `Copy image` press.
+///
+/// Returns `None` when [`ExportQrDialogState::staged_png`] is empty
+/// (the dialog has not yet rendered the QR, or an ack-off /
+/// auto-lock reset has dropped the bytes); the view-layer button is
+/// desensitized in this state via
+/// [`compose_copy_image_button_sensitive`].
+///
+/// The PNG bytes are cloned into a fresh [`Zeroizing<Vec<u8>>`] so
+/// the staged bytes on `state.staged_png` survive — a follow-up
+/// copy press reuses them without a fresh `vault.export_qr_png`
+/// round-trip. A QR PNG ≤ version 10 at the default pixel size is
+/// well under 64 KiB, so the clone is cheap.
+#[must_use]
+pub fn compose_copy_image_request_output(
+    state: &ExportQrDialogState,
+) -> Option<ExportQrDialogOutput> {
+    state
+        .staged_png
+        .as_ref()
+        .map(|bytes| ExportQrDialogOutput::CopyImageRequested(bytes.clone()))
+}
+
+/// Apply [`ExportQrDialogMsg::CopyImageSucceeded`] — clear any
+/// prior inline failure body so a stale error never survives a
+/// retry. The staged PNG bytes stay parked on
+/// [`ExportQrDialogState::staged_png`] so a follow-up copy reuses
+/// them. The success toast is raised by `AppModel` against its
+/// `adw::ToastOverlay` (the dialog has no toast surface of its
+/// own), so this reducer is the inline-error-clear half of the
+/// success path.
+pub fn apply_msg_copy_image_succeeded(state: &mut ExportQrDialogState) {
+    state.copy_image_error = None;
+}
+
+/// Apply [`ExportQrDialogMsg::CopyImageFailed`] — park `message`
+/// in [`ExportQrDialogState::copy_image_error`] for inline
+/// rendering on Page 2. `staged_png` is left untouched so the user
+/// can retry without a fresh Show-QR press.
+///
+/// The reducer **does not** emit any output: image copies are
+/// user-initiated paste-ables, not OTP codes, and must never arm
+/// [`crate::clipboard_clear::schedule_copy`]. Pinned by
+/// `apply_msg_copy_image_failure_does_not_arm_clipboard_clear`.
+pub fn apply_msg_copy_image_failed(state: &mut ExportQrDialogState, message: String) {
+    state.copy_image_error = Some(message);
 }
 
 /// Drop the staged Page-2 buffers and reset the visible page back
@@ -1074,6 +1213,7 @@ fn drop_staged_buffers(state: &mut ExportQrDialogState) {
     state.show_qr_error = None;
     state.save_error = None;
     state.save_warning = None;
+    state.copy_image_error = None;
 }
 
 /// Apply an [`ExportQrDialogMsg`] to the [`ExportQrDialogState`] and
@@ -1103,17 +1243,21 @@ pub fn apply_msg(
             apply_msg_ack_toggled(state, active);
             None
         }
-        // `ShowQr` and the two `SaveAs*Pressed` variants are pure
-        // view-layer triggers — the `SimpleComponent` opens a
-        // `gtk::FileDialog::save` from the `connect_clicked`
-        // handler (for the Save variants) or emits
-        // [`ExportQrDialogOutput::ShowQrRequested`] (for `ShowQr`).
-        // All three reducer arms collapse onto `None` so the
+        // `ShowQr`, the two `SaveAs*Pressed` variants, and
+        // `CopyImage` are pure view-layer triggers — the
+        // `SimpleComponent` opens a `gtk::FileDialog::save` from
+        // the `connect_clicked` handler (for the Save variants),
+        // emits [`ExportQrDialogOutput::ShowQrRequested`] (for
+        // `ShowQr`), or emits
+        // [`ExportQrDialogOutput::CopyImageRequested`] (for
+        // `CopyImage`, via [`compose_copy_image_request_output`]).
+        // All four reducer arms collapse onto `None` so the
         // dispatch table stays exhaustive without spurious state
         // churn.
         ExportQrDialogMsg::ShowQr
         | ExportQrDialogMsg::SaveAsPngPressed
-        | ExportQrDialogMsg::SaveAsSvgPressed => None,
+        | ExportQrDialogMsg::SaveAsSvgPressed
+        | ExportQrDialogMsg::CopyImage => None,
         ExportQrDialogMsg::ShowQrSucceeded(bytes) => {
             apply_msg_show_qr_succeeded(state, bytes);
             None
@@ -1148,6 +1292,14 @@ pub fn apply_msg(
         }
         ExportQrDialogMsg::SaveCompleted(completion) => {
             apply_msg_save_completed(state, completion);
+            None
+        }
+        ExportQrDialogMsg::CopyImageSucceeded => {
+            apply_msg_copy_image_succeeded(state);
+            None
+        }
+        ExportQrDialogMsg::CopyImageFailed(message) => {
+            apply_msg_copy_image_failed(state, message);
             None
         }
     }
@@ -1409,6 +1561,20 @@ impl SimpleComponent for ExportQrDialogComponent {
                             set_label: model.state.save_warning.as_deref().unwrap_or(""),
                         },
 
+                        // Inline `Copy image` error rendered when
+                        // `gdk::Clipboard::set_content` returned an
+                        // error for a prior `Copy image` press.
+                        #[name = "copy_image_error_label"]
+                        gtk::Label {
+                            set_wrap: true,
+                            set_xalign: 0.0,
+                            add_css_class: "error",
+                            #[watch]
+                            set_visible: model.state.copy_image_error.is_some(),
+                            #[watch]
+                            set_label: model.state.copy_image_error.as_deref().unwrap_or(""),
+                        },
+
                         // Inline overwrite gate — visible only when
                         // the picked destination already exists on
                         // disk per `Path::try_exists`. Mirrors the
@@ -1455,15 +1621,28 @@ impl SimpleComponent for ExportQrDialogComponent {
                                 },
                             },
 
-                            // `Copy image` lands wired in the Phase 6
-                            // "Copy image action" commit; the button
-                            // ships now so the footer layout is
-                            // stable across the Phase 5 / Phase 6
-                            // split.
+                            // `Copy image` dispatches
+                            // `ExportQrDialogMsg::CopyImage`; the
+                            // `SimpleComponent::update` arm
+                            // forwards
+                            // `ExportQrDialogOutput::CopyImageRequested`
+                            // (via `compose_copy_image_request_output`)
+                            // to `AppModel`, which owns the live
+                            // `gdk::Clipboard` handle and runs
+                            // `set_content` on the main loop.
+                            // Sensitivity guards against a state
+                            // drift where the button is reachable
+                            // without staged PNG bytes (in
+                            // practice Page 2 is only mounted
+                            // after a successful Show-QR render).
                             #[name = "copy_image_button"]
                             gtk::Button {
                                 set_label: format_export_qr_dialog_copy_image_label(),
-                                set_sensitive: false,
+                                #[watch]
+                                set_sensitive: compose_copy_image_button_sensitive(&model.state),
+                                connect_clicked[sender] => move |_| {
+                                    sender.input(ExportQrDialogMsg::CopyImage);
+                                },
                             },
 
                             #[name = "done_button"]
@@ -1505,6 +1684,22 @@ impl SimpleComponent for ExportQrDialogComponent {
         // matching reducer arm.
         if matches!(msg, ExportQrDialogMsg::ShowQr) {
             let _ = sender.output(ExportQrDialogOutput::ShowQrRequested(self.state.account_id));
+        }
+        // `CopyImage` needs the live `gdk::Clipboard` handle —
+        // emit `ExportQrDialogOutput::CopyImageRequested(bytes)`
+        // so `AppModel` can wrap the staged PNG in
+        // `gdk::ContentProvider::for_bytes(COPY_IMAGE_CLIPBOARD_MIME_TYPE, ...)`
+        // and call `gdk::Clipboard::set_content` on the main loop.
+        // `compose_copy_image_request_output` returns `None` when
+        // `staged_png` is empty (defensive — the button is
+        // desensitized in that state); skip the output dispatch
+        // in that case. `apply_msg` collapses `CopyImage` onto
+        // `None`, so no double-output races with the matching
+        // reducer arm.
+        if matches!(msg, ExportQrDialogMsg::CopyImage) {
+            if let Some(output) = compose_copy_image_request_output(&self.state) {
+                let _ = sender.output(output);
+            }
         }
         if let Some(output) = apply_msg(&mut self.state, msg) {
             // Send failures mean `AppModel` has already dropped the

@@ -3124,6 +3124,44 @@ impl SimpleComponent for AppModel {
                     }));
                 }
             }
+            AppMsg::ExportQrDialogAction(ExportQrDialogOutput::CopyImageRequested(bytes)) => {
+                // User pressed Page-2 `Copy image`. Wrap the staged
+                // PNG bytes in a `glib::Bytes` →
+                // `gdk::ContentProvider::for_bytes(
+                //   COPY_IMAGE_CLIPBOARD_MIME_TYPE, ...)`
+                // and call `gdk::Clipboard::set_content(...)` on
+                // the main loop. Image copies are user-initiated
+                // paste-ables, not OTP codes, so this path does
+                // NOT call `clipboard_clear::schedule_copy` —
+                // pinned by
+                // `apply_msg_copy_image_failure_does_not_arm_clipboard_clear`.
+                //
+                // The dialog cannot reach the live `gdk::Clipboard`
+                // handle itself, so the round trip is
+                // `Dialog → CopyImageRequested → AppModel →
+                //  CopyImageSucceeded | CopyImageFailed → Dialog`.
+                let clipboard = WidgetExt::display(&self.content).clipboard();
+                let glib_bytes = glib::Bytes::from(bytes.as_slice());
+                let provider = gtk::gdk::ContentProvider::for_bytes(
+                    crate::export_qr_dialog::COPY_IMAGE_CLIPBOARD_MIME_TYPE,
+                    &glib_bytes,
+                );
+                let result = clipboard.set_content(Some(&provider));
+                if let Some(controller) = self.export_qr_dialog.as_ref() {
+                    match result {
+                        Ok(()) => {
+                            controller.emit(ExportQrDialogMsg::CopyImageSucceeded);
+                            self.show_toast(
+                                &sender,
+                                crate::export_qr_dialog::format_export_qr_dialog_copy_image_success_toast(),
+                            );
+                        }
+                        Err(err) => {
+                            controller.emit(ExportQrDialogMsg::CopyImageFailed(err.to_string()));
+                        }
+                    }
+                }
+            }
             AppMsg::ExportQrDialogAction(
                 ExportQrDialogOutput::Cancel | ExportQrDialogOutput::Close,
             ) => {
