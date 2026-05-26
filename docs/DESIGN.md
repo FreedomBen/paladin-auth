@@ -920,6 +920,7 @@ impl Vault {
     pub fn rename(&mut self, id: AccountId, label: &str, now: SystemTime) -> Result<()>;
     pub fn edit_account_metadata(&mut self, id: AccountId, edit: AccountEdit, now: SystemTime) -> Result<()>;  // Multi-field non-cryptographic edit (label / issuer / icon_hint). See `AccountEdit` below. Reuses §4.1 validation per supplied field. `rename` is the label-only shorthand; both bump `updated_at` and route through `mutate_and_save`.
     pub fn find_duplicate(&self, account: &ValidatedAccount) -> Option<&Account>;  // exact (secret, issuer, label) collision helper for single-entry add flows
+    pub fn find_duplicate_after_edit(&self, id: AccountId, edit: &AccountEdit) -> Option<&Account>;  // companion to `find_duplicate` for edit flows: projects the would-be post-edit (secret, issuer, label) for `id` (secret is never edited) and runs the same byte-for-byte / case-sensitive comparison, skipping the account at `id` so an unchanged self-comparison never reports a collision. Returns `None` for unknown `id`. Used by CLI `paladin edit`, TUI Edit modal, and GUI `EditDialog` to render `duplicate_account` before submission.
     pub fn import_accounts(&mut self, accounts: Vec<ValidatedAccount>, policy: ImportConflict, now: SystemTime) -> Result<ImportReport>;  // applies the §5 merge policy
     pub fn totp_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;       // TOTP only; errors on HOTP entries
     pub fn totp_next_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;  // TOTP only; code for the next window (`((now/period)+1)*period`); errors on HOTP entries
@@ -1054,9 +1055,12 @@ The non-secret projection types (`AccountSummary`, `Code`,
 `ImportReport`, `ImportWarning`, `VaultStatus`, `VaultSettings`,
 `Algorithm`, `AccountKindSummary`, `Argon2Params`, `QrRenderOptions`,
 `SettingKey`, `SettingPatch`, `IconHintInput`, `AccountKindInput`,
-`AccountQuery`, `InitPrecheck`, `AccountId`) are also `Sync`. Secret-bearing types
+`AccountEdit`, `AccountQuery`, `InitPrecheck`, `AccountId`) are also
+`Sync` — `AccountEdit` carries no secret bytes (only `label` /
+`issuer` / `icon_hint` projections), so it sits with the non-secret
+projection types here. Secret-bearing types
 (`Vault`, `Store`, `Account`, `Secret`, `EncryptionOptions`,
-`AccountInput`, `AccountEdit`, `ValidatedAccount`, `VaultLock`, `VaultInit`,
+`AccountInput`, `ValidatedAccount`, `VaultLock`, `VaultInit`,
 `PaladinError`) are deliberately *not* asserted `Sync` — `SecretString`
 is `!Sync` in `secrecy` and core does not promote any secret-bearing
 type past that posture. CI also pins this decision so a future change

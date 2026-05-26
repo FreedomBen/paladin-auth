@@ -29,7 +29,7 @@ crates/paladin-core/
 ├── src/
 │   ├── lib.rs            # re-exports public surface from §4.7
 │   ├── error.rs          # PaladinError + Result alias; carries core-returnable §5 error_kind values verbatim so the CLI can emit them under --json without renaming or mapping
-│   ├── vault.rs          # Vault impl: add/remove/iter/rename/import_accounts/totp_code/totp_next_code/hotp_*; save/mutate_and_save; is_encrypted() mode getter; passphrase set/change/remove transitions with rollback; AccountSummary projection via summaries()/Account::summary()
+│   ├── vault.rs          # Vault impl: add/remove/iter/rename/edit_account_metadata/import_accounts/totp_code/totp_next_code/hotp_*; save/mutate_and_save; is_encrypted() mode getter; passphrase set/change/remove transitions with rollback; AccountSummary projection via summaries()/Account::summary()
 │   ├── text.rs           # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning helpers (CLI / TUI / GUI parity); fixture-pinned wording
 │   ├── ui_contract.rs    # HOTP_REVEAL_SECS, QR_RGBA_MAX_BYTES, TICK_INTERVAL_MS (250 ms TOTP gauge / clipboard-staleness tick shared by TUI + GTK), AUTO_LOCK_SECS_MIN/MAX (30 / 86_400), CLIPBOARD_CLEAR_SECS_MIN/MAX (5 / 600). All shared front-end constants live here so TUI / GUI never hard-code them.
 │   ├── domain/
@@ -88,6 +88,7 @@ crates/paladin-core/
     ├── vault_account_id_errors.rs       # invalid / unknown AccountId rejection per command
     ├── vault_find_duplicate.rs          # duplicate-account detection on add / rename
     ├── vault_rename.rs                  # rename validation + persistence + idempotency
+    ├── vault_edit_account_metadata.rs   # AccountEdit validation + Vault::edit_account_metadata mutator (Phase M); rename-via-edit byte-identical-error refactor lock
     ├── vault_hotp_advance.rs            # hotp_advance persists and returns the pre-advance counter; peek and totp_code never mutate
     ├── vault_otp_codes.rs               # totp_code / totp_next_code / hotp_peek surface contracts
     ├── vault_import_accounts.rs         # Vault::import_accounts merge policies × ImportReport bucket assignments
@@ -1761,7 +1762,9 @@ gate is extended to cover `AccountEdit`. Independent of Phase L
 work or alongside it. `Vault::rename` stays as the label-only
 convenience method and, after this phase, is reimplemented
 internally on top of `edit_account_metadata` so there is exactly
-one mutation path through the validator and `mutate_and_save`.
+one `&mut self` mutation path through the validator. Both
+mutators remain caller-persisted via `Vault::mutate_and_save`,
+matching the existing `add` / `remove` / `rename` pattern.
 
 - [ ] **`AccountEdit` struct.** Public type added to the §4.7 surface
   per DESIGN.md. Three fields: `label: Option<String>`,
@@ -1781,23 +1784,40 @@ one mutation path through the validator and `mutate_and_save`.
   helpers per the matching `AccountEdit` field and returns
   `validation_error` with the offending field name on the first
   failure (consistent with `validate_manual`'s per-field error
-  shape). The `now` parameter is unused today but is required so
-  the signature stays stable when (post-v0.2) we add a freshness
-  check that rejects `updated_at` in the future. The validator does
-  **not** reject an empty `AccountEdit` — that decision belongs to
-  `Vault::edit_account_metadata` so front ends can drive per-field
-  rendering against a draft that hasn't yet committed to a field.
-  Errors include the `field` name (`"label"`, `"issuer"`,
-  `"icon_hint"`) and the typed `reason` from the underlying
-  validator (`"empty"`, `"too_long"`, `"invalid_slug"`, etc.).
+  shape). The `prior` and `now` parameters are currently unused
+  but are required so the signature stays stable when (post-v0.2)
+  we add cross-field invariants — `prior` reserves room for
+  rules that compare the proposed edit against the existing
+  account state (e.g. "rename must preserve the canonical match
+  key when issuer is `None`"), and `now` reserves room for a
+  freshness check that rejects an `updated_at` value drifted
+  beyond an acceptable clock skew. Keeping both parameters now
+  avoids a breaking signature change once those rules land. The
+  validator does **not** reject an empty `AccountEdit` — that
+  decision belongs to `Vault::edit_account_metadata` so front ends
+  can drive per-field rendering against a draft that hasn't yet
+  committed to a field. Errors include the `field` name
+  (`"label"`, `"issuer"`, `"icon_hint"`) and the typed `reason`
+  from the underlying validator (`"empty"`, `"too_long"`,
+  `"invalid_slug"`, etc.).
 
 - [ ] **`Vault::edit_account_metadata(id, edit, now)` mutator.**
-  Single public mutator. Resolves `id`, returns `invalid_state`
-  (`operation: "edit_account_metadata"`,
+  Single public mutator. Routes through a private inner helper
+  `fn edit_metadata_with_operation(&mut self, id: AccountId,
+  edit: AccountEdit, now: SystemTime, operation: &'static str) ->
+  Result<()>` that owns every fallible step so the `operation`
+  field on `invalid_state` and `time_range` errors is set by the
+  caller — the public `edit_account_metadata` passes
+  `"edit_account_metadata"` and the post-refactor `rename` passes
+  `"rename"` (see below). The public mutator resolves `id`, returns
+  `invalid_state` (`operation: "edit_account_metadata"`,
   `state: "account_not_found"`) when no account exists for `id`
   (matches the existing `rename` shape). Rejects an empty
   `AccountEdit` (every field `None`) with `validation_error`
-  (`field: "edit"`, `reason: "empty"`). Calls `validate_account_edit`
+  (`field: "edit"`, `reason: "empty"`). Validates `now` via
+  `system_time_to_secs_for(operation, now)` so pre-epoch / year-9999
+  cap inputs surface as `time_range` before any mutation —
+  parity with `rename`. Calls `validate_account_edit`
   against the resolved `Account`; on validation failure returns the
   typed `validation_error` without mutating. On validation success
   applies the present fields to the account, derives the post-edit
@@ -1808,18 +1828,44 @@ one mutation path through the validator and `mutate_and_save`.
   `Vault::mutate_and_save` for atomic persistence + rollback — same
   pattern as `rename` / `add` / `remove`.
 
+- [ ] **`Vault::find_duplicate_after_edit(id, edit) -> Option<&Account>`.**
+  Companion to the existing `find_duplicate(&ValidatedAccount)` so
+  GTK `EditDialog`, TUI Edit modal, and CLI `paladin edit` flows
+  can detect `(secret, issuer, label)` collisions before
+  submitting the edit. The helper computes the would-be post-edit
+  `(secret, issuer, label)` for the account identified by `id`
+  (secret is never edited so it comes from the resolved
+  `Account`; `issuer` and `label` are derived from the
+  `AccountEdit` tri-state against the prior values) and runs the
+  same byte-for-byte / case-sensitive comparison as
+  `find_duplicate`, **skipping the account at `id`** so an
+  unchanged self-comparison never reports a collision. Returns
+  `None` for an unknown `id` (front ends already handle the
+  account-not-found path before opening the dialog; if they
+  haven't, the subsequent `edit_account_metadata` call surfaces
+  `invalid_state` `account_not_found`). The helper is
+  `&self` and never mutates. Re-exported at the crate root and
+  asserted `Send + Sync` (it carries no state). DESIGN.md §4.7 is
+  updated to list this method alongside `find_duplicate`.
+
 - [ ] **`Vault::rename` reimplementation on top of
   `edit_account_metadata`.** Internal refactor: the existing
   `Vault::rename(id, label, now)` body is replaced with a call to
-  `self.edit_account_metadata(id,
+  `self.edit_metadata_with_operation(id,
   AccountEdit { label: Some(label.into()), ..Default::default() },
-  now)`. Public signature, error kinds, and `updated_at`-on-same-
-  label semantics all stay byte-identical so `paladin rename`, the
-  TUI Rename modal, and existing test inventory keep passing without
-  churn. A CI-locked semantic test asserts the rename path's
-  behavior is unchanged before and after the refactor.
+  now, "rename")` so the `operation` field on every error
+  (`invalid_state` `account_not_found`, `time_range`
+  pre-epoch / year-9999 cap, `validation_error` from
+  `validate_label`) stays exactly `"rename"`. Public signature,
+  error kinds, and stable error extra fields (including the
+  `operation` tag) all stay byte-identical so `paladin rename`,
+  the TUI Rename modal, and existing test inventory keep passing
+  without churn. A CI-locked semantic test asserts the rename
+  path's full error surface is unchanged before and after the
+  refactor.
 
-- [ ] **Tests — `AccountEdit` validation.** Cover each editable
+- [ ] **Tests — `AccountEdit` validation.** Land in
+  `tests/vault_edit_account_metadata.rs`. Cover each editable
   field independently: label empty / overlong / valid; issuer set /
   clear / invalid; icon-hint slug invalid / `none` clears /
   `Default` re-derives / explicit slug; combined-field happy paths
@@ -1827,7 +1873,8 @@ one mutation path through the validator and `mutate_and_save`.
   per-field validator-error fixtures from Phase B so the wire shapes
   stay aligned.
 
-- [ ] **Tests — `Vault::edit_account_metadata` mutator.** Cover
+- [ ] **Tests — `Vault::edit_account_metadata` mutator.** Land in
+  `tests/vault_edit_account_metadata.rs`. Cover
   account-not-found (`invalid_state`), empty-edit
   (`validation_error` (`field: "edit"`, `reason: "empty"`)), each
   single-field happy path, multi-field happy path, the "leave
@@ -1849,11 +1896,46 @@ one mutation path through the validator and `mutate_and_save`.
   `updated_at` all roll back). Mirror Phase G's rename-rollback test
   shape so the two mutators share one rollback-correctness contract.
 
-- [ ] **Tests — Send assertion.** Extend `tests/send_assertions.rs`
-  with a `const _: fn() = ||
-  { fn assert_send<T: Send>() {} assert_send::<AccountEdit>(); }`
-  block so a future field change that breaks `Send` fails the build
-  per Phase J's contract.
+- [ ] **Tests — `Vault::find_duplicate_after_edit`.** Land in
+  `tests/vault_edit_account_metadata.rs`. Cover: no-edit
+  self-comparison returns `None` (the account at `id` is skipped);
+  unknown `id` returns `None`; label-only edit producing a
+  `(secret, issuer, label)` triple equal to another account
+  returns `Some(&that_account)`; issuer-clear edit that produces a
+  triple equal to an existing `issuer = None` account returns
+  `Some(&that_account)`; issuer-set edit that produces a triple
+  equal to an existing account with the new issuer returns
+  `Some(&that_account)`; combined label-and-issuer edit; an edit
+  that leaves both label and issuer untouched still returns
+  `None` (self-skip covers the unchanged case). Case-sensitive
+  comparison parity with `find_duplicate` (mixed-case issuer not
+  matching) is asserted.
+  In `tests/vault_edit_account_metadata.rs` (or the existing
+  `tests/vault_rename.rs` as the natural home — pick one to avoid
+  duplication), pin that the post-refactor `Vault::rename`
+  surfaces the same `PaladinError` variants and the same
+  stable extra fields (notably the `operation` tag on
+  `invalid_state` and `time_range`) as the pre-refactor
+  implementation. This locks the "Public signature, error kinds,
+  and `updated_at`-on-same-label semantics all stay
+  byte-identical" claim against a regression where the operation
+  field silently flips to `"edit_account_metadata"`.
+
+- [ ] **Tests — Send / Sync assertions.** Extend
+  `tests/send_assertions.rs` with `assert_send::<AccountEdit>()`
+  and `assert_impl_all!(AccountEdit: Sync)` per the Phase J
+  convention (every J.3 type is `Sync` except `Store`). A future
+  field change that breaks either trait fails the build.
+
+- [ ] **Tests — `tests/error_matrix.rs` extension.** Add two new
+  rows to the Phase J matrix: (1) the
+  `invalid_state` pair `edit_account_metadata /
+  account_not_found`, and (2) the
+  `validation_error` site `field: "edit"`, `reason: "empty"`.
+  These are the only new core-returnable §5 surface entries Phase M
+  introduces; the per-field `validation_error` rows for `label` /
+  `issuer` / `icon_hint` are already covered by Phase B's manual-add
+  matrix and do not need duplicate rows.
 
 - [ ] **Tests — public-api snapshot diff.** Run
   `cargo public-api --diff` against the prior snapshot and commit
@@ -2185,6 +2267,31 @@ is a separate `#[test]` or table-driven case family.
   determinism, `parse_setting_patch` malformed-value rejection
   matrix, proptest case-count bump plus TOTP idempotency property,
   and 10,000-account plaintext round-trip stress.
+- [ ] Phase M per-account metadata edit tests — each enumerated as
+  its own Phase M checklist entry above: `AccountEdit` validation
+  matrix (label / issuer / icon_hint independent and combined,
+  first-failure-wins ordering); `Vault::edit_account_metadata`
+  mutator covering `account_not_found` `invalid_state`, empty-edit
+  `validation_error` (`field: "edit"`, `reason: "empty"`),
+  single-field and multi-field happy paths, the `issuer` "leave
+  untouched" tri-state, the `IconHintInput::Default` re-derivation
+  against the post-edit issuer, the no-op-but-non-empty
+  `updated_at` bump, and validation rejection preserving the prior
+  `Account` byte-for-byte; `mutate_and_save` pre-commit rollback
+  restoring `label` / `issuer` / `icon_hint` / `updated_at` under
+  the `test-fault-injection` feature; the `Vault::rename`
+  byte-identical-error refactor lock; `AccountEdit` `Send` and
+  `Sync` assertions added to the Phase J matrix;
+  `tests/error_matrix.rs` rows for the new
+  `invalid_state` (`edit_account_metadata` / `account_not_found`)
+  pair and the new `validation_error` (`field: "edit"`,
+  `reason: "empty"`) site; `Vault::find_duplicate_after_edit`
+  coverage (self-skip, unknown-id, label-only / issuer-clear /
+  issuer-set / combined-edit collisions, and case-sensitive
+  parity with `find_duplicate`); and the `cargo public-api`
+  snapshot adding exactly the new surface
+  (`AccountEdit`, `validate_account_edit`,
+  `Vault::edit_account_metadata`, `Vault::find_duplicate_after_edit`).
 - [x] Phase L per-account QR export tests — each enumerated as its
   own Phase L checklist entry above: PNG / SVG / ANSI URI-round-trip
   through `rqrr` against the matching slice of
