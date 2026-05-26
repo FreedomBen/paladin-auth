@@ -1370,6 +1370,41 @@ fn build_staged_png_texture(state: &ExportQrDialogState) -> Option<gdk::Texture>
     gdk::Texture::from_bytes(&glib::Bytes::from(bytes.as_slice())).ok()
 }
 
+/// Install a bubble-phase [`gtk::EventControllerKey`] on the
+/// dialog root that posts [`ExportQrDialogMsg::CancelPressed`]
+/// when the user presses a bare Escape.
+///
+/// Bubble (default) phase means focused child widgets see the
+/// key event first; only an unconsumed press bubbles up to this
+/// dispatcher. That keeps Escape from being stolen out from
+/// under any sub-control that might want to handle it locally
+/// (e.g. the inline overwrite-ack `SwitchRow`) while still making
+/// the dialog dismissable from any focused widget.
+///
+/// Routing `ExportQrDialogMsg::CancelPressed` matches the Page-1
+/// Cancel button (`cancel_button.connect_clicked` in the view!
+/// macro), so the staged-buffer wipe and
+/// `ExportQrDialogOutput::Cancel` forwarding flow through
+/// `apply_msg`'s single Cancel arm regardless of dismissal
+/// source.
+///
+/// Reuses [`crate::add_account::dispatch_root_dismiss_key`] for
+/// the bare-Escape truth table so the chord-modifier / other-key
+/// dispatch stays in lock-step with the `AddAccount` dialog
+/// without duplicating the test surface.
+fn wire_dismiss_controller(root: &adw::Dialog, sender: &ComponentSender<ExportQrDialogComponent>) {
+    let controller = gtk::EventControllerKey::new();
+    let dismiss_sender = sender.clone();
+    controller.connect_key_pressed(move |_, keyval, _, mods| {
+        if crate::add_account::dispatch_root_dismiss_key(keyval, mods) {
+            dismiss_sender.input(ExportQrDialogMsg::CancelPressed);
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    root.add_controller(controller);
+}
+
 /// Per-account QR export dialog component.
 ///
 /// Wraps the [`ExportQrDialogState`] reducer in a relm4
@@ -1669,6 +1704,7 @@ impl SimpleComponent for ExportQrDialogComponent {
             state: ExportQrDialogState::new(init),
         };
         let widgets = view_output!();
+        wire_dismiss_controller(&root, &sender);
         ComponentParts { model, widgets }
     }
 

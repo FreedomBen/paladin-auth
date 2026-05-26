@@ -1523,3 +1523,83 @@ fn apply_msg_close_clears_copy_image_error() {
     let _ = apply_msg(&mut state, ExportQrDialogMsg::Close);
     assert!(state.copy_image_error.is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Group K — Bubble-phase Escape dismissal (Phase 7)
+// ---------------------------------------------------------------------------
+//
+// The plan requires reusing `add_account::dispatch_root_dismiss_key`
+// rather than duplicating its truth table. These tests pin the
+// behaviour of the helper as wired into the QR-export dialog: bare
+// Escape routes to `ExportQrDialogMsg::CancelPressed`; chord
+// modifiers and other keys propagate untouched.
+
+#[test]
+fn dispatch_root_dismiss_key_routes_bare_escape_to_cancel_pressed() {
+    use paladin_gtk::add_account::dispatch_root_dismiss_key;
+    use relm4::gtk::gdk;
+
+    // Bare Escape (no modifiers) — must route to dismissal.
+    assert!(dispatch_root_dismiss_key(
+        gdk::Key::Escape,
+        gdk::ModifierType::empty()
+    ));
+}
+
+#[test]
+fn dispatch_root_dismiss_key_ignores_escape_with_chord_modifiers() {
+    use paladin_gtk::add_account::dispatch_root_dismiss_key;
+    use relm4::gtk::gdk;
+
+    for mods in [
+        gdk::ModifierType::CONTROL_MASK,
+        gdk::ModifierType::ALT_MASK,
+        gdk::ModifierType::SHIFT_MASK,
+        gdk::ModifierType::SUPER_MASK,
+        gdk::ModifierType::HYPER_MASK,
+        gdk::ModifierType::META_MASK,
+    ] {
+        assert!(
+            !dispatch_root_dismiss_key(gdk::Key::Escape, mods),
+            "Escape with {mods:?} must propagate untouched"
+        );
+    }
+}
+
+#[test]
+fn dispatch_root_dismiss_key_ignores_other_keys() {
+    use paladin_gtk::add_account::dispatch_root_dismiss_key;
+    use relm4::gtk::gdk;
+
+    for keyval in [
+        gdk::Key::Return,
+        gdk::Key::space,
+        gdk::Key::Tab,
+        gdk::Key::a,
+        gdk::Key::F1,
+    ] {
+        assert!(
+            !dispatch_root_dismiss_key(keyval, gdk::ModifierType::empty()),
+            "{keyval:?} must propagate untouched"
+        );
+    }
+}
+
+#[test]
+fn escape_dismissal_routes_through_cancel_pressed_msg() {
+    // The dispatched message must match the Cancel-button path so
+    // the secret-wipe / `ExportQrDialogOutput::Cancel` flow is
+    // identical regardless of dismissal surface. Drive the
+    // reducer with `CancelPressed` and assert it clears the
+    // staged buffers and emits the matching Output.
+    let mut state = fixture_state();
+    state.ack_revealed = true;
+    state.staged_png = Some(Zeroizing::new(vec![0x89, b'P', b'N', b'G']));
+    state.staged_svg = Some(Zeroizing::new("<svg/>".to_string()));
+
+    let out = apply_msg(&mut state, ExportQrDialogMsg::CancelPressed);
+
+    assert_eq!(out, Some(ExportQrDialogOutput::Cancel));
+    assert!(state.staged_png.is_none());
+    assert!(state.staged_svg.is_none());
+}

@@ -1786,13 +1786,28 @@ by ticking it.
   `drop_staged_buffers` / `apply_msg_ack_toggled(false)` /
   `CancelPressed` / `Close` all clear `copy_image_error` so a
   stale failure never survives a re-acked retry.
-* [ ] **Bubble-phase Escape dismissal.** Install a
+* [x] **Bubble-phase Escape dismissal.** Install a
   `gtk::EventControllerKey` mirroring
   `dispatch_root_dismiss_key` so bare `Escape` (no modifiers)
   cancels the dialog through the same secret-wipe /
   `ExportQrDialogOutput::Cancel` path as the Cancel button.
   Reuse the existing `dispatch_root_dismiss_key` helper rather
   than duplicating its truth table.
+  *Implementation note (Phase 7):* shipped via a private
+  `wire_dismiss_controller(&adw::Dialog, &ComponentSender<…>)`
+  helper in `src/export_qr_dialog.rs` that delegates to
+  `crate::add_account::dispatch_root_dismiss_key` for the truth
+  table; bare Escape posts `ExportQrDialogMsg::CancelPressed`
+  (the same reducer arm the Cancel button hits, so the
+  staged-buffer wipe + `ExportQrDialogOutput::Cancel` flow stays
+  uniform). Called from `SimpleComponent::init` after
+  `view_output!()`. Coverage in `tests/export_qr_dialog_logic.rs`:
+  `dispatch_root_dismiss_key_routes_bare_escape_to_cancel_pressed`,
+  `dispatch_root_dismiss_key_ignores_escape_with_chord_modifiers`,
+  `dispatch_root_dismiss_key_ignores_other_keys`, and
+  `escape_dismissal_routes_through_cancel_pressed_msg` (pinned at
+  reducer level — drives `CancelPressed` and asserts the
+  staged-buffer drop + Cancel output emit).
 * [ ] **Auto-lock pruning.** Register
   `crate::export_qr_dialog::clear_for_lock` with the lock-
   transition pruning so an auto-lock fire drops the dialog
