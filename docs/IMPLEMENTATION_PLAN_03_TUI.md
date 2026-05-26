@@ -490,8 +490,9 @@ dismiss deliberately.
     - empty buffer AND prior issuer was `None` → `None` (leave untouched);
     - empty buffer AND prior issuer was `Some(_)` → `Some(None)` (implicit
       clear — matches CLI `--no-issuer`);
-    - buffer byte-equal to the prior issuer (after §4.1 issuer
-      normalization) → `None`;
+    - buffer, after §4.1 issuer normalization (trim Unicode
+      whitespace; empty becomes `None`), equals the prior issuer
+      → `None`;
     - any other non-empty buffer → `Some(Some(normalized))` and
       flows through `validate_issuer` for §4.1 rejection.
     `Ctrl+U` is an inline convenience that empties the row buffer in
@@ -508,30 +509,53 @@ dismiss deliberately.
     3. *No icon* →
        `Some(IconHintInput::Clear)`;
     4. *Slug: <text>* — enables a sibling `tui-input` row pre-populated
-       with the prior resolved slug-or-empty-string; submit routes
+       with the prior `icon_hint` slug (or the empty string when the
+       prior value was `None`); submit routes
        through `paladin_core::parse_icon_hint_token(slug)` so any
        invalid slug surfaces inline as
        `validation_error` (`field: "icon_hint"`, `reason: "invalid_slug"`)
-       and the buffer text round-trips losslessly when the user
-       re-opens the modal.
+       and a successfully saved slug round-trips losslessly into the
+       buffer the next time the user opens the modal (invalid input
+       that never reached core is discarded on modal close along with
+       the other row buffers).
     The selector always defaults to *Leave unchanged* on open so the
     user must affirmatively pick a different mode to mutate
     `icon_hint`; this prevents the pre-fill from silently re-deriving
     a slug for accounts whose prior `icon_hint` was `None`.
 
-  `Tab` / `Shift+Tab` traverse the three controls in document order
-  (Label → Issuer → Icon hint); `Enter` submits, validating each
-  present field through `validate_account_edit` and surfacing the
-  first failing field's typed `validation_error` inline beside its
-  row without closing.
+  `Tab` / `Shift+Tab` traverse the focusable controls in document
+  order. When the icon-hint selector is on *Leave unchanged* /
+  *Default from issuer* / *No icon* the cycle is three stops
+  (Label → Issuer → Icon hint); when the selector is on *Slug:*
+  the sibling slug `tui-input` row joins the cycle as a fourth
+  stop (Label → Issuer → Icon hint → Slug), with wrap-around in
+  both directions. Toggling the selector off *Slug:* skips the
+  now-disabled slug row on the next traversal and preserves the
+  slug buffer's text per the round-trip rule above. `Enter`
+  submits, running the assembled `AccountEdit` through
+  `validate_account_edit` and surfacing the first failing field's
+  typed `validation_error` inline beside its row without closing.
+  Before emitting `Effect::EditAccountMetadata`, the reducer calls
+  `Vault::find_duplicate_after_edit(id, &edit)`; a hit rejects with
+  the inline `duplicate_account` message rendered via
+  `format_duplicate_account_message(&existing_summary)` (parity
+  with the Add modal's duplicate channel) and the modal stays open
+  with row buffers intact. There is no "edit anyway" override:
+  DESIGN does not define one for the edit flow, so the user must
+  alter the projected `(issuer, label)` tuple (the secret is never
+  edited) before the modal will dispatch the effect.
   Successful submit wraps the assembled `AccountEdit` in
   `Vault::mutate_and_save` → `Vault::edit_account_metadata`, bumps
   `updated_at` even when every field equals its prior value (same
   contract as the Rename modal), and posts
   `StatusLine::Confirmation(format!("Edited {}.", summary_display_label(&summary)))`
-  on `Ok`, where `summary` is the post-edit `AccountSummary` returned
-  by `Vault::edit_account_metadata` — matching the Add / Remove
-  status-line shape. An
+  on `Ok`, where `summary` is the post-edit `AccountSummary` carried
+  by the `EffectResult::EditAccountMetadata` Ok-arm. Because
+  `Vault::edit_account_metadata` returns `Result<()>`, the executor
+  builds the summary itself with a post-save
+  `Vault::get(id).map(Account::summary)` projection and ships it on
+  the channel — same shape the Add / Remove channels already use
+  for their `summary_display_label`-driven status lines. An
   empty `AccountEdit` (every control projects to `None` per the
   rules above — label byte-equal to prior, issuer either matching
   prior or empty-on-prior-`None`, and icon-hint selector still on
@@ -862,7 +886,7 @@ v0.2-only rows are marked inline.
 | `a`                                | Open Add modal                                                                                        |
 | `r`                                | Open Remove confirmation                                                                              |
 | `R`                                | Open Rename modal (Shift+R; `r` stays bound to Remove)                                                |
-| `E` (Shift-e)                      | Open Edit modal for the focused row (v0.2; multi-field label / issuer / icon-hint editor)             |
+| `E` (Shift-e)                      | Open Edit modal for the focused row (v0.2; multi-field label / issuer / icon-hint editor); rejected silently while any other modal is open |
 | `i`                                | Open Import modal                                                                                     |
 | `e`                                | Open Export modal                                                                                     |
 | `Q` (Shift-q)                      | Open QR Export modal for the focused row (v0.2; warning-ack gate, ANSI body, Save-as-PNG / Save-as-SVG); rejected silently while any other modal is open |
@@ -1976,11 +2000,24 @@ ships in `paladin-core` and the TUI Edit modal lands.
   three controls pre-populated: label buffer = prior label, issuer
   buffer = prior issuer (`None` rendered as empty), icon-hint
   selector defaulted to *Leave unchanged* with the sibling slug
-  buffer pre-populated from the prior resolved slug-or-empty-string.
-- [ ] `Tab` / `Shift+Tab` cycle focus across the three controls in
-  document order (Label → Issuer → Icon hint); `Enter` submits and
-  `Esc` cancels (both clear every row buffer and reset the
-  icon-hint selector to *Leave unchanged*).
+  buffer pre-populated from the prior `icon_hint` slug (empty
+  string when the prior value was `None`).
+- [ ] `Tab` / `Shift+Tab` cycle focus across the focusable controls
+  in document order. With the icon-hint selector on *Leave
+  unchanged* / *Default from issuer* / *No icon* the cycle is three
+  stops (Label → Issuer → Icon hint); with the selector on *Slug:*
+  the sibling slug `tui-input` row joins as a fourth stop (Label →
+  Issuer → Icon hint → Slug). Two reducer tests cover the wrap-
+  around in each direction for both cycle lengths, plus a third
+  asserts that toggling the selector off *Slug:* on the next
+  traversal skips the now-disabled slug row without losing the
+  slug buffer's text. `Enter` submits and `Esc` cancels (both
+  clear every row buffer and reset the icon-hint selector to
+  *Leave unchanged*).
+- [ ] `Shift+E` while any other modal is open is silently
+  rejected — the existing modal stays open, the Edit modal does
+  not mount, and no effect is emitted. Mirrors the `Q` QR-Export
+  test shape (`shift_q_while_other_modal_open_is_silently_rejected`).
 - [ ] Per-field text editing routes through the shared
   `tui-input` walker; typing into a row clears that row's inline
   error. `←` / `→` on the icon-hint selector cycles its four
@@ -1989,6 +2026,36 @@ ships in `paladin-core` and the TUI Edit modal lands.
   value emits `Effect::EditAccountMetadata { path, account_id,
   edit: AccountEdit }` carrying only the changed fields populated;
   unchanged controls map to `None`.
+- [ ] Pre-submit duplicate check (reducer side): when the projected
+  `AccountEdit` would land the focused account on the same
+  `(secret, issuer, label)` tuple as another account in the vault,
+  the reducer surfaces the inline `duplicate_account` message
+  rendered through `format_duplicate_account_message(&existing_summary)`
+  and emits no effect; the modal stays open with row buffers and
+  the icon-hint selector intact so the user can revise.
+  Companion reducer tests cover both projection sources (label
+  divergence vs issuer divergence) and assert that an unchanged
+  self-comparison never fires (per
+  `Vault::find_duplicate_after_edit` skipping `id`).
+- [ ] Pre-submit duplicate check (executor side): an executor-side
+  test in `tests/effect_tests.rs` exercises the live
+  `Vault::find_duplicate_after_edit` wiring against a fixture vault
+  that contains a colliding sibling account, asserts the Effect is
+  short-circuited before `Vault::mutate_and_save`, and asserts the
+  on-disk vault is byte-identical before and after the rejected
+  edit.
+- [ ] `EffectResult::EditAccountMetadata` Ok-arm: when the executor
+  reports success, the reducer closes the Edit modal and publishes
+  `StatusLine::Confirmation(format!("Edited {}.", summary_display_label(&summary)))`
+  against the post-edit `AccountSummary` carried in the Ok payload
+  (built by the executor via a post-save `Vault::get(id).map(Account::summary)`
+  projection). Asserted by
+  `effect_result_edit_ok_closes_modal_with_status_line_confirmation`,
+  matching the Add (`effect_result_add_ok_sets_status_line_confirmation_with_display_label`)
+  and Remove status-line shape. A companion snapshot
+  `tests/view_snapshots.rs::snapshot_edit_modal_status_line_confirmation`
+  pins the post-close list-view frame with the confirmation text
+  visible in the status line.
 - [ ] Empty-edit submit (label buffer byte-equal to prior label,
   issuer buffer projects to `None` per the WYSIWYS rules, icon-hint
   selector still on *Leave unchanged*) surfaces the inline
@@ -2075,6 +2142,13 @@ ships in `paladin-core` and the TUI Edit modal lands.
   so the slug input row is captured as enabled and focused,
   visually distinguishing it from the disabled state under the
   other three selector options.
+- [ ] Snapshot test for the duplicate-account variant
+  (`tests/view_snapshots.rs::snapshot_edit_modal_duplicate_account`)
+  with the pre-submit `Vault::find_duplicate_after_edit` check
+  rejecting the projected edit, so the inline
+  `format_duplicate_account_message(&existing_summary)` text
+  renders in the modal body parallel to the Add modal's
+  `snapshot_add_modal_duplicate_account` fixture.
 
 ### Pre-commit save rollback (`tests/reducer_tests.rs`)
 
