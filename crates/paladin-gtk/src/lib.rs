@@ -30,6 +30,7 @@ pub mod clipboard_clear;
 pub mod column_view;
 pub mod effect_ownership;
 pub mod export_dialog;
+pub mod export_qr_dialog;
 pub mod gsettings;
 pub mod hotp_reveal;
 pub mod icon_resolution;
