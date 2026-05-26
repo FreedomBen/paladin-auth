@@ -2606,18 +2606,24 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::SettingsDialogAction(SettingsDialogOutput::Close) => {
-                // User dismissed the `AdwPreferencesDialog`. Drop the
-                // live controller so the widget is released and any
-                // in-flight pending spinner draft is discarded.
-                // `adw::PreferencesDialog` self-detaches from its
-                // toplevel parent on close, so no `self.content.remove`
-                // is needed — unlike `AddAccountComponent` /
-                // `RenameDialogComponent` / `RemoveDialogComponent`
-                // which are appended into the content tree directly.
+                // User dismissed the `AdwPreferencesDialog`. Call
+                // `force_close` *before* dropping the controller so
+                // the dialog is removed from its dialog-host parent —
+                // simply dropping the controller releases our refcount
+                // but leaves the dialog presented (the host still
+                // holds it), so an explicit Close button activation
+                // would appear to do nothing. The Escape / window-close
+                // path arrives here through `connect_closed` after the
+                // widget already detached itself, so `force_close` is
+                // a benign no-op there. Mirrors the precedent in the
+                // `PassphraseDialogOutput::Close` arm. The pending
+                // spinner draft zeroizes as the controller drops.
                 // Defensive: if the field is already `None`
                 // (controller swapped under us by a future race),
                 // this is a benign no-op.
-                self.settings_dialog = None;
+                if let Some(controller) = self.settings_dialog.take() {
+                    controller.widget().force_close();
+                }
             }
             AppMsg::SettingsDialogAction(SettingsDialogOutput::Submit(patch)) => {
                 // Toggle clicked or 500 ms debounce resolved with a
@@ -2760,28 +2766,43 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::ImportDialogAction(ImportDialogOutput::Close) => {
-                // User dismissed the `adw::Dialog`. Drop the live
-                // controller so the widget is released and any
-                // in-flight pending form draft (selected source
-                // path, format / conflict choice, bundle passphrase
-                // entry) is discarded. `adw::Dialog` self-detaches
-                // from its toplevel parent on close, so no
-                // `self.content.remove` is needed — unlike
-                // `AddAccountComponent` / `RenameDialogComponent` /
-                // `RemoveDialogComponent` which are appended into
-                // the content tree directly. Defensive: if the field
-                // is already `None` (controller swapped under us by
-                // a future race), this is a benign no-op.
-                self.import_dialog = None;
+                // User dismissed the `adw::Dialog` — either by Escape /
+                // window close / parent navigation routed through
+                // `connect_closed` (where the widget is already gone
+                // and `force_close` is a no-op), or by the post-success
+                // Dismiss button routed through
+                // `ImportDialogMsg::DismissCounts` (where the widget is
+                // still presented and must be closed here). Call
+                // `force_close` *before* dropping the controller so
+                // the dialog is removed from its dialog-host parent —
+                // simply dropping the controller releases our refcount
+                // but leaves the dialog presented (the host still
+                // holds it), so the next Cancel / Dismiss click would
+                // appear to do nothing. Mirrors the precedent in the
+                // `PassphraseDialogOutput::Close` arm. The pending
+                // form draft / bundle-passphrase entry zeroizes as
+                // the controller drops. Defensive: if the field is
+                // already `None` (controller swapped under us by a
+                // future race), this is a benign no-op.
+                if let Some(controller) = self.import_dialog.take() {
+                    controller.widget().force_close();
+                }
             }
             AppMsg::ImportDialogAction(ImportDialogOutput::Cancel) => {
                 // Explicit Cancel button activation. Treated the same
-                // as `Close`: drop the live controller so the widget
-                // tears down and any pending form draft / bundle-
-                // passphrase entry is discarded (the
+                // as `Close`: call `force_close` *before* dropping the
+                // controller so the dialog leaves its host's dialog
+                // stack (just dropping the controller leaves the
+                // widget presented because the host still holds a
+                // reference). Pending form draft / bundle-passphrase
+                // entry zeroizes as the controller drops (the
                 // `crate::secret_fields::SecretEntry` inside
-                // `ImportDialogState` zeroes on drop).
-                self.import_dialog = None;
+                // `ImportDialogState` zeroes on drop). Defensive: if
+                // the field is already `None` (controller swapped
+                // under us by a future race), this is a benign no-op.
+                if let Some(controller) = self.import_dialog.take() {
+                    controller.widget().force_close();
+                }
             }
             AppMsg::ImportDialogAction(ImportDialogOutput::Submit(payload)) => {
                 // Entry side of the `gio::spawn_blocking
@@ -3185,24 +3206,30 @@ impl SimpleComponent for AppModel {
                 // explicit Cancel button (`ExportDialogOutput::Cancel`),
                 // by Escape / window close (`ExportDialogOutput::Close`),
                 // or by the dialog's own post-success `Close` emitted
-                // from `WorkerCompleted(Success)`. All three drop the
-                // live controller so the widget is released and any
-                // in-flight pending form draft (selected destination
-                // path, format choice, overwrite acknowledgement,
-                // plaintext-warning acknowledgement, twice-confirm
-                // passphrase entries) is discarded; the variants stay
+                // from `WorkerCompleted(Success)`. Call `force_close`
+                // *before* dropping the controller so the dialog is
+                // removed from its dialog-host parent — simply dropping
+                // the controller releases our refcount but leaves the
+                // dialog presented (the host still holds it), so the
+                // Cancel / post-success Close click would appear to do
+                // nothing. The Escape / window-close path arrives here
+                // through `connect_closed` after the widget already
+                // detached itself, so `force_close` is a benign no-op
+                // there. Mirrors the precedent in the
+                // `PassphraseDialogOutput::Close` arm. The pending
+                // form draft (selected destination path, format choice,
+                // overwrite acknowledgement, plaintext-warning
+                // acknowledgement, twice-confirm passphrase entries)
+                // zeroizes as the controller drops; the variants stay
                 // distinct in
                 // [`crate::export_dialog::ExportDialogOutput`] so a
                 // future "Discard draft?" prompt can attach to one
-                // path without affecting the other. `adw::Dialog`
-                // self-detaches from its toplevel parent on close,
-                // so no `self.content.remove` is needed — unlike
-                // `AddAccountComponent` / `RenameDialogComponent` /
-                // `RemoveDialogComponent` which are appended into
-                // the content tree directly. Defensive: if the field
-                // is already `None` (controller swapped under us by
-                // a future race), this is a benign no-op.
-                self.export_dialog = None;
+                // path without affecting the other. Defensive: if the
+                // field is already `None` (controller swapped under us
+                // by a future race), this is a benign no-op.
+                if let Some(controller) = self.export_dialog.take() {
+                    controller.widget().force_close();
+                }
             }
             AppMsg::ExportDialogAction(ExportDialogOutput::Submit(payload)) => {
                 // Entry side of the `gio::spawn_blocking

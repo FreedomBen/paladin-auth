@@ -234,6 +234,23 @@ expected routing.
   * Tied to: `crates/paladin-gtk/src/import_dialog.rs`
     `connect_clicked` closures, `crates/paladin-gtk/src/app/model.rs`
     `lock_on_auto_lock_expiry`.
+- [ ] Cancel button dismisses the Import / Export / Settings dialog
+  on the first click.
+  * Expected: open the Import dialog from the application menu and
+    click Cancel — the dialog disappears immediately. Repeat for
+    the Export dialog and the Settings preferences dialog. Also
+    verify the Import post-success `Dismiss` button (after a
+    successful merge) and the Export post-success `Close` (after a
+    successful export) tear the dialog down on the first click.
+    Without the fix the controller dropped but the `adw::Dialog`
+    widget stayed presented because the dialog host kept its
+    reference, so the dialog appeared frozen.
+  * Tied to: `crates/paladin-gtk/src/app/model.rs`
+    `ImportDialogAction(Cancel|Close)`,
+    `ExportDialogAction(Cancel|Close)`,
+    `SettingsDialogAction(Close)` arms — all call
+    `controller.widget().force_close()` before dropping, mirroring
+    `PassphraseDialogAction(Close)`.
 
 Exports:
 
