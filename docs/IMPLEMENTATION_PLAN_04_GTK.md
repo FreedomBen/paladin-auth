@@ -1583,7 +1583,7 @@ by ticking it.
   `crates/paladin-core/Cargo.toml`. Update
   `crates/paladin-core/public-api.txt` to match. The core-side
   tests (DESIGN §10 "QR export") land in the same commit.
-* [ ] **Kebab menu order.** Extend
+* [x] **Kebab menu order.** Extend
   `account_list::build_kebab_menu_model` to append `Show QR…`
   between `Rename…` and `Remove…` targeting a new
   `row.show-qr` action; rename the lockstep test from
@@ -1593,7 +1593,7 @@ by ticking it.
   per-row `gio::SimpleActionGroup` in `install_row_action_group`
   with a closure that emits the new
   `AccountListOutput::OpenExportQrDialog(AccountId)` variant.
-* [ ] **`AccountListOutput::OpenExportQrDialog(AccountId)`.** Add
+* [x] **`AccountListOutput::OpenExportQrDialog(AccountId)`.** Add
   the variant and pin `account_list_output_open_export_qr_dialog_carries_account_id`
   in `tests/account_list_logic.rs`. Extend
   `dispatch_row_action` to route the new action name into the
