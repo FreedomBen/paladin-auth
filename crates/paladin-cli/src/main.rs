@@ -72,6 +72,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         },
         Command::Import(args) => commands::import::run(global, args),
         Command::Export(args) => commands::export::run(global, args),
+        Command::Qr(args) => commands::qr::run(global, args),
         Command::Settings { action } => match action {
             SettingsCommand::Get { key } => commands::settings::get(global, key.as_deref()),
             SettingsCommand::Set { key, value } => commands::settings::set(global, key, value),

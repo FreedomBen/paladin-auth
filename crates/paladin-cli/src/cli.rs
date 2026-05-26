@@ -99,6 +99,8 @@ pub enum Command {
     Import(ImportArgs),
     /// Export the vault to a file.
     Export(ExportArgs),
+    /// Render an account's `otpauth://` URI as a QR code (v0.2).
+    Qr(QrArgs),
     /// Read or modify vault settings.
     Settings {
         #[command(subcommand)]
@@ -288,6 +290,33 @@ pub struct ExportArgs {
     pub force: bool,
     #[command(flatten)]
     pub kdf: KdfArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct QrArgs {
+    /// Account query (label, issuer:label substring, or `id:<hex>` prefix).
+    pub query: String,
+    /// Write the rendered QR code to PATH (0600). Without --out, the
+    /// ANSI half-block render is printed to stdout.
+    #[arg(long, value_name = "PATH")]
+    pub out: Option<PathBuf>,
+    /// Output format. Defaults to png when --out is set, ansi otherwise.
+    #[arg(long, value_enum, value_name = "FORMAT")]
+    pub format: Option<QrFormatArg>,
+    /// Per-module pixel size for PNG / SVG output (default 8, range 1..=64).
+    /// Accepted but ignored for the ansi render.
+    #[arg(long, value_name = "PIXELS")]
+    pub module_size_px: Option<String>,
+    /// Overwrite an existing --out target.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum QrFormatArg {
+    Png,
+    Svg,
+    Ansi,
 }
 
 #[derive(Debug, Subcommand)]

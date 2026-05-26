@@ -234,6 +234,25 @@ pub fn write_export_success(
     )
 }
 
+/// Print the one-line success message for `paladin qr <query> --out
+/// <path>` to stdout. `format_label` is the §5 stable string
+/// (`"qr_png"` or `"qr_svg"`) and matches the JSON envelope's `format`
+/// field so the text and JSON paths stay in sync. The ANSI render is
+/// a terminal-only surface and does not emit a success line — the
+/// rendered glyphs are the output.
+pub fn write_qr_export_success(
+    written_path: &Path,
+    format_label: &str,
+    mut out: impl Write,
+) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "Wrote QR code to {} (0600, format={}).",
+        written_path.display(),
+        format_label,
+    )
+}
+
 /// Write a single `short_secret` validation-warning advisory to the
 /// supplied stream, prefixed with `paladin: warning:`. The CLI calls
 /// this in text mode only — under `--json` warnings flow through the

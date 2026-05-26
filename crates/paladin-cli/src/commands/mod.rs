@@ -13,6 +13,7 @@ pub mod init;
 pub mod list;
 pub mod passphrase;
 pub mod peek;
+pub mod qr;
 pub mod remove;
 pub mod rename;
 pub mod settings;

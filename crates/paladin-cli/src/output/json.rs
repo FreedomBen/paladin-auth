@@ -255,6 +255,39 @@ pub fn write_export_success(
     Ok(())
 }
 
+/// `paladin qr <query> --out <path>` success envelope per the §5 JSON
+/// shape table: `{ "written": "/path/to/out", "format": "qr_png" |
+/// "qr_svg", "account": AccountSummary }`. JSON consumers can correlate
+/// the written file back to the account without re-querying. The
+/// `account` field is the resolved account's [`AccountSummary`] — `qr`
+/// never mutates the vault, so `updated_at` matches the pre-run state.
+#[derive(Debug, Serialize)]
+struct QrExportSuccess<'a> {
+    written: &'a str,
+    format: &'a str,
+    account: &'a AccountSummary,
+}
+
+/// Render the `paladin qr` success envelope (PNG or SVG file write).
+/// ANSI rendering never reaches this helper — `--json` without `--out`
+/// is rejected at parse time.
+pub fn write_qr_export_success(
+    written_path: &std::path::Path,
+    format_label: &str,
+    account: &AccountSummary,
+    mut out: impl Write,
+) -> std::io::Result<()> {
+    let written = written_path.to_string_lossy();
+    let env = QrExportSuccess {
+        written: &written,
+        format: format_label,
+        account,
+    };
+    serde_json::to_writer(&mut out, &env).map_err(std::io::Error::other)?;
+    writeln!(out)?;
+    Ok(())
+}
+
 /// Render the `paladin settings {get,set}` success envelope per the §5
 /// JSON shape table: the full nested [`VaultSettings`] object — `get`
 /// renders the current settings, `set` renders the post-mutation

@@ -699,46 +699,48 @@ with `counter_used: null`.
   item only ticks once every Tests sub-bullet is checked.
 - [ ] **v0.2 — `paladin qr <query>` command** per the §"QR export
   command (v0.2)" section above and DESIGN §4.6 / §5 / §10.
-  - [ ] Add the `qr` subcommand to the clap derive enum with the
+  - [x] Add the `qr` subcommand to the clap derive enum with the
     `<query>` positional, `--out`, `--format`, `--module-size-px`,
     and `--force` flags. The flags are parsed and validated before
     any vault-touching call so the four parse-time rejections
     (binary-without-`--out`, `ansi`-with-`--out`,
     `--json`-without-`--out`, `--module-size-px` out of bounds)
     fire first.
-  - [ ] Build a thin dispatch handler that resolves `<query>`
+  - [x] Build a thin dispatch handler that resolves `<query>`
     through `paladin_core::parse_account_query` +
     `Vault::matching_accounts` with single-match cardinality (same
     helper as `copy` / `remove` / `rename`), then calls one of
     `Vault::export_qr_png` / `Vault::export_qr_svg` /
     `Vault::export_qr_ansi`. The CLI never re-implements URI
     emission, QR encoding, or PNG / SVG / ANSI rendering.
-  - [ ] Route the `--out` write through
+  - [x] Route the `--out` write through
     `paladin_core::write_secret_file_atomic`. The overwrite gate
     fires *after* parse-time validation and query resolution but
     *before* the write itself — failure surfaces as
     `validation_error` (`field: "out"`, `reason: "exists"`,
     `path`).
-  - [ ] Render the QR-export warning in text mode from
+  - [x] Render the QR-export warning in text mode from
     `paladin_core::format_plaintext_qr_export_warning()` to stderr
     *before* any pixel reaches stdout or the destination file.
     Suppress under `--json`, parallel to the `--force` / `--yes` /
     `--plaintext` strict-mode rule in §5.
-  - [ ] Wire the JSON success shape
+  - [x] Wire the JSON success shape
     `{ "written": "...", "format": "qr_png|qr_svg", "account": AccountSummary }`
     through the existing `error-serde` envelope serializer so
     JSON consumers can correlate the written file back to the
     resolved account without re-querying.
-  - [ ] Add `qr` to the `--help` / `--version` JSON help shape
+  - [x] Add `qr` to the `--help` / `--version` JSON help shape
     enumeration so help requests for `paladin qr` carry the
     correct `{ "help": { "command": "paladin qr", "text": "..." } }`
-    payload per §5.
-  - [ ] Extend the §"Thinness contract" guard to forbid direct
+    payload per §5. (Automatic via the clap subcommand tree walked
+    by `output::help::resolve_command_path`.)
+  - [x] Extend the §"Thinness contract" guard to forbid direct
     `qrcode` imports in `crates/paladin-cli/src/` and to forbid
     `qrcode` as a regular `[dependencies]` entry in
     `crates/paladin-cli/Cargo.toml` (the existing dev-dep entry
-    used by `tests/cli_add.rs` stays). All QR work routes through
-    `paladin-core`.
+    used by `tests/cli_add.rs` stays). Enforced by
+    `tests/cli_qr.rs::deny_qrcode_in_runtime_deps`. All QR work
+    routes through `paladin-core`.
 - [x] Run the definition-of-done checks (ticks only when every
   Tests sub-bullet is also ticked).
 
@@ -1023,15 +1025,15 @@ TOTP + HOTP account, sets `--vault` to that path, and asserts stdout,
 stderr, exit code, and on-disk side effects (or lack thereof). `[PTY]`
 bullets require the same `/dev/tty` harness the existing CLI tests use.
 
-- [ ] **Single-match cardinality.** `paladin qr github` against a vault
+- [x] **Single-match cardinality.** `paladin qr github` against a vault
   whose only `github` match is a TOTP row renders an ANSI QR to stdout
   with exit 0; against a vault with two `github` rows exits non-zero
   with `multiple_matches` carrying both candidates and their
   `id:<hex>` disambiguators.
-- [ ] **`no_match`.** `paladin qr nonexistent` against a vault with no
+- [x] **`no_match`.** `paladin qr nonexistent` against a vault with no
   matching row exits non-zero with `no_match`. Text mode prints the
   same wording the existing `copy nonexistent` test asserts.
-- [ ] **Read-only — HOTP counter unchanged.** Seed a HOTP account at
+- [x] **Read-only — HOTP counter unchanged.** Seed a HOTP account at
   `counter = 17`. Run `paladin qr <query>` three times in a row
   (ANSI / PNG to a temp file / SVG to a temp file). After each run,
   open the on-disk primary file (post-temp-dir cleanup) via
@@ -1040,32 +1042,32 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
   byte-for-byte. Vault primary-file bytes must also be unchanged
   between runs. This is the load-bearing pin for the "QR export is a
   peek, not a show" rule in DESIGN §4.6.
-- [ ] **Read-only — `peek` interaction.** After running `paladin qr`
+- [x] **Read-only — `peek` interaction.** After running `paladin qr`
   on a HOTP account, `paladin peek <query>` returns the same code
   that `peek` would have returned *before* the `qr` run. Belt-and-
   suspenders confirmation that `qr` does not advance.
-- [ ] **ANSI default to stdout.** `paladin qr <query>` (no `--out`,
+- [x] **ANSI default to stdout.** `paladin qr <query>` (no `--out`,
   no `--format`) writes the ANSI half-block render to stdout. The
   rendered text contains only the `qrcode::render::unicode::Dense1x2`
   glyph alphabet (assert that every Unicode scalar in the output is
   either `' '`, `'▀'`, `'▄'`, `'█'`, or `'\n'`). Stderr carries the
   warning text from `format_plaintext_qr_export_warning()`. Exit 0.
-- [ ] **`--format=png` without `--out` rejects at parse time.**
+- [x] **`--format=png` without `--out` rejects at parse time.**
   `paladin qr <query> --format=png` exits non-zero with
   `validation_error` (`field: "out"`,
   `reason: "required_for_binary_format"`) before any vault unlock
   attempt (assert by setting `--vault` to a non-existent path —
   the parse-time reject must win precedence over `vault_missing`).
-- [ ] **`--format=svg` without `--out` rejects at parse time** with the
+- [x] **`--format=svg` without `--out` rejects at parse time** with the
   same shape as the PNG case.
-- [ ] **`--format=ansi` with `--out` rejects at parse time.**
+- [x] **`--format=ansi` with `--out` rejects at parse time.**
   `paladin qr <query> --format=ansi --out /tmp/qr.txt` exits non-zero
   with `validation_error` (`field: "format"`,
   `reason: "ansi_requires_no_out"`) before any vault unlock attempt
   (assert by setting `--vault` to a non-existent path — the
   parse-time reject must win precedence over `vault_missing`). On-
   disk side effects: the `--out` target is never created or touched.
-- [ ] **`--json` without `--out` rejects at parse time.**
+- [x] **`--json` without `--out` rejects at parse time.**
   `paladin qr <query> --json` exits non-zero with
   `validation_error` (`field: "out"`, `reason: "required_under_json"`)
   before any vault unlock attempt; stderr carries the JSON envelope
@@ -1075,13 +1077,14 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
   `reason: "out_of_bounds"`) before vault unlock. Invalid integer
   (`-1`, `1.5`, `abc`) rejects with
   `reason: "invalid_integer"`. Overflowing `u32::MAX + 1` rejects
-  with `reason: "overflow"`.
-- [ ] **`--module-size-px` precedence.** An out-of-range
+  with `reason: "overflow"`. *(Status: `out_of_bounds` covered for
+  both edges; `invalid_integer` / `overflow` variants pending.)*
+- [x] **`--module-size-px` precedence.** An out-of-range
   `--module-size-px` value rejects before `vault_missing` (set
   `--vault` to a non-existent path) and before query resolution
   (so a bogus query string does not surface as `no_match` first).
   Mirrors the encrypted-write KDF-flag precedence rule.
-- [ ] **`--module-size-px` accepted on `--format=ansi`.** Parser accepts
+- [x] **`--module-size-px` accepted on `--format=ansi`.** Parser accepts
   the flag but the render output is unchanged from the default-flag
   case (the renderer ignores it). Exit 0; ANSI body byte-equal.
 - [ ] **PNG to `--out` writes 0600.** `paladin qr <query> --out
@@ -1091,17 +1094,19 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
   `paladin_core::export::otpauth_list(&vault)` emits for that
   account (parity with the core round-trip test in
   IMPLEMENTATION_PLAN_01_CORE.md Phase L). Exit 0; stdout carries
-  the success line; stderr carries the warning.
+  the success line; stderr carries the warning. *(Status: 0600 mode
+  + PNG magic-bytes signature covered; `rqrr` decode-back pending.)*
 - [ ] **SVG to `--out` writes 0600.** Same shape as the PNG case but
   for `--format=svg`; assert the file starts with `<?xml` or `<svg`,
   is non-empty UTF-8, and decodes through a `quick-xml`-style sanity
-  check.
-- [ ] **`--out` refuses overwrite without `--force`.** When the
+  check. *(Status: 0600 mode + `<?xml` / `<svg` prefix covered;
+  `quick-xml` decode pending.)*
+- [x] **`--out` refuses overwrite without `--force`.** When the
   destination already exists, exit non-zero with `validation_error`
   (`field: "out"`, `reason: "exists"`, `path: <out_path>`). The
   existing file's bytes must be byte-identical before and after the
   rejected run.
-- [ ] **`--out --force` overwrites.** Same as above but with
+- [x] **`--out --force` overwrites.** Same as above but with
   `--force`; the destination is replaced with the new QR bytes,
   permissions stay `0600`, exit 0.
 - [ ] **`--out` writer failure surfaces durability errors.** Under
@@ -1110,7 +1115,7 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
   `PALADIN_FAULT_INJECT=post_commit` it surfaces
   `save_durability_unconfirmed` (with `committed: true`). Mirrors
   the `export --plaintext` durability assertions.
-- [ ] **`--json` success shape.** `paladin qr <query> --json --out
+- [x] **`--json` success shape.** `paladin qr <query> --json --out
   /tmp/qr.png` writes `{ "written": "...", "format": "qr_png",
   "account": AccountSummary }` to stdout and **nothing else** on
   stdout. Stderr is empty (the warning is suppressed). `format`
@@ -1120,7 +1125,7 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
   icon_hint, created_at, updated_at). `updated_at` is unchanged
   from the pre-run vault state (read-only invariant pin under
   `--json`).
-- [ ] **`--no-color` / `NO_COLOR` have no effect on ANSI render.**
+- [x] **`--no-color` / `NO_COLOR` have no effect on ANSI render.**
   Set either; the ANSI body bytes are byte-equal to the unset case.
   The QR Unicode half-blocks are not ANSI styling escapes; they are
   plain UTF-8 glyphs.
@@ -1128,17 +1133,17 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
   vault, run `paladin qr <query> --out /tmp/qr.png`, assert the
   Argon2id unlock prompt fires once and the resulting file
   decodes back to the matching `otpauth://` URI.
-- [ ] **`id:<hex>` prefix selector.** `paladin qr id:<8-char-prefix>`
+- [x] **`id:<hex>` prefix selector.** `paladin qr id:<8-char-prefix>`
   selects a unique account even when the substring branch would
   also match (no substring fallback). `id:` prefix shorter than 8
   hex chars, longer than 32, or with non-hex characters rejects
   with `validation_error` (`field: "query"`) — same wording as
   `copy id:<bad-prefix>`.
-- [ ] **`copy`-style query precedence.** Empty `<query>` rejects with
+- [x] **`copy`-style query precedence.** Empty `<query>` rejects with
   `validation_error` (`field: "query"`); whitespace-only after trim
   rejects identically. Matches the existing `copy` / `remove`
   empty-query rejection coverage.
-- [ ] **Thinness regression guard.** A static / source-level check (or
+- [x] **Thinness regression guard.** A static / source-level check (or
   a `cargo metadata` JSON walker in `tests/cli_qr.rs::deny_qrcode_in_runtime_deps`)
   proves `qrcode` is **not** a regular `[dependencies]` entry in
   `crates/paladin-cli/Cargo.toml`. The existing `[dev-dependencies]`
@@ -1213,16 +1218,16 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
 - [x] No `init` / `init --force` / `passphrase remove --yes` /
   plaintext-export advisory text appears under `--json` (centralized
   cross-command sweep).
-- [ ] **v0.2 — `qr` success envelope.** `paladin qr <query> --out
+- [x] **v0.2 — `qr` success envelope.** `paladin qr <query> --out
   /path/qr.png --json` writes
   `{ "written": "...", "format": "qr_png", "account": AccountSummary }`
   to stdout and nothing else. `format` is `"qr_svg"` under
   `--format=svg`. The `account` field shape matches §5 `AccountSummary`.
-- [ ] **v0.2 — `qr` advisory suppression.** Under `--json`, the
+- [x] **v0.2 — `qr` advisory suppression.** Under `--json`, the
   `format_plaintext_qr_export_warning()` text never appears on
   stdout or stderr (centralized cross-command sweep extended to
   include the QR warning).
-- [ ] **v0.2 — `qr` parse-error envelopes.** Stderr carries the
+- [x] **v0.2 — `qr` parse-error envelopes.** Stderr carries the
   matching JSON envelope for the four parse-time rejections
   (`required_for_binary_format`, `ansi_requires_no_out`,
   `required_under_json`, `out_of_bounds` for `module_size_px`).
