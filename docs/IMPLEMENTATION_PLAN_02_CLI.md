@@ -112,7 +112,7 @@ valid custom KDF values are accepted but unused.
 | `passphrase set | change | remove`                     | `set` and `change` accept the KDF flags above. `passphrase remove` first verifies that the vault is encrypted. In text mode, it then prints `paladin_core::format_plaintext_storage_warning()` and confirms unless `--yes` is passed; `--yes` skips only the confirmation. `--yes` is required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
 | `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints `paladin_core::format_plaintext_export_warning()` before writing unencrypted secrets; encrypted export accepts the KDF flags above. |
-| `qr <query> [--out <path>] [--format png\|svg\|ansi] [--module-size-px <n>] [--force]` | v0.2. Renders the resolved account's `otpauth://` URI as a QR code (DESIGN §4.6). Read-only — HOTP counters are not advanced and `updated_at` is not bumped. Single-match cardinality (like `copy` / `remove` / `rename`); ambiguous queries exit non-zero with the candidate list. With `--out`, writes PNG / SVG bytes through `paladin_core::write_secret_file_atomic` (0600, refuses overwrite without `--force`); without `--out`, renders ANSI Unicode half-blocks to stdout. Default `--format` is `png` when `--out` is set and `ansi` when it is not. `--format png\|svg` without `--out` rejects at parse time as `validation_error` (`field: "out"`, `reason: "required_for_binary_format"`). Under `--json`, ANSI stdout is also rejected at parse time (`field: "out"`, `reason: "required_under_json"`) so the JSON envelope owns stdout. `--module-size-px` is validated against `paladin_core::QR_MODULE_SIZE_PX_MIN..=QR_MODULE_SIZE_PX_MAX` before any vault work. Text mode prints `paladin_core::format_plaintext_qr_export_warning()` before any pixel is rendered or written; `--json` suppresses the warning (parallel to `--force` / `--yes` / `--plaintext`). |
+| `qr <query> [--out <path>] [--format png\|svg\|ansi] [--module-size-px <n>] [--force]` | v0.2. Renders the resolved account's `otpauth://` URI as a QR code (DESIGN §4.6). Read-only — HOTP counters are not advanced and `updated_at` is not bumped. Single-match cardinality (like `copy` / `remove` / `rename`); ambiguous queries exit non-zero with the candidate list. With `--out`, writes PNG / SVG bytes through `paladin_core::write_secret_file_atomic` (0600, refuses overwrite without `--force`); without `--out`, renders ANSI Unicode half-blocks to stdout. Default `--format` is `png` when `--out` is set and `ansi` when it is not. `--format png\|svg` without `--out` rejects at parse time as `validation_error` (`field: "out"`, `reason: "required_for_binary_format"`); `--format=ansi` together with `--out` likewise rejects at parse time as `validation_error` (`field: "format"`, `reason: "ansi_requires_no_out"`) because the Unicode half-block render is terminal-only. Under `--json`, ANSI stdout is also rejected at parse time (`field: "out"`, `reason: "required_under_json"`) so the JSON envelope owns stdout. `--module-size-px` is validated against `paladin_core::QR_MODULE_SIZE_PX_MIN..=QR_MODULE_SIZE_PX_MAX` before any vault work. Text mode prints `paladin_core::format_plaintext_qr_export_warning()` before any pixel is rendered or written; `--json` suppresses the warning (parallel to `--force` / `--yes` / `--plaintext`). |
 | `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only. The `--json` shape is always the full nested `VaultSettings`: `get` returns the current settings, and `set` returns the post-mutation settings after `apply_setting_patch` commits. |
 | `tui`                                                  | `execvp` `paladin-tui`; rejects `--json`; forwards `--vault` / `--no-color`. |
 
@@ -218,14 +218,19 @@ export feature. Implementation owes:
     rather than rejected, matching how `export --plaintext --force`
     with a non-existent target is a no-op gate.
 
-- **Parse-time rejections.** Three mutually exclusive parse-time
-  rejections fire **before** vault inspection / unlock so an invalid
-  invocation never prompts:
+- **Parse-time rejections.** Four parse-time rejections fire
+  **before** vault inspection / unlock so an invalid invocation
+  never prompts:
   - `--format=png` or `--format=svg` without `--out` →
     `validation_error` (`field: "out"`,
     `reason: "required_for_binary_format"`). Rationale: writing PNG
     or SVG bytes to a terminal is unhelpful — the bytes are not
     pasteable as text and the warning would scroll off.
+  - `--format=ansi` together with `--out` →
+    `validation_error` (`field: "format"`,
+    `reason: "ansi_requires_no_out"`). Rationale per DESIGN §5:
+    the Unicode half-block render is a terminal-only surface; file
+    output is PNG or SVG only.
   - `--json` without `--out` → `validation_error` (`field: "out"`,
     `reason: "required_under_json"`). Rationale: §5's strict-mode
     rule says only the JSON envelope writes to stdout, and an ANSI
@@ -697,9 +702,10 @@ with `counter_used: null`.
   - [ ] Add the `qr` subcommand to the clap derive enum with the
     `<query>` positional, `--out`, `--format`, `--module-size-px`,
     and `--force` flags. The flags are parsed and validated before
-    any vault-touching call so the three parse-time rejections
-    (binary-without-`--out`, `--json`-without-`--out`,
-    `--module-size-px` out of bounds) fire first.
+    any vault-touching call so the four parse-time rejections
+    (binary-without-`--out`, `ansi`-with-`--out`,
+    `--json`-without-`--out`, `--module-size-px` out of bounds)
+    fire first.
   - [ ] Build a thin dispatch handler that resolves `<query>`
     through `paladin_core::parse_account_query` +
     `Vault::matching_accounts` with single-match cardinality (same
@@ -1052,6 +1058,13 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
   the parse-time reject must win precedence over `vault_missing`).
 - [ ] **`--format=svg` without `--out` rejects at parse time** with the
   same shape as the PNG case.
+- [ ] **`--format=ansi` with `--out` rejects at parse time.**
+  `paladin qr <query> --format=ansi --out /tmp/qr.txt` exits non-zero
+  with `validation_error` (`field: "format"`,
+  `reason: "ansi_requires_no_out"`) before any vault unlock attempt
+  (assert by setting `--vault` to a non-existent path — the
+  parse-time reject must win precedence over `vault_missing`). On-
+  disk side effects: the `--out` target is never created or touched.
 - [ ] **`--json` without `--out` rejects at parse time.**
   `paladin qr <query> --json` exits non-zero with
   `validation_error` (`field: "out"`, `reason: "required_under_json"`)
@@ -1210,9 +1223,9 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
   stdout or stderr (centralized cross-command sweep extended to
   include the QR warning).
 - [ ] **v0.2 — `qr` parse-error envelopes.** Stderr carries the
-  matching JSON envelope for the three parse-time rejections
-  (`required_for_binary_format`, `required_under_json`,
-  `out_of_bounds` for `module_size_px`).
+  matching JSON envelope for the four parse-time rejections
+  (`required_for_binary_format`, `ansi_requires_no_out`,
+  `required_under_json`, `out_of_bounds` for `module_size_px`).
 
 ### `--no-color` / `NO_COLOR` (`tests/cli_global_flags.rs`)
 
