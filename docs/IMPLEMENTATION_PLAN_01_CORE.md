@@ -1747,6 +1747,122 @@ land before the GTK / CLI / TUI work or alongside it.
   J CI gate then re-asserts the snapshot on every subsequent
   build.
 
+### Phase M — Per-account metadata edit (v0.2 / DESIGN §4.7 Milestone 9)
+
+Adds the multi-field non-cryptographic edit mutator
+`Vault::edit_account_metadata` (label / issuer / icon_hint) that the
+v0.2 GTK `EditDialog`, the new CLI `paladin edit` command, and the
+TUI Edit modal all consume. Surface-only addition: no behavior change
+for `add` / `remove` / `rename` / `save` / `mutate_and_save`; the
+public API surface grows by exactly the items listed below and the
+§4.7 public-api snapshot is updated to match. Phase J's Send/Sync
+gate is extended to cover `AccountEdit`. Independent of Phase L
+(QR export) — this phase can land before the GTK / CLI / TUI edit
+work or alongside it. `Vault::rename` stays as the label-only
+convenience method and, after this phase, is reimplemented
+internally on top of `edit_account_metadata` so there is exactly
+one mutation path through the validator and `mutate_and_save`.
+
+- [ ] **`AccountEdit` struct.** Public type added to the §4.7 surface
+  per DESIGN.md. Three fields: `label: Option<String>`,
+  `issuer: Option<Option<String>>`, `icon_hint: Option<IconHintInput>`.
+  `Option` carries "leave untouched"; the inner `Option<String>` on
+  `issuer` distinguishes "clear" (`Some(None)`) from "set"
+  (`Some(Some(_))`). `Clone` is required so the GTK / TUI dialog
+  state machines can stash the in-flight edit alongside the
+  pending-save effect. `Debug` is required and must redact nothing —
+  no field is secret-bearing. `Default` is derived so all-`None` is
+  the construction shorthand the internal `rename` reimplementation
+  reaches for.
+
+- [ ] **`validate_account_edit(edit, prior, now)` free function.**
+  Pure-logic pre-flight validator. Routes through the existing
+  `validate_label` / `validate_issuer` / `parse_icon_hint_token`
+  helpers per the matching `AccountEdit` field and returns
+  `validation_error` with the offending field name on the first
+  failure (consistent with `validate_manual`'s per-field error
+  shape). The `now` parameter is unused today but is required so
+  the signature stays stable when (post-v0.2) we add a freshness
+  check that rejects `updated_at` in the future. The validator does
+  **not** reject an empty `AccountEdit` — that decision belongs to
+  `Vault::edit_account_metadata` so front ends can drive per-field
+  rendering against a draft that hasn't yet committed to a field.
+  Errors include the `field` name (`"label"`, `"issuer"`,
+  `"icon_hint"`) and the typed `reason` from the underlying
+  validator (`"empty"`, `"too_long"`, `"invalid_slug"`, etc.).
+
+- [ ] **`Vault::edit_account_metadata(id, edit, now)` mutator.**
+  Single public mutator. Resolves `id`, returns `invalid_state`
+  (`operation: "edit_account_metadata"`,
+  `state: "account_not_found"`) when no account exists for `id`
+  (matches the existing `rename` shape). Rejects an empty
+  `AccountEdit` (every field `None`) with `validation_error`
+  (`field: "edit"`, `reason: "empty"`). Calls `validate_account_edit`
+  against the resolved `Account`; on validation failure returns the
+  typed `validation_error` without mutating. On validation success
+  applies the present fields to the account, derives the post-edit
+  icon-hint slug through the `IconHintInput` tri-state (the
+  `Default` variant re-derives from the **post-edit** `issuer`, not
+  the prior one), bumps `updated_at` to `now`, and returns `Ok(())`.
+  The mutator is `&mut self` and the caller wraps it in
+  `Vault::mutate_and_save` for atomic persistence + rollback — same
+  pattern as `rename` / `add` / `remove`.
+
+- [ ] **`Vault::rename` reimplementation on top of
+  `edit_account_metadata`.** Internal refactor: the existing
+  `Vault::rename(id, label, now)` body is replaced with a call to
+  `self.edit_account_metadata(id,
+  AccountEdit { label: Some(label.into()), ..Default::default() },
+  now)`. Public signature, error kinds, and `updated_at`-on-same-
+  label semantics all stay byte-identical so `paladin rename`, the
+  TUI Rename modal, and existing test inventory keep passing without
+  churn. A CI-locked semantic test asserts the rename path's
+  behavior is unchanged before and after the refactor.
+
+- [ ] **Tests — `AccountEdit` validation.** Cover each editable
+  field independently: label empty / overlong / valid; issuer set /
+  clear / invalid; icon-hint slug invalid / `none` clears /
+  `Default` re-derives / explicit slug; combined-field happy paths
+  and combined-field first-failure-wins error path. Reuse the
+  per-field validator-error fixtures from Phase B so the wire shapes
+  stay aligned.
+
+- [ ] **Tests — `Vault::edit_account_metadata` mutator.** Cover
+  account-not-found (`invalid_state`), empty-edit
+  (`validation_error` (`field: "edit"`, `reason: "empty"`)), each
+  single-field happy path, multi-field happy path, the "leave
+  untouched" tri-state on `issuer` (None vs `Some(None)` vs
+  `Some(Some(prior_value))`), the `IconHintInput::Default`
+  re-derivation against the **post-edit** issuer (verify by editing
+  issuer + setting `icon_hint = Some(Default)` in one call),
+  no-op-but-non-empty `updated_at` bump (every field set to its
+  prior value still bumps `updated_at` to `now`), and validation
+  rejection preserving the prior `Account` byte-for-byte. Run each
+  test through `Vault::mutate_and_save` with a tempfile-backed
+  plaintext vault so the persistence + rollback contract is
+  exercised end-to-end.
+
+- [ ] **Tests — `mutate_and_save` rollback.** Use the
+  `test-fault-injection` feature to inject a pre-commit save failure
+  on a successful edit and assert the `Account` is restored to its
+  pre-edit byte representation (`label`, `issuer`, `icon_hint`, and
+  `updated_at` all roll back). Mirror Phase G's rename-rollback test
+  shape so the two mutators share one rollback-correctness contract.
+
+- [ ] **Tests — Send assertion.** Extend `tests/send_assertions.rs`
+  with a `const _: fn() = ||
+  { fn assert_send<T: Send>() {} assert_send::<AccountEdit>(); }`
+  block so a future field change that breaks `Send` fails the build
+  per Phase J's contract.
+
+- [ ] **Tests — public-api snapshot diff.** Run
+  `cargo public-api --diff` against the prior snapshot and commit
+  the regenerated `crates/paladin-core/public-api.txt`. The new
+  surface entries (`AccountEdit`, `validate_account_edit`,
+  `Vault::edit_account_metadata`) and the new `invalid_state`
+  operation/state pair must appear; no unrelated public API may
+  drift.
+
 ## Test inventory
 
 This list is exhaustive per CLAUDE.md ("write exhaustive tests"). Every entry

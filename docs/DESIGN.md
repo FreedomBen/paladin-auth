@@ -918,6 +918,7 @@ impl Vault {
     pub fn iter(&self) -> impl Iterator<Item = &Account>;                          // insertion order
     pub fn summaries(&self) -> impl Iterator<Item = AccountSummary>;                // insertion order, non-secret projections
     pub fn rename(&mut self, id: AccountId, label: &str, now: SystemTime) -> Result<()>;
+    pub fn edit_account_metadata(&mut self, id: AccountId, edit: AccountEdit, now: SystemTime) -> Result<()>;  // Multi-field non-cryptographic edit (label / issuer / icon_hint). See `AccountEdit` below. Reuses §4.1 validation per supplied field. `rename` is the label-only shorthand; both bump `updated_at` and route through `mutate_and_save`.
     pub fn find_duplicate(&self, account: &ValidatedAccount) -> Option<&Account>;  // exact (secret, issuer, label) collision helper for single-entry add flows
     pub fn import_accounts(&mut self, accounts: Vec<ValidatedAccount>, policy: ImportConflict, now: SystemTime) -> Result<ImportReport>;  // applies the §5 merge policy
     pub fn totp_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;       // TOTP only; errors on HOTP entries
@@ -972,6 +973,32 @@ pub struct AccountInput {
 
 pub fn validate_manual(input: AccountInput, now: SystemTime) -> Result<ValidatedAccount>;
 
+/// Multi-field metadata edit for `Vault::edit_account_metadata`.
+///
+/// Only non-cryptographic metadata is editable: `label`, `issuer`,
+/// `icon_hint`. OTP-affecting fields (`secret`, `algorithm`, `digits`,
+/// `kind`, `period`, `counter`) are intentionally out of scope —
+/// changing them invalidates already-issued codes and is better
+/// expressed as remove + re-add. Each top-level field uses `Option`
+/// for "leave untouched" semantics; the inner `Option` on `issuer`
+/// distinguishes "clear" (`Some(None)`) from "set" (`Some(Some(_))`).
+/// All present fields run through the same §4.1 validation as
+/// `AccountInput`; invalid values surface as `validation_error`
+/// without touching the vault. `edit_account_metadata` bumps
+/// `updated_at` whenever at least one field is present, even when the
+/// resulting value equals the prior value — same-as-prior submits
+/// behave identically to `rename`'s same-label-still-bumps contract.
+/// An `AccountEdit` with every field `None` is rejected at the core
+/// boundary as `validation_error` (`field: "edit"`, `reason: "empty"`)
+/// so the front ends do not silently no-op behind the user's back.
+pub struct AccountEdit {
+    pub label: Option<String>,             // Some(new) replaces; None leaves.
+    pub issuer: Option<Option<String>>,    // Some(Some(s)) sets; Some(None) clears; None leaves.
+    pub icon_hint: Option<IconHintInput>,  // Some(...) applies the IconHintInput tri-state (Default re-derives from the post-edit issuer; Clear stores None; Slug validates §4.1); None leaves the prior slug untouched.
+}
+
+pub fn validate_account_edit(edit: &AccountEdit, prior: &Account, now: SystemTime) -> Result<()>;  // pure-logic pre-flight validator routing through validate_label / validate_issuer / parse_icon_hint_token; no mutation. Returns `validation_error` with the offending field on first failure. `Vault::edit_account_metadata` calls this internally; the front ends may also call it directly to drive inline per-field error rendering before the user submits.
+
 pub mod import {
     pub enum ImportFormat { Otpauth, Aegis, Paladin, Qr, Unknown }
     pub struct ImportOptions<'a> {
@@ -1014,8 +1041,8 @@ is `Send`. The CI-gated `Send` set covers `Vault`, `Store`, `Account`,
 `EncryptionOptions`, `Argon2Params`, `QrRenderOptions`, `VaultLock`,
 `VaultInit`, `VaultStatus`, `VaultSettings`, `SettingKey`,
 `SettingPatch`, `AccountKindInput`, `IconHintInput`, `AccountInput`,
-`AccountQuery`, `InitPrecheck`, `PaladinImportPrecheck`, and
-`PaladinError` — so
+`AccountEdit`, `AccountQuery`, `InitPrecheck`, `PaladinImportPrecheck`,
+and `PaladinError` — so
 `paladin-gtk` can drive
 encrypted `open` / `create` / `create_force` and any save-bearing
 operation inside `gio::spawn_blocking`, and `paladin-tui` can drive
@@ -1029,7 +1056,7 @@ The non-secret projection types (`AccountSummary`, `Code`,
 `SettingKey`, `SettingPatch`, `IconHintInput`, `AccountKindInput`,
 `AccountQuery`, `InitPrecheck`, `AccountId`) are also `Sync`. Secret-bearing types
 (`Vault`, `Store`, `Account`, `Secret`, `EncryptionOptions`,
-`AccountInput`, `ValidatedAccount`, `VaultLock`, `VaultInit`,
+`AccountInput`, `AccountEdit`, `ValidatedAccount`, `VaultLock`, `VaultInit`,
 `PaladinError`) are deliberately *not* asserted `Sync` — `SecretString`
 is `!Sync` in `secrecy` and core does not promote any secret-bearing
 type past that posture. CI also pins this decision so a future change
@@ -1106,6 +1133,7 @@ calling these methods:
 | Operation      | State               | Meaning                         |
 | -------------- | ------------------- | ------------------------------- |
 | `rename`       | `account_not_found` | No account exists for the ID.   |
+| `edit_account_metadata` | `account_not_found` | No account exists for the ID. |
 | `totp_code`    | `account_not_found` | No account exists for the ID.   |
 | `totp_code`    | `not_totp`          | The account is HOTP.            |
 | `totp_next_code` | `account_not_found` | No account exists for the ID. |
@@ -1142,6 +1170,7 @@ Built with `clap` (derive). Commands:
 | `paladin copy <query>`                      | Copy code to clipboard. For HOTP, advances and saves before attempting the clipboard write. (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see security consideration 6.) |
 | `paladin remove <query>`                    | Remove an account. Prompts for confirmation; `--yes` skips the prompt. Required under `--json` (no confirmation prompt available). |
 | `paladin rename <query> <label>`            | Rename an account.                                               |
+| `paladin edit <query> [--label <label>] [--issuer <issuer> \| --no-issuer] [--icon-hint <slug> \| --no-icon-hint]` | Edit an account's non-cryptographic metadata: label, issuer, and/or icon hint. Requires at least one of `--label` / `--issuer` / `--no-issuer` / `--icon-hint` / `--no-icon-hint`; a no-flag invocation is rejected at parse time as `validation_error` (`field: "argv"`, `reason: "no_edit_fields"`). `--issuer` and `--no-issuer` are mutually exclusive; `--icon-hint` and `--no-icon-hint` are mutually exclusive. Single-match cardinality (like `copy` / `remove` / `rename` / `qr`). Routes through `Vault::edit_account_metadata` inside `Vault::mutate_and_save`; bumps `updated_at`. Read-only on the secret bytes — never advances HOTP counters and never re-derives a slug from secret content. The narrower `paladin rename <query> <label>` stays as the label-only positional shorthand. |
 | `paladin passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
 | `paladin passphrase change`                 | Re-encrypt under a new passphrase.                               |
 | `paladin passphrase remove`                 | Decrypt to plaintext. Warns and prompts for destructive confirmation unless `--yes` is passed. Required under `--json` (no confirmation prompt available). |
@@ -1309,6 +1338,34 @@ in text mode and suppressed in `--json` mode (parallel to the
 advisories), since the user opting into `--out <path>` plus
 `--json` has already opted into machine-readable output.
 
+`paladin edit <query>` is the multi-field metadata edit. It requires
+at least one of `--label <label>`, `--issuer <issuer>`, `--no-issuer`,
+`--icon-hint <slug>`, or `--no-icon-hint`; a no-flag invocation is
+rejected at parse time as `validation_error` (`field: "argv"`,
+`reason: "no_edit_fields"`) before the query is resolved. `--issuer`
+and `--no-issuer` are mutually exclusive, as are `--icon-hint` and
+`--no-icon-hint`; either collision is rejected at parse time as
+`validation_error` (`field: "argv"`, `reason: "mutually_exclusive"`).
+Supplied values map onto `paladin_core::AccountEdit`: `--label`
+populates `label = Some(value)`, `--issuer` populates
+`issuer = Some(Some(value))` after the §4.1 issuer normalization,
+`--no-issuer` populates `issuer = Some(None)`, `--icon-hint <slug>`
+parses through `paladin_core::parse_icon_hint_token(slug)` (so the
+empty / case-insensitive `none` / explicit-slug grammar matches
+`add`) and populates `icon_hint`, and `--no-icon-hint` populates
+`icon_hint = Some(IconHintInput::Clear)`. The CLI resolves the
+query with the same single-match cardinality as `copy` / `remove` /
+`rename` / `qr`. The mutation runs inside
+`Vault::mutate_and_save` so pre-commit failures restore the
+pre-edit account state; `save_durability_unconfirmed` leaves the
+edit visible with the standard durability warning. `paladin edit`
+is read-only on the secret bytes — it never advances HOTP counters,
+never decodes the stored secret, and never re-derives a slug from
+secret content. `paladin rename <query> <label>` stays as the
+single-positional shorthand for the label-only path and is
+implemented on top of the same `Vault::edit_account_metadata`
+mutator.
+
 With `--json`, commands write one JSON document to stdout on success and
 one JSON document to stderr on failure. To keep the CLI scriptable,
 `paladin` pre-scans argv for an exact `--json` token before clap parsing;
@@ -1383,6 +1440,7 @@ Success shapes:
 | `copy`                        | `{ "copied": true, "account": AccountSummary, "counter_used": number_or_null }` |
 | `add` (single)                | `{ "account": AccountSummary, "warnings": [Warning] }`                          |
 | `rename`                      | `{ "account": AccountSummary }`                                                 |
+| `edit`                        | `{ "account": AccountSummary }` (the post-edit `AccountSummary`, including the bumped `updated_at`)                                                 |
 | `add --qr`                    | Same shape as `import` (a `--qr` add can decode multiple URIs and uses a fixed `--on-conflict=skip`). |
 | `remove`                      | `{ "removed": AccountSummary }`                                                 |
 | `import`                      | `{ "imported": n, "skipped": n, "replaced": n, "appended": n, "accounts": [AccountSummary], "warnings": [Warning] }` |
@@ -1602,7 +1660,7 @@ reimplementing the comparison.
   as `copy`/`remove`/`rename`/`qr` below — so a substring query cannot
   silently advance multiple HOTP counters.
 - `peek` prints **all** matching entries unconditionally (no state mutation).
-- `copy`, `remove`, `rename`, and `qr` require a single match. On multiple
+- `copy`, `remove`, `rename`, `edit`, and `qr` require a single match. On multiple
   matches they exit non-zero and list the candidates, each prefixed with
   the shortest unique `id:<hex>` form taken from the UUID, with a minimum
   length of 8 hex chars. The user can re-run with that exact-id form
@@ -1745,7 +1803,7 @@ Layout (single-screen MVP):
   The flow never writes to disk before the user confirms in the
   final step, and never silently downgrades an encrypted choice
   to plaintext.
-- Modal dialogs for add / remove / rename / import / export / qr /
+- Modal dialogs for add / remove / rename / edit / import / export / qr /
   passphrase / settings. Add supports manual entry, paste of an `otpauth://` URI
   (decoded via `paladin_core::parse_otpauth`), and QR scan from
   clipboard image bytes; manual and URI duplicates use
@@ -1753,7 +1811,18 @@ Layout (single-screen MVP):
   QR imports use `ImportConflict::Skip` and report
   imported/skipped/warning counts. Rename calls `Vault::rename(id,
   new_label, now)` inside `Vault::mutate_and_save`; issuer is not
-  editable here (parity with `paladin rename`). Import takes a file path and
+  editable here (parity with `paladin rename`). Edit (opened with
+  `Shift+E` on the focused account row) opens an `AccountEdit`-bearing
+  modal — three `tui-input` rows for label, issuer, and icon-hint slug
+  pre-populated from the current `AccountSummary` — and routes submit
+  through `Vault::edit_account_metadata` inside `Vault::mutate_and_save`,
+  bumping `updated_at` and surfacing per-field validation errors inline
+  without closing. The Rename modal stays for muscle-memory continuity
+  as the label-only shorthand; the Edit modal is the full surface and
+  is the one the GUI's `EditDialog` (§7) mirrors. OTP-affecting fields
+  (`secret`, `algorithm`, `digits`, `kind`, `period`, `counter`) are
+  intentionally absent — changing them invalidates already-issued
+  codes and the user is directed to remove + re-add. Import takes a file path and
   optional explicit format, calls `classify_paladin_import_precheck` before
   any Paladin bundle passphrase prompt, prompts only for encrypted-Paladin
   sources, applies a user-selected on-conflict
@@ -1895,10 +1964,46 @@ Library: **Relm4** on **GTK4**. Component tree:
   `Vault::mutate_and_save` paths. Switching input paths clears hidden
   secret-bearing fields and any pending duplicate override state.
 - `RemoveDialog` — confirmation gate before `Vault::remove` + save.
-- `RenameDialog` — single text entry pre-populated with the account's
-  current label. Calls `Vault::rename(id, new_label, now)` inside
-  `Vault::mutate_and_save`. Issuer is not editable here (parity with
-  `paladin rename`); deeper edits use remove + re-add.
+- `EditDialog` — supersedes the v0.2-foundation `RenameDialog` as the
+  per-account metadata editor. Three editable `AdwEntryRow` widgets —
+  *Label*, *Issuer*, *Icon hint slug* — pre-populated from the focused
+  account's `AccountSummary`. Submit routes through
+  `Vault::edit_account_metadata` inside `Vault::mutate_and_save`,
+  bumps `updated_at`, and surfaces per-field validation errors inline
+  without closing. The Issuer row exposes an explicit "clear" affordance
+  (an inline `gtk::Button` adjacent to the row) that maps to
+  `AccountEdit::issuer = Some(None)`; leaving the row's text equal to
+  the prior issuer leaves the field untouched (`None`). The Icon hint
+  row's empty / `none` / explicit-slug grammar is parsed through
+  `paladin_core::parse_icon_hint_token` so the GTK editor matches the
+  Add dialog's icon-hint behavior verbatim. OTP-affecting fields
+  (`secret`, `algorithm`, `digits`, `kind`, `period`, `counter`) are
+  intentionally absent — the dialog body carries a short footnote
+  pointing users at remove + re-add for secret rotation or OTP
+  parameter changes. The dialog is disabled on `UnlockedBusy` per the
+  shared `RenameDialog`-era effect-ownership contract.
+- **Row context menu and per-row kebab** — every account row exposes
+  a context menu with four entries in this order: *Copy code* /
+  *Edit…* / *Export QR…* / *Delete…*. The same `gio::MenuModel` is
+  bound to the row's kebab `gtk::MenuButton` and to a row-body
+  `gtk::GestureClick` configured for the secondary mouse button
+  (and to the GNOME-canonical `Menu` key / `Shift+F10` keyboard
+  equivalent via the row container's `popup-menu` signal), so
+  right-click, keyboard, and kebab click all converge on the same
+  actions. The menu is rendered as a `gtk::PopoverMenu` anchored at
+  the pointer for right-click / keyboard events and at the kebab
+  button for kebab clicks; only one row popover may be mounted at a
+  time, and dismissing it returns focus to the row that raised it.
+  Section header rows are non-selectable and do not raise the menu.
+  *Copy code* is disabled on hidden HOTP rows (parity with the
+  inline copy button via the shared `RowDisplay::copy_enabled`
+  projection); *Edit…*, *Export QR…*, and *Delete…* are
+  unconditional on account rows. Every menu entry targets a
+  `gio::SimpleAction` in the per-row `gio::SimpleActionGroup` —
+  `row.copy`, `row.edit`, `row.show-qr`, `row.remove` —
+  so the existing `dispatch_row_action` table extends with the new
+  `edit` action and the existing `copy` action becomes menu-visible
+  alongside the inline copy button.
 - `ImportDialog` — `gtk::FileDialog` for the source path, format
   selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
   `qr`), on-conflict policy (`skip` / `replace` / `append`), and a
@@ -2636,6 +2741,37 @@ artifacts side by side.
   dialog, and the read-only invariant (HOTP counters and `updated_at`
   are unchanged across every render path).
 
+### Milestone 9 — Per-account metadata edit *(v0.2)*
+- [ ] `paladin-core`: `AccountEdit` struct, `Vault::edit_account_metadata`,
+  and `validate_account_edit` per §4.7. Tests cover label-only /
+  issuer-only / icon-hint-only / multi-field paths, the "leave
+  untouched" tri-state on `issuer`, validation rejection for each
+  field, `updated_at` bump on no-op-but-non-empty submits, empty
+  `AccountEdit` rejection (`validation_error` (`field: "edit"`,
+  `reason: "empty"`)), and `mutate_and_save` pre-commit rollback
+  preserving the prior `Account` byte-for-byte.
+- [ ] CLI `paladin edit <query>` with the flag grammar per §5 and the
+  success / error JSON shapes. Tests in `tests/cli_edit.rs` covering
+  each editable field independently, the `--no-issuer` /
+  `--no-icon-hint` clear paths, the parse-time
+  mutually-exclusive-flag rejection, the no-flag rejection, the
+  single-match cardinality, and the `paladin rename` shorthand
+  routing through the same core mutator.
+- [ ] TUI Edit modal opened with `Shift+E`: three pre-populated text
+  rows, inline validation, save-effect plumbing parity with the
+  Rename modal. Snapshot test for the modal layout; logic tests for
+  the state machine.
+- [ ] GTK `EditDialog` superseding `RenameDialog`: three editable
+  rows (Label / Issuer + clear button / Icon hint slug), inline
+  validation, save-effect plumbing per §7. Row context menu (and
+  `Menu` / `Shift+F10` keyboard equivalent) bound to the same
+  `gio::MenuModel` as the per-row kebab, four entries in order
+  *Copy code* / *Edit…* / *Export QR…* / *Delete…*. Pure-logic
+  tests for the new menu model, the `AccountEdit` projection, the
+  per-field clear/leave-untouched semantics, and the right-click
+  gesture / popover-menu wiring; integration test for the menu /
+  dialog round-trip and for the single-popover-at-a-time invariant.
+
 ## 13. Open questions
 
 **Decided at sign-off (2026-05-04):**
@@ -2813,6 +2949,51 @@ artifacts side by side.
 - The no-network hardening test is a concrete source / metadata guard over
   production `paladin-core`, complementing `cargo deny` instead of relying
   on a missing-symbol compile-fail.
+
+**Decided during row context menu and EditDialog planning (2026-05-26):**
+- Per-account metadata editing is added as a v0.2 follow-on driven by
+  the GUI row-context-menu work. Scope is strictly non-cryptographic:
+  `label`, `issuer`, and `icon_hint` only. OTP-affecting fields
+  (`secret`, `algorithm`, `digits`, `kind`, `period`, `counter`)
+  stay remove + re-add — changing them invalidates already-issued
+  codes, and the user-visible distinction between "rename my GitHub
+  to GitHub-prod" and "rotate my GitHub secret" needs the bigger
+  hammer of a destructive add. v1 of edit explicitly defers all
+  cryptographic mutation paths; this scope is the locked contract
+  for the v0.2 surface.
+- Core exposes one multi-field mutator (`Vault::edit_account_metadata`
+  taking an `AccountEdit` value) rather than per-field setters so
+  every editable field routes through a single atomic
+  `mutate_and_save` call and a single rollback snapshot. `AccountEdit`
+  uses `Option` for "leave untouched" semantics, with an inner
+  `Option<String>` on `issuer` to distinguish "clear" from "set".
+  An empty `AccountEdit` (every field `None`) is rejected at the
+  core boundary as `validation_error` (`field: "edit"`,
+  `reason: "empty"`) rather than silently no-op'd. Same-as-prior
+  submits bump `updated_at` to match `rename`'s same-label contract.
+- CLI `paladin rename <query> <label>` stays available as the
+  label-only positional shorthand and is reimplemented on top of
+  `Vault::edit_account_metadata`. CLI `paladin edit <query>` covers
+  the multi-field grammar (`--label` / `--issuer` / `--no-issuer` /
+  `--icon-hint` / `--no-icon-hint`) and rejects the no-flag /
+  mutually-exclusive cases at parse time.
+- TUI gains a sibling Edit modal opened with `Shift+E`. The existing
+  Rename modal (`Shift+R`) stays for muscle-memory continuity as the
+  label-only shorthand; both modals route through the same core
+  mutator.
+- GTK replaces `RenameDialog` with `EditDialog`. There is no GUI
+  muscle-memory cost because the v0.2 GUI is the first per-account
+  edit surface — the v0.2-foundation `RenameDialog` ships only as a
+  scaffolding milestone toward `EditDialog`.
+- The GTK row context menu is the user-visible surface that
+  motivates this work. The kebab `gio::MenuModel` (v0.2 foundation:
+  *Rename…* / *Show QR…* / *Remove…*) is replaced by the four-entry
+  shared model *Copy code* / *Edit…* / *Export QR…* / *Delete…*,
+  and a right-click `gtk::GestureClick` on the row body binds the
+  same model. The `Menu` key / `Shift+F10` `popup-menu` signal is
+  routed through the same path so keyboard users get parity. Only
+  one row popover may be mounted at a time, and section header rows
+  do not raise the menu.
 
 No open questions remain.
 

@@ -49,7 +49,8 @@ crates/paladin-tui/
 │   │   ├── help.rs        # read-only help overlay, populated from `keybindings::KEYBINDINGS`
 │   │   ├── add.rs
 │   │   ├── remove.rs
-│   │   ├── rename.rs        # label edit; calls Vault::rename inside Vault::mutate_and_save
+│   │   ├── rename.rs        # label-only shorthand modal (Shift+R); calls Vault::rename inside Vault::mutate_and_save
+│   │   ├── edit.rs          # v0.2 multi-field edit modal (Shift+E): label / issuer / icon_hint; calls Vault::edit_account_metadata inside Vault::mutate_and_save
 │   │   ├── import.rs        # path + format + on-conflict + (optional) bundle passphrase
 │   │   ├── export.rs        # format + path + overwrite + (encrypted) twice-confirmed passphrase
 │   │   ├── qr.rs            # v0.2 per-account QR Export modal: warning-ack page → ANSI body + Save-as-PNG / Save-as-SVG sub-flow (read-only — never routes through Vault::mutate_and_save)
@@ -467,13 +468,48 @@ dismiss deliberately.
   same label validation as Add (non-empty, §4.1 length limits). Same-label
   renames still call `Vault::rename`, save, and bump `updated_at`, matching
   the CLI. Issuer is **not** editable here — parity with the CLI's
-  `rename` taking only `<new-label>`; deeper edits use Remove + Add.
+  `rename` taking only `<new-label>`; deeper edits use the Edit modal
+  below (or Remove + Add for OTP-affecting changes).
   Pre-commit save failures (`save_not_committed`) restore the prior label so
   memory matches disk and the modal stays open with the inline error;
   durability-unconfirmed saves leave the new label in memory and
   surface the warning inline. Rename does not handle secret material;
   the label buffer is cleared on submit, cancel, modal close, and
   auto-lock alongside the other modal-local state.
+- **Edit** *(v0.2 / DESIGN §6 Milestone 9)* — opened with `Shift+E`
+  on the focused account row. Three `tui-input` rows pre-populated
+  from the selected account's `AccountSummary`: *Label* (required,
+  trimmed and §4.1 length-validated), *Issuer* (optional; an
+  inline `Ctrl+U` clear shortcut maps to
+  `AccountEdit.issuer = Some(None)`; leaving the row's text equal
+  to the prior issuer maps to `None` — "leave untouched"), and
+  *Icon hint slug* (free-form text; empty / case-insensitive
+  `none` / explicit slug parses through
+  `paladin_core::parse_icon_hint_token` so the wording matches the
+  Add modal). `Tab` / `Shift+Tab` traverse the rows; `Enter`
+  submits, validating each field through `validate_account_edit`
+  and surfacing the first failing field's typed
+  `validation_error` inline beside its row without closing.
+  Successful submit wraps the assembled `AccountEdit` in
+  `Vault::mutate_and_save` → `Vault::edit_account_metadata`, bumps
+  `updated_at` even when every field equals its prior value (same
+  contract as the Rename modal), and posts
+  `StatusLine::Confirmation("Edited {display}")` on `Ok`. An
+  empty `AccountEdit` (every row matches its prior value and
+  neither clear shortcut was pressed) is rejected at the modal
+  with the inline body
+  `validation_error` (`field: "edit"`, `reason: "empty"`) before
+  reaching core, matching the core mutator's contract. OTP-
+  affecting fields (`secret`, `algorithm`, `digits`, `kind`,
+  `period`, `counter`) are intentionally absent — the modal
+  header footnote redirects users to Remove + Add for those
+  changes. Pre-commit save failures restore the pre-edit
+  `Account` byte-for-byte (delegated to
+  `Vault::mutate_and_save`) and keep the modal open with the
+  inline error; durability-unconfirmed saves leave the new state
+  in memory and surface the warning inline. No secret material is
+  handled — the row buffers are cleared on submit, cancel, modal
+  close, and auto-lock alongside the other modal-local state.
 - **Import** — text field for the source path, a format selector
   (auto-detect or explicit `otpauth` / `aegis` / `paladin` / `qr`),
   and an on-conflict selector (`skip` / `replace` / `append`).
@@ -1891,6 +1927,67 @@ alongside the existing `execute_export_*` family.
   `rename_modal_backspace_on_empty_draft_is_a_silent_noop`,
   `rename_modal_typing_clears_inline_error`) lock the text-editing
   contract a draft must satisfy before submit.)*
+
+### Edit modal (`tests/reducer_tests.rs`)
+
+v0.2 (DESIGN §6 Milestone 9). All bullets are red until Phase M
+ships in `paladin-core` and the TUI Edit modal lands.
+
+- [ ] `Shift+E` on the focused row opens the Edit modal with all
+  three rows pre-populated from `Account::summary()` (label,
+  issuer-or-empty-string, icon-hint slug-or-empty-string).
+- [ ] `Tab` / `Shift+Tab` cycle focus across the three rows;
+  `Enter` submits and `Esc` cancels (both clear every row
+  buffer).
+- [ ] Per-field text editing routes through the shared
+  `tui-input` walker; typing into a row clears that row's inline
+  error.
+- [ ] Submit with at least one row diverging from its prior value
+  emits `Effect::EditAccountMetadata { path, account_id, edit:
+  AccountEdit }` carrying only the changed fields populated;
+  unchanged rows map to `None`.
+- [ ] Empty-edit submit (every row matches its prior value, no
+  clear shortcut pressed) surfaces the inline
+  `validation_error` (`field: "edit"`, `reason: "empty"`)
+  without emitting an effect.
+- [ ] Label-only submit emits `AccountEdit { label: Some(...),
+  ..Default::default() }` and matches the byte-for-byte effect
+  the Rename modal emits — verifying the two surfaces share one
+  mutation path.
+- [ ] `Ctrl+U` on the issuer row sets
+  `AccountEdit.issuer = Some(None)` (clear); the row text empties
+  and the effect carries the clear marker.
+- [ ] Icon-hint slug `none` (case-insensitive) maps to
+  `IconHintInput::Clear`; an explicit slug routes through
+  `parse_icon_hint_token` and rejects invalid slugs with the
+  inline `validation_error` (`field: "icon_hint"`,
+  `reason: "invalid_slug"`).
+- [ ] Same-as-prior submit on at least one field still bumps
+  `updated_at` (matches the core mutator's no-op-but-non-empty
+  contract); covered by an executor-side test that asserts the
+  post-edit `Account::updated_at` strictly exceeds the pre-edit
+  value.
+- [ ] Pre-commit `save_not_committed` restores the pre-edit
+  account byte-for-byte and keeps the modal open with the inline
+  error; the draft is preserved for retry. (Mirrors the existing
+  Rename rollback test shape.)
+- [ ] `save_durability_unconfirmed` leaves the new account state
+  in memory and surfaces the warning. (Mirrors the existing
+  Rename durability test shape.)
+- [ ] Off-`Unlocked` / mismatched-path / stale-modal
+  `EffectResult::EditAccountMetadata` deliveries are silently
+  discarded, matching the rename test shape.
+- [ ] `?` from the list focus opens the help overlay including
+  the new `Shift+E` row; the `keybindings::KEYBINDINGS` table is
+  the single source so the overlay cannot drift from the
+  bindings.
+- [ ] Snapshot test for the Edit modal default layout
+  (`tests/view_snapshots.rs::snapshot_edit_modal_default`),
+  matching the Rename snapshot conventions (64×10 centered
+  region, three labeled rows, footer hint line).
+- [ ] Snapshot tests for the validation-error variant and the
+  durability-warning variant, mirroring the Rename snapshot
+  inventory.
 
 ### Pre-commit save rollback (`tests/reducer_tests.rs`)
 

@@ -38,7 +38,8 @@ crates/paladin-cli/
 │   │   ├── peek.rs       # never advances
 │   │   ├── copy.rs       # advances HOTP; clipboard via arboard; no auto-clear
 │   │   ├── remove.rs
-│   │   ├── rename.rs
+│   │   ├── rename.rs     # label-only positional shorthand; reimplemented on top of Vault::edit_account_metadata after Phase M
+│   │   ├── edit.rs       # multi-field metadata edit: --label / --issuer / --no-issuer / --icon-hint / --no-icon-hint; calls Vault::edit_account_metadata inside Vault::mutate_and_save
 │   │   ├── passphrase.rs # set / change / remove subcommands
 │   │   ├── import.rs     # --format otpauth/aegis/paladin/qr; --on-conflict
 │   │   ├── export.rs     # --plaintext / --encrypted; refuse overwrite w/o --force
@@ -49,6 +50,7 @@ crates/paladin-cli/
     ├── cli_add.rs
     ├── cli_show_peek_copy.rs
     ├── cli_remove_rename.rs
+    ├── cli_edit.rs                 # paladin edit multi-field grammar + parse-time rejection bullets per Phase M
     ├── cli_passphrase.rs
     ├── cli_import_export.rs
     ├── cli_settings.rs
@@ -108,7 +110,8 @@ valid custom KDF values are accepted but unused.
 | `peek <query>`                                         | Never advances. Prints all matches unconditionally. |
 | `copy <query>`                                         | Advances HOTP; copies to clipboard via `arboard`. **No auto-clear.** Single-match required. |
 | `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no confirmation prompt). Single-match required. |
-| `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. |
+| `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. Label-only positional shorthand for the `edit` command below; after Phase M ships, `rename` routes through `Vault::edit_account_metadata` so both commands share one mutation path. |
+| `edit <query> [--label <label>] [--issuer <issuer> \| --no-issuer] [--icon-hint <slug> \| --no-icon-hint]` | v0.2 (DESIGN §5 Milestone 9). Edits an account's non-cryptographic metadata. Requires at least one of `--label` / `--issuer` / `--no-issuer` / `--icon-hint` / `--no-icon-hint`; a no-flag invocation rejects at parse time as `validation_error` (`field: "argv"`, `reason: "no_edit_fields"`). `--issuer` and `--no-issuer` are mutually exclusive; `--icon-hint` and `--no-icon-hint` are mutually exclusive (collisions reject at parse time as `validation_error` (`field: "argv"`, `reason: "mutually_exclusive"`)). `--label` populates `AccountEdit.label = Some(value)`; `--issuer` populates `issuer = Some(Some(value))` after §4.1 issuer normalization; `--no-issuer` populates `issuer = Some(None)`; `--icon-hint <slug>` parses through `paladin_core::parse_icon_hint_token(slug)` (so the empty / case-insensitive `none` / explicit-slug grammar matches `add`) and populates `icon_hint`; `--no-icon-hint` populates `icon_hint = Some(IconHintInput::Clear)`. Single-match cardinality (like `copy` / `remove` / `rename` / `qr`); ambiguous queries exit non-zero with the candidate list. Routes through `Vault::edit_account_metadata` inside `Vault::mutate_and_save`; bumps `updated_at`. Read-only on the secret bytes — never advances HOTP counters and never re-derives a slug from secret content. `--json` success shape `{ "account": AccountSummary }` mirrors `rename`. |
 | `passphrase set | change | remove`                     | `set` and `change` accept the KDF flags above. `passphrase remove` first verifies that the vault is encrypted. In text mode, it then prints `paladin_core::format_plaintext_storage_warning()` and confirms unless `--yes` is passed; `--yes` skips only the confirmation. `--yes` is required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
 | `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints `paladin_core::format_plaintext_export_warning()` before writing unencrypted secrets; encrypted export accepts the KDF flags above. |
@@ -906,6 +909,62 @@ can be ticked.
 - [x] `rename` bumps `updated_at` above `created_at`.
 - [x] `rename` with an invalid label propagates a core
   `validation_error`.
+
+### `edit` (`tests/cli_edit.rs`)
+
+v0.2 (Phase M).
+
+- [ ] `edit --label <new>` succeeds and emits the
+  `{ "account": AccountSummary }` envelope with the bumped
+  `updated_at`; the persisted vault round-trip-reads the new label
+  and the prior issuer / icon_hint untouched.
+- [ ] `edit --issuer <new>` succeeds, normalizing whitespace per
+  §4.1; the persisted vault round-trip-reads the new issuer and the
+  prior label / icon_hint untouched. When the prior
+  `icon_hint == IconHintInput::Default` and no `--icon-hint` /
+  `--no-icon-hint` is supplied, the stored slug stays untouched
+  (the CLI does **not** silently re-derive a default — that
+  behavior is reserved for an explicit `--icon-hint`
+  re-derivation).
+- [ ] `edit --no-issuer` clears the issuer (`AccountSummary.issuer
+  == null` in JSON; bare label in text); the prior label /
+  icon_hint stay untouched.
+- [ ] `edit --icon-hint <slug>` validates the slug through
+  `parse_icon_hint_token` and rejects an invalid slug with the
+  core `validation_error` (`field: "icon_hint"`,
+  `reason: "invalid_slug"`); a valid slug round-trips.
+- [ ] `edit --no-icon-hint` clears the stored slug
+  (`AccountSummary.icon_hint == null` in JSON); the prior label /
+  issuer stay untouched.
+- [ ] `edit --label <l> --issuer <i> --icon-hint <s>` happy path:
+  all three fields land in a single `Vault::mutate_and_save` call;
+  the JSON envelope reflects the combined post-edit summary.
+- [ ] No-flag invocation rejects at parse time as
+  `validation_error` (`field: "argv"`, `reason: "no_edit_fields"`)
+  before the query is resolved (no `/dev/tty` reach, no vault
+  read).
+- [ ] Mutually-exclusive flag pairs (`--issuer` + `--no-issuer`,
+  `--icon-hint` + `--no-icon-hint`) reject at parse time as
+  `validation_error` (`field: "argv"`,
+  `reason: "mutually_exclusive"`).
+- [ ] Single-match cardinality: ambiguous query exits non-zero with
+  the candidate list; `id:<hex>` prefix routes through the same
+  `select` helper as `copy` / `remove` / `rename`.
+- [ ] Invalid `--label` (empty / overlong) propagates a core
+  `validation_error` (`field: "label"`, `reason: "empty"` /
+  `"too_long"`).
+- [ ] No-op-but-non-empty edit (every field set to the prior value)
+  still bumps `updated_at`, matching the `rename` same-label
+  contract and the core mutator's documented behavior.
+- [ ] `edit --json` envelopes match the
+  `cli_json_snapshots.rs` golden shape; volatile fields
+  (`updated_at`) are redacted in the snapshot.
+- [ ] Pre-commit save failure (via the core
+  `test-fault-injection` feature) leaves the vault byte-identical
+  to its pre-edit state and surfaces `save_not_committed`.
+- [ ] Post-commit durability-unconfirmed failure surfaces
+  `save_durability_unconfirmed` with `committed: true` and the
+  post-edit account state visible in the persisted vault.
 
 ### `passphrase set` / `change` / `remove` (`tests/cli_passphrase.rs`)
 

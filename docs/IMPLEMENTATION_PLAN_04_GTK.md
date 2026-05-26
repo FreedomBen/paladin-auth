@@ -48,7 +48,8 @@ crates/paladin-gtk/
 │   ├── row_item.rs        # RowItem GObject (account_id, display, icon_hint, issuer, busy) backing the gio::ListStore
 │   ├── add_account.rs     # AddAccountComponent (manual fields + otpauth:// URI paste + paste image)
 │   ├── remove_dialog.rs   # RemoveDialog (confirmation gate before Vault::remove inside Vault::mutate_and_save)
-│   ├── rename_dialog.rs   # RenameDialog (label edit; calls Vault::rename inside Vault::mutate_and_save)
+│   ├── rename_dialog.rs   # v0.2 foundation: RenameDialog (label edit; calls Vault::rename inside Vault::mutate_and_save). Superseded by edit_dialog.rs once Phase M lands; the kebab / row context menu's "Edit…" entry routes to EditDialog, not RenameDialog. Source kept during the transition window so its tests stay live while EditDialog is wired in.
+│   ├── edit_dialog.rs     # v0.2 / DESIGN §7 Milestone 9: EditDialog — three editable AdwEntryRow widgets (Label / Issuer + inline clear / Icon hint slug) over an AccountEdit value; calls Vault::edit_account_metadata inside Vault::mutate_and_save. Pure-logic state machine in this module; widget binding mirrors RenameDialog conventions.
 │   ├── import_dialog.rs   # ImportDialog (file picker + format + on-conflict + bundle passphrase)
 │   ├── export_dialog.rs   # ExportDialog (file picker + format + overwrite + encrypted passphrase)
 │   ├── export_qr_dialog.rs # ExportQrDialog — per-account QR export: adw::Dialog wrapping an AdwViewStack with "warning"/"qr" pages (warning-ack gate → Page-1 Cancel/Show-QR footer → on-screen gtk::Picture + Save PNG / Save SVG / Copy image to GDK clipboard / Done)
@@ -1909,6 +1910,223 @@ by ticking it.
   no migration. Users see `Show QR…` in the kebab on first
   launch after this lands.
 
+## Row context menu and EditDialog implementation (per DESIGN §7 / Milestone 9)
+
+This section pins the v0.2 row-context-menu surface — four menu
+entries shared between right-click, the GNOME-canonical
+`Menu` / `Shift+F10` keyboard equivalent, and the per-row kebab —
+plus the new `EditDialog` that the menu's "Edit…" entry mounts.
+Both pieces depend on `paladin-core` Phase M
+(`AccountEdit` + `Vault::edit_account_metadata`); the GTK work is
+red until that ships.
+
+### Design contract (locked)
+
+* **Four menu entries, one model.** A single
+  `account_row::build_row_context_menu_model()` builds the
+  `gio::Menu` with four entries in this order:
+    1. *Copy code* → `row.copy`
+    2. *Edit…* → `row.edit`
+    3. *Export QR…* → `row.show-qr`
+    4. *Delete…* → `row.remove`
+  This menu replaces the existing
+  `account_row::build_kebab_menu_model()` once the work lands;
+  the kebab `gtk::MenuButton`, the row-body right-click popover,
+  and the keyboard `popup-menu` path all bind the **same**
+  `gio::Menu` and the **same** per-row
+  `gio::SimpleActionGroup`. Section header rows are non-selectable
+  and never raise the menu.
+* **Action targets are the existing per-row group.**
+  `row.copy`, `row.edit`, `row.show-qr`, `row.remove` route through
+  the per-row `gio::SimpleActionGroup` installed by
+  `build_kebab_action_group` (today: `rename` / `show-qr` /
+  `remove` / `next` / `copy`). The work renames
+  `ROW_RENAME_ACTION_NAME` ("rename") to `ROW_EDIT_ACTION_NAME`
+  ("edit"), and `dispatch_row_action` returns a new
+  `AccountRowOutput::RequestEdit(AccountId)` variant.
+  `ROW_COPY_ACTION_NAME` ("copy") already exists for the inline
+  copy button and becomes menu-visible alongside it. The new
+  output variant routes onto
+  `AccountListOutput::OpenEditDialog(AccountId)` and `AppModel`
+  mounts `EditDialog`.
+* **Right-click via `gtk::GestureClick`.** Per-row, the account
+  column's cell `bind` installs a `gtk::GestureClick` configured
+  for the secondary mouse button (`set_button(GDK_BUTTON_SECONDARY)`).
+  On press, the closure looks up the row's `AccountId` through
+  the `RowItem` GObject and pops a `gtk::PopoverMenu` anchored at
+  the pointer location (`set_pointing_to` with the click's
+  `gtk::gdk::Rectangle`). The popover binds the shared
+  `gio::Menu` and the per-row action group via the row container's
+  `insert_action_group`, so the same actions fire whether the user
+  clicks the kebab, right-clicks the row, or uses the keyboard.
+  Section rows (`RowItem::is_section() == true`) early-return
+  from the gesture's press handler and never pop the menu.
+* **Keyboard parity via `popup-menu`.** Account-row containers
+  connect to the `popup-menu` signal (raised by GTK on
+  `Menu` key / `Shift+F10`). The handler pops the same
+  `gtk::PopoverMenu`, anchored to the row container's content
+  rectangle so a keyboard-driven user sees the menu attached to
+  the focused row. The signal handler returns `true` so the
+  default fallback (no menu) does not run.
+* **One popover at a time.** The account list keeps a single
+  `Option<gtk::PopoverMenu>` in `AccountListComponent` state; a
+  fresh popup unparents and drops any prior popover before
+  mounting the new one. Cleanup also fires on
+  `AccountListMsg::Refresh` (the row's `RowItem` may have moved or
+  been removed by the splice) and on auto-lock so a popover never
+  outlives its row.
+* **Per-state enablement.** The menu binds the per-row
+  `RowDisplay` projection through the existing `apply_busy_mask`
+  pipeline:
+    * *Copy code* is sensitive iff `RowDisplay::copy_enabled`
+      (hidden HOTP rows dim the entry, exactly like the inline
+      copy button).
+    * *Edit…*, *Export QR…*, *Delete…* are sensitive iff the row
+      is an account row (always true once the menu has popped on
+      one — section rows never raise it) and the app is not
+      `UnlockedBusy` (the busy mask flips them off as it does the
+      kebab today).
+* **EditDialog widget surface.** `EditDialog` is an `adw::Dialog`
+  (matching `RenameDialog`'s shell) hosting three `AdwEntryRow`
+  widgets in an `AdwPreferencesGroup`:
+    1. *Label* — required; pre-populated from
+       `Account::label()`. Validates through
+       `paladin_core::validate_label` on each keystroke; the
+       row's `error_message` is cleared / set on transition.
+    2. *Issuer* — optional; pre-populated from
+       `Account::issuer().unwrap_or("")`. An inline
+       `Adw.EntryRow::add_suffix(gtk::Button)` clears the row
+       (sets `AccountEdit.issuer = Some(None)`); leaving the row
+       at the prior issuer text means `None` (leave untouched).
+    3. *Icon hint slug* — optional free-form text;
+       pre-populated from
+       `Account::icon_hint().unwrap_or("")`. Empty /
+       case-insensitive `none` / explicit slug parses through
+       `paladin_core::parse_icon_hint_token` on submit. An
+       inline suffix `gtk::Image` previews the resolved icon
+       via `crate::icon_resolution::resolve_display_icon`.
+  Footer: `Cancel` (always sensitive) and `Save`
+  (`suggested-action`, sensitive only when the assembled
+  `AccountEdit` is non-empty *and* every populated field
+  validates clean). On `Save`, the dialog assembles
+  `AccountEdit`, posts
+  `Effect::EditAccountMetadata { path, account_id, edit, now }`
+  through the shared `effect_ownership` slot, and waits for the
+  `EffectResult` like `RenameDialog` does today. On `Ok`,
+  the dialog closes and posts an `adw::Toast` reading
+  `Edited {display}`. On `save_durability_unconfirmed`, the
+  dialog stays open with an inline warning body and the
+  post-edit state visible. On `save_not_committed` /
+  `validation_error` / `invalid_state`, the dialog stays open
+  with the inline error and the rows preserved for retry.
+* **No secret material.** `EditDialog` never touches the
+  account secret bytes; no `SecretString` / `Zeroizing`
+  buffers are required. The three entry rows hold plain
+  `String` content that is cleared on submit / cancel / dialog
+  close / auto-lock alongside the other modal-local state.
+* **Thread isolation.** `Vault::edit_account_metadata`
+  runs on `gio::spawn_blocking` per the
+  §"In-flight effect ownership" contract; the dialog never
+  blocks the main loop. The `(Vault, Store)` pair is moved into
+  the worker and returned through the
+  `EffectResult::EditAccountMetadata` completion so `AppModel`
+  reinstalls the live state regardless of the typed effect.
+* **OTP-affecting fields stay out.** `EditDialog` deliberately
+  exposes no controls for `secret`, `algorithm`, `digits`,
+  `kind`, `period`, or `counter`. The dialog body carries a
+  short footnote pointing users at Add + Remove for those
+  changes. The contract matches the core `AccountEdit` field
+  list — the GTK widget cannot drift out of sync because there
+  is no `AccountEdit` field to bind for those values.
+
+### Build order
+
+The work lands in slices so each commit ships a green test slice
+and a working app. `paladin-core` Phase M must land before any
+`paladin-gtk` slice can be wired through — until then, every GTK
+slice is gated on a stub `Vault::edit_account_metadata` shim that
+the test fixture provides through `paladin-core`'s
+`test-fault-injection` feature.
+
+1. **Menu model + action constants** — Extend
+   `account_row::build_kebab_menu_model` to add the
+   *Copy code* entry at position 0 and rename
+   `Rename…` → `Edit…` (still targeting `row.rename` for now).
+   Pinned by a new
+   `tests/account_list_logic.rs::build_kebab_menu_model_exposes_copy_edit_show_qr_and_remove_in_order`
+   replacing the existing
+   `build_kebab_menu_model_exposes_rename_show_qr_and_remove_in_order`
+   test. (No new behavior — just a label/order change so the
+   wiring stays stable.)
+2. **Action rename** — Rename
+   `ROW_RENAME_ACTION_NAME` (`"rename"`) to
+   `ROW_EDIT_ACTION_NAME` (`"edit"`); rename the
+   `AccountRowOutput::RequestRename` variant to
+   `AccountRowOutput::RequestEdit` and the
+   `AccountListOutput::OpenRenameDialog` variant to
+   `AccountListOutput::OpenEditDialog`. `AppModel` stays mounting
+   the existing `RenameDialog` on the new variant until slice 4
+   ships. Tests in `tests/account_row_logic.rs` are renamed
+   accordingly; the dispatch table coverage stays unchanged
+   modulo names.
+3. **Shared menu model helper** — Add
+   `account_row::build_row_context_menu_model()` returning the
+   `gio::Menu` constructed once and bound to both the kebab and
+   the right-click popover. The existing
+   `build_kebab_menu_model` becomes a thin wrapper around it for
+   one slice, then is removed once every call site is migrated.
+4. **EditDialog scaffold** — Add `edit_dialog.rs` with the pure-
+   logic state machine (`EditDialogState`,
+   `classify_submit(state, prior) -> SubmitOutcome`,
+   `classify_post_effect_error(err) -> PostEffectOutcome`) and
+   the widget binding. Wire `AppModel` to mount `EditDialog` on
+   `AccountListOutput::OpenEditDialog`; the legacy `RenameDialog`
+   stays available behind the kebab's secondary `Rename…`
+   alias-action until the cleanup slice. All new tests in
+   `tests/edit_dialog_logic.rs` cover the validator and post-
+   effect routing.
+5. **Right-click `gtk::GestureClick`** — Extend the account
+   column's cell factory `bind` to install a secondary-button
+   gesture and a `popup-menu` signal handler on the row
+   container. The handler routes through a new
+   `account_list::pop_row_context_menu(account_id, anchor)`
+   that mounts the shared menu against the row's
+   `gio::SimpleActionGroup`. Section rows early-return. The
+   `Option<gtk::PopoverMenu>` lives on `AccountListComponent`
+   state for the single-popover invariant. New tests in
+   `tests/row_context_menu_logic.rs` pin the pure-logic
+   decisions (pop / suppress for section / unparent prior).
+6. **RenameDialog retirement** — Remove the legacy `Rename…`
+   kebab alias action, drop `rename_dialog.rs`, and migrate the
+   `tests/rename_dialog_logic.rs` coverage of the validation /
+   save-rollback / durability-warning contracts into
+   `tests/edit_dialog_logic.rs` where the same logic now lives.
+   `Vault::rename` (and `paladin rename` and the TUI Rename
+   modal) stay — only the GTK rename surface is retired.
+7. **Docs sync** — Update `DESIGN.md` §7 / §12 / §13 and this
+   plan's checklists to reflect the final shape; tick the
+   Milestone 9 entries as each slice lands.
+
+### Open decisions / non-goals
+
+* **`gtk::PopoverMenu` vs `gtk::Popover`.**
+  `gtk::PopoverMenu::from_model` is the GNOME-HIG canonical
+  surface for menu-style popovers — kept. We do **not** ship a
+  custom `gtk::Popover` with inline buttons; that would diverge
+  from the kebab's render and from system menus.
+* **Multi-row context menu.** Out of scope. The
+  `gtk::SingleSelection` model only carries one selection;
+  bulk operations belong to a separate v0.3+ surface.
+* **Drag-to-reorder.** Out of scope. Vault insertion order is
+  the §"listing-order" contract; user-initiated reorder belongs
+  to a separate v0.3+ surface.
+* **OTP-affecting field edits.** Out of scope by core contract
+  (Phase M field list). The dialog footnote points users at
+  Add + Remove.
+* **Per-account icon picker.** Out of scope. The icon-hint
+  row stays a free-form slug entry (matching the Add modal);
+  a visual picker belongs to a separate v0.3+ feature.
+
 ## Linux desktop integration
 
 - `data/org.tamx.Paladin.Gui.desktop` shipped at
@@ -2496,6 +2714,106 @@ These run without a display server. Each lives under
   keeps the dialog open with the inline error.
 - [x] `save_durability_unconfirmed` keeps the new label in memory
   and surfaces the warning attached to the dialog body.
+
+  *Retirement note: once the Milestone 9 EditDialog cleanup slice
+  ships, these bullets migrate into `tests/edit_dialog_logic.rs`
+  and this file is removed alongside `rename_dialog.rs`.*
+
+#### `tests/edit_dialog_logic.rs`
+
+v0.2 (DESIGN §7 Milestone 9). All bullets are red until Phase M
+ships in `paladin-core` and the GTK EditDialog lands.
+
+- [ ] Pre-populates the three rows from `Account::summary()`
+  (label, issuer-or-empty-string, icon-hint slug-or-empty-string).
+- [ ] Per-row text editing rebuilds the `AccountEdit` projection on
+  each keystroke; rows that match the prior value map to `None`
+  (leave untouched), and rows that diverge map to
+  `Some(value)`. Pinned by a table-driven test against
+  `classify_edit_draft(state, prior) -> AccountEdit`.
+- [ ] Issuer row's inline clear suffix sets
+  `AccountEdit.issuer = Some(None)`; the row text empties and the
+  projection carries the clear marker.
+- [ ] Icon-hint row's text empties to `IconHintInput::Default`
+  (leave the post-edit slug derivation to core's
+  `parse_icon_hint_token`), `none` (case-insensitive) to
+  `IconHintInput::Clear`, and an explicit slug to
+  `IconHintInput::Slug(s)`. Invalid slugs surface the §5
+  `validation_error` (`field: "icon_hint"`,
+  `reason: "invalid_slug"`) inline beside the row and disable
+  Save.
+- [ ] Empty-edit submit (every row matches its prior value, no
+  clear pressed) is rejected client-side with the inline
+  `validation_error` (`field: "edit"`, `reason: "empty"`)
+  matching the core mutator's contract; no effect is posted.
+- [ ] Label-only submit emits
+  `Effect::EditAccountMetadata { edit: AccountEdit { label:
+  Some(...), ..Default::default() } }` matching what the
+  retired RenameDialog used to emit; the two surfaces are
+  pinned to share one mutation path through
+  `Vault::edit_account_metadata` after Phase M's `rename`
+  reimplementation.
+- [ ] Same-as-prior submit on at least one field still bumps
+  `updated_at` per the core mutator's no-op-but-non-empty
+  contract; verified by the executor-side
+  `tests/effect_ownership_logic.rs` worker that asserts the
+  post-edit `Account::updated_at` strictly exceeds the
+  pre-edit value.
+- [ ] `Save` is enabled iff the assembled `AccountEdit` is
+  non-empty *and* every populated field validates clean. Each
+  field's invalid input disables Save and shows the inline
+  error beside its row.
+- [ ] `save_not_committed` restores the pre-edit account
+  byte-for-byte and keeps the dialog open with the inline
+  error; the row buffers are preserved for retry.
+- [ ] `save_durability_unconfirmed` keeps the new state in
+  memory and surfaces the warning attached to the dialog body.
+- [ ] Account-not-found `invalid_state` surfaces inline
+  defensively (race against a concurrent remove); the dialog
+  closes only on `Ok`.
+- [ ] On dialog close (cancel / submit / auto-lock), every row
+  buffer is dropped — no `Account`, `AccountId`, or
+  `AccountEdit` survives in the closed dialog's state machine.
+- [ ] The dialog is disabled on `UnlockedBusy` (per the shared
+  effect-ownership contract) — Save and the row entries dim
+  while a save is mid-flight.
+
+#### `tests/row_context_menu_logic.rs`
+
+v0.2 (DESIGN §7 Milestone 9). All bullets are red until the
+right-click gesture slice lands.
+
+- [ ] `build_row_context_menu_model()` returns a `gio::Menu` with
+  the four entries in this order: *Copy code* → `row.copy`,
+  *Edit…* → `row.edit`, *Export QR…* → `row.show-qr`,
+  *Delete…* → `row.remove`. Pinned by a table-driven assertion
+  against the menu's `n_items()` and per-position attribute
+  pair (`label`, `action`).
+- [ ] `pop_row_context_menu_decision(row_kind, busy, hidden_hotp)`
+  returns `Pop` for account rows in non-busy state, `Suppress`
+  for section rows, and `Pop { copy_sensitive: false }` for
+  hidden HOTP rows. The widget binding uses this decision so
+  the unit test can pin the per-state enablement table without
+  spinning up GTK.
+- [ ] `account_list::install_row_context_menu_controllers` (the
+  pure-logic decision shadow) returns the expected controller
+  set (secondary-button `gtk::GestureClick` + `popup-menu`
+  signal handler) for an account row container and the empty
+  set for a section row container.
+- [ ] `AccountListComponent::pop_row_popover(account_id, anchor)`
+  unparents and drops any prior popover before mounting a fresh
+  one — pinned via the pure-logic
+  `single_popover_invariant` decision that the widget binding
+  calls into. Same decision fires on
+  `AccountListMsg::Refresh` (any prior popover drops because
+  its `RowItem` may have been spliced) and on auto-lock.
+- [ ] Per-row action targets resolve to the same
+  `gio::SimpleActionGroup` as the kebab — verified by
+  installing the group, activating `row.copy` / `row.edit` /
+  `row.show-qr` / `row.remove`, and asserting the matching
+  `AccountListOutput` (`CopyCode` / `OpenEditDialog` /
+  `OpenExportQrDialog` / `OpenRemoveDialog`) is emitted with
+  the expected `AccountId`.
 
 #### `tests/remove_dialog_logic.rs`
 
