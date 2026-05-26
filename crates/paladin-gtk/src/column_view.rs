@@ -35,7 +35,7 @@ use crate::account_row::{
     build_kebab_menu_model, dispatch_row_action, format_counter_label, format_seconds_remaining,
     progress_fraction, progress_urgency, AccountRowOutput, CodeDisplay, HIDDEN_CODE_PLACEHOLDER,
     PROGRESS_URGENCY_CSS_CLASSES, ROW_ACTION_GROUP_NAME, ROW_COPY_ACTION_NAME,
-    ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
+    ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME, ROW_SHOW_QR_ACTION_NAME,
 };
 use crate::icon_resolution::{resolve_display_icon, PLACEHOLDER_ICON_NAME};
 use crate::row_item::{RowItem, RowKind, ROW_ITEM_DISPLAY_CHANGED_SIGNAL};
@@ -1114,11 +1114,12 @@ fn bind_kebab_cell(kebab: &gtk::MenuButton, item: &RowItem) {
 
 /// Construct the per-row `gio::SimpleActionGroup` that the kebab's
 /// `gio::MenuModel` activations target. Holds one action per
-/// [`ROW_RENAME_ACTION_NAME`] / [`ROW_REMOVE_ACTION_NAME`] /
-/// [`ROW_NEXT_ACTION_NAME`] / [`ROW_COPY_ACTION_NAME`]; each closure
-/// captures `id` and `sender` so an activation maps through
-/// [`dispatch_row_action`] onto the matching [`AccountRowOutput`],
-/// then onto an [`AccountListOutput`] for `AppModel`.
+/// [`ROW_RENAME_ACTION_NAME`] / [`ROW_SHOW_QR_ACTION_NAME`] /
+/// [`ROW_REMOVE_ACTION_NAME`] / [`ROW_NEXT_ACTION_NAME`] /
+/// [`ROW_COPY_ACTION_NAME`]; each closure captures `id` and
+/// `sender` so an activation maps through [`dispatch_row_action`]
+/// onto the matching [`AccountRowOutput`], then onto an
+/// [`AccountListOutput`] for `AppModel`.
 fn build_kebab_action_group(
     id: AccountId,
     sender: &Sender<AccountListOutput>,
@@ -1126,6 +1127,7 @@ fn build_kebab_action_group(
     let actions = gio::SimpleActionGroup::new();
     for action_name in [
         ROW_RENAME_ACTION_NAME,
+        ROW_SHOW_QR_ACTION_NAME,
         ROW_REMOVE_ACTION_NAME,
         ROW_NEXT_ACTION_NAME,
         ROW_COPY_ACTION_NAME,
@@ -1138,6 +1140,7 @@ fn build_kebab_action_group(
             };
             let routed = match out {
                 AccountRowOutput::RequestRename(id) => AccountListOutput::OpenRenameDialog(id),
+                AccountRowOutput::RequestExportQr(id) => AccountListOutput::OpenExportQrDialog(id),
                 AccountRowOutput::RequestRemove(id) => AccountListOutput::OpenRemoveDialog(id),
                 AccountRowOutput::RequestCopy(id) => AccountListOutput::CopyCode(id),
                 AccountRowOutput::RequestAdvance(id) => AccountListOutput::AdvanceHotp(id),

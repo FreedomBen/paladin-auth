@@ -36,7 +36,7 @@ use paladin_gtk::account_list::{
 use paladin_gtk::account_row::{
     build_kebab_menu_model, dispatch_row_action, AccountRowOutput, CodeDisplay, CounterText,
     ProgressDisplay, RowDisplay, ROW_ACTION_GROUP_NAME, ROW_COPY_ACTION_NAME, ROW_NEXT_ACTION_NAME,
-    ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
+    ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME, ROW_SHOW_QR_ACTION_NAME,
 };
 use paladin_gtk::column_view::apply_interleaved_splice_plan;
 use paladin_gtk::row_item::RowItem;
@@ -1047,20 +1047,23 @@ fn row_copy_action_name_is_copy() {
 }
 
 #[test]
-fn build_kebab_menu_model_exposes_rename_and_remove_in_order() {
+fn build_kebab_menu_model_exposes_rename_show_qr_and_remove_in_order() {
     // The row kebab `gtk::MenuButton` carries the `gio::Menu`
     // produced by [`build_kebab_menu_model`]. Per
-    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-    // `AccountRowComponent`, the menu must expose exactly two
-    // entries — "Rename…" then "Remove…" — whose action targets
-    // resolve through the per-row `gio::SimpleActionGroup` named
-    // [`ROW_ACTION_GROUP_NAME`]. Pinning the labels and targets
-    // here catches drift between the kebab menu, the action group
-    // installed by `install_row_action_group`, and the dispatch
-    // table in `dispatch_row_action` — any of which would otherwise
-    // leave the user with a kebab item that activates into the void.
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"QR export dialog
+    // implementation" > "Design contract", the menu must expose
+    // exactly three entries in order — "Rename…", "Show QR…", then
+    // "Remove…" — whose action targets resolve through the per-row
+    // `gio::SimpleActionGroup` named [`ROW_ACTION_GROUP_NAME`].
+    // The destructive "Remove…" stays trailing; the read-only
+    // "Show QR…" neighbours the read-only "Rename…" shape.
+    // Pinning the labels and targets here catches drift between
+    // the kebab menu, the action group installed by
+    // `install_row_action_group`, and the dispatch table in
+    // `dispatch_row_action` — any of which would otherwise leave
+    // the user with a kebab item that activates into the void.
     let menu = build_kebab_menu_model();
-    assert_eq!(menu.n_items(), 2, "kebab menu carries exactly two items");
+    assert_eq!(menu.n_items(), 3, "kebab menu carries exactly three items");
 
     let rename_label: String = menu
         .item_attribute_value(0, "label", None)
@@ -1077,20 +1080,73 @@ fn build_kebab_menu_model_exposes_rename_and_remove_in_order() {
         format!("{ROW_ACTION_GROUP_NAME}.{ROW_RENAME_ACTION_NAME}"),
     );
 
-    let remove_label: String = menu
+    let show_qr_label: String = menu
         .item_attribute_value(1, "label", None)
         .and_then(|v| v.get())
         .expect("kebab item 1 carries a label attribute");
-    assert_eq!(remove_label, "Remove\u{2026}");
+    assert_eq!(show_qr_label, "Show QR\u{2026}");
 
-    let remove_action: String = menu
+    let show_qr_action: String = menu
         .item_attribute_value(1, "action", None)
         .and_then(|v| v.get())
         .expect("kebab item 1 carries an action attribute");
     assert_eq!(
+        show_qr_action,
+        format!("{ROW_ACTION_GROUP_NAME}.{ROW_SHOW_QR_ACTION_NAME}"),
+    );
+
+    let remove_label: String = menu
+        .item_attribute_value(2, "label", None)
+        .and_then(|v| v.get())
+        .expect("kebab item 2 carries a label attribute");
+    assert_eq!(remove_label, "Remove\u{2026}");
+
+    let remove_action: String = menu
+        .item_attribute_value(2, "action", None)
+        .and_then(|v| v.get())
+        .expect("kebab item 2 carries an action attribute");
+    assert_eq!(
         remove_action,
         format!("{ROW_ACTION_GROUP_NAME}.{ROW_REMOVE_ACTION_NAME}"),
     );
+}
+
+#[test]
+fn row_show_qr_action_name_is_show_qr() {
+    // The kebab "Show QR…" menu entry targets `row.show-qr`,
+    // which resolves to the action named `show-qr` inside the
+    // `row` group. Pinning the name keeps the kebab menu in
+    // `build_kebab_menu_model`, the action installed by
+    // `install_row_action_group`, and the dispatch table in
+    // `dispatch_row_action` in lockstep — any drift would leave
+    // the user with a "Show QR…" entry that activates into the
+    // void.
+    assert_eq!(ROW_SHOW_QR_ACTION_NAME, "show-qr");
+}
+
+#[test]
+fn dispatch_row_action_routes_show_qr_to_request_export_qr() {
+    let id = AccountId::new();
+    assert_eq!(
+        dispatch_row_action(ROW_SHOW_QR_ACTION_NAME, id),
+        Some(AccountRowOutput::RequestExportQr(id)),
+    );
+}
+
+#[test]
+fn account_list_output_open_export_qr_dialog_carries_account_id() {
+    // The kebab's `row.show-qr` activation routes through
+    // [`dispatch_row_action`] → [`AccountRowOutput::RequestExportQr`]
+    // → [`AccountListOutput::OpenExportQrDialog`]. Pinning that
+    // the variant exists *and* preserves the `AccountId` keeps the
+    // routing typed end-to-end so `AppModel` always receives the
+    // exact row the user clicked.
+    let id = AccountId::new();
+    let output = AccountListOutput::OpenExportQrDialog(id);
+    match output {
+        AccountListOutput::OpenExportQrDialog(carried) => assert_eq!(carried, id),
+        other => panic!("expected OpenExportQrDialog, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1151,7 +1207,7 @@ fn account_row_output_to_account_list_output_dispatch_table_covers_each_variant(
     // `crate::column_view` (the kebab `gio::SimpleActionGroup`
     // installed on every `bind`). The legacy `forward_row_output`
     // mapper that the FactoryVecDeque setup used is gone; this test
-    // pins the four-arm table the kebab's `build_kebab_action_group`
+    // pins the five-arm table the kebab's `build_kebab_action_group`
     // helper relies on, by exercising [`dispatch_row_action`]
     // directly and mapping the resulting [`AccountRowOutput`] onto
     // the matching [`AccountListOutput`] variant. Drift here would
@@ -1159,6 +1215,7 @@ fn account_row_output_to_account_list_output_dispatch_table_covers_each_variant(
     fn route(out: &AccountRowOutput) -> AccountListOutput {
         match *out {
             AccountRowOutput::RequestRename(id) => AccountListOutput::OpenRenameDialog(id),
+            AccountRowOutput::RequestExportQr(id) => AccountListOutput::OpenExportQrDialog(id),
             AccountRowOutput::RequestRemove(id) => AccountListOutput::OpenRemoveDialog(id),
             AccountRowOutput::RequestCopy(id) => AccountListOutput::CopyCode(id),
             AccountRowOutput::RequestAdvance(id) => AccountListOutput::AdvanceHotp(id),
@@ -1168,6 +1225,10 @@ fn account_row_output_to_account_list_output_dispatch_table_covers_each_variant(
     assert_eq!(
         route(&AccountRowOutput::RequestRename(id)),
         AccountListOutput::OpenRenameDialog(id),
+    );
+    assert_eq!(
+        route(&AccountRowOutput::RequestExportQr(id)),
+        AccountListOutput::OpenExportQrDialog(id),
     );
     assert_eq!(
         route(&AccountRowOutput::RequestRemove(id)),

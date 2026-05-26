@@ -144,6 +144,15 @@ pub enum AccountListOutput {
     /// [`AccountId`]. `AppModel` reaches into its live `Vault` to
     /// look up the current label and opens `RenameDialog`.
     OpenRenameDialog(AccountId),
+    /// User asked to view the per-account `otpauth://` QR code for
+    /// the account identified by the inner [`AccountId`].
+    /// `AppModel` resolves the matching `AccountSummary` and mounts
+    /// `ExportQrDialog` against the live `(Vault, Store)` pair per
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"QR export dialog
+    /// implementation". Read-only — the dialog never enters
+    /// `Vault::mutate_and_save`, never advances an HOTP counter,
+    /// and never bumps `updated_at`.
+    OpenExportQrDialog(AccountId),
     /// User asked to remove the account identified by the inner
     /// [`AccountId`]. `AppModel` opens `RemoveDialog` (the destructive
     /// confirmation per §"Component tree" > `RemoveDialog`).

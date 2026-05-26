@@ -2034,6 +2034,14 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
+            AppMsg::AccountListAction(AccountListOutput::OpenExportQrDialog(_id)) => {
+                // ExportQrDialogComponent mount lands in the next
+                // commit of the §"QR export dialog implementation"
+                // build order (see `docs/IMPLEMENTATION_PLAN_04_GTK.md`).
+                // Until then the activation is a benign no-op so the
+                // kebab entry is wired end-to-end on the routing side
+                // without exposing a half-built dialog.
+            }
             AppMsg::AccountListAction(AccountListOutput::OpenRemoveDialog(id)) => {
                 // Look up the targeted account in the live vault and
                 // mount the remove dialog. A `None` projection means

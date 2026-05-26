@@ -1574,7 +1574,7 @@ single reviewable commit (mirroring the shape of the
 unticked box is a discrete unit of work the implementer can claim
 by ticking it.
 
-* [ ] **`paladin-core` API.** Land the §4.7 surface first:
+* [x] **`paladin-core` API.** Land the §4.7 surface first:
   `QrRenderOptions`, the `QR_MODULE_SIZE_PX_*` constants,
   `Vault::export_qr_png` / `export_qr_svg` / `export_qr_ansi`,
   the parallel `export::qr_*` free functions, and

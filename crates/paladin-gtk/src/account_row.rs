@@ -513,13 +513,21 @@ pub fn project_row(
 /// row container.
 ///
 /// Must match the prefix used by [`build_kebab_menu_model`] for the
-/// `row.rename` / `row.remove` menu targets — otherwise the kebab
-/// items dispatch into the void at activation time.
+/// `row.rename` / `row.show-qr` / `row.remove` menu targets —
+/// otherwise the kebab items dispatch into the void at activation
+/// time.
 pub const ROW_ACTION_GROUP_NAME: &str = "row";
 
 /// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the
 /// `RenameDialog` for the row's account.
 pub const ROW_RENAME_ACTION_NAME: &str = "rename";
+
+/// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the
+/// `ExportQrDialog` for the row's account
+/// (`docs/IMPLEMENTATION_PLAN_04_GTK.md` §"QR export dialog
+/// implementation"). Read-only — activation never mutates the
+/// vault, advances an HOTP counter, or bumps `updated_at`.
+pub const ROW_SHOW_QR_ACTION_NAME: &str = "show-qr";
 
 /// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the
 /// `RemoveDialog` for the row's account.
@@ -540,12 +548,17 @@ pub const ROW_COPY_ACTION_NAME: &str = "copy";
 /// Each variant carries the row's [`AccountId`] so the cell
 /// factories in [`crate::column_view`] can route it onto the
 /// matching [`crate::account_list::AccountListOutput`] variant
-/// (`OpenRenameDialog`, `OpenRemoveDialog`, `CopyCode`,
-/// `AdvanceHotp`) directly.
+/// (`OpenRenameDialog`, `OpenExportQrDialog`, `OpenRemoveDialog`,
+/// `CopyCode`, `AdvanceHotp`) directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountRowOutput {
     /// Row's kebab-menu "Rename…" entry activated.
     RequestRename(AccountId),
+    /// Row's kebab-menu "Show QR…" entry activated. Read-only;
+    /// `AppModel` opens `ExportQrDialog` for the account per
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"QR export dialog
+    /// implementation".
+    RequestExportQr(AccountId),
     /// Row's kebab-menu "Remove…" entry activated.
     RequestRemove(AccountId),
     /// Row's per-row copy `gtk::Button` activated. Hidden HOTP rows
@@ -562,16 +575,17 @@ pub enum AccountRowOutput {
 /// [`AccountRowOutput`] the row emits.
 ///
 /// Returns [`Some`] for [`ROW_RENAME_ACTION_NAME`],
-/// [`ROW_REMOVE_ACTION_NAME`], [`ROW_NEXT_ACTION_NAME`], and
-/// [`ROW_COPY_ACTION_NAME`]; [`None`] for every other input. The row
-/// installs exactly those four actions so an unrecognized name
-/// signals a wiring drift (typo in the action group, stale kebab
-/// menu target, …) and stays a silent no-op rather than crashing the
-/// row.
+/// [`ROW_SHOW_QR_ACTION_NAME`], [`ROW_REMOVE_ACTION_NAME`],
+/// [`ROW_NEXT_ACTION_NAME`], and [`ROW_COPY_ACTION_NAME`]; [`None`]
+/// for every other input. The row installs exactly those five
+/// actions so an unrecognized name signals a wiring drift (typo in
+/// the action group, stale kebab menu target, …) and stays a silent
+/// no-op rather than crashing the row.
 #[must_use]
 pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountRowOutput> {
     match name {
         ROW_RENAME_ACTION_NAME => Some(AccountRowOutput::RequestRename(id)),
+        ROW_SHOW_QR_ACTION_NAME => Some(AccountRowOutput::RequestExportQr(id)),
         ROW_REMOVE_ACTION_NAME => Some(AccountRowOutput::RequestRemove(id)),
         ROW_NEXT_ACTION_NAME => Some(AccountRowOutput::RequestAdvance(id)),
         ROW_COPY_ACTION_NAME => Some(AccountRowOutput::RequestCopy(id)),
@@ -581,15 +595,25 @@ pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountRowOutput
 
 /// Build the kebab `gio::Menu` shared by every row.
 ///
-/// Two entries — "Rename…" → `row.rename`, "Remove…" → `row.remove` —
-/// matching the per-row [`gio::SimpleActionGroup`] installed by
-/// [`install_row_action_group`].
+/// Three entries in order — "Rename…" → `row.rename`,
+/// "Show QR…" → `row.show-qr`, "Remove…" → `row.remove` — matching
+/// the per-row [`gio::SimpleActionGroup`] installed by
+/// [`install_row_action_group`]. The destructive "Remove…" stays
+/// trailing; the read-only "Show QR…" neighbours the read-only
+/// "Rename…" shape per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"QR export dialog implementation" > "Design contract".
 #[must_use]
 pub fn build_kebab_menu_model() -> gio::Menu {
     let menu = gio::Menu::new();
     menu.append(
         Some("Rename\u{2026}"),
         Some(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_RENAME_ACTION_NAME}")),
+    );
+    menu.append(
+        Some("Show QR\u{2026}"),
+        Some(&format!(
+            "{ROW_ACTION_GROUP_NAME}.{ROW_SHOW_QR_ACTION_NAME}"
+        )),
     );
     menu.append(
         Some("Remove\u{2026}"),
