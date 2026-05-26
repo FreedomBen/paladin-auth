@@ -34,19 +34,23 @@ use ratatui::buffer::{Buffer, Cell};
 use ratatui::style::{Color, Modifier};
 use ratatui::Terminal;
 
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
 use paladin_core::{
     format_plaintext_export_warning, format_unsafe_permissions, format_validation_warning,
-    hotp_reveal_deadline, validate_manual, AccountInput, AccountKindInput, Algorithm,
+    hotp_reveal_deadline, validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm,
     IconHintInput, PaladinError, PermissionSubject, Store, ValidationWarning, Vault, VaultInit,
     VaultLock,
 };
-use paladin_tui::app::event::QrImportFailure;
+use paladin_tui::app::event::{AppEvent, EffectResult, QrImportFailure};
+use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     format_account_display_label, format_duplicate_account_message, format_qr_import_failure,
     render_error_message, AddModal, AddMode, AppState, CountsPanel, CreateVaultMode,
     CreateVaultStep, ExportFormat, ExportModal, Focus, HotpReveal, ImportModal, Modal,
-    PassphraseFieldFocus, PassphraseModal, PassphraseSubFlow, PendingDuplicateAdd, RemoveModal,
-    RenameModal, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    PassphraseFieldFocus, PassphraseModal, PassphraseSubFlow, PendingDuplicateAdd, QrSaveFocus,
+    QrSaveStep, RemoveModal, RenameModal, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED,
+    NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -4108,4 +4112,357 @@ fn snapshot_startup_error_unsafe_permissions() {
         message,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+// ---------------------------------------------------------------------------
+// QR Export modal — insta snapshot coverage
+//
+// The modal is 72x24 (centered) per `crates/paladin-tui/src/view/qr.rs`, so
+// each snapshot renders into an 80x32 TestBackend — wide enough to fit the
+// modal plus the list-view chrome that paints underneath, tall enough to
+// fit the modal's full inner body (warning paragraph wrap on Page 1, the
+// half-block QR grid on Page 2). Tracks
+// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Tests > QR Export modal > Insta
+// snapshots" bullets.
+// ---------------------------------------------------------------------------
+
+/// Build a [`KeyCode`]-only [`AppEvent::Input`] event with no modifiers.
+/// Mirrors the `key(...)` helper used throughout `tests/reducer_tests.rs`
+/// so the drive sequence (`Q` → Space → Enter → Tab → typing → Enter)
+/// matches the reducer-side coverage byte-for-byte.
+fn qr_key(code: KeyCode) -> AppEvent {
+    AppEvent::Input {
+        event: Event::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+        at: Instant::now(),
+    }
+}
+
+/// Drive a sequence of [`KeyCode`] events through the reducer, discarding
+/// any emitted effects (the QR Export snapshot suite never asserts on
+/// effects — that's reducer-test territory).
+fn qr_drive(mut state: AppState, codes: &[KeyCode]) -> AppState {
+    for code in codes {
+        let (next, _effects) = reduce(state, qr_key(*code));
+        state = next;
+    }
+    state
+}
+
+/// Type each character of `s` into the focused control via `KeyCode::Char`.
+/// Same helper shape as `reducer_tests.rs::type_chars`.
+fn qr_type_chars(mut state: AppState, s: &str) -> AppState {
+    for ch in s.chars() {
+        let (next, _) = reduce(state, qr_key(KeyCode::Char(ch)));
+        state = next;
+    }
+    state
+}
+
+/// Build an [`AppState::Unlocked`] backed by a plaintext vault with one
+/// TOTP account preselected. Mirrors `reducer_tests.rs::qr_unlocked_with_one_totp`
+/// but uses the snapshot-suite tempdir helper so permissions match the rest of
+/// the file's fixtures.
+fn qr_unlocked_with_one_totp_snapshot() -> (AppState, AccountId, PathBuf, TempDirGuard) {
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    (state, id, path, TempDirGuard::new(tmp))
+}
+
+/// Same as [`qr_unlocked_with_one_totp_snapshot`] but with a single HOTP
+/// account at counter `0`. Used by `qr_export_modal_page2_hotp` so the QR
+/// payload encodes `otpauth://hotp/...` instead of `otpauth://totp/...`.
+fn qr_unlocked_with_one_hotp_snapshot() -> (AppState, AccountId, PathBuf, TempDirGuard) {
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_hotp_account(&mut vault, &store, Some("Bank"), "savings", 0);
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    (state, id, path, TempDirGuard::new(tmp))
+}
+
+/// Holds a `TempDir` alive for the lifetime of one test so the vault path
+/// the snapshot's reducer-driven QR effect references stays valid. Drops
+/// (and removes) on test exit per `tempfile`'s usual contract.
+struct TempDirGuard(#[allow(dead_code)] tempfile::TempDir);
+
+impl TempDirGuard {
+    fn new(tmp: tempfile::TempDir) -> Self {
+        Self(tmp)
+    }
+}
+
+#[test]
+fn snapshot_qr_export_modal_warning_ack_unchecked() {
+    // Plan: "Page 1 on open, ack off, Cancel-button reachable via Tab."
+    // Drive `Q` from list focus to open the QR Export modal, then `Tab`
+    // once so the Cancel-button focus is visible (the snapshot pins the
+    // focus arrow on `Cancel` rather than the ack checkbox to make
+    // tab-reachability visible in the grid).
+    let (state, _id, _path, _guard) = qr_unlocked_with_one_totp_snapshot();
+    let state = qr_drive(state, &[KeyCode::Char('Q'), KeyCode::Tab]);
+    insta::assert_snapshot!(
+        "qr_export_modal_warning_ack_unchecked",
+        render_to_text(&state, snapshot_now(), 80, 32)
+    );
+}
+
+#[test]
+fn snapshot_qr_export_modal_page2_totp() {
+    // Plan: "Page 2 with a TOTP account's QR rendered, captured
+    // immediately after ack-toggle-on." Drive `Q` → Space so the modal
+    // advances to Page 2 with `staged_ansi` populated from
+    // `Vault::export_qr_ansi(id)`.
+    let (state, _id, _path, _guard) = qr_unlocked_with_one_totp_snapshot();
+    let state = qr_drive(state, &[KeyCode::Char('Q'), KeyCode::Char(' ')]);
+    insta::assert_snapshot!(
+        "qr_export_modal_page2_totp",
+        render_to_text(&state, snapshot_now(), 80, 32)
+    );
+}
+
+#[test]
+fn snapshot_qr_export_modal_page2_hotp() {
+    // Plan: "Page 2 with a HOTP account." Same drive sequence as the
+    // TOTP variant but seeded with a single HOTP account; the staged
+    // ANSI body therefore encodes the HOTP `otpauth://hotp/...` URI.
+    let (state, _id, _path, _guard) = qr_unlocked_with_one_hotp_snapshot();
+    let state = qr_drive(state, &[KeyCode::Char('Q'), KeyCode::Char(' ')]);
+    insta::assert_snapshot!(
+        "qr_export_modal_page2_hotp",
+        render_to_text(&state, snapshot_now(), 80, 32)
+    );
+}
+
+#[test]
+fn snapshot_qr_export_modal_save_destination_prompt() {
+    // Plan: "Page 2 + save sub-flow on EnterPath with a typed path."
+    // Drive into Page 2, Enter on `Save as PNG…` to open the sub-flow,
+    // then type a fixed path so the destination field is non-empty.
+    let (state, _id, _path, _guard) = qr_unlocked_with_one_totp_snapshot();
+    let state = qr_drive(
+        state,
+        &[KeyCode::Char('Q'), KeyCode::Char(' '), KeyCode::Enter],
+    );
+    let state = qr_type_chars(state, "/tmp/qr.png");
+    insta::assert_snapshot!(
+        "qr_export_modal_save_destination_prompt",
+        render_to_text(&state, snapshot_now(), 80, 32)
+    );
+}
+
+#[test]
+fn snapshot_qr_export_modal_save_overwrite_gate() {
+    // Plan: "Page 2 + save sub-flow on OverwriteGate." Drive the
+    // reducer to Page 2 (so `staged_ansi` is populated by the real
+    // ack-toggle path), then patch the modal's `save_sub_flow` slot
+    // directly into the overwrite-gate shape with a deterministic
+    // path. Driving the gate through the filesystem would bake the
+    // tempdir's random suffix into the snapshot — the gate's behavior
+    // is locked separately in
+    // `reducer_tests.rs::qr_export_modal_save_with_existing_destination_shows_overwrite_gate`.
+    let (state, _id, _path, _guard) = qr_unlocked_with_one_totp_snapshot();
+    let state = qr_drive(state, &[KeyCode::Char('Q'), KeyCode::Char(' ')]);
+    let state = patch_qr_modal(state, |qr| {
+        qr.focus = paladin_tui::app::state::QrExportFocus::SavePngButton;
+        qr.save_sub_flow = Some(paladin_tui::app::state::QrSaveSubFlow {
+            format: paladin_tui::app::state::QrSaveFormat::Png,
+            path_text: "/tmp/qr.png".to_string(),
+            step: QrSaveStep::OverwriteGate,
+            overwrite_ack: false,
+            focus: QrSaveFocus::OverwriteAck,
+            error: None,
+        });
+    });
+    insta::assert_snapshot!(
+        "qr_export_modal_save_overwrite_gate",
+        render_to_text(&state, snapshot_now(), 80, 32)
+    );
+}
+
+/// Apply `patch` to the open [`QrExportModal`] on an
+/// [`AppState::Unlocked`]. Panics if the state is not on `Unlocked`
+/// with a QR Export modal open — every caller drives the modal open
+/// before calling this helper, so the panic is a programmer-error
+/// guard rather than a recoverable path.
+fn patch_qr_modal<F>(state: AppState, patch: F) -> AppState
+where
+    F: FnOnce(&mut paladin_tui::app::state::QrExportModal),
+{
+    match state {
+        AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            selected,
+            pending_chord_leader,
+            viewport_height,
+            viewport_offset,
+            focus,
+            status_line,
+            help_open,
+        } => {
+            let modal = match modal {
+                Some(Modal::QrExport(mut qr)) => {
+                    patch(&mut qr);
+                    Some(Modal::QrExport(qr))
+                }
+                other => panic!("expected QR modal open, got modal={other:?}"),
+            };
+            AppState::Unlocked {
+                path,
+                vault,
+                store,
+                search_query,
+                idle_deadline,
+                pending_clipboard_clear,
+                hotp_reveal,
+                modal,
+                selected,
+                pending_chord_leader,
+                viewport_height,
+                viewport_offset,
+                focus,
+                status_line,
+                help_open,
+            }
+        }
+        other => panic!("expected AppState::Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn snapshot_qr_export_modal_save_succeeded() {
+    // Plan: "Page 2 with last_save_path set + no active sub-flow."
+    // Drive into the sub-flow, type a path, then inject a synthetic
+    // `EffectResult::QrExport(Ok(path))` so the reducer closes the
+    // sub-flow and stashes the path in `last_save_path` for the green
+    // `Saved to …` row.
+    let (state, _id, _path, _guard) = qr_unlocked_with_one_totp_snapshot();
+    let state = qr_drive(
+        state,
+        &[KeyCode::Char('Q'), KeyCode::Char(' '), KeyCode::Enter],
+    );
+    let state = qr_type_chars(state, "/tmp/qr.png");
+    let written = PathBuf::from("/tmp/qr.png");
+    let (state, _effects) = reduce(
+        state,
+        AppEvent::EffectResult(EffectResult::QrExport {
+            result: Ok(written.clone()),
+        }),
+    );
+    // Sanity: the success result should have populated last_save_path.
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::QrExport(qr)),
+            ..
+        } => {
+            assert_eq!(qr.last_save_path.as_deref(), Some(written.as_path()));
+            assert!(qr.save_sub_flow.is_none());
+        }
+        other => panic!("expected QR modal on Page 2, got {other:?}"),
+    }
+    insta::assert_snapshot!(
+        "qr_export_modal_save_succeeded",
+        render_to_text(&state, snapshot_now(), 80, 32)
+    );
+}
+
+#[test]
+fn snapshot_qr_export_modal_save_failed_pre_commit() {
+    // Plan: "Page 2 + save sub-flow showing save_not_committed inline
+    // error." Drive into the sub-flow, type a path, then inject a
+    // synthetic `EffectResult::QrExport(Err(SaveNotCommitted { .. }))`
+    // so the reducer parks the rendered wording on
+    // `QrSaveSubFlow::error` for the inline-error row.
+    let (state, _id, _path, _guard) = qr_unlocked_with_one_totp_snapshot();
+    let state = qr_drive(
+        state,
+        &[KeyCode::Char('Q'), KeyCode::Char(' '), KeyCode::Enter],
+    );
+    let state = qr_type_chars(state, "/tmp/qr.png");
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let (state, _effects) = reduce(
+        state,
+        AppEvent::EffectResult(EffectResult::QrExport { result: Err(err) }),
+    );
+    let rendered = render_to_text(&state, snapshot_now(), 80, 32);
+    // Regression guard mirrors the Export modal's inline-error guards.
+    assert!(
+        rendered.contains("save not committed") || rendered.contains("save_not_committed"),
+        "expected inline save_not_committed wording to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!("qr_export_modal_save_failed_pre_commit", rendered);
+}
+
+#[test]
+fn snapshot_qr_export_modal_save_failed_durability_unconfirmed() {
+    // Plan: same as `save_failed_pre_commit` but for
+    // `SaveDurabilityUnconfirmed` — the primary rename succeeded but
+    // the parent-directory fsync failed.
+    let (state, _id, _path, _guard) = qr_unlocked_with_one_totp_snapshot();
+    let state = qr_drive(
+        state,
+        &[KeyCode::Char('Q'), KeyCode::Char(' '), KeyCode::Enter],
+    );
+    let state = qr_type_chars(state, "/tmp/qr.png");
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let (state, _effects) = reduce(
+        state,
+        AppEvent::EffectResult(EffectResult::QrExport { result: Err(err) }),
+    );
+    let rendered = render_to_text(&state, snapshot_now(), 80, 32);
+    assert!(
+        rendered.to_lowercase().contains("durability")
+            || rendered.contains("save_durability_unconfirmed"),
+        "expected inline save_durability_unconfirmed wording to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(
+        "qr_export_modal_save_failed_durability_unconfirmed",
+        rendered
+    );
 }

@@ -1,0 +1,36 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+expression: "render_to_text(&state, snapshot_now(), 80, 32)"
+---
+┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ ▶ GitHub (ben@example.com)            914 994  ██████░░░░   18s  ↪   255 062 │
+│   ┌ QR Export ───────────────────────────────────────────────────────────┐   │
+│   │ WARNING: A QR code encodes the account secret. Anyone who sees or    │   │
+│   │ photographs it can clone the OTP, so treat the displayed code and    │   │
+│   │ any saved QR file like a plaintext export. HOTP exports encode the   │   │
+│   │ current counter and do not advance it; scanning the QR into a second │   │
+│   │ device keeps both devices in sync.                                   │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │   [ ] I understand the warning                                       │   │
+│   │                                                                      │   │
+│   │                              ▶ Cancel ◀                              │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │        Space / Enter toggles ack  ·  Tab cycles  ·  Esc cancel       │   │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find     │
+└──────────────────────────────────────────────────────────────────────────────┘

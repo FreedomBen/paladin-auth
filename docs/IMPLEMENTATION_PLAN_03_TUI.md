@@ -1708,7 +1708,7 @@ alongside the existing `execute_export_*` family.
   and
   `qr_export_modal_png_save_for_totp_row_decodes_to_otpauth_uri_with_matching_params`
   in `tests/effect_tests.rs`.
-- [ ] Insta snapshots — render the modal at each state:
+- [x] Insta snapshots — render the modal at each state:
   `qr_export_modal_warning_ack_unchecked` (Page 1 on open, ack
   off, Cancel-button reachable via Tab),
   `qr_export_modal_page2_totp` (Page 2 with a TOTP account's QR
@@ -1721,6 +1721,17 @@ alongside the existing `execute_export_*` family.
   `qr_export_modal_save_failed_durability_unconfirmed`. Locked
   via `insta::assert_snapshot!` per the existing modal-snapshot
   pattern.
+  *(All eight snapshots landed in
+  `crates/paladin-tui/tests/view_snapshots.rs` as
+  `snapshot_qr_export_modal_*` tests rendering an 80x32
+  `TestBackend` so the 72x24 centered modal fits with list-view
+  chrome around it. The Page-1 / Page-2 / destination-prompt /
+  succeeded / save-failed snapshots drive the reducer (`Q` → Space
+  → Enter → typed path → injected `EffectResult::QrExport`); the
+  overwrite-gate snapshot patches the `QrSaveSubFlow` slot
+  directly to avoid baking the tempdir's random suffix into the
+  snapshot — the gate's reducer behavior is locked separately by
+  `reducer_tests.rs::qr_export_modal_save_with_existing_destination_shows_overwrite_gate`.)*
 
 ### Settings modal (`tests/reducer_tests.rs`)
 
@@ -4125,10 +4136,18 @@ terminal theme and survives `--no-color`.
     `view_snapshots__snapshot_help_overlay.snap` is updated and
     the `TestBackend` height bumped from 31 to 32 rows to
     accommodate the additional row.)*
-  - [ ] All `tests/reducer_tests.rs::qr_export_modal_*` bullets
+  - [x] All `tests/reducer_tests.rs::qr_export_modal_*` bullets
     ticked, the `tests/effect_tests.rs::execute_qr_export_*`
     bullets ticked, and the insta snapshots listed in the
     §"QR Export modal" Tests block locked.
+    *(Reducer / effect tests landed across the foundation and
+    Save-sub-flow slices; the eight insta snapshots
+    (`snapshot_qr_export_modal_*` in
+    `crates/paladin-tui/tests/view_snapshots.rs`) lock the
+    modal's per-state rendering and pin a regression guard on the
+    inline `save_not_committed` / `save_durability_unconfirmed`
+    wording so any future change in `render_error_message`
+    surfaces here as a diff.)*
 
 ## Definition of done
 
