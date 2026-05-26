@@ -43,7 +43,12 @@
 
 use std::path::PathBuf;
 
-use paladin_core::{format_plaintext_qr_export_warning, AccountId, AccountSummary};
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::gtk;
+use relm4::prelude::*;
+
+use paladin_core::{format_plaintext_qr_export_warning, AccountId, AccountSummary, Vault};
 use zeroize::Zeroizing;
 
 /// Name of the [`adw::ViewStack`] child carrying the warning page
@@ -396,4 +401,234 @@ pub fn format_export_qr_dialog_done_label() -> &'static str {
 #[must_use]
 pub fn format_export_qr_dialog_save_success_toast() -> &'static str {
     "QR saved to"
+}
+
+/// Drop the staged Page-2 buffers and reset the visible page back
+/// to the warning page.
+///
+/// Shared between [`apply_msg`] (`CancelPressed` / `Close` arms) and
+/// [`apply_msg_ack_toggled`]'s ack-off branch so the buffer-wipe
+/// contract has a single source of truth. The widget layer still
+/// has to swap the `gtk::Picture` paintable back to
+/// `gdk::Paintable::new_empty` — that lives in the `view!` binding
+/// rather than this state-side helper because it requires a
+/// `gdk::Paintable`.
+fn drop_staged_buffers(state: &mut ExportQrDialogState) {
+    state.staged_png = None;
+    state.staged_svg = None;
+    state.save_target = None;
+    state.destination_exists = false;
+    state.overwrite_acknowledged = false;
+}
+
+/// Apply an [`ExportQrDialogMsg`] to the [`ExportQrDialogState`] and
+/// return the optional [`ExportQrDialogOutput`] the widget should
+/// forward to `AppModel`.
+///
+/// Mirrors the [`crate::export_dialog::apply_msg`] shape so the two
+/// dialogs stay in lock-step. The widget calls this from
+/// [`SimpleComponent::update`]; `AppModel` consumes the returned
+/// output through the
+/// [`crate::app::model::AppMsg::ExportQrDialogAction`] dispatch arm.
+///
+/// `ShowQr` is intentionally a no-op at this layer — the
+/// `SimpleComponent` owns the actual
+/// `vault.export_qr_png(account_id, ...)` render and stages the
+/// returned bytes via a side channel because `Vault` is not
+/// reachable from this pure helper. The reducer still receives the
+/// message so the dispatch table is exhaustive.
+//
+// `clippy::needless_pass_by_value` would suggest a reference because
+// the current variants only carry `Copy` payloads. The signature is
+// kept by-value to match `crate::export_dialog::apply_msg` (a stable
+// dispatch contract across dialog reducers) and to keep room for a
+// future variant carrying owned secret bytes (e.g. a staged-buffer
+// hand-off) without churning the call sites.
+#[allow(clippy::needless_pass_by_value)]
+pub fn apply_msg(
+    state: &mut ExportQrDialogState,
+    msg: ExportQrDialogMsg,
+) -> Option<ExportQrDialogOutput> {
+    match msg {
+        ExportQrDialogMsg::AckToggled(active) => {
+            apply_msg_ack_toggled(state, active);
+            None
+        }
+        ExportQrDialogMsg::ShowQr => None,
+        ExportQrDialogMsg::CancelPressed => {
+            drop_staged_buffers(state);
+            Some(ExportQrDialogOutput::Cancel)
+        }
+        ExportQrDialogMsg::Close => {
+            drop_staged_buffers(state);
+            Some(ExportQrDialogOutput::Close)
+        }
+    }
+}
+
+/// Resolve the targeted account in `vault` and project it into an
+/// [`ExportQrDialogInit`] payload `AppModel` hands to
+/// `ExportQrDialogComponent::builder().launch(...)`.
+///
+/// Returns `None` when the account is no longer present (the user
+/// removed it between the kebab activation and this dispatch — a
+/// benign race that the caller drops silently, mirroring
+/// [`crate::rename_dialog::decide_rename_target`] /
+/// [`crate::remove_dialog::decide_remove_target`]).
+#[must_use]
+pub fn decide_export_qr_target(vault: &Vault, id: AccountId) -> Option<ExportQrDialogInit> {
+    vault
+        .summaries()
+        .find(|summary| summary.id == id)
+        .map(|summary| ExportQrDialogInit {
+            account_id: summary.id,
+            account_summary: summary,
+        })
+}
+
+/// Per-account QR export dialog component.
+///
+/// Wraps the [`ExportQrDialogState`] reducer in a relm4
+/// [`SimpleComponent`] backed by an [`adw::Dialog`] whose body is an
+/// [`adw::ViewStack`] with two named children
+/// ([`VIEW_STACK_WARNING_PAGE_NAME`] and [`VIEW_STACK_QR_PAGE_NAME`]).
+/// The warning page carries the plaintext-export warning body, the
+/// ack `adw::SwitchRow`, and a Cancel / Show QR footer; the QR page
+/// is mounted as a placeholder until the "Page 2 mount on Show-QR
+/// press" commit lands the Picture + caption + save / copy buttons.
+pub struct ExportQrDialogComponent {
+    state: ExportQrDialogState,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for ExportQrDialogComponent {
+    type Init = ExportQrDialogInit;
+    type Input = ExportQrDialogMsg;
+    type Output = ExportQrDialogOutput;
+
+    view! {
+        #[root]
+        adw::Dialog {
+            set_title: format_export_qr_dialog_title(),
+
+            connect_closed[sender] => move |_| {
+                sender.input(ExportQrDialogMsg::Close);
+            },
+
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {},
+
+                #[wrap(Some)]
+                #[name = "view_stack"]
+                set_content = &adw::ViewStack {
+                    add_named[Some(VIEW_STACK_WARNING_PAGE_NAME)] = &gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 12,
+                        set_margin_top: 12,
+                        set_margin_bottom: 12,
+                        set_margin_start: 12,
+                        set_margin_end: 12,
+
+                        #[name = "warning_group"]
+                        adw::PreferencesGroup {
+                            #[name = "warning_body_row"]
+                            add = &adw::ActionRow {
+                                set_title: &compose_export_qr_warning_body(),
+                                set_title_lines: 0,
+                                set_subtitle_lines: 0,
+                                add_css_class: "warning",
+                            },
+
+                            #[name = "warning_ack_row"]
+                            add = &adw::SwitchRow {
+                                set_title: format_export_qr_dialog_ack_row_title(),
+                                set_subtitle: format_export_qr_dialog_ack_row_subtitle(),
+                                #[watch]
+                                set_active: model.state.ack_revealed,
+                                connect_active_notify[sender] => move |row| {
+                                    sender.input(ExportQrDialogMsg::AckToggled(
+                                        row.is_active(),
+                                    ));
+                                },
+                            },
+                        },
+
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_spacing: 6,
+                            set_halign: gtk::Align::End,
+
+                            #[name = "cancel_button"]
+                            gtk::Button {
+                                set_label: format_export_qr_dialog_cancel_label(),
+                                connect_clicked[sender] => move |_| {
+                                    sender.input(ExportQrDialogMsg::CancelPressed);
+                                },
+                            },
+
+                            #[name = "show_qr_button"]
+                            gtk::Button {
+                                set_label: format_export_qr_dialog_show_qr_button_label(),
+                                add_css_class: "suggested-action",
+                                #[watch]
+                                set_sensitive: compose_show_qr_button_sensitive(&model.state),
+                                connect_clicked[sender] => move |_| {
+                                    sender.input(ExportQrDialogMsg::ShowQr);
+                                },
+                            },
+                        },
+                    },
+
+                    // Page 2 placeholder — the live Picture + caption +
+                    // Save / Copy / Done footer land in the "Page 2 mount
+                    // on Show-QR press" commit of the §"QR export
+                    // dialog implementation" build order.
+                    add_named[Some(VIEW_STACK_QR_PAGE_NAME)] = &gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                    },
+                },
+            },
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = ExportQrDialogComponent {
+            state: ExportQrDialogState::new(init),
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        if let Some(output) = apply_msg(&mut self.state, msg) {
+            // Send failures mean `AppModel` has already dropped the
+            // controller (e.g. window closed mid-click); nothing
+            // remains to dismiss.
+            let _ = sender.output(output);
+        }
+    }
+}
+
+/// Page-1 warning-ack `adw::SwitchRow` title.
+#[must_use]
+pub fn format_export_qr_dialog_ack_row_title() -> &'static str {
+    "I understand \u{2014} show the QR"
+}
+
+/// Page-1 warning-ack `adw::SwitchRow` subtitle.
+#[must_use]
+pub fn format_export_qr_dialog_ack_row_subtitle() -> &'static str {
+    "Reveal the QR code only after reading the warning above."
+}
+
+/// Page-1 footer "Cancel" button label.
+#[must_use]
+pub fn format_export_qr_dialog_cancel_label() -> &'static str {
+    "Cancel"
 }

@@ -1598,14 +1598,14 @@ by ticking it.
   in `tests/account_list_logic.rs`. Extend
   `dispatch_row_action` to route the new action name into the
   variant.
-* [ ] **`AppMsg::OpenExportQrDialog(AccountId)` and dispatch.**
+* [x] **`AppMsg::OpenExportQrDialog(AccountId)` and dispatch.**
   Add the message variant and the `AccountListAction` arm that
   resolves the matching `AccountSummary` and mounts
   `ExportQrDialogComponent` against the live `(Vault, Store)`
   pair. The dispatch must reject the open when `AppModel` is not
   `Unlocked` (silent no-op) for parity with the existing
   `OpenRenameDialog` / `OpenRemoveDialog` gates.
-* [ ] **`src/export_qr_dialog.rs` skeleton.** Add the
+* [x] **`src/export_qr_dialog.rs` skeleton.** Add the
   `ExportQrDialogComponent` (`relm4::SimpleComponent`) with
   `ExportQrDialogInit { account_id, account_summary }`,
   `ExportQrDialogMsg`, `ExportQrDialogOutput`, and the
@@ -1628,7 +1628,7 @@ by ticking it.
   that `classify_export_qr_save_error` routes to inline
   rendering). The `Cancel` / `Close` output variants are
   distinct, matching `ExportDialogOutput`.
-* [ ] **Warning page wiring.** Construct the `AdwViewStack` with
+* [x] **Warning page wiring.** Construct the `AdwViewStack` with
   the `"warning"` child mounted on init. Inside `"warning"`,
   mount Page 1's `adw::ActionRow` rendering
   `compose_export_qr_warning_body() ->

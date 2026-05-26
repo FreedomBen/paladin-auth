@@ -121,6 +121,9 @@ use crate::export_dialog::{
     run_export_worker, ExportDialogComponent, ExportDialogInit, ExportDialogMsg,
     ExportDialogOutput, ExportWorkerCompletion,
 };
+use crate::export_qr_dialog::{
+    decide_export_qr_target, ExportQrDialogComponent, ExportQrDialogOutput,
+};
 use crate::hotp_reveal::{
     apply_advance_decision, apply_advance_outcome, expired_reveals,
     format_hotp_advance_failed_toast, format_hotp_durability_unconfirmed_toast,
@@ -286,6 +289,13 @@ pub struct AppModel {
     /// [`AppMsg::OpenExportDialog`] handler.
     #[allow(dead_code)]
     export_dialog: Option<Controller<ExportDialogComponent>>,
+    /// Live [`ExportQrDialogComponent`] controller when the user has
+    /// activated a row's kebab `Show QR…` action. `None` between
+    /// activations. Held on `self` so the rendered `adw::Dialog` is
+    /// not dropped at the end of the
+    /// [`AppMsg::OpenExportQrDialog`] handler.
+    #[allow(dead_code)]
+    export_qr_dialog: Option<Controller<ExportQrDialogComponent>>,
     /// Live [`PassphraseDialogComponent`] controller when the user
     /// has activated the application menu's Passphrase… entry.
     /// `None` between activations. Held on `self` so the rendered
@@ -585,6 +595,10 @@ impl std::fmt::Debug for AppModel {
                 &self.export_dialog.as_ref().map(|_| "<mounted>"),
             )
             .field(
+                "export_qr_dialog",
+                &self.export_qr_dialog.as_ref().map(|_| "<mounted>"),
+            )
+            .field(
                 "passphrase_dialog",
                 &self.passphrase_dialog.as_ref().map(|_| "<mounted>"),
             )
@@ -881,6 +895,27 @@ pub enum AppMsg {
     /// this commit only wires the dispatch edge so the menu
     /// activation reaches `AppModel`.
     OpenExportDialog,
+    /// Posted from
+    /// `AppMsg::AccountListAction(AccountListOutput::OpenExportQrDialog(id))`
+    /// (and reserved for a future keyboard-shortcut dispatch).
+    /// Mounts a fresh [`ExportQrDialogComponent`] seeded with the
+    /// targeted [`paladin_core::AccountSummary`] resolved from the
+    /// live vault through
+    /// [`crate::export_qr_dialog::decide_export_qr_target`]. The
+    /// dispatch is gated on
+    /// [`crate::app::state::AppState::is_unlocked`] and a live
+    /// `(Vault, Store)` pair so a stray dispatch in any other state
+    /// is a benign no-op.
+    OpenExportQrDialog(paladin_core::AccountId),
+    /// Forwarded from the live [`ExportQrDialogComponent`] when the
+    /// user dismisses the dialog. Both
+    /// [`ExportQrDialogOutput::Cancel`] (explicit Cancel button) and
+    /// [`ExportQrDialogOutput::Close`] (window-manager close /
+    /// Escape) drop the live controller so the rendered
+    /// `adw::Dialog` is released; the variants stay distinct in
+    /// [`crate::export_qr_dialog`] so a future telemetry / undo
+    /// surface can differentiate them.
+    ExportQrDialogAction(ExportQrDialogOutput),
     /// Posted by the application menu's Passphrase entry's
     /// `connect_activate` handler. Mounts the
     /// [`PassphraseDialogComponent`](crate::passphrase_dialog)
@@ -1791,6 +1826,7 @@ impl SimpleComponent for AppModel {
             settings_dialog: None,
             import_dialog: None,
             export_dialog: None,
+            export_qr_dialog: None,
             passphrase_dialog: None,
             content: widgets.content.clone(),
             search_query: String::new(),
@@ -2034,13 +2070,14 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
-            AppMsg::AccountListAction(AccountListOutput::OpenExportQrDialog(_id)) => {
-                // ExportQrDialogComponent mount lands in the next
-                // commit of the §"QR export dialog implementation"
-                // build order (see `docs/IMPLEMENTATION_PLAN_04_GTK.md`).
-                // Until then the activation is a benign no-op so the
-                // kebab entry is wired end-to-end on the routing side
-                // without exposing a half-built dialog.
+            AppMsg::AccountListAction(AccountListOutput::OpenExportQrDialog(id)) => {
+                // Forward to the dedicated `AppMsg::OpenExportQrDialog`
+                // arm so a future keyboard-shortcut dispatch path can
+                // reach the same mount handler without going through
+                // `AccountListOutput`. The handler resolves the live
+                // `AccountSummary` and applies the
+                // `AppState::is_unlocked` gate.
+                sender.input(AppMsg::OpenExportQrDialog(id));
             }
             AppMsg::AccountListAction(AccountListOutput::OpenRemoveDialog(id)) => {
                 // Look up the targeted account in the live vault and
@@ -2921,6 +2958,53 @@ impl SimpleComponent for AppModel {
                         }
                     }
                 }
+            }
+            AppMsg::OpenExportQrDialog(id) => {
+                // Per-row kebab `Show QR…` activation. Resolve the
+                // targeted account in the live vault and mount a
+                // fresh `ExportQrDialogComponent`. A `None`
+                // projection means the account was removed between
+                // the kebab activation and this dispatch — treat
+                // that as a benign race and drop the action,
+                // mirroring `OpenRenameDialog` / `OpenRemoveDialog`.
+                // The kebab action's sensitivity is already gated
+                // against `AppState::is_unlocked` at the column-view
+                // layer, but a stray dispatch from a future keyboard
+                // accelerator could still arrive in a non-unlocked
+                // state — defend against that here so the dialog
+                // never mounts over a `Missing` / `Locked` /
+                // `UnlockedBusy` / `StartupError` window.
+                if let Some(state) = self.state.as_ref() {
+                    if state.is_unlocked() {
+                        if let Some((vault, _store)) = self.vault.as_ref() {
+                            if let Some(init) = decide_export_qr_target(vault, id) {
+                                let controller = ExportQrDialogComponent::builder()
+                                    .launch(init)
+                                    .forward(sender.input_sender(), AppMsg::ExportQrDialogAction);
+                                controller.widget().present(Some(&self.content));
+                                self.export_qr_dialog = Some(controller);
+                            }
+                        }
+                    }
+                }
+            }
+            AppMsg::ExportQrDialogAction(
+                ExportQrDialogOutput::Cancel | ExportQrDialogOutput::Close,
+            ) => {
+                // User dismissed the QR-export `adw::Dialog` — drop
+                // the live controller so the widget is released and
+                // the staged PNG / SVG buffers (held in
+                // [`Zeroizing`](zeroize::Zeroizing) wrappers inside
+                // `ExportQrDialogState`) zero on drop. The two
+                // variants stay distinct in
+                // [`crate::export_qr_dialog::ExportQrDialogOutput`]
+                // so a future telemetry / undo surface can
+                // differentiate them. `adw::Dialog` self-detaches
+                // from its toplevel parent on close, so no
+                // `self.content.remove` is needed. Defensive: if the
+                // field is already `None` (controller swapped under
+                // us by a future race), this is a benign no-op.
+                self.export_qr_dialog = None;
             }
             AppMsg::ExportDialogAction(ExportDialogOutput::Cancel | ExportDialogOutput::Close) => {
                 // User dismissed the `adw::Dialog` — either by the

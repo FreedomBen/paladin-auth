@@ -17,17 +17,25 @@
 //! tempfile-backed invariant land alongside the matching commits
 //! in the §"QR export dialog implementation" build order.
 
+use std::path::Path;
+use std::time::SystemTime;
+
+use secrecy::SecretString;
+use zeroize::Zeroizing;
+
 use paladin_core::{
-    format_plaintext_qr_export_warning, AccountId, AccountKindSummary, AccountSummary, Algorithm,
+    format_plaintext_qr_export_warning, validate_manual, AccountId, AccountInput, AccountKindInput,
+    AccountKindSummary, AccountSummary, Algorithm, IconHintInput, Store, Vault, VaultInit,
+    VaultLock,
 };
 use paladin_gtk::export_qr_dialog::{
-    apply_msg_ack_toggled, compose_export_qr_warning_body, compose_show_qr_button_sensitive,
-    compose_visible_child_name, format_export_qr_dialog_copy_image_label,
-    format_export_qr_dialog_done_label, format_export_qr_dialog_save_as_png_label,
-    format_export_qr_dialog_save_as_svg_label, format_export_qr_dialog_save_success_toast,
-    format_export_qr_dialog_show_qr_button_label, format_export_qr_dialog_title,
-    ExportQrDialogInit, ExportQrDialogMsg, ExportQrDialogOutput, ExportQrDialogState,
-    VIEW_STACK_QR_PAGE_NAME, VIEW_STACK_WARNING_PAGE_NAME,
+    apply_msg, apply_msg_ack_toggled, compose_export_qr_warning_body,
+    compose_show_qr_button_sensitive, compose_visible_child_name, decide_export_qr_target,
+    format_export_qr_dialog_copy_image_label, format_export_qr_dialog_done_label,
+    format_export_qr_dialog_save_as_png_label, format_export_qr_dialog_save_as_svg_label,
+    format_export_qr_dialog_save_success_toast, format_export_qr_dialog_show_qr_button_label,
+    format_export_qr_dialog_title, ExportQrDialogInit, ExportQrDialogMsg, ExportQrDialogOutput,
+    ExportQrDialogState, VIEW_STACK_QR_PAGE_NAME, VIEW_STACK_WARNING_PAGE_NAME,
 };
 
 /// Build a synthetic TOTP [`AccountSummary`] for the fixture used
@@ -261,4 +269,154 @@ fn format_export_qr_dialog_done_label_is_non_empty() {
 #[test]
 fn format_export_qr_dialog_save_success_toast_is_non_empty() {
     assert!(!format_export_qr_dialog_save_success_toast().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Group B — apply_msg dispatch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_ack_toggled_returns_none() {
+    // Ack toggling never emits an output; only `CancelPressed` and
+    // `Close` lift the dialog out via `ExportQrDialogOutput`.
+    let mut state = fixture_state();
+    let out = apply_msg(&mut state, ExportQrDialogMsg::AckToggled(true));
+    assert!(out.is_none());
+    assert!(state.ack_revealed);
+}
+
+#[test]
+fn apply_msg_show_qr_returns_none() {
+    // The pure-logic `apply_msg` is a no-op for `ShowQr` — the
+    // `SimpleComponent` owns the `Vault::export_qr_png` render and
+    // stages the bytes through a side channel because `Vault` is
+    // not reachable from this pure helper.
+    let mut state = fixture_state();
+    state.ack_revealed = true;
+    let out = apply_msg(&mut state, ExportQrDialogMsg::ShowQr);
+    assert!(out.is_none());
+}
+
+#[test]
+fn apply_msg_cancel_pressed_emits_cancel_output() {
+    let mut state = fixture_state();
+    let out = apply_msg(&mut state, ExportQrDialogMsg::CancelPressed);
+    assert!(matches!(out, Some(ExportQrDialogOutput::Cancel)));
+}
+
+#[test]
+fn apply_msg_cancel_pressed_clears_staged_buffers() {
+    // Cancel must wipe the staged PNG / SVG bytes (their
+    // `Zeroizing` wrappers zero on drop), the save-target slot,
+    // and the overwrite-ack so `AppModel`'s
+    // `self.export_qr_dialog = None` controller drop releases a
+    // fresh slate.
+    let mut state = fixture_state();
+    state.ack_revealed = true;
+    state.staged_png = Some(Zeroizing::new(vec![1, 2, 3]));
+    state.staged_svg = Some(Zeroizing::new("<svg/>".to_string()));
+
+    let out = apply_msg(&mut state, ExportQrDialogMsg::CancelPressed);
+
+    assert!(matches!(out, Some(ExportQrDialogOutput::Cancel)));
+    assert!(state.staged_png.is_none());
+    assert!(state.staged_svg.is_none());
+    assert!(state.save_target.is_none());
+    assert!(!state.overwrite_acknowledged);
+}
+
+#[test]
+fn apply_msg_close_emits_close_output() {
+    let mut state = fixture_state();
+    let out = apply_msg(&mut state, ExportQrDialogMsg::Close);
+    assert!(matches!(out, Some(ExportQrDialogOutput::Close)));
+}
+
+#[test]
+fn apply_msg_close_clears_staged_buffers() {
+    // The `closed` signal path (Escape, WM close, …) must
+    // perform the same buffer wipe as Cancel — the two variants
+    // stay distinct in `ExportQrDialogOutput` only so a future
+    // telemetry / undo surface can differentiate them.
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![9, 9, 9]));
+    state.staged_svg = Some(Zeroizing::new("<svg></svg>".to_string()));
+
+    let out = apply_msg(&mut state, ExportQrDialogMsg::Close);
+
+    assert!(matches!(out, Some(ExportQrDialogOutput::Close)));
+    assert!(state.staged_png.is_none());
+    assert!(state.staged_svg.is_none());
+    assert!(state.save_target.is_none());
+    assert!(!state.overwrite_acknowledged);
+}
+
+// ---------------------------------------------------------------------------
+// Group C — decide_export_qr_target (Vault-backed projection)
+// ---------------------------------------------------------------------------
+
+fn secure_tempdir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("create tempdir for export-qr-target fixture");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir to 0700");
+    }
+    dir
+}
+
+fn open_plaintext_pair(path: &Path) -> (Vault, Store) {
+    let (vault, store) =
+        Store::create(path, VaultInit::Plaintext).expect("create plaintext vault on disk");
+    vault.save(&store).expect("commit empty vault");
+    drop(vault);
+    drop(store);
+    Store::open(path, VaultLock::Plaintext).expect("reopen plaintext vault")
+}
+
+fn add_totp(vault: &mut Vault, store: &Store, issuer: Option<&str>, label: &str) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: issuer.map(str::to_string),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::now()).expect("totp account input validates");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added account");
+    id
+}
+
+#[test]
+fn decide_export_qr_target_finds_known_account() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+
+    let init = decide_export_qr_target(&vault, id).expect("known account id resolves");
+    assert_eq!(init.account_id, id);
+    assert_eq!(init.account_summary.id, id);
+    assert_eq!(init.account_summary.issuer.as_deref(), Some("GitHub"));
+    assert_eq!(init.account_summary.label, "ben");
+}
+
+#[test]
+fn decide_export_qr_target_returns_none_for_unknown_id() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    let stray = AccountId::new();
+
+    assert!(decide_export_qr_target(&vault, stray).is_none());
 }
