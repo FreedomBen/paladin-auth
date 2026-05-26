@@ -105,6 +105,10 @@ pub const KEYBINDINGS: &[Keybinding] = &[
         action: "Open Export modal",
     },
     Keybinding {
+        keys: "Q",
+        action: "Open QR Export modal for the focused row",
+    },
+    Keybinding {
         keys: "/",
         action: "Focus search bar",
     },

@@ -30,8 +30,8 @@ use crate::app::state::{
     format_qr_import_failure, initial_selection, render_error_message, AddManualFocus, AddModal,
     AddMode, AppState, ChordLeader, CountsPanel, ExportFormat, ExportModal, Focus, HotpReveal,
     ImportModal, Modal, PassphraseModal, PassphraseSubFlow, PendingClipboardClear,
-    PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
-    CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    PendingDuplicateAdd, QrExportFocus, QrExportModal, QrExportPage, RemoveModal, RenameModal,
+    SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::prompt::PassphraseBuffer;
 use crate::search::{filtered_account_ids, select_after_search};
@@ -1694,6 +1694,7 @@ fn route_unlocked_char_kbd(mut state: AppState, c: char) -> (AppState, Vec<Effec
     let rename_modal = pending_rename_for_char(c, vault, *selected);
     let remove_modal = pending_remove_for_char(c, *selected);
     let settings_modal = pending_settings_for_char(c, vault);
+    let qr_export_modal = pending_qr_export_for_char(c, vault, *selected);
     let copy_next = if c == 'C' {
         Some(copy_next_code_outcome(path, vault, *selected))
     } else {
@@ -1706,6 +1707,7 @@ fn route_unlocked_char_kbd(mut state: AppState, c: char) -> (AppState, Vec<Effec
         rename_modal,
         remove_modal,
         settings_modal,
+        qr_export_modal,
         copy_next,
     )
 }
@@ -1839,6 +1841,34 @@ fn pending_settings_for_char(c: char, vault: &Vault) -> Option<SettingsModal> {
     })
 }
 
+/// Construct the [`QrExportModal`] payload for `Q` (Shift-q) from the
+/// current selection, or `None` when the binding is not `Q`, when
+/// nothing is selected (empty filtered set), or when the selection
+/// has dropped out of the vault.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > QR
+/// Export: *"single-account QR modal opened with `Q` (Shift-q) on
+/// the focused list row. ... is also a silent no-op when the
+/// filtered set is empty so there is no focused row to render
+/// (parity with `Enter` on an empty list)."* Unlike Remove / Rename,
+/// the no-selection case does NOT set a status-line error — the
+/// binding is a silent no-op (parity with `Enter` on an empty list).
+/// The vault lookup tolerates a stale selection (id no longer in
+/// `Vault::iter`) by returning `None`; the dispatch arm leaves the
+/// modal slot untouched in that case.
+fn pending_qr_export_for_char(
+    c: char,
+    vault: &Vault,
+    selected: Option<AccountId>,
+) -> Option<QrExportModal> {
+    if c != 'Q' {
+        return None;
+    }
+    let id = selected?;
+    vault.iter().find(|a| a.id() == id)?;
+    Some(QrExportModal::new(id))
+}
+
 /// Dispatch a key event to the open modal's modal-local input path.
 ///
 /// At this slice [`Modal::Add`], [`Modal::Rename`], [`Modal::Remove`],
@@ -1867,6 +1897,13 @@ fn route_modal_input(
                 *modal = None;
             }
             effects
+        }
+        Some(Modal::QrExport(qr)) => {
+            let close = route_qr_export_modal_input(qr, vault, key);
+            if close {
+                *modal = None;
+            }
+            Vec::new()
         }
         _ => Vec::new(),
     }
@@ -2685,6 +2722,150 @@ fn route_export_modal_input(
     Vec::new()
 }
 
+/// QR Export modal's input path (v0.2; DESIGN §4.6 / §6).
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > QR Export
+/// the modal is a small two-page state machine. The reducer arms here
+/// cover the **read-only** axis (open / ack-toggle / focus-cycle /
+/// Enter on Cancel or Done); the save sub-flow (destination prompt,
+/// overwrite gate, PNG / SVG executors) lands in a follow-up slice.
+///
+/// Returns `true` if the modal should close (Enter on Cancel on
+/// Page 1, Enter on Done on Page 2). `Esc` is handled by
+/// [`apply_esc_dismiss`] upstream and never reaches this routine.
+///
+/// **Page 1 keys** — `Space` on the ack checkbox toggles `ack`. The
+/// toggle-on path immediately advances to
+/// [`QrExportPage::QrAndActions`] and populates `staged_ansi` via
+/// [`paladin_core::Vault::export_qr_ansi`] (the
+/// `account_not_found` path stores the rendered error inline rather
+/// than crashing). The toggle-off path drops `staged_ansi` and
+/// returns to [`QrExportPage::WarningAck`]. `Tab` / `Ctrl-N` advance
+/// focus forward (Ack → Cancel → Ack) and `Shift-Tab` / `Ctrl-P`
+/// retreat. `Enter` on [`QrExportFocus::CancelButton`] closes the
+/// modal; `Enter` on [`QrExportFocus::AckCheckbox`] toggles the ack
+/// (same wiring as `Space`).
+///
+/// **Page 2 keys** — `Tab` / `Ctrl-N` advance focus among
+/// `SavePngButton` / `SaveSvgButton` / `DoneButton` (wrapping);
+/// `Shift-Tab` / `Ctrl-P` retreat. `Enter` on
+/// [`QrExportFocus::DoneButton`] closes the modal. `Enter` on the
+/// Save buttons is reserved for the save sub-flow slice (currently a
+/// silent no-op so the modal-trap contract holds).
+fn route_qr_export_modal_input(qr: &mut QrExportModal, vault: &Vault, key: &KeyEvent) -> bool {
+    if is_modal_focus_next(key) {
+        qr.focus = qr_export_focus_next(qr.focus, qr.page);
+        return false;
+    }
+    if is_modal_focus_prev(key) {
+        qr.focus = qr_export_focus_prev(qr.focus, qr.page);
+        return false;
+    }
+    match qr.page {
+        QrExportPage::WarningAck => match key.code {
+            KeyCode::Char(' ') if qr.focus == QrExportFocus::AckCheckbox => {
+                toggle_qr_export_ack(qr, vault);
+                false
+            }
+            KeyCode::Enter => match qr.focus {
+                QrExportFocus::AckCheckbox => {
+                    toggle_qr_export_ack(qr, vault);
+                    false
+                }
+                QrExportFocus::CancelButton => true,
+                _ => false,
+            },
+            _ => false,
+        },
+        QrExportPage::QrAndActions => match key.code {
+            KeyCode::Char(' ') if qr.focus == QrExportFocus::AckCheckbox => {
+                // The ack control still owns the toggle even when the
+                // user has Tabbed back to it from Page 2's button row
+                // (defensive — the focus enum is shared across pages,
+                // and a future redesign that surfaces the ack on
+                // Page 2 should not silently drop the bind).
+                toggle_qr_export_ack(qr, vault);
+                false
+            }
+            KeyCode::Enter if qr.focus == QrExportFocus::DoneButton => true,
+            _ => false,
+        },
+    }
+}
+
+/// Toggle the QR Export modal's ack checkbox and apply the
+/// page-mount side effects per DESIGN §4.6 / §6.
+///
+/// Toggling on advances to [`QrExportPage::QrAndActions`] and
+/// populates [`QrExportModal::staged_ansi`] via
+/// [`paladin_core::Vault::export_qr_ansi`]. Toggling off drops the
+/// staged buffer (zeroizing on `Drop`) and returns to
+/// [`QrExportPage::WarningAck`]. The page-1 focus snaps to
+/// [`QrExportFocus::AckCheckbox`] on toggle-off so the user returns
+/// to the same control that triggered the ack; the page-2 focus
+/// snaps to [`QrExportFocus::SavePngButton`] on toggle-on so the
+/// user's next Enter targets the canonical save path.
+///
+/// Encoder failures (the `qrcode` crate's `data_too_long` on a
+/// payload past QR version 40, or the defensive
+/// `account_not_found` path if the vault mutates while the modal is
+/// open) render inline through [`render_error_message`] and leave
+/// the modal on Page 1 with `ack = false`.
+fn toggle_qr_export_ack(qr: &mut QrExportModal, vault: &Vault) {
+    if qr.ack {
+        // Toggle off: drop staged buffers and return to Page 1.
+        qr.ack = false;
+        qr.staged_ansi = None;
+        qr.page = QrExportPage::WarningAck;
+        qr.focus = QrExportFocus::AckCheckbox;
+        return;
+    }
+    match vault.export_qr_ansi(qr.account_id) {
+        Ok(rendered) => {
+            qr.ack = true;
+            qr.staged_ansi = Some(rendered);
+            qr.page = QrExportPage::QrAndActions;
+            qr.focus = QrExportFocus::SavePngButton;
+            qr.error = None;
+        }
+        Err(err) => {
+            qr.error = Some(render_error_message(&err));
+        }
+    }
+}
+
+/// Advance focus within the QR Export modal, wrapping at either end
+/// of the current page's control set.
+fn qr_export_focus_next(focus: QrExportFocus, page: QrExportPage) -> QrExportFocus {
+    match page {
+        QrExportPage::WarningAck => match focus {
+            QrExportFocus::AckCheckbox => QrExportFocus::CancelButton,
+            _ => QrExportFocus::AckCheckbox,
+        },
+        QrExportPage::QrAndActions => match focus {
+            QrExportFocus::SavePngButton => QrExportFocus::SaveSvgButton,
+            QrExportFocus::SaveSvgButton => QrExportFocus::DoneButton,
+            _ => QrExportFocus::SavePngButton,
+        },
+    }
+}
+
+/// Retreat focus within the QR Export modal, wrapping at either end
+/// of the current page's control set.
+fn qr_export_focus_prev(focus: QrExportFocus, page: QrExportPage) -> QrExportFocus {
+    match page {
+        QrExportPage::WarningAck => match focus {
+            QrExportFocus::CancelButton => QrExportFocus::AckCheckbox,
+            _ => QrExportFocus::CancelButton,
+        },
+        QrExportPage::QrAndActions => match focus {
+            QrExportFocus::DoneButton => QrExportFocus::SaveSvgButton,
+            QrExportFocus::SaveSvgButton => QrExportFocus::SavePngButton,
+            _ => QrExportFocus::DoneButton,
+        },
+    }
+}
+
 /// Passphrase modal's input path (submit axis).
 ///
 /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
@@ -2812,6 +2993,7 @@ fn selection_gated_status_error(c: char, selected: Option<AccountId>) -> Option<
 /// [`SettingsModal`] payload snapshotted from the live vault
 /// settings for `s` (or `None` otherwise). All are precomputed by
 /// the caller so this helper does not borrow the vault.
+#[allow(clippy::too_many_arguments)]
 fn dispatch_unlocked_char(
     mut state: AppState,
     c: char,
@@ -2819,6 +3001,7 @@ fn dispatch_unlocked_char(
     rename_modal: Option<RenameModal>,
     remove_modal: Option<RemoveModal>,
     settings_modal: Option<SettingsModal>,
+    qr_export_modal: Option<QrExportModal>,
     copy_next: Option<CopyNextCodeOutcome>,
 ) -> (AppState, Vec<Effect>) {
     // `q` quits Unlocked when no modal is open. (Once the search bar
@@ -2919,6 +3102,21 @@ fn dispatch_unlocked_char(
         if let Some(settings) = settings_modal {
             if let AppState::Unlocked { modal, .. } = &mut state {
                 *modal = Some(Modal::Settings(settings));
+            }
+        }
+        return (state, Vec::new());
+    }
+    if c == 'Q' {
+        // QR Export is selection-gated and carries a pre-populated
+        // payload built by [`pending_qr_export_for_char`]. The
+        // no-selection / empty-filtered-set / stale-id cases yield
+        // `None` so the binding observes as a silent no-op — parity
+        // with `Enter` on an empty list. No status-line error is
+        // surfaced (unlike `r` / `R` / `C` which set
+        // [`crate::app::state::NO_ACCOUNT_SELECTED`]).
+        if let Some(qr) = qr_export_modal {
+            if let AppState::Unlocked { modal, .. } = &mut state {
+                *modal = Some(Modal::QrExport(qr));
             }
         }
         return (state, Vec::new());

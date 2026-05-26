@@ -1,7 +1,6 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
-assertion_line: 4715
-expression: "render_to_text(&state, snapshot_now(), 80, 31)"
+expression: "render_to_text(&state, snapshot_now(), 80, 32)"
 ---
 ┌┌ Help — keybindings ────────────────────────────────────────────────────────┐┐
 ││ Read-only — keys are listed for reference.                                 ││
@@ -19,6 +18,7 @@ expression: "render_to_text(&state, snapshot_now(), 80, 31)"
 ││ R                            Open Rename modal                             ││
 ││ i                            Open Import modal                             ││
 ││ e                            Open Export modal                             ││
+││ Q                            Open QR Export modal for the focused row      ││
 ││ /                            Focus search bar                              ││
 ││ Tab / Shift-Tab              Cycle focus between search bar and list       ││
 ││ p                            Open Passphrase modal                         ││

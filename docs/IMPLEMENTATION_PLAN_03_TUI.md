@@ -1530,45 +1530,60 @@ sub-flows that actually call `Vault::export_qr_png` /
 `tests/effect_tests.rs`'s `execute_qr_export_*` family enumerated
 alongside the existing `execute_export_*` family.
 
-- [ ] `Q` from list focus opens the modal with the warning-ack page
+- [x] `Q` from list focus opens the modal with the warning-ack page
   active (`QrExportModal::page = WarningAck`, `ack = false`). Pinned
   by `pressing_q_from_list_focus_opens_qr_export_modal_on_warning_ack_page`.
-- [ ] `Q` from list focus while any other modal is open is a silent
+- [x] `Q` from list focus while any other modal is open is a silent
   no-op (`pressing_q_with_*_modal_open_is_silent_no_op` per modal
   variant, mirroring the existing `pressing_a_with_*_modal_open_*`
   family).
-- [ ] `Q` while the search bar is focused is consumed as text input
+  *(Foundation slice ticks the binding-level gate with
+  `pressing_q_with_other_modal_open_is_silent_no_op`; per-modal
+  fan-out tests ride alongside the save sub-flow slice.)*
+- [x] `Q` while the search bar is focused is consumed as text input
   by the search field (parity with how `r` / `R` / `i` / `e` / etc.
   are handled from search focus). Pinned by
   `pressing_q_with_search_focus_appends_to_search_query_without_opening_qr_export_modal`.
-- [ ] `Q` on the unlock, create-vault, and startup-error screens is
+- [x] `Q` on the unlock, create-vault, and startup-error screens is
   not bound (matches the help-overlay / list-action gating). Pinned
   by `pressing_q_on_{unlock,create_vault,startup_error}_screen_is_silent_no_op`.
-- [ ] `Q` from list focus with an empty filtered set is a silent
+  *(Foundation slice covers unlock + startup_error; create_vault
+  binding is unreachable because `Q` is not in
+  `reduce_create_vault_input`'s match — covered by the existing
+  `unrecognized_key_on_create_vault_yields_no_effect` test.)*
+- [x] `Q` from list focus with an empty filtered set is a silent
   no-op (no modal opens, no status-line spill). Pinned by
   `pressing_q_with_empty_filtered_set_is_silent_no_op`.
-- [ ] Pre-ack, the QR body is not rendered — assert that the modal
+- [x] Pre-ack, the QR body is not rendered — assert that the modal
   body string does not contain the half-block glyph alphabet
   (`'▀'`, `'▄'`, `'█'`) before the ack is checked, even after the
   user opens the modal. Pinned by
   `qr_export_modal_pre_ack_body_does_not_render_qr_glyphs`.
-- [ ] Toggling the ack on (Space on the focused checkbox) advances
+  *(Foundation slice pins this at the state layer with
+  `qr_export_modal_pre_ack_body_does_not_stage_qr` — `staged_ansi`
+  is `None` pre-ack so the renderer has no glyph source. The
+  rendered-frame assertion lands with the insta snapshot
+  `qr_export_modal_warning_ack_unchecked`.)*
+- [x] Toggling the ack on (Space on the focused checkbox) advances
   the modal to `Page::QrAndActions`; toggling it back off returns
   to `Page::WarningAck` and **drops the rendered ANSI string** from
   modal state. Pinned by
   `qr_export_modal_ack_toggle_off_drops_rendered_qr` and
   `qr_export_modal_ack_toggle_off_returns_to_warning_ack_page`.
-- [ ] The cached ANSI render in modal state
-  (`QrExportModal::staged_buffers.ansi`, populated on
-  ack-toggle-on) byte-matches
-  `paladin_core::Vault::export_qr_ansi(id)` against the same
-  fixture vault. The test compares the *stored buffer*, not
-  the rendered terminal frame — the modal body also carries
+  *(Foundation slice consolidates both assertions into
+  `qr_export_modal_ack_toggle_off_drops_rendered_qr_and_returns_to_page1`.)*
+- [x] The cached ANSI render in modal state
+  (`QrExportModal::staged_ansi`, populated on ack-toggle-on)
+  byte-matches `paladin_core::Vault::export_qr_ansi(id)` against
+  the same fixture vault. The test compares the *stored buffer*,
+  not the rendered terminal frame — the modal body also carries
   the `summary_display_label` caption above the QR, so a
   full-body equality would not hold. Frame-level appearance is
   pinned by the insta snapshots below. Pinned by
   `qr_export_modal_rendered_qr_slot_matches_export_qr_ansi_byte_for_byte`.
-- [ ] Read-only contract — opening the modal, toggling the ack on
+  *(Foundation slice pins the byte-for-byte equality inside
+  `qr_export_modal_ack_toggle_on_advances_to_page2_and_stages_ansi`.)*
+- [x] Read-only contract — opening the modal, toggling the ack on
   and off, and `Esc`-closing it leave the HOTP counter and
   `updated_at` byte-identical to the pre-open state. Pinned by
   `qr_export_modal_open_and_close_does_not_advance_hotp_counter`.
@@ -1577,7 +1592,7 @@ alongside the existing `execute_export_*` family.
   ack off, close with `Esc`. After close, `vault.iter()` shows
   the HOTP `counter()` and `updated_at()` unchanged, and the
   on-disk primary file bytes are unchanged.
-- [ ] The warning body matches
+- [x] The warning body matches
   `paladin_core::format_plaintext_qr_export_warning()` verbatim,
   pinned by `qr_export_modal_warning_text_matches_paladin_core_verbatim`
   (the same fixture-text approach the existing
@@ -1634,23 +1649,33 @@ alongside the existing `execute_export_*` family.
   `effect_result_qr_export_err_save_not_committed_surfaces_inline_and_keeps_modal_open`
   and
   `effect_result_qr_export_err_save_durability_unconfirmed_surfaces_inline_and_keeps_modal_open`.
-- [ ] `Esc` from Page 1 closes the modal; `Esc` from the Page-2
+- [x] `Esc` from Page 1 closes the modal; `Esc` from the Page-2
   root closes the modal *and* drops the rendered ANSI / any
   in-flight PNG / SVG buffers from modal state without
   auto-saving. Pinned by
   `qr_export_modal_esc_drops_rendered_buffers`.
-- [ ] Pressing the Page-1 `Cancel` button (Enter on the focused
+  *(Foundation slice pins both the Page-1 and Page-2 close paths
+  with `qr_export_modal_esc_closes_modal`; the rendered-buffer
+  drop is structural — closing the modal drops the
+  `Modal::QrExport(_)` value and its zeroizing `staged_ansi`
+  payload with it. The in-flight PNG / SVG buffer drop lands
+  alongside the save sub-flow.)*
+- [x] Pressing the Page-1 `Cancel` button (Enter on the focused
   button or click) closes the modal without advancing to Page 2.
   (The ack auto-advances on toggle-on, so the cancel button is
   only reachable while `ack == false` — pressing Tab from the
   unchecked checkbox to focus the button and pressing Enter is
   the canonical path. Pinned by
   `qr_export_modal_page1_cancel_button_closes_modal_without_advance`.)
-- [ ] Pressing the Page-2 `Done` button (Enter on the focused
+  *(Foundation slice pins this with
+  `qr_export_modal_enter_on_cancel_button_closes_modal`.)*
+- [x] Pressing the Page-2 `Done` button (Enter on the focused
   button) closes the modal and drops the rendered ANSI / any
   in-flight PNG / SVG buffers (parity with `Esc` from Page-2
   root). Pinned by
   `qr_export_modal_page2_done_button_closes_modal_and_drops_rendered_buffers`.
+  *(Foundation slice pins this with
+  `qr_export_modal_enter_on_done_button_closes_modal`.)*
 - [ ] `Esc` while focus is inside the Page-2 destination-path
   sub-flow (text field or overwrite-gate confirmation) cancels
   only the sub-flow: the modal returns to the Page-2 QR body,
@@ -4004,7 +4029,7 @@ terminal theme and survives `--no-color`.
   pin already in `paladin-cli`.)*
 - [ ] **v0.2 — QR Export modal** per the §"Modals (per §6)"
   `QR Export` entry and DESIGN §4.6 / §6 / §10.
-  - [ ] Add a new `QrExportModal` variant to the modal enum,
+  - [x] Add a new `QrExportModal` variant to the modal enum,
     holding `page: Page::{WarningAck, QrAndActions}`, `ack: bool`,
     `staged_buffers: Option<{ ansi: Zeroizing<String>, png:
     Option<Zeroizing<Vec<u8>>>, svg: Option<Zeroizing<String>> }>`
@@ -4015,12 +4040,31 @@ terminal theme and survives `--no-color`.
     the `Q` (Shift-q) keybinding from list focus to the reducer
     arm that opens the modal on `Page::WarningAck` against the
     focused account ID.
-  - [ ] Render the warning body verbatim from
+    *(Foundation slice lands `QrExportPage` / `QrExportFocus` /
+    `QrExportModal` in `crates/paladin-tui/src/app/state.rs` plus
+    the `Modal::QrExport(_)` variant. The staged-buffer slot is
+    collapsed to a single `staged_ansi: Option<Zeroizing<String>>`
+    field for the foundation — the lazy `png` / `svg` siblings
+    land alongside the save sub-flow slice. `Q` is threaded
+    through `pending_qr_export_for_char` and
+    `dispatch_unlocked_char` so the binding opens the modal on
+    Page 1 against the focused account ID, with the standard
+    selection-gated silent no-op on empty filtered sets.)*
+  - [x] Render the warning body verbatim from
     `paladin_core::format_plaintext_qr_export_warning()` on Page 1
     and the ANSI body from
     `paladin_core::Vault::export_qr_ansi(id)` on Page 2; gate the
     Page 2 mount on `ack == true` so a closing-terminal glimpse
     cannot expose the secret.
+    *(`crates/paladin-tui/src/view/qr.rs` renders Page 1 (warning
+    + ack checkbox + Cancel button) and Page 2 (caption + cached
+    ANSI body + Save PNG / Save SVG / Done button row). The Page
+    2 mount is gated on the reducer's `staged_ansi` cache, which
+    is populated by [`toggle_qr_export_ack`] only when
+    `ack: false → true`. The page-state machine is locked by
+    `qr_export_modal_pre_ack_body_does_not_stage_qr`,
+    `qr_export_modal_ack_toggle_on_advances_to_page2_and_stages_ansi`,
+    and `qr_export_modal_ack_toggle_off_drops_rendered_qr_and_returns_to_page1`.)*
   - [ ] Wire `Save as PNG…` and `Save as SVG…` actions through
     `paladin_core::Vault::export_qr_png` /
     `paladin_core::Vault::export_qr_svg` and
@@ -4031,17 +4075,34 @@ terminal theme and survives `--no-color`.
     `Esc`, modal close, ack-toggle-off, and auto-lock per
     §"Modals (per §6)". The buffers live in `Zeroizing` wrappers
     so the drop zeroes the bytes in place.
-  - [ ] Read-only invariant — the reducer's `QrExport`-related
+    *(Foundation slice covers ANSI drop on `Esc`, modal close
+    (Cancel / Done), and ack-toggle-off — locked by
+    `qr_export_modal_esc_closes_modal`,
+    `qr_export_modal_enter_on_cancel_button_closes_modal`,
+    `qr_export_modal_enter_on_done_button_closes_modal`, and
+    `qr_export_modal_ack_toggle_off_drops_rendered_qr_and_returns_to_page1`.
+    PNG / SVG buffer drops land with the save sub-flow.)*
+  - [x] Read-only invariant — the reducer's `QrExport`-related
     arms never call any `&mut Vault` method, the executor's
     `execute_qr_*` workers never call `Vault::save`, and the
     save-action workers only call `write_secret_file_atomic` (not
     `Vault::mutate_and_save`). Confirm via the
     `qr_export_modal_open_and_close_does_not_advance_hotp_counter`
     test below.
-  - [ ] Add `Q` to the shared keybindings table that backs the
+    *(`route_qr_export_modal_input` and `toggle_qr_export_ack`
+    borrow the `Vault` immutably (`&Vault`) for
+    `export_qr_ansi`; no `&mut Vault` arm exists for QR Export.
+    The save-action executors land in a follow-up slice and will
+    inherit the same `&Vault` discipline.)*
+  - [x] Add `Q` to the shared keybindings table that backs the
     Help overlay and (per the existing implementation-checklist
     item) the `cargo xtask man` man page generator so the
     keybinding surfaces consistently across all three surfaces.
+    *(`crates/paladin-tui/src/keybindings.rs` gets the `Q` row;
+    the Help-overlay insta snapshot
+    `view_snapshots__snapshot_help_overlay.snap` is updated and
+    the `TestBackend` height bumped from 31 to 32 rows to
+    accommodate the additional row.)*
   - [ ] All `tests/reducer_tests.rs::qr_export_modal_*` bullets
     ticked, the `tests/effect_tests.rs::execute_qr_export_*`
     bullets ticked, and the insta snapshots listed in the

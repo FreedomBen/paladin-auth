@@ -23,6 +23,7 @@ pub mod help;
 pub mod import;
 pub mod list;
 pub mod passphrase;
+pub mod qr;
 pub mod remove;
 pub mod rename;
 pub mod settings;
@@ -146,5 +147,6 @@ fn render_modal(frame: &mut Frame<'_>, modal: &Modal, vault: &Vault, no_color: b
             passphrase::render(frame, passphrase_modal, no_color);
         }
         Modal::Settings(settings_modal) => settings::render(frame, settings_modal, no_color),
+        Modal::QrExport(qr_modal) => qr::render(frame, qr_modal, vault, no_color),
     }
 }

@@ -4082,10 +4082,10 @@ fn snapshot_help_overlay() {
         status_line: None,
         help_open: true,
     };
-    // Bumped to 31 rows (was 30) for the §6 `C` Copy-next keybind
+    // Bumped to 32 rows (was 31) for the v0.2 `Q` QR-Export keybind
     // row that the Help overlay enumerates from
     // `keybindings::KEYBINDINGS`.
-    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 31));
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 32));
 }
 
 #[test]
