@@ -48,7 +48,7 @@ crates/paladin-gtk/
 │   ├── row_item.rs        # RowItem GObject (account_id, display, icon_hint, issuer, busy) backing the gio::ListStore
 │   ├── add_account.rs     # AddAccountComponent (manual fields + otpauth:// URI paste + paste image)
 │   ├── remove_dialog.rs   # RemoveDialog (confirmation gate before Vault::remove inside Vault::mutate_and_save)
-│   ├── rename_dialog.rs   # v0.2 foundation: RenameDialog (label edit; calls Vault::rename inside Vault::mutate_and_save). Superseded by edit_dialog.rs starting at Milestone 9 slice 4: from slice 4 onward the kebab / row context menu's "Edit…" entry routes to EditDialog, not RenameDialog (slices 1–3 still relabel "Rename…" → "Edit…" cosmetically while continuing to mount RenameDialog). Source kept through slice 5 so its tests stay live while EditDialog is wired in, then dropped in slice 6 once its contract migrates into tests/edit_dialog_logic.rs.
+│   ├── rename_dialog.rs   # v0.2 foundation: RenameDialog (label edit; calls Vault::rename inside Vault::mutate_and_save). Superseded by edit_dialog.rs starting at Milestone 9 slice 4: from slice 4 onward the kebab / row context menu's "Edit…" entry routes to EditDialog, not RenameDialog (slices 1–3 still relabel "Rename…" → "Edit…" cosmetically while continuing to mount RenameDialog; slices 1–3 are internal-only, not release-eligible). Source kept through slice 5 so its tests stay live while EditDialog is wired in, then dropped in slice 6 — the equivalent coverage is already pinned in tests/edit_dialog_logic.rs (no test migration is needed).
 │   ├── edit_dialog.rs     # v0.2 / DESIGN §7 Milestone 9: EditDialog — three editable AdwEntryRow widgets (Label / Issuer + inline clear / Icon hint slug) over an AccountEdit value; calls Vault::edit_account_metadata inside Vault::mutate_and_save. Pure-logic state machine in this module; widget binding mirrors RenameDialog conventions.
 │   ├── import_dialog.rs   # ImportDialog (file picker + format + on-conflict + bundle passphrase)
 │   ├── export_dialog.rs   # ExportDialog (file picker + format + overwrite + encrypted passphrase)
@@ -1970,9 +1970,19 @@ red until that ships.
   to the focused row; `Shift+E` triggers a
   `gtk::NamedAction("row.edit")` for TUI parity (DESIGN §6) so
   the user can open EditDialog directly without going through
-  the menu. The controller's propagation phase is `capture`
-  so the row consumes the trigger before any window-level
-  handler runs. Section rows do not install the controller.
+  the menu. The controller's propagation phase is the default
+  `bubble` so the row's `Shift+E` shortcut fires before the
+  press bubbles up to any window-level handler; the window-
+  level capture-phase controllers
+  (`wire_app_window_search_focus_controller`,
+  `wire_account_list_navigation_controllers`) all return `None`
+  for `Shift+E`, so the press is never swallowed higher in the
+  tree before it reaches the row. When another modal `adw::Dialog`
+  is mounted, its modal focus capture absorbs the keypress
+  before it reaches the row's controller, so `Shift+E` is
+  silently rejected while a dialog is open (TUI parity,
+  DESIGN §6's "silently rejected" rule for `Shift+E` / `Q`).
+  Section rows do not install the controller.
 * **One popover at a time.** The account list keeps a single
   `Option<gtk::PopoverMenu>` in `AccountListComponent` state; a
   fresh popup unparents and drops any prior popover before
@@ -1992,8 +2002,10 @@ red until that ships.
       `UnlockedBusy` (the busy mask flips them off as it does the
       kebab today).
 * **EditDialog widget surface.** `EditDialog` is an `adw::Dialog`
-  (matching `RenameDialog`'s shell) hosting three `AdwEntryRow`
-  widgets in an `AdwPreferencesGroup`. Each row is
+  (matching `RenameDialog`'s shell) with the visible title
+  `Edit account` (matching the menu entry's verb and the TUI
+  modal heading) hosting three `AdwEntryRow` widgets in an
+  `AdwPreferencesGroup`. Each row is
   pre-populated from the focused account's `AccountSummary`
   (the projection `AppModel` already holds for the row).
   Per-keystroke projection runs through a pure-logic
@@ -2026,8 +2038,8 @@ red until that ships.
        - empty buffer AND prior issuer was `Some(_)` →
          `Some(None)` (implicit clear — matches CLI
          `--no-issuer`);
-       - buffer byte-equal to the prior issuer (after §4.1
-         normalization) → `None`;
+       - buffer, after §4.1 issuer normalization, equals
+         the prior issuer → `None`;
        - any other non-empty buffer →
          `Some(Some(normalized))` and routes through
          `validate_issuer` for §4.1 rejection.
@@ -2074,30 +2086,36 @@ red until that ships.
   through the shared `effect_ownership` slot, and waits for the
   `EffectResult` like `RenameDialog` does today.
 * **Pre-submit duplicate detection.** Before the effect is
-  posted, the worker projects the would-be post-edit
+  posted, `classify_submit` projects the would-be post-edit
   `(secret, issuer, label)` triple through
   `Vault::find_duplicate_after_edit(account_id, &edit)`
-  (DESIGN §4.7); a `Some(other)` result surfaces the §5
-  `duplicate_account` error inline beside the offending row
-  (parity with the AddDialog's `Vault::find_duplicate`
-  affordance) without mutating the vault. The CLI / TUI / GUI
-  share this pre-flight so an Edit can never silently collide
-  with another account that already holds the same triple.
-  Unlike the Add path, the GTK EditDialog does **not** offer
-  an "edit anyway" override — the user must resolve the
-  collision (rename one side, clear the issuer, etc.) before
-  Save re-enables.
+  (DESIGN §4.7). The check runs synchronously on the main
+  thread: between effects the `(Vault, Store)` pair lives
+  on `AppModel`'s `effect_ownership` slot rather than inside
+  the worker, so `&Vault` is available to the dialog handler
+  without spawning a worker (same affordance the AddDialog
+  uses for `Vault::find_duplicate`). A `Some(other)` result
+  surfaces the §5 `duplicate_account` error inline beside
+  the offending row without mutating the vault. The CLI /
+  TUI / GUI share this pre-flight so an Edit can never
+  silently collide with another account that already holds
+  the same triple. Unlike the Add path, the GTK EditDialog
+  does **not** offer an "edit anyway" override — the user
+  must resolve the collision (rename one side, clear the
+  issuer, etc.) before Save re-enables.
 * **Post-edit summary lookup.** `Vault::edit_account_metadata`
   returns `Result<()>`; the worker re-reads the post-edit
   `AccountSummary` via `Vault::summaries().find(|s| s.id ==
   account_id)` after the mutator returns and threads it
   through `EffectResult::EditAccountMetadata { summary, .. }`
   so the dispatch site renders the toast against post-edit
-  data (`Edited {summary_display_label}` — e.g.
-  `Edited GitHub:work`). The lookup is `Option<AccountSummary>`
+  data (`Edited {summary_display_label}.` — e.g.
+  `Edited GitHub:work.`). The lookup is `Option<AccountSummary>`
   to defend against a concurrent remove between mutate and
   read; `None` collapses the toast text to the bare
-  `Edited.` form rather than panicking.
+  `Edited.` form rather than panicking. Both forms keep the
+  trailing period so the toast wording matches the TUI status-
+  line `Edited {summary_display_label(&summary)}.` confirmation.
 * **Effect-result routing.** On `Ok` the dialog closes and
   posts the toast above; on `save_durability_unconfirmed`,
   the dialog stays open with an inline warning body and the
@@ -2119,6 +2137,22 @@ red until that ships.
   buffers are required. The three entry rows hold plain
   `String` content that is cleared on submit / cancel / dialog
   close / auto-lock alongside the other modal-local state.
+* **Auto-lock dismissal.** `crate::edit_dialog::clear_for_lock(&mut state)`
+  is registered with `AppModel`'s lock-transition pruning
+  (the same hook `ExportQrDialog`, `ImportDialog`,
+  `ExportDialog`, and `SettingsDialog` use) and drops the
+  three row buffers, the cached pre-edit `AccountSummary`,
+  and any pending `classify_submit` outcome so none of them
+  outlives the `(Vault, Store)` pair they're projected from.
+  `AppModel` calls `force_close()` on the EditDialog
+  controller before the pruning fires, so the `adw::Dialog`
+  widget is detached from the window before its backing
+  state goes away — matching the `RemoveDialog` /
+  `ExportQrDialog` contract enforced by commit 14026f6.
+  An in-flight save is allowed to complete; the auto-lock
+  timer's `UnlockedBusy` guard (§"In-flight effect
+  ownership") keeps the lock from firing until the worker
+  returns.
 * **Thread isolation.** `Vault::edit_account_metadata`
   runs on `gio::spawn_blocking` per the
   §"In-flight effect ownership" contract; the dialog never
@@ -2142,7 +2176,14 @@ and a working app. `paladin-core` Phase M must land before any
 `paladin-gtk` slice can be wired through — until then, every GTK
 slice is gated on a stub `Vault::edit_account_metadata` shim that
 the test fixture provides through `paladin-core`'s
-`test-fault-injection` feature.
+`test-fault-injection` feature. Slices 1–3 are internal-only and
+do **not** ship to users on their own: slice 1 relabels the menu
+entry from `Rename…` to `Edit…` while still mounting
+`RenameDialog` (single-field, label-only), so an end-user build
+released between slice 1 and slice 4 would advertise "Edit…" and
+deliver a one-field rename. The v0.2 release cut waits until
+slice 4 has mounted the real `EditDialog`; only slices 4–7 are
+candidate release boundaries.
 
 1. **Menu model + action constants** — Extend
    `account_row::build_kebab_menu_model` to add the
@@ -2199,12 +2240,12 @@ the test fixture provides through `paladin-core`'s
    `gio::SimpleActionGroup`, or `AppModel` once this slice
    lands. All new tests in `tests/edit_dialog_logic.rs` cover
    each classifier and its post-effect routing.
-5. **Right-click `gtk::GestureClick` + `gtk::ShortcutController`**
-   — Extend the account column's cell factory `bind` to install
-   a secondary-button `gtk::GestureClick` and a single
-   `gtk::ShortcutController` on the row container. The
-   controller hosts the `Menu` / `Shift+F10` (context menu) and
-   `Shift+E` (direct Edit, via
+5. **Right-click `gtk::GestureClick` + `gtk::ShortcutController`
+   + auto-lock pruning** — Extend the account column's cell
+   factory `bind` to install a secondary-button
+   `gtk::GestureClick` and a single `gtk::ShortcutController`
+   on the row container. The controller hosts the `Menu` /
+   `Shift+F10` (context menu) and `Shift+E` (direct Edit, via
    `gtk::NamedAction("row.edit")`) shortcuts described in the
    design contract. The gesture and the menu-popping shortcuts
    both route through a new
@@ -2213,15 +2254,32 @@ the test fixture provides through `paladin-core`'s
    `gio::SimpleActionGroup`. Section rows early-return and do
    not install the controller. The `Option<gtk::PopoverMenu>`
    lives on `AccountListComponent` state for the single-popover
-   invariant. New tests in `tests/row_context_menu_logic.rs`
-   pin the pure-logic decisions (pop / suppress for section /
-   unparent prior / `Shift+E` activates `row.edit`).
-6. **RenameDialog retirement** — Drop `rename_dialog.rs`, and
-   migrate the `tests/rename_dialog_logic.rs` coverage of the
-   validation / save-rollback / durability-warning contracts
-   into `tests/edit_dialog_logic.rs` where the same logic now
-   lives. `Vault::rename` (and `paladin rename` and the TUI
-   Rename modal) stay — only the GTK rename surface is retired.
+   invariant. This slice also registers
+   `crate::edit_dialog::clear_for_lock` with `AppModel`'s
+   lock-transition pruning and wires `force_close()` on the
+   EditDialog controller into the same path that already
+   dismisses `ExportQrDialog` / `ImportDialog` /
+   `ExportDialog` / `SettingsDialog`, so an auto-lock fires
+   the dialog away before `(Vault, Store)` is dropped. New
+   tests in `tests/row_context_menu_logic.rs` pin the
+   pure-logic decisions (pop / suppress for section /
+   unparent prior / `Shift+E` activates `row.edit` /
+   `Shift+E` silently rejected while another modal is open).
+6. **RenameDialog retirement** — Drop `rename_dialog.rs` and
+   `tests/rename_dialog_logic.rs`. The validation /
+   save-rollback / durability-warning contracts are already
+   pinned in `tests/edit_dialog_logic.rs` by the slice 4
+   bullets (label projection, `save_not_committed`,
+   `save_durability_unconfirmed`, clean-validate Save
+   sensitivity), so no test bullets need to migrate — only
+   the now-empty source and test files are deleted. The
+   label-only emit bullet in slice 4 already pins that
+   `Effect::EditAccountMetadata { edit: AccountEdit {
+   label: Some(...), ..Default::default() } }` matches what
+   the retired `RenameDialog` used to send, locking the
+   regression contract. `Vault::rename` (and `paladin rename`
+   and the TUI Rename modal) stay — only the GTK rename
+   surface is retired.
 7. **Docs sync** — Update `DESIGN.md` §7 / §12 / §13 and this
    plan's checklists to reflect the final shape; tick the
    Milestone 9 entries as each slice lands.
@@ -2835,8 +2893,12 @@ These run without a display server. Each lives under
   and surfaces the warning attached to the dialog body.
 
   *Retirement note: once the Milestone 9 EditDialog cleanup slice
-  ships, these bullets migrate into `tests/edit_dialog_logic.rs`
-  and this file is removed alongside `rename_dialog.rs`.*
+  ships, these bullets are superseded by the equivalent coverage
+  already pinned in `tests/edit_dialog_logic.rs` (label projection,
+  `save_not_committed`, `save_durability_unconfirmed`, clean-
+  validate Save sensitivity, label-only emit shape) — no bullets
+  need to migrate. This file is deleted alongside
+  `rename_dialog.rs`.*
 
 #### `tests/edit_dialog_logic.rs`
 
@@ -2846,6 +2908,11 @@ ships in `paladin-core` and the GTK EditDialog lands.
 - [ ] Pre-populates the three rows from the focused account's
   `AccountSummary` (label, issuer-or-empty-string, icon-hint
   slug-or-empty-string).
+- [ ] The `adw::Dialog` widget exposes `Edit account` as its
+  visible title (matching the menu entry's verb and the TUI
+  modal heading); pinned by a pure-logic helper that returns
+  the title constant so a string typo in the widget binding
+  fails the test bar.
 - [ ] `classify_edit_draft(state, prior) -> AccountEdit` is the
   per-keystroke projection driving Save sensitivity and the
   submit payload. Pinned by table-driven tests covering all
@@ -2860,8 +2927,8 @@ ships in `paladin-core` and the GTK EditDialog lands.
      `AccountEdit.issuer = None`;
   2. empty buffer AND prior issuer was `Some(_)` →
      `Some(None)` (implicit clear);
-  3. buffer byte-equal to the prior issuer (post-§4.1
-     normalization) → `None`;
+  3. buffer, after §4.1 issuer normalization, equals the
+     prior issuer → `None`;
   4. any other non-empty buffer →
      `Some(Some(normalized))`.
 - [ ] Issuer row's inline clear suffix empties the row text in
@@ -2930,13 +2997,23 @@ ships in `paladin-core` and the GTK EditDialog lands.
   mutator returns and threads
   `EffectResult::EditAccountMetadata { summary: Option<AccountSummary>, .. }`
   to the dispatch site. The dispatch site renders the toast
-  text `Edited {summary_display_label(&summary)}` (e.g.
-  `Edited GitHub:work`) when `Some`, and the bare `Edited.`
+  text `Edited {summary_display_label(&summary)}.` (e.g.
+  `Edited GitHub:work.`) when `Some`, and the bare `Edited.`
   form when `None` (defensive against a concurrent remove
-  between mutate and read).
+  between mutate and read); both forms carry the trailing
+  period for TUI status-line parity.
 - [ ] On dialog close (cancel / submit / auto-lock), every row
   buffer is dropped — no `Account`, `AccountId`, or
   `AccountEdit` survives in the closed dialog's state machine.
+- [ ] `clear_for_lock(&mut state)` drops the row buffers,
+  cached pre-edit `AccountSummary`, and any pending
+  `classify_submit` outcome, leaving the state identity-equal
+  to `EditDialogState::default()`. Pinned by
+  `clear_for_lock_drops_row_buffers_and_summary` and
+  `clear_for_lock_on_fresh_state_is_a_noop`; the
+  `force_close()` plumbing is covered by the integration test
+  registered alongside `ExportQrDialog`'s lock-transition
+  pruning suite.
 - [ ] The dialog is disabled on `UnlockedBusy` (per the shared
   effect-ownership contract) — Save and the row entries dim
   while a save is mid-flight; Cancel stays sensitive.
@@ -2971,6 +3048,12 @@ right-click gesture slice lands.
   `AccountListOutput::OpenEditDialog(account_id)`; section
   rows do not install the controller, so the trigger does not
   fire from a section row.
+- [ ] `Shift+E` is silently rejected while another modal
+  `adw::Dialog` is open: the dialog's modal focus capture
+  consumes the keypress before it reaches the row's
+  `gtk::ShortcutController`, so no new `OpenEditDialog` is
+  emitted and the existing dialog stays mounted (TUI parity
+  with DESIGN §6's `Q` / `Shift+E` rule).
 - [ ] `AccountListComponent::pop_row_popover(account_id, anchor)`
   unparents and drops any prior popover before mounting a fresh
   one — pinned via the pure-logic
