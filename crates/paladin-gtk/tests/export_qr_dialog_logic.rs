@@ -17,7 +17,7 @@
 //! tempfile-backed invariant land alongside the matching commits
 //! in the §"QR export dialog implementation" build order.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use secrecy::SecretString;
@@ -29,15 +29,19 @@ use paladin_core::{
     PaladinError, QrRenderOptions, Store, Vault, VaultInit, VaultLock,
 };
 use paladin_gtk::export_qr_dialog::{
-    apply_msg, apply_msg_ack_toggled, apply_msg_show_qr, compose_export_qr_caption_style_class,
-    compose_export_qr_caption_text, compose_export_qr_warning_body,
-    compose_show_qr_button_sensitive, compose_visible_child_name, decide_export_qr_target,
-    format_export_qr_dialog_copy_image_label, format_export_qr_dialog_done_label,
-    format_export_qr_dialog_save_as_png_label, format_export_qr_dialog_save_as_svg_label,
-    format_export_qr_dialog_save_success_toast, format_export_qr_dialog_show_qr_button_label,
-    format_export_qr_dialog_title, render_show_qr_error_message, ExportQrDialogInit,
-    ExportQrDialogMsg, ExportQrDialogOutput, ExportQrDialogState, VIEW_STACK_QR_PAGE_NAME,
-    VIEW_STACK_WARNING_PAGE_NAME,
+    apply_msg, apply_msg_ack_toggled, apply_msg_overwrite_acknowledged, apply_msg_save_completed,
+    apply_msg_save_destination_picked, apply_msg_show_qr, classify_export_qr_save_error,
+    compose_export_qr_caption_style_class, compose_export_qr_caption_text,
+    compose_export_qr_warning_body, compose_save_can_fire,
+    compose_save_target_overwrite_gate_visible, compose_show_qr_button_sensitive,
+    compose_visible_child_name, decide_export_qr_target, format_export_qr_dialog_copy_image_label,
+    format_export_qr_dialog_done_label, format_export_qr_dialog_save_as_png_label,
+    format_export_qr_dialog_save_as_svg_label, format_export_qr_dialog_save_success_toast,
+    format_export_qr_dialog_show_qr_button_label, format_export_qr_dialog_title,
+    render_show_qr_error_message, run_export_qr_save_worker, ExportQrDialogInit, ExportQrDialogMsg,
+    ExportQrDialogOutput, ExportQrDialogState, ExportQrSaveCompletion, ExportQrSaveOutcome,
+    ExportQrSaveRequest, ExportQrSaveWorkerCompletion, ExportQrSaveWorkerInput, SaveKind,
+    SaveTarget, VIEW_STACK_QR_PAGE_NAME, VIEW_STACK_WARNING_PAGE_NAME,
 };
 
 /// Build a synthetic TOTP [`AccountSummary`] for the fixture used
@@ -632,4 +636,662 @@ fn decide_export_qr_target_returns_none_for_unknown_id() {
     let stray = AccountId::new();
 
     assert!(decide_export_qr_target(&vault, stray).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Group D — Save sub-flow (Phase 5: Save-as-PNG / Save-as-SVG actions)
+// ---------------------------------------------------------------------------
+//
+// Pin the overwrite-gate visibility quartet, the
+// `SaveDestinationPicked` / `OverwriteAcknowledged` reducer arms, the
+// worker's PNG and SVG round-trip behavior (file at `0600`,
+// PNG-bytes-verbatim, SVG-renders-once-then-cached), and the
+// `classify_export_qr_save_error` table that splits
+// `save_durability_unconfirmed` from every other typed failure.
+
+#[test]
+fn compose_save_target_overwrite_gate_visible_hidden_when_no_target() {
+    let state = fixture_state();
+    assert!(state.save_target.is_none());
+    assert!(!compose_save_target_overwrite_gate_visible(&state));
+}
+
+#[test]
+fn compose_save_target_overwrite_gate_visible_hidden_when_destination_does_not_exist() {
+    let mut state = fixture_state();
+    apply_msg_save_destination_picked(
+        &mut state,
+        SaveKind::Png,
+        PathBuf::from("/tmp/does-not-exist.png"),
+        false,
+    );
+    assert!(state.save_target.is_some());
+    assert!(!state.destination_exists);
+    assert!(!compose_save_target_overwrite_gate_visible(&state));
+}
+
+#[test]
+fn compose_save_target_overwrite_gate_visible_visible_when_destination_exists() {
+    let mut state = fixture_state();
+    apply_msg_save_destination_picked(
+        &mut state,
+        SaveKind::Png,
+        PathBuf::from("/tmp/already-here.png"),
+        true,
+    );
+    assert!(state.destination_exists);
+    assert!(compose_save_target_overwrite_gate_visible(&state));
+}
+
+#[test]
+fn compose_save_target_overwrite_gate_visible_re_keys_on_target_kind_switch() {
+    // Switching from PNG to SVG re-arms the gate from scratch — a
+    // stale ack against the PNG target cannot cross-stomp the SVG
+    // target. Pinned because the dialog hosts both save flows
+    // simultaneously through one `(save_target, destination_exists,
+    // overwrite_acknowledged)` triple.
+    let mut state = fixture_state();
+
+    apply_msg_save_destination_picked(
+        &mut state,
+        SaveKind::Png,
+        PathBuf::from("/tmp/existing.png"),
+        true,
+    );
+    apply_msg_overwrite_acknowledged(&mut state, true);
+    assert!(compose_save_can_fire(&state));
+
+    // Picking a new SVG target invalidates the prior ack.
+    apply_msg_save_destination_picked(
+        &mut state,
+        SaveKind::Svg,
+        PathBuf::from("/tmp/different-target.svg"),
+        true,
+    );
+    assert!(compose_save_target_overwrite_gate_visible(&state));
+    assert!(!state.overwrite_acknowledged);
+    assert!(!compose_save_can_fire(&state));
+}
+
+#[test]
+fn apply_msg_save_destination_picked_records_exists() {
+    let mut state = fixture_state();
+    apply_msg_save_destination_picked(
+        &mut state,
+        SaveKind::Png,
+        PathBuf::from("/tmp/here.png"),
+        true,
+    );
+    let target = state.save_target.as_ref().expect("target recorded");
+    assert_eq!(target.kind, SaveKind::Png);
+    assert_eq!(target.path, PathBuf::from("/tmp/here.png"));
+    assert!(state.destination_exists);
+    assert!(!state.overwrite_acknowledged);
+}
+
+#[test]
+fn apply_msg_save_destination_picked_resets_overwrite_acknowledged() {
+    let mut state = fixture_state();
+    state.overwrite_acknowledged = true;
+    apply_msg_save_destination_picked(
+        &mut state,
+        SaveKind::Svg,
+        PathBuf::from("/tmp/fresh.svg"),
+        false,
+    );
+    assert!(
+        !state.overwrite_acknowledged,
+        "fresh pick wipes any stale ack so a pre-acknowledged user \
+         cannot fire a save against an unintended new target"
+    );
+}
+
+#[test]
+fn apply_msg_save_destination_picked_clears_prior_save_error() {
+    let mut state = fixture_state();
+    state.save_error = Some("io_error: …".to_string());
+    state.save_warning = Some("save_durability_unconfirmed: …".to_string());
+    apply_msg_save_destination_picked(
+        &mut state,
+        SaveKind::Png,
+        PathBuf::from("/tmp/anywhere.png"),
+        false,
+    );
+    assert!(state.save_error.is_none());
+    assert!(state.save_warning.is_none());
+}
+
+#[test]
+fn apply_msg_overwrite_acknowledged_true() {
+    let mut state = fixture_state();
+    apply_msg_overwrite_acknowledged(&mut state, true);
+    assert!(state.overwrite_acknowledged);
+}
+
+#[test]
+fn apply_msg_overwrite_acknowledged_false() {
+    let mut state = fixture_state();
+    state.overwrite_acknowledged = true;
+    apply_msg_overwrite_acknowledged(&mut state, false);
+    assert!(!state.overwrite_acknowledged);
+}
+
+#[test]
+fn apply_msg_save_destination_picked_auto_fires_when_destination_does_not_exist() {
+    let mut state = fixture_state();
+    // Stage PNG bytes so `build_save_request_when_armed` has
+    // payload to forward through `SaveRequested`.
+    state.staged_png = Some(Zeroizing::new(vec![1, 2, 3]));
+    let out = apply_msg(
+        &mut state,
+        ExportQrDialogMsg::SaveDestinationPicked {
+            kind: SaveKind::Png,
+            path: PathBuf::from("/tmp/new.png"),
+            exists: false,
+        },
+    );
+    let Some(ExportQrDialogOutput::SaveRequested(req)) = out else {
+        panic!("expected SaveRequested; got {out:?}");
+    };
+    assert_eq!(req.target.kind, SaveKind::Png);
+    assert_eq!(req.target.path, PathBuf::from("/tmp/new.png"));
+}
+
+#[test]
+fn apply_msg_save_destination_picked_does_not_fire_when_destination_exists() {
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![1, 2, 3]));
+    let out = apply_msg(
+        &mut state,
+        ExportQrDialogMsg::SaveDestinationPicked {
+            kind: SaveKind::Png,
+            path: PathBuf::from("/tmp/exists.png"),
+            exists: true,
+        },
+    );
+    assert!(
+        out.is_none(),
+        "reducer must wait on `OverwriteAcknowledged(true)` before \
+         firing — got {out:?}"
+    );
+}
+
+#[test]
+fn apply_msg_overwrite_acknowledged_true_auto_fires_when_target_set() {
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![1, 2, 3]));
+    apply_msg_save_destination_picked(
+        &mut state,
+        SaveKind::Png,
+        PathBuf::from("/tmp/exists.png"),
+        true,
+    );
+    let out = apply_msg(&mut state, ExportQrDialogMsg::OverwriteAcknowledged(true));
+    assert!(matches!(out, Some(ExportQrDialogOutput::SaveRequested(_))));
+}
+
+#[test]
+fn apply_msg_overwrite_acknowledged_false_does_not_fire() {
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![1, 2, 3]));
+    apply_msg_save_destination_picked(
+        &mut state,
+        SaveKind::Png,
+        PathBuf::from("/tmp/exists.png"),
+        true,
+    );
+    state.overwrite_acknowledged = true;
+    // Toggling back to false must not fire.
+    let out = apply_msg(&mut state, ExportQrDialogMsg::OverwriteAcknowledged(false));
+    assert!(out.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Group D — Worker round-trip tests (vault-backed)
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+fn mode_bits_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .expect("stat saved file")
+        .permissions()
+        .mode()
+        & 0o7777
+}
+
+#[test]
+fn run_export_qr_save_worker_plaintext_png_succeeds_and_writes_0600_file() {
+    let dir = secure_tempdir();
+    let vault_path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&vault_path);
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+
+    // Seed `state.staged_png` with the bytes that pressing Show-QR
+    // on the main loop would have produced.
+    let staged = vault
+        .export_qr_png(id, &QrRenderOptions::default())
+        .expect("render PNG once on the main loop");
+    let staged_bytes_for_assert = staged.to_vec();
+
+    let target_path = dir.path().join("qr.png");
+    let completion = run_export_qr_save_worker(ExportQrSaveWorkerInput::Png {
+        path: target_path.clone(),
+        bytes: staged,
+        vault,
+        store,
+    });
+    let ExportQrSaveWorkerCompletion::Png { outcome, path, .. } = completion else {
+        panic!("PNG worker must return PNG completion");
+    };
+    assert_eq!(path, target_path);
+    assert!(matches!(outcome, ExportQrSaveOutcome::Success { .. }));
+
+    // The on-disk bytes must equal the staged bytes verbatim — the
+    // worker never re-renders via `vault.export_qr_png`.
+    let on_disk = std::fs::read(&target_path).expect("read saved PNG");
+    assert_eq!(on_disk, staged_bytes_for_assert);
+
+    #[cfg(unix)]
+    assert_eq!(
+        mode_bits_of(&target_path),
+        0o600,
+        "saved PNG must land at mode 0o600 (DESIGN §4.3)"
+    );
+}
+
+#[test]
+fn run_export_qr_save_worker_png_does_not_call_export_qr_png() {
+    // The worker's PNG branch must write `bytes` verbatim. We
+    // prove this by feeding bytes that are *not* a real QR — if
+    // the worker were silently calling `vault.export_qr_png`, the
+    // on-disk file would be the real QR, not our nonsense bytes.
+    let dir = secure_tempdir();
+    let vault_path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&vault_path);
+    let _id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+
+    let fake_bytes = Zeroizing::new(vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]);
+    let target_path = dir.path().join("not-a-qr.png");
+    let completion = run_export_qr_save_worker(ExportQrSaveWorkerInput::Png {
+        path: target_path.clone(),
+        bytes: fake_bytes.clone(),
+        vault,
+        store,
+    });
+    let ExportQrSaveWorkerCompletion::Png { outcome, .. } = completion else {
+        panic!("PNG worker must return PNG completion");
+    };
+    assert!(matches!(outcome, ExportQrSaveOutcome::Success { .. }));
+
+    let on_disk = std::fs::read(&target_path).expect("read saved file");
+    assert_eq!(
+        on_disk,
+        fake_bytes.to_vec(),
+        "PNG worker wrote real QR bytes (must have called export_qr_png)"
+    );
+}
+
+#[test]
+fn run_export_qr_save_worker_plaintext_svg_succeeds_and_writes_0600_file() {
+    let dir = secure_tempdir();
+    let vault_path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&vault_path);
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+
+    let target_path = dir.path().join("qr.svg");
+    let completion = run_export_qr_save_worker(ExportQrSaveWorkerInput::Svg {
+        path: target_path.clone(),
+        account_id: id,
+        staged_svg: None,
+        vault,
+        store,
+    });
+    let ExportQrSaveWorkerCompletion::Svg {
+        outcome,
+        path,
+        staged_svg_after,
+        ..
+    } = completion
+    else {
+        panic!("SVG worker must return SVG completion");
+    };
+    assert_eq!(path, target_path);
+    assert!(matches!(outcome, ExportQrSaveOutcome::Success { .. }));
+    let svg_after = staged_svg_after.expect("worker rendered SVG and parked it on completion");
+    let svg_text: &str = &svg_after;
+    assert!(
+        svg_text.starts_with("<?xml") || svg_text.starts_with("<svg"),
+        "rendered SVG does not look like XML/SVG: {}",
+        &svg_text[..svg_text.len().min(40)]
+    );
+
+    // On-disk bytes must equal the bytes the worker rendered.
+    let on_disk = std::fs::read(&target_path).expect("read saved SVG");
+    assert_eq!(on_disk, svg_text.as_bytes());
+
+    #[cfg(unix)]
+    assert_eq!(
+        mode_bits_of(&target_path),
+        0o600,
+        "saved SVG must land at mode 0o600 (DESIGN §4.3)"
+    );
+}
+
+#[test]
+fn run_export_qr_save_worker_svg_reuses_staged_svg_on_second_save() {
+    let dir = secure_tempdir();
+    let vault_path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&vault_path);
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+
+    // First save: worker renders SVG and parks it.
+    let first_path = dir.path().join("first.svg");
+    let first = run_export_qr_save_worker(ExportQrSaveWorkerInput::Svg {
+        path: first_path,
+        account_id: id,
+        staged_svg: None,
+        vault,
+        store,
+    });
+    let (vault, store, staged_svg) = match first {
+        ExportQrSaveWorkerCompletion::Svg {
+            vault,
+            store,
+            staged_svg_after,
+            ..
+        } => (
+            vault,
+            store,
+            staged_svg_after.expect("first save parks SVG"),
+        ),
+        ExportQrSaveWorkerCompletion::Png { .. } => unreachable!(),
+    };
+
+    // Second save: feed the staged SVG back in. The worker must
+    // reuse it verbatim (no re-render). We prove this by
+    // substituting a sentinel string that is NOT a real SVG — the
+    // bytes on disk after the second save must equal the
+    // sentinel, not whatever `vault.export_qr_svg` would produce.
+    let sentinel = Zeroizing::new("<sentinel-svg id=\"reused\"/>".to_string());
+    let second_path = dir.path().join("second.svg");
+    let second = run_export_qr_save_worker(ExportQrSaveWorkerInput::Svg {
+        path: second_path.clone(),
+        account_id: id,
+        staged_svg: Some(sentinel.clone()),
+        vault,
+        store,
+    });
+    let ExportQrSaveWorkerCompletion::Svg {
+        outcome,
+        staged_svg_after,
+        ..
+    } = second
+    else {
+        unreachable!();
+    };
+    assert!(matches!(outcome, ExportQrSaveOutcome::Success { .. }));
+    let on_disk = std::fs::read(&second_path).expect("read second save");
+    assert_eq!(
+        on_disk,
+        sentinel.as_bytes(),
+        "second SVG save re-rendered via vault instead of reusing staged_svg"
+    );
+    assert_eq!(
+        staged_svg_after.as_ref().map(|s| s.as_str()),
+        Some(sentinel.as_str()),
+        "worker should pass the same staged SVG back through completion"
+    );
+    // Suppress the unused warning — the first save's staged SVG
+    // is what the production path stashes on `state.staged_svg`;
+    // we don't compare to the sentinel here.
+    let _ = staged_svg;
+}
+
+#[test]
+fn run_export_qr_save_worker_png_missing_parent_surfaces_save_not_committed_inline() {
+    // `paladin_core::write_secret_file_atomic` collapses every
+    // pre-commit IO failure (including a missing parent dir) into
+    // `save_not_committed`; the worker then classifies it as
+    // `ExportQrSaveOutcome::Inline` (no rollback for export).
+    let dir = secure_tempdir();
+    let vault_path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&vault_path);
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    let staged = vault
+        .export_qr_png(id, &QrRenderOptions::default())
+        .expect("render PNG");
+
+    let bogus = dir.path().join("definitely/not/a/dir/qr.png");
+    let completion = run_export_qr_save_worker(ExportQrSaveWorkerInput::Png {
+        path: bogus,
+        bytes: staged,
+        vault,
+        store,
+    });
+    let ExportQrSaveWorkerCompletion::Png { outcome, .. } = completion else {
+        unreachable!();
+    };
+    let ExportQrSaveOutcome::Inline { error } = outcome else {
+        panic!("missing-parent must surface as Inline; got something else");
+    };
+    assert_eq!(error.kind, paladin_core::ErrorKind::SaveNotCommitted);
+}
+
+// ---------------------------------------------------------------------------
+// Group D — classify_export_qr_save_error error table
+// ---------------------------------------------------------------------------
+
+#[test]
+fn classify_export_qr_save_error_io_error_renders_inline() {
+    let err = PaladinError::IoError {
+        operation: "write_export_qr",
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+    };
+    let outcome = classify_export_qr_save_error(Err(err), Path::new("/tmp/out.png"));
+    let ExportQrSaveOutcome::Inline { error } = outcome else {
+        panic!("io_error must classify as Inline");
+    };
+    assert_eq!(error.kind, paladin_core::ErrorKind::IoError);
+}
+
+#[test]
+fn classify_export_qr_save_error_save_not_committed_renders_inline() {
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_export_qr_save_error(Err(err), Path::new("/tmp/out.png"));
+    let ExportQrSaveOutcome::Inline { error } = outcome else {
+        panic!("save_not_committed must classify as Inline");
+    };
+    assert_eq!(error.kind, paladin_core::ErrorKind::SaveNotCommitted);
+}
+
+#[test]
+fn classify_export_qr_save_error_save_durability_unconfirmed_renders_inline_warning() {
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = classify_export_qr_save_error(Err(err), Path::new("/tmp/out.png"));
+    let ExportQrSaveOutcome::DurabilityWarning { warning, path } = outcome else {
+        panic!("save_durability_unconfirmed must classify as DurabilityWarning");
+    };
+    assert_eq!(
+        warning.kind,
+        paladin_core::ErrorKind::SaveDurabilityUnconfirmed
+    );
+    assert_eq!(path, PathBuf::from("/tmp/out.png"));
+}
+
+#[test]
+fn classify_export_qr_save_error_validation_error_renders_inline() {
+    let err = PaladinError::ValidationError {
+        field: "qr_payload",
+        reason: "payload_too_long".to_string(),
+        source_index: None,
+        decoded_len: None,
+        recommended_min: None,
+        entry_type: None,
+    };
+    let outcome = classify_export_qr_save_error(Err(err), Path::new("/tmp/out.png"));
+    let ExportQrSaveOutcome::Inline { error } = outcome else {
+        panic!("validation_error must classify as Inline");
+    };
+    assert_eq!(error.kind, paladin_core::ErrorKind::ValidationError);
+}
+
+#[test]
+fn classify_export_qr_save_error_ok_classifies_as_success() {
+    let outcome = classify_export_qr_save_error(Ok(()), Path::new("/tmp/out.png"));
+    let ExportQrSaveOutcome::Success { path } = outcome else {
+        panic!("Ok must classify as Success");
+    };
+    assert_eq!(path, PathBuf::from("/tmp/out.png"));
+}
+
+// ---------------------------------------------------------------------------
+// Group D — SaveCompleted reducer surfaces outcome
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_save_completed_success_stashes_last_save_path_and_clears_target() {
+    let mut state = fixture_state();
+    apply_msg_save_destination_picked(&mut state, SaveKind::Png, PathBuf::from("/tmp/q.png"), true);
+    state.overwrite_acknowledged = true;
+    apply_msg_save_completed(
+        &mut state,
+        ExportQrSaveCompletion {
+            outcome: ExportQrSaveOutcome::Success {
+                path: PathBuf::from("/tmp/q.png"),
+            },
+            target: SaveTarget {
+                kind: SaveKind::Png,
+                path: PathBuf::from("/tmp/q.png"),
+            },
+            staged_svg_after: None,
+        },
+    );
+    assert_eq!(state.last_save_path, Some(PathBuf::from("/tmp/q.png")));
+    assert!(state.save_target.is_none());
+    assert!(!state.destination_exists);
+    assert!(!state.overwrite_acknowledged);
+    assert!(state.save_error.is_none());
+    assert!(state.save_warning.is_none());
+}
+
+#[test]
+fn apply_msg_save_completed_inline_error_keeps_target_and_records_message() {
+    let mut state = fixture_state();
+    apply_msg_save_destination_picked(
+        &mut state,
+        SaveKind::Png,
+        PathBuf::from("/tmp/q.png"),
+        false,
+    );
+    let err = PaladinError::IoError {
+        operation: "write_export_qr",
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+    };
+    let rendered = err.to_string();
+    let outcome = classify_export_qr_save_error(Err(err), Path::new("/tmp/q.png"));
+    apply_msg_save_completed(
+        &mut state,
+        ExportQrSaveCompletion {
+            outcome,
+            target: SaveTarget {
+                kind: SaveKind::Png,
+                path: PathBuf::from("/tmp/q.png"),
+            },
+            staged_svg_after: None,
+        },
+    );
+    assert!(
+        state.save_target.is_some(),
+        "target retained so user can retry"
+    );
+    assert_eq!(state.save_error.as_deref(), Some(rendered.as_str()));
+    assert!(state.save_warning.is_none());
+}
+
+#[test]
+fn apply_msg_save_completed_durability_warning_records_warning_and_last_save_path() {
+    let mut state = fixture_state();
+    apply_msg_save_destination_picked(
+        &mut state,
+        SaveKind::Svg,
+        PathBuf::from("/tmp/q.svg"),
+        false,
+    );
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let rendered = err.to_string();
+    let outcome = classify_export_qr_save_error(Err(err), Path::new("/tmp/q.svg"));
+    apply_msg_save_completed(
+        &mut state,
+        ExportQrSaveCompletion {
+            outcome,
+            target: SaveTarget {
+                kind: SaveKind::Svg,
+                path: PathBuf::from("/tmp/q.svg"),
+            },
+            staged_svg_after: None,
+        },
+    );
+    assert_eq!(state.last_save_path, Some(PathBuf::from("/tmp/q.svg")));
+    assert_eq!(state.save_warning.as_deref(), Some(rendered.as_str()));
+    assert!(state.save_error.is_none());
+}
+
+#[test]
+fn apply_msg_save_completed_restashes_staged_svg_for_subsequent_saves() {
+    let mut state = fixture_state();
+    let svg = Zeroizing::new("<svg>rendered-by-worker</svg>".to_string());
+    apply_msg_save_completed(
+        &mut state,
+        ExportQrSaveCompletion {
+            outcome: ExportQrSaveOutcome::Success {
+                path: PathBuf::from("/tmp/q.svg"),
+            },
+            target: SaveTarget {
+                kind: SaveKind::Svg,
+                path: PathBuf::from("/tmp/q.svg"),
+            },
+            staged_svg_after: Some(svg.clone()),
+        },
+    );
+    assert_eq!(
+        state.staged_svg.as_ref().map(|s| s.as_str()),
+        Some(svg.as_str()),
+        "worker-rendered SVG must be restashed so next SVG save reuses it"
+    );
+}
+
+#[test]
+fn export_qr_save_request_round_trips_through_save_requested_output() {
+    let mut state = fixture_state();
+    state.staged_png = Some(Zeroizing::new(vec![0xCAu8, 0xFE, 0xBA, 0xBE]));
+    let out = apply_msg(
+        &mut state,
+        ExportQrDialogMsg::SaveDestinationPicked {
+            kind: SaveKind::Png,
+            path: PathBuf::from("/tmp/round-trip.png"),
+            exists: false,
+        },
+    );
+    let Some(ExportQrDialogOutput::SaveRequested(ExportQrSaveRequest {
+        target,
+        account_id,
+        staged_png,
+        staged_svg,
+    })) = out
+    else {
+        panic!("expected SaveRequested with cloned staged buffers");
+    };
+    assert_eq!(target.kind, SaveKind::Png);
+    assert_eq!(target.path, PathBuf::from("/tmp/round-trip.png"));
+    assert_eq!(account_id, state.account_id);
+    assert!(staged_svg.is_none());
+    assert_eq!(
+        staged_png.as_ref().map(|b| b.to_vec()),
+        Some(vec![0xCAu8, 0xFE, 0xBA, 0xBE]),
+        "request must carry the staged PNG bytes verbatim"
+    );
 }

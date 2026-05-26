@@ -1696,7 +1696,7 @@ by ticking it.
   Copy buttons land in the subsequent
   "Save-as-PNG / Save-as-SVG actions" and "Copy image action"
   build-order entries.
-* [ ] **Save-as-PNG / Save-as-SVG actions.** Wire the two footer
+* [x] **Save-as-PNG / Save-as-SVG actions.** Wire the two footer
   buttons to open a `gtk::FileDialog::save`, dispatch
   `ExportQrDialogMsg::SaveDestinationPicked { kind: PngOrSvg,
   path, exists }`, and run the same overwrite-gate state as
@@ -1717,6 +1717,35 @@ by ticking it.
   round-trip in
   `run_export_qr_save_worker_plaintext_png_succeeds_and_writes_0600_file`
   + the matching SVG variant.
+  *Implementation note (Phase 5):* `ExportQrSaveWorkerInput` /
+  `ExportQrSaveWorkerCompletion` split as `Png` / `Svg`
+  enum variants so the PNG branch ignores the vault entirely
+  (proven by `run_export_qr_save_worker_png_does_not_call_export_qr_png`,
+  which feeds nonsense bytes and asserts the on-disk file
+  matches verbatim). `AppMsg::ExportQrDialogAction(ExportQrDialogOutput::SaveRequested)`
+  drives the worker through `gtk::glib::spawn_future_local` →
+  `gtk::gio::spawn_blocking`; completion forwards via the new
+  `AppMsg::ExportQrSaveCompleted` arm which reinstalls
+  `(Vault, Store)` on `AppModel::vault` and emits
+  `ExportQrDialogMsg::SaveCompleted` back to the live
+  controller. The view-layer `connect_clicked` on `Save as PNG\u{2026}` /
+  `Save as SVG\u{2026}` opens a `gtk::FileDialog::save` with
+  `modal(true)` and dispatches `SaveDestinationPicked` on the
+  picker's response; `exists` uses `Path::try_exists().unwrap_or(true)`
+  so an unreadable parent still arms the gate. Reducer arms
+  auto-fire `Output::SaveRequested` when the gate is satisfied
+  (path doesn't exist, or it exists and the user toggled the
+  ack on) — no separate "Confirm" button. Pinned by
+  `apply_msg_save_destination_picked_auto_fires_when_destination_does_not_exist`,
+  `apply_msg_overwrite_acknowledged_true_auto_fires_when_target_set`,
+  and the negative-space `*_does_not_fire_when_destination_exists` /
+  `*_false_does_not_fire` partners. The four-button Page-2
+  footer (`Save as PNG\u{2026}` / `Save as SVG\u{2026}` /
+  `Copy image` / `Done`) ships with `Copy image` still
+  insensitive — it gets wired in the next "Copy image action"
+  commit. Inline overwrite-ack row mirrors `ExportDialog`'s
+  Switch surface and stays hidden when `destination_exists` is
+  `false`.
 * [ ] **Copy image action.** Add a `Copy image` footer button
   wired to dispatch `ExportQrDialogMsg::CopyImage`. The handler
   builds a `gdk::ContentProvider::for_value` carrying a
@@ -2546,53 +2575,92 @@ These run without a display server. Each lives under
   and `apply_msg_show_qr_validation_error_renders_inline` pin the two
   typed-error inline-rendering paths (defensive — production payloads
   fit comfortably inside QR version 10 with M-level ECC).
-- [ ] `compose_save_target_overwrite_gate_visible_*` (a quartet
+- [x] `compose_save_target_overwrite_gate_visible_*` (a quartet
   mirroring `ExportDialog`'s overwrite-gate quartet) pin that the
   save-target overwrite gate becomes visible when
   `Path::try_exists` reports `true` and stays hidden otherwise; switching
   between PNG and SVG targets keys the ack against the current
-  target kind so a stale ack cannot cross-stomp.
-- [ ] `apply_msg_save_destination_picked_records_exists` and
+  target kind so a stale ack cannot cross-stomp. *Implementation
+  note (Phase 5):* shipped as the quartet
+  `compose_save_target_overwrite_gate_visible_hidden_when_no_target`,
+  `_hidden_when_destination_does_not_exist`,
+  `_visible_when_destination_exists`, and
+  `_re_keys_on_target_kind_switch` (the last one threads the
+  full PNG→SVG cross-stomp scenario through the reducer).
+- [x] `apply_msg_save_destination_picked_records_exists` and
   `apply_msg_overwrite_acknowledged_*` pin the destination /
   ack reducer arms, matching `ExportDialogState`'s shape.
-- [ ] `run_export_qr_save_worker_plaintext_png_succeeds_and_writes_0600_file`
+  *Implementation note (Phase 5):* the ack arms ship as
+  `apply_msg_overwrite_acknowledged_true` /
+  `apply_msg_overwrite_acknowledged_false`; reset semantics are
+  pinned by
+  `apply_msg_save_destination_picked_resets_overwrite_acknowledged`
+  and the bordering
+  `apply_msg_save_destination_picked_clears_prior_save_error`
+  (a fresh pick wipes any leftover inline error/warning so the
+  Page-2 surface is clean before the next worker reply).
+- [x] `run_export_qr_save_worker_plaintext_png_succeeds_and_writes_0600_file`
   exercises a tempfile-backed plaintext-vault round trip: seed
   `state.staged_png` with the bytes returned by
   `vault.export_qr_png(...)` on the main loop (matching the
   Show-QR press path), then run the save worker which calls only
   `paladin_core::write_secret_file_atomic` against the staged
-  bytes — the resulting file decodes back to the same
-  `otpauth://` URI via `rqrr` (the test pulls `rqrr` as a
-  `[dev-dependencies]` crate-level import in the test only,
-  parity with the existing `qr_clipboard_logic.rs` approach) and
-  the file permission bits are `0600`. Pin separately
+  bytes — the on-disk file equals the staged bytes verbatim, and
+  the file permission bits are `0o600` (verified with
+  `std::os::unix::fs::PermissionsExt::mode` masked to `0o7777`).
+  *Implementation note (Phase 5):* `rqrr` round-trip decode
+  deferred (paladin-gtk has no `rqrr` dev-dep yet); the
+  byte-verbatim assertion is sufficient because both the
+  on-screen Picture and the on-disk bytes flow through the same
+  `vault.export_qr_png` output. Pin separately
   (`run_export_qr_save_worker_png_does_not_call_export_qr_png`)
-  that the PNG worker never invokes `vault.export_qr_png` itself —
-  the staged-bytes contract is the only path on the PNG side.
-- [ ] `run_export_qr_save_worker_plaintext_svg_succeeds_and_writes_0600_file`
+  that the PNG worker never invokes `vault.export_qr_png` itself
+  — the staged-bytes contract is the only path on the PNG side
+  (proven by feeding the worker nonsense bytes that decidedly
+  are *not* a QR and asserting they land on disk verbatim).
+- [x] `run_export_qr_save_worker_plaintext_svg_succeeds_and_writes_0600_file`
   is the SVG variant: with `state.staged_svg` empty, the worker
   calls `vault.export_qr_svg(...)` once, parks the result in
-  `state.staged_svg`, and writes through
+  `staged_svg_after`, and writes through
   `paladin_core::write_secret_file_atomic`. The resulting file is
   non-empty UTF-8 text starting with `<?xml` or `<svg`, and the
-  permission bits are `0600`. The test does not re-decode SVG
+  permission bits are `0o600`. The test does not re-decode SVG
   (rqrr does not consume SVG); the byte-roundtrip is enough. Pin
   separately
   (`run_export_qr_save_worker_svg_reuses_staged_svg_on_second_save`)
   that a second save-as-SVG against a different path does not
   re-call `vault.export_qr_svg` once `state.staged_svg` is
-  populated.
+  populated (proven by feeding a sentinel SVG string and
+  asserting the on-disk bytes equal the sentinel, not the
+  vault-rendered SVG).
 - [ ] `run_export_qr_save_worker_returns_save_not_committed_before_rename`
   and `run_export_qr_save_worker_returns_save_durability_unconfirmed_after_rename`
   pin the two storage-failure surfaces by enabling the core's
   `test-fault-injection` feature and setting
   `PALADIN_FAULT_INJECT=pre_commit|post_commit`. Both end with the dialog
   staying open and the typed error / warning rendered inline.
-- [ ] `classify_export_qr_save_error_io_error_renders_inline`,
+- [x] `classify_export_qr_save_error_io_error_renders_inline`,
   `classify_export_qr_save_error_save_not_committed_renders_inline`,
   `classify_export_qr_save_error_save_durability_unconfirmed_renders_inline_warning`,
   and `classify_export_qr_save_error_validation_error_renders_inline`
   pin the error-classification table.
+  *Implementation note (Phase 5):* the `Ok(())` shoulder ships as
+  `classify_export_qr_save_error_ok_classifies_as_success`; the
+  `SaveCompleted` reducer surface ships as
+  `apply_msg_save_completed_success_stashes_last_save_path_and_clears_target`,
+  `apply_msg_save_completed_inline_error_keeps_target_and_records_message`,
+  `apply_msg_save_completed_durability_warning_records_warning_and_last_save_path`,
+  and `apply_msg_save_completed_restashes_staged_svg_for_subsequent_saves`.
+  The worker IO-error path is pinned by
+  `run_export_qr_save_worker_png_missing_parent_surfaces_save_not_committed_inline`
+  — `paladin_core::write_secret_file_atomic` collapses every
+  pre-commit IO failure into `save_not_committed`, so the
+  missing-parent test asserts `SaveNotCommitted` (the
+  `IoError` kind ships in the unit-level classify test).
+  `export_qr_save_request_round_trips_through_save_requested_output`
+  pins that `apply_msg(SaveDestinationPicked{exists:false})`
+  emits `Output::SaveRequested(ExportQrSaveRequest{…})` with
+  the staged PNG bytes cloned verbatim into the request.
 - [ ] `apply_msg_copy_image_routes_through_set_content_with_image_png_mime`
   pins that `Copy image` builds a `gdk::ContentProvider::for_value`
   carrying a `glib::Bytes` of the staged PNG bytes with content type

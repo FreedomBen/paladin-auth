@@ -122,8 +122,9 @@ use crate::export_dialog::{
     ExportDialogOutput, ExportWorkerCompletion,
 };
 use crate::export_qr_dialog::{
-    decide_export_qr_target, render_show_qr_error_message, ExportQrDialogComponent,
-    ExportQrDialogMsg, ExportQrDialogOutput,
+    decide_export_qr_target, render_show_qr_error_message, run_export_qr_save_worker,
+    ExportQrDialogComponent, ExportQrDialogMsg, ExportQrDialogOutput, ExportQrSaveCompletion,
+    ExportQrSaveRequest, ExportQrSaveWorkerCompletion, ExportQrSaveWorkerInput, SaveKind,
 };
 use crate::hotp_reveal::{
     apply_advance_decision, apply_advance_outcome, expired_reveals,
@@ -917,6 +918,13 @@ pub enum AppMsg {
     /// [`crate::export_qr_dialog`] so a future telemetry / undo
     /// surface can differentiate them.
     ExportQrDialogAction(ExportQrDialogOutput),
+    /// Worker completion from the QR-export Save sub-flow. The
+    /// worker is dispatched on `gio::spawn_blocking` from the
+    /// `AppMsg::ExportQrDialogAction(ExportQrDialogOutput::SaveRequested)`
+    /// arm; this variant reinstalls the `(Vault, Store)` pair on
+    /// `AppModel::vault`, then forwards the dialog-facing outcome
+    /// back through `ExportQrDialogMsg::SaveCompleted`.
+    ExportQrSaveCompleted(ExportQrSaveWorkerCompletion),
     /// Posted by the application menu's Passphrase entry's
     /// `connect_activate` handler. Mounts the
     /// [`PassphraseDialogComponent`](crate::passphrase_dialog)
@@ -3018,6 +3026,102 @@ impl SimpleComponent for AppModel {
                             }
                         }
                     }
+                }
+            }
+            AppMsg::ExportQrDialogAction(ExportQrDialogOutput::SaveRequested(request)) => {
+                // User confirmed a Save-as-PNG or Save-as-SVG. Mirror
+                // the export-dialog dispatch: move the live
+                // `(Vault, Store)` pair into the worker on
+                // `gio::spawn_blocking`, run the writer, and forward
+                // the completion back through the dialog's input
+                // channel via `ExportQrDialogMsg::SaveCompleted`. The
+                // QR save path does not mutate the vault, so the
+                // returned pair is byte-identical to the input pair;
+                // the round-trip exists so `AppModel::vault` is
+                // never orphaned across the spawn boundary.
+                if let Some((vault, store)) = self.vault.take() {
+                    let ExportQrSaveRequest {
+                        target,
+                        account_id,
+                        staged_png,
+                        staged_svg,
+                    } = request;
+                    let worker_input = match target.kind {
+                        SaveKind::Png => ExportQrSaveWorkerInput::Png {
+                            path: target.path,
+                            // The Page-2 `Save as PNG…` button is only
+                            // sensitive once Show-QR has staged the
+                            // PNG bytes, so `staged_png` is `Some`
+                            // here. A `None` would be a dispatch-site
+                            // bug (mirrors `ExportFormatChoice` /
+                            // `EncryptionOptions` pairing on the
+                            // export dialog).
+                            bytes: staged_png.expect(
+                                "Save-as-PNG dispatch requires staged PNG bytes \
+                                 (Show-QR must have populated them)",
+                            ),
+                            vault,
+                            store,
+                        },
+                        SaveKind::Svg => ExportQrSaveWorkerInput::Svg {
+                            path: target.path,
+                            account_id,
+                            staged_svg,
+                            vault,
+                            store,
+                        },
+                    };
+                    let sender_inner = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        // Worker panic (`Err`) is silently swallowed
+                        // — the dialog stays mounted on screen so the
+                        // user can close it; the `(Vault, Store)`
+                        // pair moved into the worker is lost on panic
+                        // (mirrors the export worker path's
+                        // `WorkerPanic`). The QR save path does not
+                        // mutate the vault, so no rollback is owed.
+                        if let Ok(completion) = gtk::gio::spawn_blocking(move || {
+                            run_export_qr_save_worker(worker_input)
+                        })
+                        .await
+                        {
+                            sender_inner.input(AppMsg::ExportQrSaveCompleted(completion));
+                        }
+                    });
+                }
+            }
+            AppMsg::ExportQrSaveCompleted(completion) => {
+                // Worker finished. Reinstall `(Vault, Store)` on
+                // `AppModel::vault` and forward the dialog-facing
+                // payload (the outcome plus any worker-rendered SVG)
+                // back to the live dialog controller.
+                let (target_kind, target_path, dialog_outcome, vault, store, staged_svg_after) =
+                    match completion {
+                        ExportQrSaveWorkerCompletion::Png {
+                            outcome,
+                            path,
+                            vault,
+                            store,
+                        } => (SaveKind::Png, path, outcome, vault, store, None),
+                        ExportQrSaveWorkerCompletion::Svg {
+                            outcome,
+                            path,
+                            vault,
+                            store,
+                            staged_svg_after,
+                        } => (SaveKind::Svg, path, outcome, vault, store, staged_svg_after),
+                    };
+                self.vault = Some((vault, store));
+                if let Some(controller) = self.export_qr_dialog.as_ref() {
+                    use crate::export_qr_dialog::SaveTarget;
+                    controller.emit(ExportQrDialogMsg::SaveCompleted(ExportQrSaveCompletion {
+                        outcome: dialog_outcome,
+                        target: SaveTarget {
+                            kind: target_kind,
+                            path: target_path,
+                        },
+                        staged_svg_after,
+                    }));
                 }
             }
             AppMsg::ExportQrDialogAction(

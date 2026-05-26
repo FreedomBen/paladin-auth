@@ -482,7 +482,7 @@ pub fn classify_export_result(result: Result<(), PaladinError>) -> ExportOutcome
 /// Carries the stable §5 [`ErrorKind`] for instrumentation and the
 /// rendered body for display. No source-error reference is kept so
 /// the model can be cloned freely into the dialog's reactive state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InlineError {
     /// Stable §5 [`ErrorKind`] discriminator copied from
     /// [`PaladinError::kind`].
@@ -526,7 +526,7 @@ impl InlineError {
 /// `save_durability_unconfirmed`: the export file is on disk, but
 /// the parent-directory `fsync` failed, so the dialog surfaces the
 /// warning so the user can decide whether to retry.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InlineWarning {
     /// Stable §5 [`ErrorKind`] discriminator — always
     /// [`ErrorKind::SaveDurabilityUnconfirmed`] in current code.
