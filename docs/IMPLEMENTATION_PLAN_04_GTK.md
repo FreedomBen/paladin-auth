@@ -1808,12 +1808,35 @@ by ticking it.
   `escape_dismissal_routes_through_cancel_pressed_msg` (pinned at
   reducer level — drives `CancelPressed` and asserts the
   staged-buffer drop + Cancel output emit).
-* [ ] **Auto-lock pruning.** Register
+* [x] **Auto-lock pruning.** Register
   `crate::export_qr_dialog::clear_for_lock` with the lock-
   transition pruning so an auto-lock fire drops the dialog
   widget and the staged PNG / SVG buffers before the
   `(Vault, Store)` pair is destroyed. Pin
   `clear_for_lock_drops_staged_buffers_and_paintable`.
+  *Implementation note (Phase 8):* `clear_for_lock(&mut state)`
+  resets `ack_revealed`, `last_save_path`, and delegates to
+  `drop_staged_buffers` (which already wipes the staged PNG /
+  SVG `Zeroizing<...>` buffers, the save target, the
+  destination-exists / overwrite-ack flags, and every inline
+  error / warning body — `show_qr_error`, `save_error`,
+  `save_warning`, `copy_image_error`). `account_id` and
+  `account_summary` are preserved so a post-lock re-open can
+  rebuild Picture and caption (pinned by
+  `clear_for_lock_preserves_account_id_and_summary`).
+  `AppModel::lock_on_auto_lock_expiry` calls the helper via
+  `controller.state().get_mut().model.state_mut()` BEFORE
+  taking the controller into the `modal` aggregate; the
+  controller drop then tears down the widget tree (including
+  the `gtk::Picture`'s `gdk::Paintable`). Two-step
+  state-clear-then-drop is defensive: even if a future change
+  retains the controller across lock, the buffers are zeroed
+  first. New `pub fn ExportQrDialogComponent::state_mut`
+  accessor exposes the reducer state for the controller-side
+  call. Additional pin
+  `clear_for_lock_on_fresh_state_is_a_noop` confirms the call
+  is safe on every auto-lock fire even when the user never
+  opened the dialog.
 * [ ] **Thinness contract.** Re-run
   `cargo test -p paladin-gtk --test thinness` to confirm the
   GTK crate still passes — the new file imports only
@@ -2726,11 +2749,19 @@ These run without a display server. Each lives under
   arm parks the message in `state.copy_image_error` and returns
   `None` from `apply_msg`, so no output ever lands on `AppModel`
   that would route into `clipboard_clear::schedule_copy`.
-- [ ] `clear_for_lock_drops_staged_buffers_and_paintable` pins that
+- [x] `clear_for_lock_drops_staged_buffers_and_paintable` pins that
   the auto-lock pruning helper drops `state.staged_png`,
   `state.staged_svg`, and the Picture paintable before the
   `(Vault, Store)` pair is released, so a lock-after-effect cannot
   leak the rendered bytes.
+  *Implementation note (Phase 8):* the paintable-drop assertion is
+  proxied here by the `staged_png.is_none()` ⇒
+  `compose_visible_child_name == warning` invariant — the widget
+  tree (including the Picture's `gdk::Paintable`) tears down when
+  `AppModel` drops the controller in the same call. Sibling pins
+  `clear_for_lock_preserves_account_id_and_summary` and
+  `clear_for_lock_on_fresh_state_is_a_noop` cover identity
+  preservation and the noop-when-unopened path.
 - [ ] `export_qr_dialog_does_not_advance_hotp_counter` exercises a
   tempfile-backed HOTP-account vault: capture `account.counter()`
   before and after `Vault::export_qr_png` + save-as-PNG + auto-lock,

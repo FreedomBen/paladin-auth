@@ -31,9 +31,10 @@ use paladin_core::{
 use paladin_gtk::export_qr_dialog::{
     apply_msg, apply_msg_ack_toggled, apply_msg_copy_image_failed, apply_msg_copy_image_succeeded,
     apply_msg_overwrite_acknowledged, apply_msg_save_completed, apply_msg_save_destination_picked,
-    apply_msg_show_qr, classify_export_qr_save_error, compose_copy_image_button_sensitive,
-    compose_copy_image_request_output, compose_export_qr_caption_style_class,
-    compose_export_qr_caption_text, compose_export_qr_warning_body, compose_save_can_fire,
+    apply_msg_show_qr, classify_export_qr_save_error, clear_for_lock,
+    compose_copy_image_button_sensitive, compose_copy_image_request_output,
+    compose_export_qr_caption_style_class, compose_export_qr_caption_text,
+    compose_export_qr_warning_body, compose_save_can_fire,
     compose_save_target_overwrite_gate_visible, compose_show_qr_button_sensitive,
     compose_visible_child_name, decide_export_qr_target, format_export_qr_dialog_copy_image_label,
     format_export_qr_dialog_copy_image_success_toast, format_export_qr_dialog_done_label,
@@ -1602,4 +1603,109 @@ fn escape_dismissal_routes_through_cancel_pressed_msg() {
     assert_eq!(out, Some(ExportQrDialogOutput::Cancel));
     assert!(state.staged_png.is_none());
     assert!(state.staged_svg.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Group L — Auto-lock pruning (Phase 8)
+// ---------------------------------------------------------------------------
+//
+// `AppModel::lock_on_auto_lock_expiry` calls `clear_for_lock` on the
+// live dialog state before the controller is dropped, so the staged
+// PNG / SVG buffers and the inline-error bodies are wiped before
+// the `(Vault, Store)` pair is destroyed. Dropping the controller
+// then tears down the widget tree, including the Picture's
+// `gdk::Paintable` (proxied here by the `staged_png.is_none()` ⇒
+// `compose_visible_child_name == warning` invariant).
+
+#[test]
+fn clear_for_lock_drops_staged_buffers_and_paintable() {
+    // Set up a state that exercises every persistent slot: ack on,
+    // staged PNG + SVG bytes, a save target with overwrite-ack
+    // armed, a recorded last-save path, and inline bodies on all
+    // three error / warning slots.
+    let mut state = fixture_state();
+    state.ack_revealed = true;
+    state.staged_png = Some(Zeroizing::new(vec![0x89, b'P', b'N', b'G']));
+    state.staged_svg = Some(Zeroizing::new("<svg>secret</svg>".to_string()));
+    state.save_target = Some(SaveTarget {
+        kind: SaveKind::Png,
+        path: PathBuf::from("/tmp/qr.png"),
+    });
+    state.destination_exists = true;
+    state.overwrite_acknowledged = true;
+    state.last_save_path = Some(PathBuf::from("/tmp/prior.png"));
+    state.show_qr_error = Some("prior show-qr error".to_string());
+    state.save_error = Some("prior save error".to_string());
+    state.save_warning = Some("prior save warning".to_string());
+    state.copy_image_error = Some("prior copy error".to_string());
+
+    clear_for_lock(&mut state);
+
+    // Every secret-bearing slot is empty.
+    assert!(
+        state.staged_png.is_none(),
+        "auto-lock must drop the staged PNG bytes (paintable source)"
+    );
+    assert!(
+        state.staged_svg.is_none(),
+        "auto-lock must drop the staged SVG document"
+    );
+    // The picker / save state is reset.
+    assert!(state.save_target.is_none());
+    assert!(!state.destination_exists);
+    assert!(!state.overwrite_acknowledged);
+    // All inline error bodies cleared.
+    assert!(state.show_qr_error.is_none());
+    assert!(state.save_error.is_none());
+    assert!(state.save_warning.is_none());
+    assert!(state.copy_image_error.is_none());
+    // The ack is reset so a re-mount lands on the warning page.
+    assert!(!state.ack_revealed);
+    // Visible-child reducer reports the warning page because
+    // `staged_png` is now `None` — equivalent to the Picture
+    // paintable being empty when the widget tears down.
+    assert_eq!(
+        compose_visible_child_name(&state),
+        VIEW_STACK_WARNING_PAGE_NAME,
+        "ack reset must surface the warning page on a re-mount"
+    );
+}
+
+#[test]
+fn clear_for_lock_preserves_account_id_and_summary() {
+    // `clear_for_lock` only wipes the dialog's transient state; the
+    // account identity carried in `account_id` / `account_summary`
+    // is required to rebuild a Picture / caption on a future
+    // re-open. Pin that contract so a future drift (e.g. wiping
+    // the summary to a placeholder) doesn't break a re-mount.
+    let summary = fixture_summary();
+    let account_id = summary.id;
+    let label_before = summary.label.clone();
+    let mut state = ExportQrDialogState::new(ExportQrDialogInit {
+        account_id,
+        account_summary: summary,
+    });
+    state.ack_revealed = true;
+    state.staged_png = Some(Zeroizing::new(vec![1, 2, 3]));
+
+    clear_for_lock(&mut state);
+
+    assert_eq!(state.account_id, account_id);
+    assert_eq!(state.account_summary.label, label_before);
+}
+
+#[test]
+fn clear_for_lock_on_fresh_state_is_a_noop() {
+    // `lock_on_auto_lock_expiry` runs on every auto-lock fire even
+    // if the user never opened the QR dialog. Pin that calling the
+    // helper on a freshly-init'd state leaves it unchanged.
+    let mut state = fixture_state();
+    let initial_visible = compose_visible_child_name(&state).to_string();
+
+    clear_for_lock(&mut state);
+
+    assert!(state.staged_png.is_none());
+    assert!(state.staged_svg.is_none());
+    assert!(!state.ack_revealed);
+    assert_eq!(compose_visible_child_name(&state), initial_visible);
 }

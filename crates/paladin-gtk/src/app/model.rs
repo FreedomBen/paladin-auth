@@ -5140,6 +5140,16 @@ impl AppModel {
         let import_dialog = self.import_dialog.take();
         let export_dialog = self.export_dialog.take();
         let passphrase_dialog = self.passphrase_dialog.take();
+        // QR-export dialog: explicit `clear_for_lock` wipes the
+        // staged PNG / SVG buffers and inline-error bodies on the
+        // controller's state BEFORE the controller is dropped, so
+        // a future "stays-mounted-across-lock" UX still flushes
+        // the secret buffers at the lock boundary. Pinned by
+        // `clear_for_lock_drops_staged_buffers_and_paintable`.
+        if let Some(controller) = self.export_qr_dialog.as_ref() {
+            crate::export_qr_dialog::clear_for_lock(controller.state().get_mut().model.state_mut());
+        }
+        let export_qr_dialog = self.export_qr_dialog.take();
 
         // Reveal-window map and pending clipboard are extracted by
         // value so `lock_on_expiry` is the one place that decides
@@ -5164,6 +5174,7 @@ impl AppModel {
             import_dialog,
             export_dialog,
             passphrase_dialog,
+            export_qr_dialog,
         );
 
         let discards = UnlockedDiscards::<_, _> {

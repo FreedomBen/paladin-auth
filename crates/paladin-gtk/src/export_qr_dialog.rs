@@ -1216,6 +1216,34 @@ fn drop_staged_buffers(state: &mut ExportQrDialogState) {
     state.copy_image_error = None;
 }
 
+/// Pure-logic helper invoked by `AppModel`'s auto-lock pruning
+/// before the live `(Vault, Store)` pair is destroyed.
+///
+/// Resets [`ExportQrDialogState::ack_revealed`] to `false`, wipes
+/// every transient slot via [`drop_staged_buffers`] (the
+/// [`Zeroizing`](zeroize::Zeroizing)-wrapped staged PNG and SVG
+/// buffers zero on drop), and additionally clears
+/// [`ExportQrDialogState::last_save_path`] so the post-lock
+/// re-mount lands on a clean Page 1 with no inline-status carry-over.
+///
+/// `account_id` / `account_summary` are intentionally **not**
+/// cleared — they identify the dialog's target account and a
+/// future re-open rebuilds the Picture / caption from them. Pinned
+/// by `clear_for_lock_preserves_account_id_and_summary`.
+///
+/// `AppModel` follows the explicit clear with a `take()` of the
+/// `Option<Controller<ExportQrDialogComponent>>` slot so the
+/// widget tree (including the `gtk::Picture`'s `gdk::Paintable`)
+/// tears down with the controller. The two-step shape — explicit
+/// state-clear then drop — is defensive: even if a future change
+/// retains the controller across lock (e.g. a "stays-mounted"
+/// UX), the buffers are zeroed first.
+pub fn clear_for_lock(state: &mut ExportQrDialogState) {
+    state.ack_revealed = false;
+    state.last_save_path = None;
+    drop_staged_buffers(state);
+}
+
 /// Apply an [`ExportQrDialogMsg`] to the [`ExportQrDialogState`] and
 /// return the optional [`ExportQrDialogOutput`] the widget should
 /// forward to `AppModel`.
@@ -1417,6 +1445,23 @@ fn wire_dismiss_controller(root: &adw::Dialog, sender: &ComponentSender<ExportQr
 /// press" commit lands the Picture + caption + save / copy buttons.
 pub struct ExportQrDialogComponent {
     state: ExportQrDialogState,
+}
+
+impl ExportQrDialogComponent {
+    /// Mutable view into the component's reducer state.
+    ///
+    /// Exposed so `AppModel`'s auto-lock pruning can invoke
+    /// [`clear_for_lock`] on the live controller through
+    /// `controller.state().get_mut().model.state_mut()` before
+    /// the controller itself is dropped — the explicit
+    /// state-clear-then-drop sequence pinned by
+    /// `clear_for_lock_drops_staged_buffers_and_paintable`. Not
+    /// intended for in-flight UX mutations; route those through
+    /// `ComponentSender::input(ExportQrDialogMsg::...)` so the
+    /// reducer arm stays the single source of truth.
+    pub fn state_mut(&mut self) -> &mut ExportQrDialogState {
+        &mut self.state
+    }
 }
 
 #[allow(missing_docs)]
