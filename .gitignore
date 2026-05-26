@@ -2,6 +2,7 @@ TODO.md
 .claude/settings.local.json
 .codex
 commit.lock
+.antigravitycli/
 
 # Rust workspace artifacts
 /target
