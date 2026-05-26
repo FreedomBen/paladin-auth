@@ -360,8 +360,8 @@ auto-lock. Any OTP code retained after generation (HOTP reveal state and
 clipboard auto-clear values) is also kept in zeroizing storage and zeroized
 when replaced, cleared, expired, or dropped.
 
-Modal-local navigation is consistent across Add / Remove / Rename / Import /
-Export / Passphrase / Settings: `Tab` and `Ctrl-N` move to the next
+Modal-local navigation is consistent across Add / Remove / Rename / Edit /
+Import / Export / Passphrase / Settings: `Tab` and `Ctrl-N` move to the next
 control, `Shift-Tab` and `Ctrl-P` move to the previous control
 (vim insert-mode parity), `Enter` activates the focused
 button or the modal's default confirm action, `Space` toggles the focused
@@ -381,7 +381,7 @@ unless the modal is showing a post-success counts panel, where `Esc` simply
 closes it.
 
 Successful modal outcomes are consistent: manual Add, URI Add, Remove,
-Rename, Export, Passphrase, and Settings close the modal and publish a
+Rename, Edit, Export, Passphrase, and Settings close the modal and publish a
 status-line confirmation (unless Settings Confirm found no changes, which
 closes without saving). Import and clipboard-QR Add stay in the modal on a
 post-success counts panel so imported/skipped/replaced/appended/warning
@@ -477,27 +477,65 @@ dismiss deliberately.
   the label buffer is cleared on submit, cancel, modal close, and
   auto-lock alongside the other modal-local state.
 - **Edit** *(v0.2 / DESIGN §6 Milestone 9)* — opened with `Shift+E`
-  on the focused account row. Three `tui-input` rows pre-populated
-  from the selected account's `AccountSummary`: *Label* (required,
-  trimmed and §4.1 length-validated), *Issuer* (optional; an
-  inline `Ctrl+U` clear shortcut maps to
-  `AccountEdit.issuer = Some(None)`; leaving the row's text equal
-  to the prior issuer maps to `None` — "leave untouched"), and
-  *Icon hint slug* (free-form text; empty / case-insensitive
-  `none` / explicit slug parses through
-  `paladin_core::parse_icon_hint_token` so the wording matches the
-  Add modal). `Tab` / `Shift+Tab` traverse the rows; `Enter`
-  submits, validating each field through `validate_account_edit`
-  and surfacing the first failing field's typed
-  `validation_error` inline beside its row without closing.
+  on the focused account row. Three focusable controls pre-populated
+  from the selected account's `AccountSummary`:
+  * *Label* — `tui-input` row, required, trimmed and §4.1
+    length-validated. Buffer byte-equal to the prior label maps to
+    `AccountEdit.label = None` ("leave untouched"); any divergence
+    (including same-text-after-retrim) maps to
+    `Some(trimmed)`.
+  * *Issuer* — `tui-input` row, optional. Submit projects the
+    buffer onto `AccountEdit.issuer` with **what-you-see-is-what-you-save**
+    semantics:
+    - empty buffer AND prior issuer was `None` → `None` (leave untouched);
+    - empty buffer AND prior issuer was `Some(_)` → `Some(None)` (implicit
+      clear — matches CLI `--no-issuer`);
+    - buffer byte-equal to the prior issuer (after §4.1 issuer
+      normalization) → `None`;
+    - any other non-empty buffer → `Some(Some(normalized))` and
+      flows through `validate_issuer` for §4.1 rejection.
+    `Ctrl+U` is an inline convenience that empties the row buffer in
+    one keystroke; it carries no separate "explicit-clear marker" —
+    the empty-buffer rule above determines the projection.
+  * *Icon hint* — segmented selector (cycled with `←` / `→` per the
+    modal-local navigation rules) with four mutually exclusive
+    options matching the Add modal's icon-hint UX:
+    1. *Leave unchanged* (default at modal open) →
+       `AccountEdit.icon_hint = None`;
+    2. *Default from issuer* →
+       `Some(IconHintInput::Default)` (re-derives the slug from the
+       post-edit issuer via the §4.1 derivation rules);
+    3. *No icon* →
+       `Some(IconHintInput::Clear)`;
+    4. *Slug: <text>* — enables a sibling `tui-input` row pre-populated
+       with the prior resolved slug-or-empty-string; submit routes
+       through `paladin_core::parse_icon_hint_token(slug)` so any
+       invalid slug surfaces inline as
+       `validation_error` (`field: "icon_hint"`, `reason: "invalid_slug"`)
+       and the buffer text round-trips losslessly when the user
+       re-opens the modal.
+    The selector always defaults to *Leave unchanged* on open so the
+    user must affirmatively pick a different mode to mutate
+    `icon_hint`; this prevents the pre-fill from silently re-deriving
+    a slug for accounts whose prior `icon_hint` was `None`.
+
+  `Tab` / `Shift+Tab` traverse the three controls in document order
+  (Label → Issuer → Icon hint); `Enter` submits, validating each
+  present field through `validate_account_edit` and surfacing the
+  first failing field's typed `validation_error` inline beside its
+  row without closing.
   Successful submit wraps the assembled `AccountEdit` in
   `Vault::mutate_and_save` → `Vault::edit_account_metadata`, bumps
   `updated_at` even when every field equals its prior value (same
   contract as the Rename modal), and posts
-  `StatusLine::Confirmation("Edited {display}")` on `Ok`. An
-  empty `AccountEdit` (every row matches its prior value and
-  neither clear shortcut was pressed) is rejected at the modal
-  with the inline body
+  `StatusLine::Confirmation(format!("Edited {}.", summary_display_label(&summary)))`
+  on `Ok`, where `summary` is the post-edit `AccountSummary` returned
+  by `Vault::edit_account_metadata` — matching the Add / Remove
+  status-line shape. An
+  empty `AccountEdit` (every control projects to `None` per the
+  rules above — label byte-equal to prior, issuer either matching
+  prior or empty-on-prior-`None`, and icon-hint selector still on
+  *Leave unchanged*) is rejected at the modal with the inline body
   `validation_error` (`field: "edit"`, `reason: "empty"`) before
   reaching core, matching the core mutator's contract. OTP-
   affecting fields (`secret`, `algorithm`, `digits`, `kind`,
@@ -824,6 +862,7 @@ v0.2-only rows are marked inline.
 | `a`                                | Open Add modal                                                                                        |
 | `r`                                | Open Remove confirmation                                                                              |
 | `R`                                | Open Rename modal (Shift+R; `r` stays bound to Remove)                                                |
+| `E` (Shift-e)                      | Open Edit modal for the focused row (v0.2; multi-field label / issuer / icon-hint editor)             |
 | `i`                                | Open Import modal                                                                                     |
 | `e`                                | Open Export modal                                                                                     |
 | `Q` (Shift-q)                      | Open QR Export modal for the focused row (v0.2; warning-ack gate, ANSI body, Save-as-PNG / Save-as-SVG); rejected silently while any other modal is open |
@@ -1934,34 +1973,61 @@ v0.2 (DESIGN §6 Milestone 9). All bullets are red until Phase M
 ships in `paladin-core` and the TUI Edit modal lands.
 
 - [ ] `Shift+E` on the focused row opens the Edit modal with all
-  three rows pre-populated from `Account::summary()` (label,
-  issuer-or-empty-string, icon-hint slug-or-empty-string).
-- [ ] `Tab` / `Shift+Tab` cycle focus across the three rows;
-  `Enter` submits and `Esc` cancels (both clear every row
-  buffer).
+  three controls pre-populated: label buffer = prior label, issuer
+  buffer = prior issuer (`None` rendered as empty), icon-hint
+  selector defaulted to *Leave unchanged* with the sibling slug
+  buffer pre-populated from the prior resolved slug-or-empty-string.
+- [ ] `Tab` / `Shift+Tab` cycle focus across the three controls in
+  document order (Label → Issuer → Icon hint); `Enter` submits and
+  `Esc` cancels (both clear every row buffer and reset the
+  icon-hint selector to *Leave unchanged*).
 - [ ] Per-field text editing routes through the shared
   `tui-input` walker; typing into a row clears that row's inline
-  error.
-- [ ] Submit with at least one row diverging from its prior value
-  emits `Effect::EditAccountMetadata { path, account_id, edit:
-  AccountEdit }` carrying only the changed fields populated;
-  unchanged rows map to `None`.
-- [ ] Empty-edit submit (every row matches its prior value, no
-  clear shortcut pressed) surfaces the inline
+  error. `←` / `→` on the icon-hint selector cycles its four
+  options without affecting the sibling slug buffer.
+- [ ] Submit with at least one control diverging from its prior
+  value emits `Effect::EditAccountMetadata { path, account_id,
+  edit: AccountEdit }` carrying only the changed fields populated;
+  unchanged controls map to `None`.
+- [ ] Empty-edit submit (label buffer byte-equal to prior label,
+  issuer buffer projects to `None` per the WYSIWYS rules, icon-hint
+  selector still on *Leave unchanged*) surfaces the inline
   `validation_error` (`field: "edit"`, `reason: "empty"`)
   without emitting an effect.
-- [ ] Label-only submit emits `AccountEdit { label: Some(...),
-  ..Default::default() }` and matches the byte-for-byte effect
-  the Rename modal emits — verifying the two surfaces share one
-  mutation path.
-- [ ] `Ctrl+U` on the issuer row sets
-  `AccountEdit.issuer = Some(None)` (clear); the row text empties
-  and the effect carries the clear marker.
-- [ ] Icon-hint slug `none` (case-insensitive) maps to
-  `IconHintInput::Clear`; an explicit slug routes through
-  `parse_icon_hint_token` and rejects invalid slugs with the
+- [ ] Label-only submit emits `Effect::EditAccountMetadata` with
+  `AccountEdit { label: Some(trimmed), issuer: None, icon_hint:
+  None }`. A companion executor-side test (rename + edit fixture
+  using the same starting `Account` and identical post-edit label)
+  asserts both surfaces produce *equivalent post-execute vault
+  state* — same on-disk label, same `updated_at` bump, same
+  rollback behavior on `save_not_committed` — verifying the two
+  surfaces share one mutation path (`Vault::edit_account_metadata`)
+  even though they emit distinct Effect variants.
+- [ ] Issuer WYSIWYS projection — covered by four reducer tests:
+  empty buffer with prior `None` → `None`; empty buffer with prior
+  `Some(_)` → `Some(None)`; buffer byte-equal to normalized prior
+  → `None`; non-empty divergent buffer → `Some(Some(normalized))`.
+  A fifth test asserts `Ctrl+U` on the issuer row empties the
+  buffer in one keystroke and that the projection then follows the
+  same rules (i.e. `Ctrl+U` over a prior `Some(_)` lands on
+  `Some(None)`).
+- [ ] Icon-hint selector — four reducer tests, one per option:
+  *Leave unchanged* → `AccountEdit.icon_hint = None`;
+  *Default from issuer* → `Some(IconHintInput::Default)`;
+  *No icon* → `Some(IconHintInput::Clear)`;
+  *Slug: <text>* with a valid slug → `Some(IconHintInput::Slug(...))`.
+  A fifth test asserts an invalid slug under *Slug:* surfaces the
   inline `validation_error` (`field: "icon_hint"`,
-  `reason: "invalid_slug"`).
+  `reason: "invalid_slug"`) and emits no effect. A sixth test
+  asserts that switching the selector away from *Slug:* and back
+  preserves the slug buffer's text (so the user does not lose
+  typed input by toggling modes).
+- [ ] Opening Edit on an account whose prior `icon_hint` is `None`
+  with a non-empty issuer, then pressing `Enter` without touching
+  the selector, emits an effect whose `AccountEdit.icon_hint`
+  equals `None` — proving the modal does **not** silently
+  re-derive a slug for the "leave untouched" path. (Regression
+  guard against the prior text-row design.)
 - [ ] Same-as-prior submit on at least one field still bumps
   `updated_at` (matches the core mutator's no-op-but-non-empty
   contract); covered by an executor-side test that asserts the
@@ -1977,17 +2043,38 @@ ships in `paladin-core` and the TUI Edit modal lands.
 - [ ] Off-`Unlocked` / mismatched-path / stale-modal
   `EffectResult::EditAccountMetadata` deliveries are silently
   discarded, matching the rename test shape.
+- [ ] Auto-lock with the Edit modal open drops the modal and
+  every modal-local buffer (label, issuer, icon-hint slug) and
+  resets the selector to *Leave unchanged* before re-presenting
+  the unlock screen. Pinned by
+  `auto_lock_with_edit_modal_open_drops_modal_and_buffers` in
+  `tests/auto_lock_tests.rs`, matching the QR Export auto-lock
+  test shape.
 - [ ] `?` from the list focus opens the help overlay including
   the new `Shift+E` row; the `keybindings::KEYBINDINGS` table is
   the single source so the overlay cannot drift from the
   bindings.
 - [ ] Snapshot test for the Edit modal default layout
   (`tests/view_snapshots.rs::snapshot_edit_modal_default`),
-  matching the Rename snapshot conventions (64×10 centered
-  region, three labeled rows, footer hint line).
-- [ ] Snapshot tests for the validation-error variant and the
-  durability-warning variant, mirroring the Rename snapshot
-  inventory.
+  matching the Rename snapshot conventions (centered region,
+  three labeled controls, footer hint line). The icon-hint
+  selector renders with `▶ Leave unchanged ◀` active markers
+  parallel to other segmented selectors in this plan.
+- [ ] Snapshot test for the validation-error variant
+  (`tests/view_snapshots.rs::snapshot_edit_modal_validation_error`)
+  with an invalid icon-hint slug entered under *Slug:* so the
+  inline `validation_error` (`field: "icon_hint"`,
+  `reason: "invalid_slug"`) text renders beside the selector.
+- [ ] Snapshot test for the durability-warning variant
+  (`tests/view_snapshots.rs::snapshot_edit_modal_durability_warning`)
+  with `EffectResult::EditAccountMetadata`
+  `Err(SaveDurabilityUnconfirmed)` injected so the inline warning
+  text renders, mirroring the Rename durability snapshot.
+- [ ] Snapshot test for the *Slug:* mode active
+  (`tests/view_snapshots.rs::snapshot_edit_modal_icon_hint_slug_mode`)
+  so the slug input row is captured as enabled and focused,
+  visually distinguishing it from the disabled state under the
+  other three selector options.
 
 ### Pre-commit save rollback (`tests/reducer_tests.rs`)
 
