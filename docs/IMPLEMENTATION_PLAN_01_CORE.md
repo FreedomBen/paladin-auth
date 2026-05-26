@@ -88,7 +88,7 @@ crates/paladin-core/
     ├── vault_account_id_errors.rs       # invalid / unknown AccountId rejection per command
     ├── vault_find_duplicate.rs          # duplicate-account detection on add / rename
     ├── vault_rename.rs                  # rename validation + persistence + idempotency
-    ├── vault_edit_account_metadata.rs   # AccountEdit validation + Vault::edit_account_metadata mutator (Phase M); rename-via-edit byte-identical-error refactor lock
+    ├── vault_edit_account_metadata.rs   # AccountEdit validation + Vault::edit_account_metadata mutator + Vault::find_duplicate_after_edit (Phase M); rename-via-edit byte-identical-error refactor lock
     ├── vault_hotp_advance.rs            # hotp_advance persists and returns the pre-advance counter; peek and totp_code never mutate
     ├── vault_otp_codes.rs               # totp_code / totp_next_code / hotp_peek surface contracts
     ├── vault_import_accounts.rs         # Vault::import_accounts merge policies × ImportReport bucket assignments
@@ -1778,10 +1778,18 @@ matching the existing `add` / `remove` / `rename` pattern.
   the construction shorthand the internal `rename` reimplementation
   reaches for.
 
-- [ ] **`validate_account_edit(edit, prior, now)` free function.**
-  Pure-logic pre-flight validator. Routes through the existing
-  `validate_label` / `validate_issuer` / `parse_icon_hint_token`
-  helpers per the matching `AccountEdit` field and returns
+- [ ] **`validate_account_edit(edit: &AccountEdit, prior: &Account, now: SystemTime)` free function.**
+  Pure-logic pre-flight validator. Routes the `label` field through
+  `validate_label`, the `issuer` field through `validate_issuer`,
+  and the `icon_hint` field's `IconHintInput::Slug(s)` variant
+  through `domain::slug::validate_slug(s)` (the same slug grammar
+  `parse_icon_hint_token` enforces — but the AccountEdit field is
+  the already-parsed `IconHintInput`, so the validator hits the
+  slug helper directly, not the string-token parser).
+  `IconHintInput::Default` and `IconHintInput::Clear` need no
+  validation here; the post-edit slug for `Default` is re-derived
+  by `Vault::edit_account_metadata` via
+  `domain::slug::derive_default_from_issuer`. Returns
   `validation_error` with the offending field name on the first
   failure (consistent with `validate_manual`'s per-field error
   shape). The `prior` and `now` parameters are currently unused
@@ -1799,7 +1807,8 @@ matching the existing `add` / `remove` / `rename` pattern.
   committed to a field. Errors include the `field` name
   (`"label"`, `"issuer"`, `"icon_hint"`) and the typed `reason`
   from the underlying validator (`"empty"`, `"too_long"`,
-  `"invalid_slug"`, etc.).
+  `"invalid_chars"`, etc., per `validate_slug` for the icon-hint
+  case).
 
 - [ ] **`Vault::edit_account_metadata(id, edit, now)` mutator.**
   Single public mutator. Routes through a private inner helper
@@ -1828,7 +1837,7 @@ matching the existing `add` / `remove` / `rename` pattern.
   `Vault::mutate_and_save` for atomic persistence + rollback — same
   pattern as `rename` / `add` / `remove`.
 
-- [ ] **`Vault::find_duplicate_after_edit(id, edit) -> Option<&Account>`.**
+- [ ] **`Vault::find_duplicate_after_edit(&self, id: AccountId, edit: &AccountEdit) -> Option<&Account>`.**
   Companion to the existing `find_duplicate(&ValidatedAccount)` so
   GTK `EditDialog`, TUI Edit modal, and CLI `paladin edit` flows
   can detect `(secret, issuer, label)` collisions before
@@ -1843,10 +1852,12 @@ matching the existing `add` / `remove` / `rename` pattern.
   `None` for an unknown `id` (front ends already handle the
   account-not-found path before opening the dialog; if they
   haven't, the subsequent `edit_account_metadata` call surfaces
-  `invalid_state` `account_not_found`). The helper is
-  `&self` and never mutates. Re-exported at the crate root and
-  asserted `Send + Sync` (it carries no state). DESIGN.md §4.7 is
-  updated to list this method alongside `find_duplicate`.
+  `invalid_state` `account_not_found`). The method takes `&self`
+  and never mutates. As a method on `Vault`, it adds no new field
+  and inherits the existing `Vault: Send + Sync` posture asserted
+  in `tests/send_assertions.rs` — no new Send/Sync entry is
+  needed for the method itself. DESIGN.md §4.7 is updated to list
+  this method alongside `find_duplicate`.
 
 - [ ] **`Vault::rename` reimplementation on top of
   `edit_account_metadata`.** Internal refactor: the existing
@@ -1923,9 +1934,10 @@ matching the existing `add` / `remove` / `rename` pattern.
 
 - [ ] **Tests — Send / Sync assertions.** Extend
   `tests/send_assertions.rs` with `assert_send::<AccountEdit>()`
-  and `assert_impl_all!(AccountEdit: Sync)` per the Phase J
-  convention (every J.3 type is `Sync` except `Store`). A future
-  field change that breaks either trait fails the build.
+  and `assert_sync::<AccountEdit>()` calls — the same
+  function-helper style the file already uses for every other
+  J.3 type (every worker-boundary type is `Sync` except `Store`).
+  A future field change that breaks either trait fails the build.
 
 - [ ] **Tests — `tests/error_matrix.rs` extension.** Add two new
   rows to the Phase J matrix: (1) the
