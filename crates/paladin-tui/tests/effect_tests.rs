@@ -43,6 +43,35 @@ fn light_params() -> Argon2Params {
     }
 }
 
+/// Process-wide lock around the `PALADIN_FAULT_INJECT` env var so the
+/// `cargo test` thread pool does not let fault-injecting modules (e.g.
+/// `import_save_not_committed`) bleed `PALADIN_FAULT_INJECT=pre_commit`
+/// into other modules' `vault.save()` calls. All helpers below that
+/// commit a vault to disk acquire the lock through
+/// [`with_save_env_lock`] before saving.
+///
+/// When `test-hooks` is disabled, the fault-injection hook is compiled
+/// out entirely, so the lock degrades to a no-op.
+#[cfg(feature = "test-hooks")]
+mod env_lock {
+    use std::sync::Mutex;
+    pub static ENV_LOCK: Mutex<()> = Mutex::new(());
+    pub const ENV: &str = "PALADIN_FAULT_INJECT";
+}
+
+#[cfg(feature = "test-hooks")]
+fn with_save_env_lock<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    f()
+}
+
+#[cfg(not(feature = "test-hooks"))]
+fn with_save_env_lock<R>(f: impl FnOnce() -> R) -> R {
+    f()
+}
+
 /// Create a tempdir whose own mode is `0700`, so vault-dir permission
 /// checks (`unsafe_permissions`) pass even when the system `TMPDIR`
 /// inherits looser bits.
@@ -61,12 +90,12 @@ fn create_encrypted_vault(path: &Path, passphrase: &str) {
     let pp = SecretString::from(passphrase.to_string());
     let opts = EncryptionOptions::with_params(pp, light_params()).expect("encryption opts");
     let (vault, store) = Store::create(path, VaultInit::Encrypted(opts)).expect("create vault");
-    vault.save(&store).expect("commit initial vault");
+    with_save_env_lock(|| vault.save(&store).expect("commit initial vault"));
 }
 
 fn create_plaintext_vault(path: &Path) {
     let (vault, store) = Store::create(path, VaultInit::Plaintext).expect("create vault");
-    vault.save(&store).expect("commit initial vault");
+    with_save_env_lock(|| vault.save(&store).expect("commit initial vault"));
 }
 
 /// A throwaway state for effects that do not read it (`Quit`,
@@ -81,7 +110,7 @@ fn dummy_state() -> AppState {
 /// state and the account's `AccountId` so callers can target it.
 fn unlocked_with_one_totp(path: &Path, label: &str) -> (AppState, AccountId) {
     let (mut vault, store) = Store::create(path, VaultInit::Plaintext).expect("create vault");
-    vault.save(&store).expect("commit empty vault");
+    with_save_env_lock(|| vault.save(&store).expect("commit empty vault"));
     let id = add_totp_account(&mut vault, &store, label);
     let state = AppState::Unlocked {
         path: path.to_path_buf(),
@@ -117,7 +146,7 @@ fn add_totp_account(vault: &mut Vault, store: &Store, label: &str) -> AccountId 
     };
     let validated = validate_manual(input, SystemTime::now()).expect("valid manual input");
     let id = vault.add(validated.account);
-    vault.save(store).expect("commit added account");
+    with_save_env_lock(|| vault.save(store).expect("commit added account"));
     id
 }
 
@@ -863,7 +892,7 @@ fn execute_remove_carries_issuer_joined_display_label() {
     };
     let validated = validate_manual(input, SystemTime::now()).expect("valid manual input");
     let id = vault.add(validated.account);
-    vault.save(&store).expect("save vault");
+    with_save_env_lock(|| vault.save(&store).expect("save vault"));
 
     let mut state = AppState::Unlocked {
         path: path.clone(),
@@ -2592,20 +2621,19 @@ mod import_save_not_committed {
     //! "Import modal". Gated behind the `test-hooks` cargo feature so
     //! the `PALADIN_FAULT_INJECT=pre_commit` hook is compiled into
     //! `paladin-core::storage::fault`. The process-wide env var
-    //! serializes through a local mutex so concurrent tests in the
-    //! `cargo test` thread pool don't trip each other.
+    //! serializes through the shared file-scope [`super::env_lock`]
+    //! mutex so concurrent tests in the `cargo test` thread pool
+    //! don't trip each other — fault-injecting closures here and
+    //! every helper that calls `vault.save()` acquire the same lock.
     use super::*;
-    use std::sync::Mutex;
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-    const ENV: &str = "PALADIN_FAULT_INJECT";
 
     fn with_pre_commit_fault<R>(f: impl FnOnce() -> R) -> R {
-        let _guard = ENV_LOCK
+        let _guard = super::env_lock::ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        std::env::set_var(ENV, "pre_commit");
+        std::env::set_var(super::env_lock::ENV, "pre_commit");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        std::env::remove_var(ENV);
+        std::env::remove_var(super::env_lock::ENV);
         match result {
             Ok(v) => v,
             Err(payload) => std::panic::resume_unwind(payload),
@@ -3685,7 +3713,7 @@ mod copy_code {
         };
         let validated = validate_manual(input, SystemTime::now()).expect("valid manual input");
         let id = vault.add(validated.account);
-        vault.save(store).expect("commit added hotp account");
+        super::with_save_env_lock(|| vault.save(store).expect("commit added hotp account"));
         id
     }
 
@@ -3695,7 +3723,7 @@ mod copy_code {
         visible_code: &str,
     ) -> (AppState, AccountId) {
         let (mut vault, store) = Store::create(path, VaultInit::Plaintext).expect("create vault");
-        vault.save(&store).expect("commit empty vault");
+        super::with_save_env_lock(|| vault.save(&store).expect("commit empty vault"));
         let id = add_hotp_account(&mut vault, &store, label);
         let reveal = HotpReveal {
             account_id: id,
@@ -3725,7 +3753,7 @@ mod copy_code {
 
     fn unlocked_with_hotp_no_reveal(path: &Path, label: &str) -> (AppState, AccountId) {
         let (mut vault, store) = Store::create(path, VaultInit::Plaintext).expect("create vault");
-        vault.save(&store).expect("commit empty vault");
+        super::with_save_env_lock(|| vault.save(&store).expect("commit empty vault"));
         let id = add_hotp_account(&mut vault, &store, label);
         let state = AppState::Unlocked {
             path: path.to_path_buf(),
@@ -4225,7 +4253,7 @@ mod qr_export {
     /// [`AccountId`] so callers can target it.
     fn unlocked_with_one_hotp(path: &Path, label: &str, counter: u64) -> (AppState, AccountId) {
         let (mut vault, store) = Store::create(path, VaultInit::Plaintext).expect("create vault");
-        vault.save(&store).expect("commit empty vault");
+        super::with_save_env_lock(|| vault.save(&store).expect("commit empty vault"));
         let input = AccountInput {
             label: label.to_string(),
             issuer: None,
@@ -4239,7 +4267,7 @@ mod qr_export {
         };
         let validated = validate_manual(input, SystemTime::now()).expect("valid HOTP manual input");
         let id = vault.add(validated.account);
-        vault.save(&store).expect("commit hotp account");
+        super::with_save_env_lock(|| vault.save(&store).expect("commit hotp account"));
         let state = AppState::Unlocked {
             path: path.to_path_buf(),
             vault,

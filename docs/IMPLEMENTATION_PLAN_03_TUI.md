@@ -4038,8 +4038,18 @@ terminal theme and survives `--no-color`.
   `exec_paladin_tui` failure mode. `assert_cmd = "2.0"` is added to
   `crates/paladin-tui/Cargo.toml` `[dev-dependencies]`, matching the
   pin already in `paladin-cli`.)*
-- [ ] **v0.2 — QR Export modal** per the §"Modals (per §6)"
+- [x] **v0.2 — QR Export modal** per the §"Modals (per §6)"
   `QR Export` entry and DESIGN §4.6 / §6 / §10.
+  *(All foundation + save sub-flow + auto-lock + insta-snapshot
+  sub-items below ticked. Effect-test PALADIN_FAULT_INJECT bleed
+  fixed by hoisting `ENV_LOCK` to file scope as
+  `crates/paladin-tui/tests/effect_tests.rs::env_lock`; helpers
+  that call `vault.save()` (`create_plaintext_vault`,
+  `create_encrypted_vault`, `add_totp_account`,
+  `unlocked_with_one_totp`, qr_export's `unlocked_with_one_hotp`,
+  copy_code's HOTP helpers) acquire the lock through the
+  shared `with_save_env_lock` helper so the fault-injection
+  module's env-var toggling can no longer race a clean save.)*
   - [x] Add a new `QrExportModal` variant to the modal enum,
     holding `page: Page::{WarningAck, QrAndActions}`, `ack: bool`,
     `staged_buffers: Option<{ ansi: Zeroizing<String>, png:
