@@ -469,21 +469,30 @@ Three formats, user picks per invocation:
       gate `ExportDialog` uses; saved files are `0600`.
     * **SVG text** — same write contract as PNG. Useful for sharp
       printing and for users who want a vector copy.
-    * **ANSI Unicode QR** — Unicode half-block rendering for terminals
-      (CLI default when no file output is selected, TUI modal body).
-      Stdout output is plain UTF-8 text; ANSI styling is disabled when
-      `--no-color` is set or stdout is not a TTY, matching §5.
+    * **Unicode half-block QR** — `qrcode::render::unicode::Dense1x2`
+      rendering for terminals (CLI default when no file output is
+      selected, TUI modal body). The body is plain UTF-8 text using
+      only the `' '`, `'▀'`, `'▄'`, `'█'`, and `'\n'` glyphs — no ANSI
+      colour / style escape sequences — so `--no-color`, `NO_COLOR`,
+      and non-TTY stdout do not change the rendered bytes. (The
+      half-blocks are described as "ANSI" only colloquially because
+      they target ANSI-capable terminals; nothing about the encoding
+      depends on ANSI escapes.)
   Render parameters are bounded so a malformed `QrRenderOptions` value
   cannot blow up the encoder: `module_size_px` is 1 to 64 inclusive
-  (default 8), `quiet_zone` is bool (default `true`), and the QR error-
-  correction level is fixed to **M** (the §9 `qrcode` crate default).
-  Encoder failures return `validation_error` with `field: "qr_render"`
-  and `reason` set to the encoder's stable rejection slug (e.g.
-  `data_too_long` if a far-future account format somehow exceeds the
-  largest QR version); v0.1 `otpauth://` URIs fit comfortably inside
-  QR version 10 with M-level ECC, so production payloads never trip
-  the size cap. The QR pipeline is read-only: it never calls into
-  storage, never advances a counter, and never mutates `updated_at`.
+  (default 8), `quiet_zone` is bool (default `true`), and the QR
+  error-correction level is fixed to **M** (the §9 `qrcode` crate
+  default). `QrRenderOptions` is consumed by the PNG and SVG render
+  paths only; the half-block path takes no options because terminal
+  cell size is fixed by the renderer and the quiet zone is always
+  emitted for scannability. Encoder failures return `validation_error`
+  with `field: "qr_render"` and `reason` set to the encoder's stable
+  rejection slug (e.g. `data_too_long` if a far-future account format
+  somehow exceeds the largest QR version); today's `otpauth://` URIs
+  fit comfortably inside QR version 10 with M-level ECC, so production
+  payloads never trip the size cap. The QR pipeline is read-only: it
+  never calls into storage, never advances a counter, and never
+  mutates `updated_at`.
 
 `write_secret_file_atomic` is the shared export-writer primitive for the CLI,
 TUI, and GUI. It writes caller-supplied bytes to an arbitrary destination path
@@ -633,7 +642,7 @@ pub const HOTP_REVEAL_SECS: u64 = 120;
 pub const QR_RGBA_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// QR-export render bounds, mirrored on the CLI `--module-size-px` flag and
 /// the GUI render path. The QR error-correction level is fixed at M and is
-/// not exposed as an option in v0.1.
+/// not exposed as an option in v0.2.
 pub const QR_MODULE_SIZE_PX_MIN: u32 = 1;
 pub const QR_MODULE_SIZE_PX_MAX: u32 = 64;
 pub const QR_MODULE_SIZE_PX_DEFAULT: u32 = 8;
@@ -1095,8 +1104,8 @@ calling these methods:
 | `hotp_peek`    | `not_hotp`          | The account is TOTP.            |
 | `hotp_advance` | `account_not_found` | No account exists for the ID.   |
 | `hotp_advance` | `not_hotp`          | The account is TOTP.            |
-| `export_qr_png` | `account_not_found` | No account exists for the ID. |
-| `export_qr_svg` | `account_not_found` | No account exists for the ID. |
+| `export_qr_png`  | `account_not_found` | No account exists for the ID. |
+| `export_qr_svg`  | `account_not_found` | No account exists for the ID. |
 | `export_qr_ansi` | `account_not_found` | No account exists for the ID. |
 
 Other core-owned `invalid_state` operation/state pairs are also stable:
@@ -1755,18 +1764,20 @@ Layout (single-screen MVP):
   acknowledges the QR-export warning sourced from
   `paladin_core::format_plaintext_qr_export_warning()`. The modal body
   shows the warning + ack gate first; on ack, the same modal switches
-  to the Unicode half-block QR plus the account's `issuer:label`
-  caption and two save actions, `Save as PNG…` and `Save as SVG…`, both
-  routed through `Vault::export_qr_png` / `export_qr_svg` and
-  `write_secret_file_atomic` (0600). Save targets prompt for a
-  destination path inside the modal, refuse overwrite without an
-  inline `--force`-equivalent confirmation, and surface the resulting
-  path inline on success. `Esc` closes the modal and drops the
-  rendered `Zeroizing` buffers; the modal is rejected on HOTP rows
-  only when the row has no decoded `Account` (defensive — the §4.6
-  QR pipeline is read-only and never advances HOTP). Auto-lock
-  during the modal lifecycle drops the rendered buffers before
-  switching to the unlock screen.
+  to the Unicode half-block QR plus the account's `summary_display_label`
+  caption (CLI / GUI parity) and two save actions, `Save as PNG…` and
+  `Save as SVG…`, both routed through `Vault::export_qr_png` /
+  `export_qr_svg` and `write_secret_file_atomic` (0600). Save targets
+  prompt for a destination path inside the modal, refuse overwrite
+  without an inline `--force`-equivalent confirmation, and surface the
+  resulting path inline on success. `Esc` closes the modal and drops
+  the rendered `Zeroizing` buffers. The modal opens regardless of OTP
+  kind (TOTP and HOTP rows both qualify — §4.6 is read-only, so HOTP
+  rows do not need the hidden-code reveal gate that `show` / `copy`
+  use); the only defensive rejection is a focused row that carries no
+  decoded `Account` value, which cannot occur in normal `Unlocked`
+  state. Auto-lock during the modal lifecycle drops the rendered
+  buffers before switching to the unlock screen.
 - `?` from list focus opens a read-only Help overlay listing every
   keybinding; `Esc` closes it. The overlay never mutates state and is
   not bound on the unlock, create-vault, or startup-error screens.
@@ -2213,11 +2224,15 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
   - QR export (§4.6): `Vault::export_qr_png` / `export_qr_svg` /
     `export_qr_ansi` and the parallel `export::qr_*` free functions
     encode the same `otpauth://` URI that `export::otpauth_list`
-    emits for that account — pinned by re-decoding the rendered QR
-    through `rqrr` and asserting equality with the URI. Render
-    operations are pure reads: the HOTP counter is not advanced,
-    `updated_at` is not bumped, and the on-disk vault is byte-
-    identical before and after every render. `QrRenderOptions`
+    emits for that account. PNG output is round-tripped through
+    `rqrr` and asserted equal to the URI; SVG output is asserted
+    well-formed (starts with `<?xml` / `<svg`, parses through a
+    `quick-xml`-style sanity check) and carries the URI as alt-text;
+    Unicode half-block output is asserted to consist only of the
+    `Dense1x2` glyph alphabet (`' '`, `'▀'`, `'▄'`, `'█'`, `'\n'`).
+    Render operations are pure reads: the HOTP counter is not
+    advanced, `updated_at` is not bumped, and the on-disk vault is
+    byte-identical before and after every render. `QrRenderOptions`
     validation rejects `module_size_px` outside
     `QR_MODULE_SIZE_PX_MIN..=QR_MODULE_SIZE_PX_MAX` with
     `validation_error` (`field: "qr_render"`). Account-not-found
@@ -2733,10 +2748,13 @@ artifacts side by side.
   not bumped. Semantically a QR export is a `peek`, not a `show`.
 - Three render targets, locked at the core boundary: PNG bytes
   (returned `Zeroizing<Vec<u8>>`), SVG text
-  (returned `Zeroizing<String>`), and Unicode half-block ANSI text
+  (returned `Zeroizing<String>`), and Unicode half-block text
   (returned `Zeroizing<String>`). QR error-correction level is fixed
-  to **M** in v0.1; `QrRenderOptions` exposes only `module_size_px`
-  (bounded 1..=64, default 8) and `quiet_zone` (default `true`).
+  to **M** for the v0.2 surface; `QrRenderOptions` exposes only
+  `module_size_px` (bounded 1..=64, default 8) and `quiet_zone`
+  (default `true`), and is consumed by the PNG / SVG renderers only —
+  the half-block renderer takes no options and always emits the quiet
+  zone.
 - Warning text is shared via
   `paladin_core::format_plaintext_qr_export_warning()`. CLI / TUI /
   GUI all render it verbatim before any pixel of the QR is shown,

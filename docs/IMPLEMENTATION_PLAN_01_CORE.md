@@ -1560,11 +1560,14 @@ land before the GTK / CLI / TUI work or alongside it.
   resulting `Vec<u8>` is wrapped in `Zeroizing` because the PNG
   encodes the account secret. Encoder failures (e.g. `qrcode`
   returns `Err` on a payload longer than QR version 40 can hold,
-  which v0.1 `otpauth://` URIs never trigger) surface as
+  which today's `otpauth://` URIs never trigger) surface as
   `validation_error` (`field: "qr_render"`, `reason` matching the
-  encoder's stable rejection slug). The function takes `&Account`,
-  not `&AccountSummary`, because the URI emitter needs the secret
-  bytes.
+  encoder's stable rejection slug, e.g. `data_too_long`). This is a
+  distinct `reason` value from the `module_size_px_out_of_bounds`
+  bounds-violation path; both share `field: "qr_render"` because
+  they both originate from the QR rendering surface. The function
+  takes `&Account`, not `&AccountSummary`, because the URI emitter
+  needs the secret bytes.
 
 - [ ] **`export::qr_svg(account, options) -> Result<Zeroizing<String>>`.**
   Implement in `src/export/qr.rs`. Same validation / URI / encoder

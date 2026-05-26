@@ -563,7 +563,7 @@ dismiss deliberately.
   `io_error`, `validation_error` from
   `QrRenderOptions::validate`) stay inline in the modal as
   the existing Export modal handles them. Encoder failures from
-  `qrcode` (defensive — v0.1 / v0.2 `otpauth://` URIs fit in QR
+  `qrcode` (defensive — today's `otpauth://` URIs fit in QR
   version 10 with M-level ECC, but the modal renders the typed
   error inline rather than crashing) follow the same inline path.
   The modal opens regardless of vault mode (plaintext or
@@ -1529,10 +1529,12 @@ executor coverage rides with `tests/effect_tests.rs`'s
   the HOTP `counter()` and `updated_at()` unchanged, and the
   on-disk primary file bytes are unchanged.
 - [ ] The warning body matches
-  `paladin_core::format_plaintext_qr_export_warning()` verbatim
-  (pinned via the same fixture-text approach the existing
-  `qr_export_modal_warning_text_matches_paladin_core_verbatim`
-  fixture uses; CLI / TUI / GUI share one source).
+  `paladin_core::format_plaintext_qr_export_warning()` verbatim,
+  pinned by `qr_export_modal_warning_text_matches_paladin_core_verbatim`
+  (the same fixture-text approach the existing
+  `format_plaintext_storage_warning_matches_fixture` and
+  `format_plaintext_export_warning_matches_fixture` tests use; CLI /
+  TUI / GUI share one source).
 - [ ] `Save as PNG…` from Page 2 dispatches a save effect that
   prompts inline for the destination path. Empty path rejects
   inline. Non-existent directory parent rejects inline with
@@ -1561,13 +1563,16 @@ executor coverage rides with `tests/effect_tests.rs`'s
   then re-presents the unlock screen for encrypted vaults
   (no-op on plaintext). Pinned by
   `auto_lock_with_qr_export_modal_open_drops_modal_and_renders_buffers`.
-- [ ] HOTP account QR export — assert the rendered ANSI body
-  decodes back through `rqrr` (gated behind the existing
-  `qrcode` / `rqrr` dev-dependency that the other QR tests use)
-  to an `otpauth://hotp/...&counter=N` URI whose `counter`
-  equals the *current* stored counter. (TOTP rows decode to
-  `otpauth://totp/...` with the matching algorithm / digits /
-  period / secret.)
+- [ ] HOTP account QR export — assert the PNG that the
+  `Save as PNG…` worker writes for a HOTP row decodes back through
+  `rqrr` (gated behind the existing `qrcode` / `rqrr` dev-dependency
+  that the other QR tests use) to an `otpauth://hotp/...&counter=N`
+  URI whose `counter` equals the *current* stored counter. (TOTP rows
+  decode to `otpauth://totp/...` with the matching algorithm / digits
+  / period / secret.) `rqrr` decodes images, not the on-screen
+  half-block render, so this test exercises the save path; the
+  half-block round-trip is asserted at the core layer in
+  `tests/export_qr.rs` against the URI string directly.
 - [ ] Insta snapshots — render the modal at each state:
   `qr_export_modal_warning_ack_unchecked`,
   `qr_export_modal_warning_ack_checked` (Page 1 with the ack on,

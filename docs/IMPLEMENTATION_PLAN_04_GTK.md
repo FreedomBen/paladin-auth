@@ -1708,7 +1708,7 @@ by ticking it.
   Picture is bound to an in-memory texture, not a file URL, so
   the rendered bytes never touch disk on the way to the screen.
   Save-as-PNG / Save-as-SVG are the only on-disk paths.
-* **Failure when `qrcode` rejects a payload.** v0.1 / v0.2
+* **Failure when `qrcode` rejects a payload.** Today's
   `otpauth://` URIs fit inside QR version 10 with M-level ECC
   comfortably, but defensively the dialog renders
   `validation_error` (`field: "qr_render"`, `reason: "..."`)
@@ -2420,7 +2420,7 @@ These run without a display server. Each lives under
   `Path::try_exists` reports `true` and stays hidden otherwise; switching
   between PNG and SVG targets keys the ack against the current
   target kind so a stale ack cannot cross-stomp.
-* [ ] `apply_msg_save_destination_picked_records_exists` and
+- [ ] `apply_msg_save_destination_picked_records_exists` and
   `apply_msg_overwrite_acknowledged_*` pin the destination /
   ack reducer arms, matching `ExportDialogState`'s shape.
 - [ ] `run_export_qr_save_worker_plaintext_png_succeeds_and_writes_0600_file`
