@@ -3186,20 +3186,29 @@ impl SimpleComponent for AppModel {
             AppMsg::ExportQrDialogAction(
                 ExportQrDialogOutput::Cancel | ExportQrDialogOutput::Close,
             ) => {
-                // User dismissed the QR-export `adw::Dialog` — drop
-                // the live controller so the widget is released and
-                // the staged PNG / SVG buffers (held in
+                // User dismissed the QR-export `adw::Dialog` — call
+                // `force_close` *before* dropping the controller so
+                // the dialog is removed from its dialog-host parent;
+                // simply dropping the controller releases our refcount
+                // but leaves the dialog presented (the host still
+                // holds it), so the Cancel click would appear to do
+                // nothing. The Escape / window-close path arrives
+                // here through `connect_closed` after the widget
+                // already detached itself, so `force_close` is a
+                // benign no-op there. Mirrors the precedent in the
+                // `PassphraseDialogOutput::Close` arm. The staged
+                // PNG / SVG buffers (held in
                 // [`Zeroizing`](zeroize::Zeroizing) wrappers inside
                 // `ExportQrDialogState`) zero on drop. The two
                 // variants stay distinct in
                 // [`crate::export_qr_dialog::ExportQrDialogOutput`]
                 // so a future telemetry / undo surface can
-                // differentiate them. `adw::Dialog` self-detaches
-                // from its toplevel parent on close, so no
-                // `self.content.remove` is needed. Defensive: if the
-                // field is already `None` (controller swapped under
-                // us by a future race), this is a benign no-op.
-                self.export_qr_dialog = None;
+                // differentiate them. Defensive: if the field is
+                // already `None` (controller swapped under us by a
+                // future race), this is a benign no-op.
+                if let Some(controller) = self.export_qr_dialog.take() {
+                    controller.widget().force_close();
+                }
             }
             AppMsg::ExportDialogAction(ExportDialogOutput::Cancel | ExportDialogOutput::Close) => {
                 // User dismissed the `adw::Dialog` — either by the
