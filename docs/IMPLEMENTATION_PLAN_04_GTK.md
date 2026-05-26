@@ -1837,13 +1837,13 @@ by ticking it.
   `clear_for_lock_on_fresh_state_is_a_noop` confirms the call
   is safe on every auto-lock fire even when the user never
   opened the dialog.
-* [ ] **Thinness contract.** Re-run
+* [x] **Thinness contract.** Re-run
   `cargo test -p paladin-gtk --test thinness` to confirm the
   GTK crate still passes — the new file imports only
   `paladin_core::*` and `gtk` / `gdk` / `glib` / `adw` /
   `relm4`. No `image` / `rqrr` / `qrcode` imports anywhere in
   `crates/paladin-gtk/src/`.
-* [ ] **Manual test plan.** Append five scenarios to
+* [x] **Manual test plan.** Append five scenarios to
   `tests/manual/MANUAL_TEST_PLAN.md`:
     * "Open the kebab on a TOTP row → `Show QR…` is the second
       entry; the dialog opens on the warning page with the ack
@@ -1860,11 +1860,11 @@ by ticking it.
       pixels match the on-screen render; pasting into a text
       field yields nothing (the clipboard carries PNG bytes,
       not text)."
-* [ ] **Pure-logic unit tests.** Tick every bullet in the
+* [x] **Pure-logic unit tests.** Tick every bullet in the
   `tests/export_qr_dialog_logic.rs` checklist below (and the
   kebab-menu rename in `tests/account_list_logic.rs`); CI gates
   them.
-* [ ] **CI gates.** `cargo fmt --all -- --check`,
+* [x] **CI gates.** `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace --all-targets`, `cargo deny check`,
   `cargo audit`. `cargo public-api` snapshot is updated to
