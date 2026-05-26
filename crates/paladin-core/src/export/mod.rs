@@ -3,9 +3,11 @@
 // Export surface (docs/DESIGN.md §4.6 / §4.7).
 //
 // Two formats are supported:
-//   - [`otpauth_list`] — infallible JSON array of canonical
-//     `otpauth://` URIs, suitable for piping into another
-//     authenticator that consumes the otpauth scheme.
+//   - [`otpauth_list`] — infallible newline-separated list of
+//     canonical `otpauth://` URIs (one per line, trailing newline),
+//     matching Gnome Authenticator's "Backup → Save in plain text"
+//     format. Suitable for piping into any authenticator that
+//     consumes the otpauth scheme.
 //   - `encrypted` — an encrypted Paladin bundle (see
 //     `crate::export::encrypted`, Phase I.9).
 //

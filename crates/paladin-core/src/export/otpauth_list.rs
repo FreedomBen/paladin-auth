@@ -2,12 +2,18 @@
 //
 // `export::otpauth_list` (docs/DESIGN.md §4.6 / §4.7).
 //
-// Infallible JSON-array dump of the vault's accounts as canonical
-// `otpauth://` URIs. The emitter (`crate::otpauth::emit_otpauth`) is
-// the same one tested by the parser round-trip suite, so a fresh
-// import via `import::from_bytes` yields a `Vec<ValidatedAccount>`
-// with the same `(label, issuer, secret, algorithm, digits, kind,
-// icon_hint)` for each account modulo the import-time timestamp rule.
+// Infallible newline-separated dump of the vault's accounts as
+// canonical `otpauth://` URIs, one per line — the same shape Gnome
+// Authenticator's "Backup → Save in plain text" produces. The
+// emitter (`crate::otpauth::emit_otpauth`) is the same one tested by
+// the parser round-trip suite, so a fresh import via
+// `import::from_bytes` yields a `Vec<ValidatedAccount>` with the same
+// `(label, issuer, secret, algorithm, digits, kind, icon_hint)` for
+// each account modulo the import-time timestamp rule.
+//
+// Lines are separated by `\n`. Every URI is followed by `\n`, so the
+// file ends with a trailing newline (POSIX text-file convention). An
+// empty vault yields an empty string.
 //
 // Returns a UTF-8 `String`. Callers that need bytes can `.into_bytes()`
 // before passing through `crate::write_secret_file_atomic`.
@@ -15,12 +21,17 @@
 use crate::otpauth::emit_otpauth;
 use crate::vault::Vault;
 
-/// Render every account in `vault` as a JSON array of `otpauth://`
-/// URIs.
+/// Render every account in `vault` as a newline-separated list of
+/// `otpauth://` URIs, one per line, with a trailing newline. Empty
+/// vaults produce an empty string.
 #[must_use]
 pub fn otpauth_list(vault: &Vault) -> String {
-    let uris: Vec<String> = vault.iter().map(emit_otpauth).collect();
-    serde_json::to_string(&uris).expect("Vec<String> serializes infallibly to JSON")
+    let mut out = String::new();
+    for account in vault.iter() {
+        out.push_str(&emit_otpauth(account));
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]
@@ -57,9 +68,10 @@ mod tests {
         let _ = vault.add(parse_otpauth(URI_TOTP_A, import_time()).unwrap().account);
         let _ = vault.add(parse_otpauth(URI_HOTP_B, import_time()).unwrap().account);
 
-        let json = otpauth_list(&vault);
+        let rendered = otpauth_list(&vault);
         let imported =
-            import::from_bytes(json.as_bytes(), ImportOptions::default(), import_time()).unwrap();
+            import::from_bytes(rendered.as_bytes(), ImportOptions::default(), import_time())
+                .unwrap();
         assert_eq!(imported.len(), 2);
 
         let originals: Vec<_> = vault.iter().collect();

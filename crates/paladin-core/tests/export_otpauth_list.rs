@@ -36,40 +36,45 @@ const URI_HOTP_B: &str =
     "otpauth://hotp/Globex:bob?secret=NBSWY3DPEHPK3PXP&issuer=Globex&counter=7";
 
 #[test]
-fn empty_vault_emits_empty_json_array() {
+fn empty_vault_emits_empty_string() {
     let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (vault, _store) = Store::create(&path, VaultInit::Plaintext).unwrap();
-    assert_eq!(export::otpauth_list(&vault), "[]");
+    assert_eq!(export::otpauth_list(&vault), "");
 }
 
 #[test]
-fn single_account_emits_one_uri_in_array() {
+fn single_account_emits_one_uri_with_trailing_newline() {
     let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (mut vault, _store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     let _ = vault.add(make_account(URI_TOTP_A));
-    let json = export::otpauth_list(&vault);
+    let rendered = export::otpauth_list(&vault);
 
-    let arr: Vec<String> = serde_json::from_str(&json).unwrap();
-    assert_eq!(arr.len(), 1);
-    assert!(arr[0].starts_with("otpauth://totp/"));
-    assert!(arr[0].contains("secret="));
-    assert!(arr[0].contains("issuer=Acme"));
+    let lines: Vec<&str> = rendered.lines().collect();
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].starts_with("otpauth://totp/"));
+    assert!(lines[0].contains("secret="));
+    assert!(lines[0].contains("issuer=Acme"));
+    assert!(
+        rendered.ends_with('\n'),
+        "expected trailing newline, got {rendered:?}"
+    );
 }
 
 #[test]
-fn multiple_accounts_preserve_insertion_order() {
+fn multiple_accounts_preserve_insertion_order_one_per_line() {
     let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (mut vault, _store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     let _ = vault.add(make_account(URI_TOTP_A));
     let _ = vault.add(make_account(URI_HOTP_B));
-    let json = export::otpauth_list(&vault);
-    let arr: Vec<String> = serde_json::from_str(&json).unwrap();
-    assert_eq!(arr.len(), 2);
-    assert!(arr[0].contains("totp"));
-    assert!(arr[1].contains("hotp"));
+    let rendered = export::otpauth_list(&vault);
+    let lines: Vec<&str> = rendered.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].contains("totp"));
+    assert!(lines[1].contains("hotp"));
+    assert!(rendered.ends_with('\n'));
 }
 
 #[test]
@@ -79,12 +84,13 @@ fn round_trip_yields_matching_validated_accounts_modulo_timestamps() {
     let (mut vault, _store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     let _ = vault.add(make_account(URI_TOTP_A));
     let _ = vault.add(make_account(URI_HOTP_B));
-    let json = export::otpauth_list(&vault);
+    let rendered = export::otpauth_list(&vault);
 
     // Re-import via the auto-detect facade: detect should classify as
-    // Otpauth and the importer should parse every URI back.
+    // Otpauth (line-list path) and the importer should parse every URI
+    // back.
     let imported =
-        import::from_bytes(json.as_bytes(), ImportOptions::default(), import_time()).unwrap();
+        import::from_bytes(rendered.as_bytes(), ImportOptions::default(), import_time()).unwrap();
     assert_eq!(imported.len(), 2);
 
     let exported_accounts: Vec<&Account> = vault.iter().collect();
@@ -120,10 +126,9 @@ fn export_uses_canonical_emitter_so_each_uri_round_trips_through_parse_otpauth()
     let (mut vault, _store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     let _ = vault.add(make_account(URI_TOTP_A));
     let _ = vault.add(make_account(URI_HOTP_B));
-    let json = export::otpauth_list(&vault);
-    let arr: Vec<String> = serde_json::from_str(&json).unwrap();
-    for uri in arr {
-        let _ = parse_otpauth(&uri, import_time())
+    let rendered = export::otpauth_list(&vault);
+    for uri in rendered.lines() {
+        let _ = parse_otpauth(uri, import_time())
             .expect("emitted URI should round-trip through parse_otpauth");
     }
 }

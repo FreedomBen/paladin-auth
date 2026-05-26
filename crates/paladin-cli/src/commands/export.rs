@@ -3,12 +3,14 @@
 //! `paladin export` — write the vault to a file (docs/DESIGN.md §5).
 //!
 //! Two modes selected via the (clap-required) mutually-exclusive flags
-//! `--plaintext <path>` (JSON `otpauth://` array) and `--encrypted
-//! <path>` (Paladin-format encrypted bundle). Both modes refuse to
-//! overwrite without `--force`, both write through
-//! [`paladin_core::write_secret_file_atomic`] so the destination ends up
-//! `0600`, and both render the §5 stable success envelope (`{ "written":
-//! ..., "format": "otpauth"|"paladin" }`) on completion.
+//! `--plaintext <path>` (newline-separated list of `otpauth://` URIs,
+//! the same shape Gnome Authenticator's "Backup → Save in plain text"
+//! produces) and `--encrypted <path>` (Paladin-format encrypted
+//! bundle). Both modes refuse to overwrite without `--force`, both
+//! write through [`paladin_core::write_secret_file_atomic`] so the
+//! destination ends up `0600`, and both render the §5 stable success
+//! envelope (`{ "written": ..., "format": "otpauth"|"paladin" }`) on
+//! completion.
 //!
 //! Order of operations (locked by `docs/IMPLEMENTATION_PLAN_02_CLI.md`
 //! "Vault interaction pattern" / "Encrypted-write KDF flags"):
@@ -54,7 +56,8 @@ use crate::output::{self, Mode};
 use crate::prompt::{self, NewPassphraseEmptyPolicy};
 use crate::vault_open;
 
-/// Stable §5 `format` value for plaintext export (JSON `otpauth://` array).
+/// Stable §5 `format` value for plaintext export (newline-separated
+/// `otpauth://` URI list).
 const FORMAT_OTPAUTH: &str = "otpauth";
 /// Stable §5 `format` value for an encrypted Paladin-bundle export.
 const FORMAT_PALADIN: &str = "paladin";

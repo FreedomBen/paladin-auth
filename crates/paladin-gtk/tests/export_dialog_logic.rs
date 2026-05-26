@@ -485,7 +485,7 @@ fn export_dialog_component_input_and_output_match_dispatch_edges() {
 //
 // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
 // `ExportDialogComponent` > "Add a format selector (plaintext
-// `otpauth://` JSON list or encrypted Paladin bundle) and pick the
+// `otpauth://` URI list or encrypted Paladin bundle) and pick the
 // destination via `gtk::FileDialog`." The widget binds an
 // `adw::ComboRow` to `format_export_dialog_format_labels()` and reads
 // `ExportFormatChoice` selections back through
@@ -499,7 +499,7 @@ fn format_export_dialog_format_labels_returns_plaintext_then_encrypted() {
 
     let labels = format_export_dialog_format_labels();
     assert_eq!(labels.len(), 2);
-    assert_eq!(labels[0], "Plaintext otpauth:// JSON list");
+    assert_eq!(labels[0], "Plaintext otpauth:// URI list");
     assert_eq!(labels[1], "Encrypted Paladin bundle");
 }
 
@@ -574,9 +574,9 @@ fn format_choice_index_round_trip_across_every_variant() {
 #[test]
 fn export_format_choice_default_is_plaintext_otpauth() {
     // CLI parity: `paladin export <DEST>` defaults to the plaintext
-    // `otpauth://` JSON list when no `--format` is provided. The
-    // dialog opens on the same format so the user's first interaction
-    // matches the CLI documentation.
+    // newline-separated `otpauth://` URI list when no `--format` is
+    // provided. The dialog opens on the same format so the user's
+    // first interaction matches the CLI documentation.
     assert_eq!(
         ExportFormatChoice::default(),
         ExportFormatChoice::PlaintextOtpauth
@@ -2502,10 +2502,10 @@ mod worker_integration {
     }
 
     #[test]
-    fn run_export_worker_plaintext_writes_otpauth_json_and_returns_success() {
+    fn run_export_worker_plaintext_writes_otpauth_list_and_returns_success() {
         let dir = secure_tempdir();
         let (vault, store) = open_plaintext_vault(&dir, "vault.bin");
-        let dest = dir.path().join("export.json");
+        let dest = dir.path().join("export.txt");
 
         let input = ExportWorkerInput {
             vault,
@@ -2523,8 +2523,8 @@ mod worker_integration {
         assert_eq!(destination, dest);
         let bytes = fs::read(&dest).expect("read written export");
         let s = String::from_utf8(bytes).expect("utf8");
-        // Empty vault → JSON array of zero `otpauth://` URIs.
-        assert_eq!(s, "[]");
+        // Empty vault → empty file (no `otpauth://` lines).
+        assert_eq!(s, "");
         let mode = fs::metadata(&dest).expect("stat").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "write_secret_file_atomic enforces 0600");
     }
@@ -2562,9 +2562,10 @@ mod worker_integration {
         let ExportWorkerCompletion { outcome, .. } = run_export_worker(input);
         assert!(matches!(outcome, ExportOutcome::Success));
         let bytes = fs::read(&dest).expect("read written bundle");
-        // Encrypted bundle is not JSON — assert it does not start with
-        // the plaintext JSON sentinel `[`.
-        assert_ne!(bytes.first().copied(), Some(b'['));
+        // Encrypted bundle is not an `otpauth://` text dump — assert
+        // its first byte is not the lowercase `o` that begins every
+        // `otpauth://` URI emitted by the plaintext writer.
+        assert_ne!(bytes.first().copied(), Some(b'o'));
         // Paladin bundle starts with the magic header bytes; confirm
         // it's not empty.
         assert!(!bytes.is_empty(), "encrypted bundle should not be empty");

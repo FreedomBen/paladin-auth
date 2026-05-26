@@ -2,12 +2,12 @@
 
 //! End-to-end tests for `paladin export`. Covers the no-prompt code
 //! paths against a plaintext source vault: `--plaintext` happy path
-//! (empty + populated, mode `0600`, JSON otpauth array round-trip),
-//! `--force` overwrite, refuse-overwrite-without-force, plaintext
-//! export warning routing in text vs `--json` mode, the §5 success
-//! envelope, and the encrypted branch's no-prompt error paths
-//! (every KDF flag failure, plus the precedence rules that put KDF
-//! errors before `vault_missing`, the overwrite check, and the
+//! (empty + populated, mode `0600`, newline-separated otpauth list
+//! round-trip), `--force` overwrite, refuse-overwrite-without-force,
+//! plaintext export warning routing in text vs `--json` mode, the §5
+//! success envelope, and the encrypted branch's no-prompt error
+//! paths (every KDF flag failure, plus the precedence rules that put
+//! KDF errors before `vault_missing`, the overwrite check, and the
 //! bundle-passphrase prompt).
 //!
 //! Encrypted-export happy paths require entering a fresh export-bundle
@@ -71,10 +71,10 @@ const HOTP_URI_BOB: &str =
 // ==========================================================================
 
 #[test]
-fn plaintext_export_against_empty_vault_writes_empty_json_array() {
+fn plaintext_export_against_empty_vault_writes_empty_file() {
     let (dir, vault_path) = fresh_vault_path();
     create_empty_plaintext_vault(&vault_path);
-    let out = dir.path().join("creds.json");
+    let out = dir.path().join("creds.txt");
 
     paladin()
         .args([
@@ -89,14 +89,14 @@ fn plaintext_export_against_empty_vault_writes_empty_json_array() {
 
     let bytes = std::fs::read(&out).expect("read export");
     let s = std::str::from_utf8(&bytes).expect("utf-8");
-    assert_eq!(s, "[]");
+    assert_eq!(s, "");
 }
 
 #[test]
 fn plaintext_export_writes_output_file_with_zero_six_zero_zero_mode() {
     let (dir, vault_path) = fresh_vault_path();
     create_empty_plaintext_vault(&vault_path);
-    let out = dir.path().join("creds.json");
+    let out = dir.path().join("creds.txt");
 
     paladin()
         .args([
@@ -117,7 +117,7 @@ fn plaintext_export_writes_output_file_with_zero_six_zero_zero_mode() {
 fn plaintext_export_writes_one_otpauth_uri_per_account_in_insertion_order() {
     let (dir, vault_path) = fresh_vault_path();
     create_plaintext_vault_with(&vault_path, &[TOTP_URI_ALICE, HOTP_URI_BOB]);
-    let out = dir.path().join("creds.json");
+    let out = dir.path().join("creds.txt");
 
     paladin()
         .args([
@@ -131,11 +131,16 @@ fn plaintext_export_writes_one_otpauth_uri_per_account_in_insertion_order() {
         .success();
 
     let bytes = std::fs::read(&out).expect("read export");
-    let arr: Vec<String> = serde_json::from_slice(&bytes).expect("json array");
-    assert_eq!(arr.len(), 2);
+    let text = std::str::from_utf8(&bytes).expect("utf-8");
+    assert!(
+        text.ends_with('\n'),
+        "expected trailing newline, got {text:?}"
+    );
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2);
     let now = SystemTime::now();
-    let _ = parse_otpauth(&arr[0], now).expect("alice round-trips");
-    let _ = parse_otpauth(&arr[1], now).expect("bob round-trips");
+    let _ = parse_otpauth(lines[0], now).expect("alice round-trips");
+    let _ = parse_otpauth(lines[1], now).expect("bob round-trips");
 }
 
 #[test]
@@ -261,7 +266,7 @@ fn json_export_refuses_overwrite_without_force() {
 fn force_flag_allows_overwriting_existing_file_with_export_contents() {
     let (dir, vault_path) = fresh_vault_path();
     create_empty_plaintext_vault(&vault_path);
-    let out = dir.path().join("existing.json");
+    let out = dir.path().join("existing.txt");
     std::fs::write(&out, b"prev").expect("seed existing");
 
     paladin()
@@ -277,7 +282,7 @@ fn force_flag_allows_overwriting_existing_file_with_export_contents() {
         .success();
 
     let bytes = std::fs::read(&out).unwrap();
-    assert_eq!(bytes, b"[]");
+    assert_eq!(bytes, b"");
     let mode = std::fs::metadata(&out).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
 }

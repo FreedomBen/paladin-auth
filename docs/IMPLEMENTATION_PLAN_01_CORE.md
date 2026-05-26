@@ -77,7 +77,7 @@ crates/paladin-core/
 │   │   └── qr.rs         # rqrr + image
 │   └── export/
 │       ├── mod.rs            # facade
-│       ├── otpauth_list.rs   # JSON array of otpauth:// URIs
+│       ├── otpauth_list.rs   # newline-separated otpauth:// URIs (Gnome Authenticator–compatible)
 │       └── encrypted.rs      # Paladin encrypted bundle
 └── tests/
     ├── common/mod.rs                    # shared test helpers (tempdirs, fixture builders, in-memory Store wiring) — referenced via `mod common;` from every integration test
@@ -119,7 +119,7 @@ crates/paladin-core/
     ├── import_qr.rs
     ├── export_encrypted.rs              # encrypted bundle export round-trip
     ├── export_encrypted_fresh_material.rs # every export creates a fresh salt + nonce; never re-uses prior bytes
-    ├── export_otpauth_list.rs           # JSON-array-of-otpauth-URIs writer
+    ├── export_otpauth_list.rs           # newline-separated otpauth:// URI list writer
     ├── error_display.rs                 # PaladinError Display impl: stable text for every variant
     ├── error_serde.rs                   # PaladinError JSON envelope shape (per §5)
     ├── error_matrix.rs                  # one test per §5 core-returnable error_kind asserting kind + every stable extra field
@@ -1007,8 +1007,9 @@ Each step lands as its own commit. Tests come first.
 - [x] Tests for batch atomicity: any validation failure aborts the batch;
   warnings do not, and warnings are collected before merge-policy application
   so skipped rows can still report warnings.
-- [x] Tests for `export::otpauth_list(&Vault)` (infallible JSON array of
-  URIs), `export::encrypted(&Vault, EncryptionOptions)` (wraps
+- [x] Tests for `export::otpauth_list(&Vault)` (infallible newline-separated
+  list of `otpauth://` URIs, one per line, Gnome Authenticator–compatible),
+  `export::encrypted(&Vault, EncryptionOptions)` (wraps
   `VaultSettings::default()`, writes default or custom Argon2 params,
   round-trips with the importer, and rejects empty passphrase), and
   front-end-style export writes that pass the resulting bytes through
@@ -1704,7 +1705,7 @@ is a separate `#[test]` or table-driven case family.
   destination `id` / `created_at` preservation on replace, HOTP counter
   preservation, cross-kind replacement, `ImportReport` counts /
   account IDs, batch atomicity, and warnings retained even for skipped rows.
-- [x] Exporters: `otpauth_list(&Vault)` emits an infallible JSON array of URIs;
+- [x] Exporters: `otpauth_list(&Vault)` emits an infallible newline-separated list of `otpauth://` URIs (Gnome Authenticator–compatible);
   `encrypted(&Vault, EncryptionOptions)` wraps default settings, writes
   default or custom Argon2 params, round-trips through the importer, and
   rejects empty passphrases; `write_secret_file_atomic` writes export bytes

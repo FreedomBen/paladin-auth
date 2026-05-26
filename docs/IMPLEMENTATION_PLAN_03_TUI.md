@@ -507,7 +507,8 @@ dismiss deliberately.
   `kdf_params_out_of_bounds`, `io_error`) stay in the modal as inline
   errors and never mutate
   vault state.
-- **Export** — format selector (plaintext `otpauth://` JSON list or
+- **Export** — format selector (plaintext newline-separated
+  `otpauth://` URI list — Gnome Authenticator–compatible — or
   encrypted Paladin bundle) and a destination path field. Overwriting
   an existing file is rejected unless the user confirms an inline
   overwrite gate (parity with CLI `--force`). Encrypted exports

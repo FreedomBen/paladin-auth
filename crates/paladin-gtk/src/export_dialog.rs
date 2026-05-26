@@ -75,22 +75,25 @@ use crate::secret_fields::SecretEntry;
 /// control.
 ///
 /// The two formats correspond to
-/// [`paladin_core::export::otpauth_list`] (plaintext JSON list of
-/// `otpauth://` URIs) and [`paladin_core::export::encrypted`]
-/// (encrypted Paladin bundle). They drive distinct dialog gates: the
-/// plaintext path arms the plaintext-warning checkbox; the encrypted
-/// path arms the twice-confirm passphrase row.
+/// [`paladin_core::export::otpauth_list`] (plaintext, newline-separated
+/// list of `otpauth://` URIs — the same shape Gnome Authenticator's
+/// "Backup → Save in plain text" produces) and
+/// [`paladin_core::export::encrypted`] (encrypted Paladin bundle).
+/// They drive distinct dialog gates: the plaintext path arms the
+/// plaintext-warning checkbox; the encrypted path arms the
+/// twice-confirm passphrase row.
 ///
 /// [`Default`] returns [`ExportFormatChoice::PlaintextOtpauth`] for
 /// CLI parity: `paladin export <DEST>` with no `--format` flag writes
-/// the plaintext `otpauth://` JSON list, and the dialog opens on the
+/// the plaintext `otpauth://` URI list, and the dialog opens on the
 /// same format so the user's first interaction matches the CLI
 /// documentation. Switching to the encrypted path is one click on
 /// the format-selector `adw::ComboRow`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExportFormatChoice {
-    /// Plaintext otpauth JSON list. Requires the plaintext-export
-    /// warning to be acknowledged before the writer runs.
+    /// Plaintext otpauth URI list (one URI per line). Requires the
+    /// plaintext-export warning to be acknowledged before the writer
+    /// runs.
     #[default]
     PlaintextOtpauth,
     /// Encrypted Paladin bundle. Requires the twice-confirm
@@ -149,7 +152,7 @@ pub fn format_choice_from_index(selected: u32) -> Option<ExportFormatChoice> {
 /// `[PlaintextOtpauth, EncryptedPaladin]`.
 #[must_use]
 pub fn format_export_dialog_format_labels() -> &'static [&'static str] {
-    &["Plaintext otpauth:// JSON list", "Encrypted Paladin bundle"]
+    &["Plaintext otpauth:// URI list", "Encrypted Paladin bundle"]
 }
 
 // ---------------------------------------------------------------------------
@@ -711,8 +714,10 @@ pub struct ExportWorkerCompletion {
 ///
 /// 1. Render the export bytes:
 ///    * [`ExportFormatChoice::PlaintextOtpauth`] →
-///      [`paladin_core::export::otpauth_list`] (a JSON array of
-///      `otpauth://` URIs).
+///      [`paladin_core::export::otpauth_list`] (a newline-separated
+///      list of `otpauth://` URIs, one per line, terminated by a
+///      trailing newline; same shape as Gnome Authenticator's
+///      "Backup → Save in plain text" file).
 ///    * [`ExportFormatChoice::EncryptedPaladin`] →
 ///      [`paladin_core::export::encrypted`] with the worker-supplied
 ///      [`EncryptionOptions`], which runs the §4.4 Argon2id KDF and
@@ -988,8 +993,8 @@ pub struct ExportDialogState {
 impl ExportDialogState {
     /// Construct a fresh state — equivalent to `Self::default()`.
     /// `format` defaults to [`ExportFormatChoice::default`] (the
-    /// plaintext `otpauth://` JSON list, mirroring the CLI's
-    /// no-`--format` behavior).
+    /// plaintext newline-separated `otpauth://` URI list, mirroring
+    /// the CLI's no-`--format` behavior).
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -1261,7 +1266,7 @@ pub fn compose_overwrite_gate_visible(state: &ExportDialogState) -> bool {
 /// group.
 ///
 /// Returns `true` iff the active format is the plaintext
-/// `otpauth://` JSON list ([`ExportFormatChoice::requires_plaintext_warning`]).
+/// `otpauth://` URI list ([`ExportFormatChoice::requires_plaintext_warning`]).
 /// The widget mounts the warning body + ack row inside an
 /// `adw::PreferencesGroup` and reveals it through this predicate so
 /// the user only sees the warning when an actual plaintext write is

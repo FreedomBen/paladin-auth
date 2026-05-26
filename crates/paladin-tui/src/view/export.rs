@@ -3,9 +3,11 @@
 //! Export-modal renderer.
 //!
 //! Per `docs/DESIGN.md` §6 and `docs/IMPLEMENTATION_PLAN_03_TUI.md`
-//! "Modals (per §6) > Export": *"Export writes either the plaintext
-//! `otpauth://` JSON list (with an explicit unencrypted-secrets
-//! warning before the write) or an encrypted Paladin bundle
+//! "Modals (per §6) > Export": *"Export writes either a
+//! newline-separated list of plaintext `otpauth://` URIs (one per
+//! line; Gnome Authenticator–compatible) with an explicit
+//! unencrypted-secrets warning before the write, or an encrypted
+//! Paladin bundle
 //! (passphrase prompted twice and matched), refuses overwrite
 //! without explicit confirmation, and surfaces the resulting `0600`
 //! output path inline."* This slice paints the freshly-opened

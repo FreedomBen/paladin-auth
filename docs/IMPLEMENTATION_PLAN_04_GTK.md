@@ -636,7 +636,8 @@ inclusion.
   `invalid_payload`, `unsupported_format_version`,
   `kdf_params_out_of_bounds`, `io_error`) stay in the dialog as inline
   errors and never mutate vault state.
-- `ExportDialog` — format selector (plaintext `otpauth://` JSON list or
+- `ExportDialog` — format selector (plaintext newline-separated
+  `otpauth://` URI list — Gnome Authenticator–compatible — or
   encrypted Paladin bundle) and `gtk::FileDialog` for the
   destination path. Overwriting an existing file is rejected unless
   the user confirms an inline overwrite gate (parity with CLI
@@ -3921,7 +3922,8 @@ sign-off.
 - [x] `ExportDialogComponent` full implementation (format selector,
   destination picker, overwrite gate, plaintext warning,
   twice-confirm passphrase, `write_secret_file_atomic` call).
-  - [x] Add a format selector (plaintext `otpauth://` JSON list or
+  - [x] Add a format selector (plaintext newline-separated
+    `otpauth://` URI list — Gnome Authenticator–compatible — or
     encrypted Paladin bundle) and pick the destination via
     `gtk::FileDialog`.
     (`ExportFormatChoice` gains `Default` (returns
@@ -3939,7 +3941,7 @@ sign-off.
     path comparisons stay authoritative). A second
     `adw::PreferencesGroup` "Options" mounts an `adw::ComboRow`
     "Format" bound to `format_export_dialog_format_labels()`
-    (`["Plaintext otpauth:// JSON list", "Encrypted Paladin
+    (`["Plaintext otpauth:// URI list", "Encrypted Paladin
     bundle"]`); the `connect_selected_notify` callback decodes the
     selection through `format_choice_from_index` and dispatches
     `ExportDialogMsg::FormatChanged(ExportFormatChoice)`, ignoring

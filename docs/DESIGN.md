@@ -416,12 +416,16 @@ want plaintext storage must use `remove_passphrase`.
 
 Two formats, user picks per invocation:
 
-- **Plaintext (otpauth URI list).** A JSON array of `otpauth://` URIs, one
-  entry per account (HOTP entries carry their counter via the standard
-  `counter` URI parameter, per the Google Authenticator key-URI format).
-  This *is* the otpauth URI list format — there is no Paladin-specific
-  plaintext envelope, and on import these files are read via the otpauth
-  path. Cross-compatible with most authenticators that accept URI lists.
+- **Plaintext (otpauth URI list).** A newline-separated list of
+  `otpauth://` URIs, one URI per line, terminated by a trailing
+  newline — the exact shape Gnome Authenticator's
+  *Backup → Save in plain text* writes. HOTP entries carry their
+  counter via the standard `counter` URI parameter, per the Google
+  Authenticator key-URI format. There is no Paladin-specific
+  plaintext envelope, and on import these files are read via the
+  otpauth path. An empty vault writes an empty (zero-byte) file.
+  Cross-compatible with Gnome Authenticator, FreeOTP+, and other
+  authenticators that accept URI lists.
   **The CLI prints a clear warning** before writing unencrypted secrets to
   disk and refuses to write to a file that already exists unless `--force`
   is given. The output file is written with
@@ -902,7 +906,7 @@ pub mod import {
 }
 
 pub mod export {
-    pub fn otpauth_list(vault: &Vault) -> Vec<u8>;                              // JSON array of `otpauth://` URIs (infallible: validated accounts always serialize)
+    pub fn otpauth_list(vault: &Vault) -> String;                               // newline-separated `otpauth://` URIs, one per line with trailing newline; empty vault → empty string. Infallible.
     pub fn encrypted(vault: &Vault, options: EncryptionOptions) -> Result<Vec<u8>>;  // Paladin encrypted bundle. Wraps `VaultPayload { accounts, settings: VaultSettings::default() }`; uses default or custom Argon2 params from `options`; `import::paladin` discards the settings field.
 }
 ```
@@ -1050,7 +1054,7 @@ Built with `clap` (derive). Commands:
 | `paladin passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
 | `paladin passphrase change`                 | Re-encrypt under a new passphrase.                               |
 | `paladin passphrase remove`                 | Decrypt to plaintext. Warns and prompts for destructive confirmation unless `--yes` is passed. Required under `--json` (no confirmation prompt available). |
-| `paladin export --plaintext <out>`          | Write JSON `otpauth://` array. Warns; refuses overwrite without `--force`; creates output `0600`. |
+| `paladin export --plaintext <out>`          | Write a newline-separated list of `otpauth://` URIs, one per line (Gnome Authenticator–compatible). Warns; refuses overwrite without `--force`; creates output `0600`. |
 | `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle. Refuses overwrite without `--force`; creates output `0600`. |
 | `paladin import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
 | `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `paladin` (encrypted bundle only), `qr`.               |
@@ -1630,7 +1634,8 @@ Layout (single-screen MVP):
   sources, applies a user-selected on-conflict
   policy (`skip` / `replace` / `append`), and reports
   imported/skipped/replaced/appended/warning counts. Export writes
-  either the plaintext `otpauth://` JSON list (with an explicit
+  either a newline-separated list of plaintext `otpauth://` URIs
+  (one per line, Gnome Authenticator–compatible; with an explicit
   unencrypted-secrets warning before the write) or an encrypted
   Paladin bundle (passphrase prompted twice and matched), refuses
   overwrite without explicit confirmation, and surfaces the resulting
@@ -1756,8 +1761,9 @@ Library: **Relm4** on **GTK4**. Component tree:
   passphrase prompt for encrypted Paladin bundles gated by
   `classify_paladin_import_precheck`. Reports
   imported/skipped/replaced/appended/warning counts on success.
-- `ExportDialog` — format selector (plaintext `otpauth://` JSON list or
-  encrypted Paladin bundle), `gtk::FileDialog` for the
+- `ExportDialog` — format selector (plaintext `otpauth://` URI list
+  — newline-separated, Gnome Authenticator–compatible — or encrypted
+  Paladin bundle), `gtk::FileDialog` for the
   destination path, overwrite confirmation, twice-entered passphrase
   for the encrypted variant, and an explicit unencrypted-secrets
   warning before plaintext writes. Writes through
@@ -2292,7 +2298,7 @@ artifacts side by side.
   durability-unconfirmed post-commit failures.
 
 ### Milestone 3 — Import / Export *(v0.1)*
-- [ ] Plaintext export (JSON `otpauth://` array) with overwrite guard + `0600`.
+- [ ] Plaintext export (newline-separated `otpauth://` URI list, Gnome Authenticator–compatible) with overwrite guard + `0600`.
 - [ ] Encrypted export bundle (Paladin format) with overwrite guard + `0600`.
 - [ ] Shared `write_secret_file_atomic` export writer used by CLI/TUI/GUI.
 - [ ] Importer: `otpauth://` URIs (single + list).
