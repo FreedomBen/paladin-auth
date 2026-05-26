@@ -10,6 +10,8 @@
 //
 // Pinned by fixture in `tests/ui_contract.rs`.
 
+use crate::domain::AccountSummary;
+
 /// HOTP reveal countdown duration, in seconds (docs/DESIGN.md §6 / §7).
 ///
 /// Both the TUI countdown and GUI reveal panel hide the displayed HOTP
@@ -66,3 +68,22 @@ pub const QR_MODULE_SIZE_PX_MAX: u32 = 64;
 /// Eight pixels per module is a comfortable scan size on a typical
 /// laptop display while keeping the PNG byte count modest.
 pub const QR_MODULE_SIZE_PX_DEFAULT: u32 = 8;
+
+/// Render the human-readable `"{issuer}:{label}"` caption shared by
+/// the CLI status text, the TUI QR / rename / remove modals, and the
+/// GTK `ExportQrDialog` / `RenameDialog` / `RemoveDialog` subtitles
+/// (docs/DESIGN.md §4.6 / §7).
+///
+/// Returns `"{issuer}:{label}"` when `summary.issuer` is `Some(s)`
+/// and `s.trim()` is non-empty; returns the bare `label` otherwise,
+/// so a missing or whitespace-only issuer never produces a stray
+/// leading colon. Pinned by fixture so front-ends cannot drift.
+#[must_use]
+pub fn summary_display_label(summary: &AccountSummary) -> String {
+    match summary.issuer.as_deref() {
+        Some(issuer) if !issuer.trim().is_empty() => {
+            format!("{issuer}:{label}", label = summary.label)
+        }
+        _ => summary.label.clone(),
+    }
+}

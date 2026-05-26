@@ -1511,7 +1511,7 @@ cover `QrRenderOptions`. The phase order matters — every entry
 is independent of every other v0.2 workstream, so this phase can
 land before the GTK / CLI / TUI work or alongside it.
 
-- [ ] **`qrcode` dep promotion.** Move `qrcode` from
+- [x] **`qrcode` dep promotion.** Move `qrcode` from
   `[dev-dependencies]` to `[dependencies]` in
   `crates/paladin-core/Cargo.toml`. The existing dev-dep config is
   `default-features = false, features = ["image"]`; extend it to
@@ -1529,7 +1529,7 @@ land before the GTK / CLI / TUI work or alongside it.
   per `cargo metadata`; the `deny.toml` allow-list does not need an
   update beyond confirming this).
 
-- [ ] **`QrRenderOptions` value type.** Add
+- [x] **`QrRenderOptions` value type.** Add
   `pub struct QrRenderOptions { pub module_size_px: u32, pub quiet_zone: bool }`
   with a `Default` impl (`module_size_px = QR_MODULE_SIZE_PX_DEFAULT`,
   `quiet_zone = true`) and a `validate(&self) -> Result<()>` that
@@ -1544,7 +1544,7 @@ land before the GTK / CLI / TUI work or alongside it.
   alongside the existing `TICK_INTERVAL_MS` / `HOTP_REVEAL_SECS`
   cluster, and re-export at the crate root.
 
-- [ ] **Internal otpauth URI emitter reuse.** The QR renderers
+- [x] **Internal otpauth URI emitter reuse.** The QR renderers
   must encode the *same* `otpauth://` URI that
   `export::otpauth_list(&vault)` emits for the matching account, so
   the QR import path (an external scanner consuming the QR) lands
@@ -1556,7 +1556,7 @@ land before the GTK / CLI / TUI work or alongside it.
   `export_qr_png_encodes_the_otpauth_list_uri_for_the_account`
   below.
 
-- [ ] **`export::qr_png(account, options) -> Result<Zeroizing<Vec<u8>>>`.**
+- [x] **`export::qr_png(account, options) -> Result<Zeroizing<Vec<u8>>>`.**
   Implement in `src/export/qr.rs`. Validates `options` first, then
   emits the account's `otpauth://` URI, then renders the QR via
   `qrcode::QrCode::new(uri.as_bytes())` at error-correction level
@@ -1575,7 +1575,7 @@ land before the GTK / CLI / TUI work or alongside it.
   takes `&Account`, not `&AccountSummary`, because the URI emitter
   needs the secret bytes.
 
-- [ ] **`export::qr_svg(account, options) -> Result<Zeroizing<String>>`.**
+- [x] **`export::qr_svg(account, options) -> Result<Zeroizing<String>>`.**
   Implement in `src/export/qr.rs`. Same validation / URI / encoder
   / EC-level rules as `qr_png`. Renders via
   `qrcode::render::svg::Color` so the SVG is a single
@@ -1590,7 +1590,7 @@ land before the GTK / CLI / TUI work or alongside it.
   `quiet_zone = false` suppresses it. Returned string is wrapped
   in `Zeroizing` for the same reason as PNG.
 
-- [ ] **`export::qr_ansi(account) -> Result<Zeroizing<String>>`.**
+- [x] **`export::qr_ansi(account) -> Result<Zeroizing<String>>`.**
   Implement in `src/export/qr.rs`. Same URI / encoder / EC-level
   rules as `qr_png`. Renders via
   `qrcode::render::unicode::Dense1x2` so a single module occupies
@@ -1600,7 +1600,7 @@ land before the GTK / CLI / TUI work or alongside it.
   is always rendered for scannability. Returned string is wrapped
   in `Zeroizing` for the same reason.
 
-- [ ] **`Vault::export_qr_png` / `Vault::export_qr_svg` /
+- [x] **`Vault::export_qr_png` / `Vault::export_qr_svg` /
   `Vault::export_qr_ansi`.** Add three `&self` methods on `Vault`
   that resolve `id` through the existing private account lookup,
   return `invalid_state` (`operation: "export_qr_png"` etc.,
@@ -1612,7 +1612,7 @@ land before the GTK / CLI / TUI work or alongside it.
   `export_qr_png_does_not_advance_hotp_counter_or_bump_updated_at`
   below.
 
-- [ ] **`format_plaintext_qr_export_warning() -> String`.** Add to
+- [x] **`format_plaintext_qr_export_warning() -> String`.** Add to
   the `src/ui_contract.rs` warning-text cluster alongside
   `format_plaintext_storage_warning` /
   `format_plaintext_export_warning`. Static, parameter-free; the
@@ -1624,7 +1624,7 @@ land before the GTK / CLI / TUI work or alongside it.
   counter and do not advance — the user's existing device retains
   code parity with a second device that scanned the QR.
 
-- [ ] **`summary_display_label(&AccountSummary) -> String`.** Add
+- [x] **`summary_display_label(&AccountSummary) -> String`.** Add
   to `src/ui_contract.rs` (or the matching account-projection
   module) so the CLI status text, the TUI QR modal caption, the
   GTK `ExportQrDialog` caption, and the GTK rename / remove
@@ -1638,7 +1638,7 @@ land before the GTK / CLI / TUI work or alongside it.
   and `summary_display_label_with_whitespace_only_issuer_collapses_to_bare_label`,
   so the wording stays locked across front ends.
 
-- [ ] **Public-api snapshot update.** After landing the surface
+- [x] **Public-api snapshot update.** After landing the surface
   above, regenerate `crates/paladin-core/public-api.txt` via
   `cargo public-api`. The diff should add exactly: the three
   `Vault::export_qr_*` methods, the three `export::qr_*` free
@@ -1649,7 +1649,7 @@ land before the GTK / CLI / TUI work or alongside it.
   Sync assertions in `tests/api_send_sync.rs` (Phase J) grow to
   cover `QrRenderOptions` (both `Send` and `Sync`).
 
-- [ ] **Tests — URI / scanner round-trip.** Add
+- [x] **Tests — URI / scanner round-trip.** Add
   `export_qr_png_encodes_the_otpauth_list_uri_for_the_account` to
   `tests/export_qr.rs`. For a small fixture vault carrying one
   TOTP and one HOTP account, call `Vault::export_qr_png(id,
@@ -1674,7 +1674,7 @@ land before the GTK / CLI / TUI work or alongside it.
   `'▀'`, `'▄'`, `'█'`, `'\n'` — matching DESIGN.md §4.6 and §10
   byte-for-byte).
 
-- [ ] **Tests — read-only invariant.** Add
+- [x] **Tests — read-only invariant.** Add
   `export_qr_png_does_not_advance_hotp_counter_or_bump_updated_at`
   to `tests/export_qr.rs`, parameterized across both vault modes
   (plaintext and encrypted) so the invariant is pinned for each.
@@ -1691,7 +1691,7 @@ land before the GTK / CLI / TUI work or alongside it.
   the load-bearing pin for the "QR export is a peek, not a show"
   rule from DESIGN §4.6.
 
-- [ ] **Tests — `QrRenderOptions` bounds.** Add
+- [x] **Tests — `QrRenderOptions` bounds.** Add
   `qr_render_options_validate_rejects_module_size_px_below_min`,
   `_above_max`, and `_accepts_defaults_and_edges` to
   `tests/export_qr.rs`. Both rejection cases return
@@ -1700,7 +1700,7 @@ land before the GTK / CLI / TUI work or alongside it.
   `module_size_px = 0` rejects, `= 1` accepts, `= 64` accepts,
   `= 65` rejects.
 
-- [ ] **Tests — `quiet_zone = false`.** Add
+- [x] **Tests — `quiet_zone = false`.** Add
   `export_qr_png_with_quiet_zone_false_still_round_trips_through_rqrr`
   to `tests/export_qr.rs`. Renders a TOTP account with
   `QrRenderOptions { module_size_px: QR_MODULE_SIZE_PX_DEFAULT,
@@ -1713,32 +1713,35 @@ land before the GTK / CLI / TUI work or alongside it.
   strictly smaller than the `quiet_zone: true` PNG at the same
   `module_size_px` (the white border is real pixels).
 
-- [ ] **Tests — account-not-found.** Add
+- [x] **Tests — account-not-found.** Add
   `export_qr_png_unknown_account_returns_invalid_state` (and the
   matching `_svg` / `_ansi` siblings) asserting
   `invalid_state` with the matching `operation` field and
   `state: "account_not_found"` per DESIGN §4.7's invalid-state
   table.
 
-- [ ] **Tests — `Zeroizing` posture.** Add
+- [x] **Tests — `Zeroizing` posture.** Add
   `export_qr_png_returns_zeroizing_wrapper_that_wipes_inner_bytes_on_drop`
   to `tests/export_qr.rs`. Exercise the same controlled-allocation
   drop witness used by `Secret`'s zeroize-on-drop test (Phase E)
   to prove the PNG bytes are wiped before deallocation; the SVG
   variant lands the matching string-buffer pin.
 
-- [ ] **Tests — warning text fixture.** Add
+- [x] **Tests — warning text fixture.** Add
   `format_plaintext_qr_export_warning_matches_fixture` to
   `tests/format_text.rs` (alongside the existing
   `format_plaintext_storage_warning_matches_fixture` and friends).
   Pin the exact wording byte-for-byte so a future reword does not
   silently drift CLI / TUI / GUI rendering.
 
-- [ ] **Tests — `Send` / `Sync`.** Extend the Phase J
-  `tests/api_send_sync.rs` matrix with `QrRenderOptions: Send`
-  and `QrRenderOptions: Sync` asserts (non-secret value type).
+- [x] **Tests — `Send` / `Sync`.** Extend the Phase J
+  `tests/send_assertions.rs` matrix with `QrRenderOptions: Send`
+  and `QrRenderOptions: Sync` asserts (non-secret value type). The
+  Phase J file shipped as `tests/send_assertions.rs`, not the
+  placeholder `api_send_sync.rs` name the Phase L plan was drafted
+  against — the entries live in that file.
 
-- [ ] **Tests — public-api snapshot diff.** Run
+- [x] **Tests — public-api snapshot diff.** Run
   `cargo public-api --diff` against the prior snapshot and commit
   the regenerated `crates/paladin-core/public-api.txt`. The Phase
   J CI gate then re-asserts the snapshot on every subsequent

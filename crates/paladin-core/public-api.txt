@@ -1124,6 +1124,7 @@ pub fn paladin_core::parse_otpauth(uri: &str, import_time: std::time::SystemTime
 pub fn paladin_core::parse_setting_key(key: &str) -> paladin_core::Result<paladin_core::SettingKey>
 pub fn paladin_core::parse_setting_patch(key: &str, value: &str) -> paladin_core::Result<paladin_core::SettingPatch>
 pub fn paladin_core::select_after_filter(prev: core::option::Option<paladin_core::AccountId>, filtered: &[paladin_core::AccountId]) -> core::option::Option<paladin_core::AccountId>
+pub fn paladin_core::summary_display_label(summary: &paladin_core::AccountSummary) -> alloc::string::String
 pub fn paladin_core::validate_label(raw: &str) -> core::result::Result<alloc::string::String, paladin_core::PaladinError>
 pub fn paladin_core::validate_manual(input: paladin_core::AccountInput, now: std::time::SystemTime) -> core::result::Result<paladin_core::ValidatedAccount, paladin_core::PaladinError>
 pub fn paladin_core::write_secret_file_atomic(path: &std::path::Path, content: &[u8]) -> paladin_core::Result<()>

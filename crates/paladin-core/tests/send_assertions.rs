@@ -33,8 +33,8 @@ use paladin_core::{
     Account, AccountId, AccountInput, AccountKindInput, AccountKindSummary, AccountQuery,
     AccountSummary, Algorithm, Argon2Params, Code, EncryptionOptions, IconHintInput,
     ImportConflict, ImportFormat, ImportOptions, ImportReport, ImportWarning, InitPrecheck,
-    PaladinError, PaladinImportPrecheck, SettingKey, SettingPatch, Store, ValidatedAccount,
-    ValidationWarning, Vault, VaultInit, VaultLock, VaultSettings, VaultStatus,
+    PaladinError, PaladinImportPrecheck, QrRenderOptions, SettingKey, SettingPatch, Store,
+    ValidatedAccount, ValidationWarning, Vault, VaultInit, VaultLock, VaultSettings, VaultStatus,
 };
 use static_assertions::assert_not_impl_all;
 
@@ -75,6 +75,7 @@ const _: fn() = || {
     assert_send::<InitPrecheck>();
     assert_send::<PaladinImportPrecheck>();
     assert_send::<PaladinError>();
+    assert_send::<QrRenderOptions>();
 };
 
 // Compile-time gate for the Sync posture (J.4). Identical pattern to
@@ -110,6 +111,7 @@ const _: fn() = || {
     assert_sync::<InitPrecheck>();
     assert_sync::<PaladinImportPrecheck>();
     assert_sync::<PaladinError>();
+    assert_sync::<QrRenderOptions>();
 };
 
 // Negative assertion: `Store` carries `Cell<...>` fields for the save
@@ -153,6 +155,7 @@ fn worker_boundary_types_are_send() {
     assert_send::<InitPrecheck>();
     assert_send::<PaladinImportPrecheck>();
     assert_send::<PaladinError>();
+    assert_send::<QrRenderOptions>();
 }
 
 #[test]
@@ -189,4 +192,5 @@ fn worker_boundary_types_are_sync_except_store() {
     assert_sync::<InitPrecheck>();
     assert_sync::<PaladinImportPrecheck>();
     assert_sync::<PaladinError>();
+    assert_sync::<QrRenderOptions>();
 }
