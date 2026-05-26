@@ -2627,7 +2627,7 @@ artifacts side by side.
   parse-time rejection of binary formats without `--out`, and the
   JSON `{ "written", "format", "account" }` success shape gated on
   `--out` per §5.
-- [ ] TUI QR modal opened with `Q` on the focused row — warning-ack
+- [x] TUI QR modal opened with `Q` on the focused row — warning-ack
   gate, ANSI body from `Vault::export_qr_ansi`, Save-as-PNG /
   Save-as-SVG via `write_secret_file_atomic` with the inline
   overwrite gate; auto-lock and `Esc` drop the rendered buffers.

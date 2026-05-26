@@ -21402,24 +21402,165 @@ fn pressing_q_with_empty_filtered_set_is_silent_no_op() {
     }
 }
 
-#[test]
-fn pressing_q_with_other_modal_open_is_silent_no_op() {
-    // The list-focus `Q` keybinding is suppressed while any other
-    // modal is open so the modal-trap contract holds — the bare
-    // `Q` is consumed by the modal-local input path instead.
+/// Per-modal fan-out helper for the `pressing_q_with_*_modal_open_is_silent_no_op`
+/// family. The list-focus `Q` keybinding must be suppressed while
+/// any modal is open so the modal-trap contract holds — the bare
+/// `Q` is consumed by the modal-local input path instead. We assert
+/// that (a) no effects are emitted and (b) the modal slot still
+/// holds a value matching `modal_check` (the same discriminant we
+/// seeded) — text-field modals may consume `Q` as a character into
+/// their internal buffer, so per-modal fields are intentionally not
+/// asserted; the gate's contract is the variant, not the contents.
+fn assert_q_with_modal_open_is_silent_no_op<F>(opened: Modal, modal_check: F)
+where
+    F: FnOnce(&Modal) -> bool,
+{
     let (mut unlocked, _id, _path) = qr_unlocked_with_one_totp();
     if let AppState::Unlocked { modal, .. } = &mut unlocked {
-        *modal = Some(Modal::Add(AddModal::default()));
+        *modal = Some(opened);
     }
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('Q')));
-    assert!(effects.is_empty());
+    assert!(
+        effects.is_empty(),
+        "Q with a modal open must emit no effects, got {effects:?}"
+    );
     match state {
         AppState::Unlocked {
-            modal: Some(Modal::Add(_)),
-            ..
-        } => {}
+            modal: Some(ref m), ..
+        } if modal_check(m) => {}
         AppState::Unlocked { modal, .. } => {
-            panic!("expected Modal::Add still open, got {modal:?}")
+            panic!("Q must not replace the open modal, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_q_with_add_modal_open_is_silent_no_op() {
+    assert_q_with_modal_open_is_silent_no_op(Modal::Add(AddModal::default()), |m| {
+        matches!(m, Modal::Add(_))
+    });
+}
+
+#[test]
+fn pressing_q_with_remove_modal_open_is_silent_no_op() {
+    assert_q_with_modal_open_is_silent_no_op(Modal::Remove(RemoveModal::default()), |m| {
+        matches!(m, Modal::Remove(_))
+    });
+}
+
+#[test]
+fn pressing_q_with_rename_modal_open_is_silent_no_op() {
+    assert_q_with_modal_open_is_silent_no_op(Modal::Rename(RenameModal::default()), |m| {
+        matches!(m, Modal::Rename(_))
+    });
+}
+
+#[test]
+fn pressing_q_with_import_modal_open_is_silent_no_op() {
+    assert_q_with_modal_open_is_silent_no_op(Modal::Import(ImportModal::default()), |m| {
+        matches!(m, Modal::Import(_))
+    });
+}
+
+#[test]
+fn pressing_q_with_export_modal_open_is_silent_no_op() {
+    assert_q_with_modal_open_is_silent_no_op(Modal::Export(ExportModal::default()), |m| {
+        matches!(m, Modal::Export(_))
+    });
+}
+
+#[test]
+fn pressing_q_with_passphrase_modal_open_is_silent_no_op() {
+    assert_q_with_modal_open_is_silent_no_op(Modal::Passphrase(PassphraseModal::default()), |m| {
+        matches!(m, Modal::Passphrase(_))
+    });
+}
+
+#[test]
+fn pressing_q_with_settings_modal_open_is_silent_no_op() {
+    assert_q_with_modal_open_is_silent_no_op(Modal::Settings(SettingsModal::default()), |m| {
+        matches!(m, Modal::Settings(_))
+    });
+}
+
+#[test]
+fn pressing_q_with_qr_export_modal_open_is_silent_no_op() {
+    // Self re-open guard: once the QR Export modal is on screen,
+    // pressing `Q` again must not replace it with a fresh modal —
+    // `route_modal_input` consumes the keystroke (it's not bound on
+    // either Page 1 or Page 2, so the modal-local handler treats it
+    // as a silent no-op) and `dispatch_unlocked_char` never runs.
+    // We open the modal through the reducer (rather than
+    // constructing it directly) so the account-id wiring matches
+    // the production opener path.
+    let (unlocked, account_id, _path) = qr_unlocked_with_one_totp();
+    let (opened, _) = reduce(unlocked, key(KeyCode::Char('Q')));
+    let (state, effects) = reduce(opened, key(KeyCode::Char('Q')));
+    assert!(
+        effects.is_empty(),
+        "second Q must emit no effects, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::QrExport(qr)),
+            ..
+        } => {
+            assert_eq!(
+                qr.account_id, account_id,
+                "second Q must not swap the modal's account_id"
+            );
+            assert_eq!(
+                qr.page,
+                QrExportPage::WarningAck,
+                "second Q must not advance the page"
+            );
+            assert!(!qr.ack, "second Q must not flip the ack");
+            assert!(
+                qr.staged_ansi.is_none(),
+                "second Q must not stage a QR (still pre-ack)"
+            );
+        }
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected QR Export modal preserved, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_q_with_help_overlay_open_is_silent_no_op() {
+    // The Help overlay (`?` from list focus) is a read-only veil
+    // that suppresses every key except `Esc` (close) and `Ctrl-C`
+    // (quit). `Q` must not punch through to open the QR Export
+    // modal — the `if *help_open { return ... }` branch in
+    // `reduce_unlocked_input` short-circuits dispatch before
+    // `dispatch_unlocked_char` is reached.
+    let (mut unlocked, _id, _path) = qr_unlocked_with_one_totp();
+    if let AppState::Unlocked { help_open, .. } = &mut unlocked {
+        *help_open = true;
+    }
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('Q')));
+    assert!(
+        effects.is_empty(),
+        "Q with help overlay open must emit no effects, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked {
+            modal,
+            help_open,
+            status_line,
+            ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "Q must not open the QR Export modal while help is up, got modal={modal:?}"
+            );
+            assert!(help_open, "help overlay must stay open");
+            assert!(
+                status_line.is_none(),
+                "Q with help open must not surface a status-line error"
+            );
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }

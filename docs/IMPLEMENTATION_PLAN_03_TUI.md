@@ -1537,9 +1537,23 @@ alongside the existing `execute_export_*` family.
   no-op (`pressing_q_with_*_modal_open_is_silent_no_op` per modal
   variant, mirroring the existing `pressing_a_with_*_modal_open_*`
   family).
-  *(Foundation slice ticks the binding-level gate with
-  `pressing_q_with_other_modal_open_is_silent_no_op`; per-modal
-  fan-out tests ride alongside the save sub-flow slice.)*
+  *(Per-modal fan-out lands as
+  `pressing_q_with_{add,remove,rename,import,export,passphrase,settings,qr_export}_modal_open_is_silent_no_op`
+  in `tests/reducer_tests.rs`, routed through a shared
+  [`assert_q_with_modal_open_is_silent_no_op`] helper that asserts
+  (a) no effects, (b) the modal variant is preserved (text-field
+  modals may consume `Q` as a character into their internal buffer,
+  so per-modal field equality is intentionally not asserted — the
+  gate's contract is the variant, not the contents). The QR Export
+  self re-open guard is opened through the reducer (rather than
+  constructed directly) so the account-id wiring matches the
+  production opener path; it pins `account_id`, `page`,
+  `ack`, and `staged_ansi` byte-identical across the second
+  press. A companion
+  `pressing_q_with_help_overlay_open_is_silent_no_op` covers the
+  read-only Help overlay gate (`*help_open` short-circuit in
+  `reduce_unlocked_input`) so `Q` cannot punch through to open the
+  QR Export modal while help is up.)*
 - [x] `Q` while the search bar is focused is consumed as text input
   by the search field (parity with how `r` / `R` / `i` / `e` / etc.
   are handled from search focus). Pinned by
