@@ -641,8 +641,8 @@ pub enum PaladinImportPrecheck { NoPrompt, PromptForPassphrase, Reject(PaladinEr
 pub const HOTP_REVEAL_SECS: u64 = 120;
 pub const QR_RGBA_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// QR-export render bounds, mirrored on the CLI `--module-size-px` flag and
-/// the GUI render path. The QR error-correction level is fixed at M and is
-/// not exposed as an option in v0.2.
+/// the GUI render path. The QR error-correction level is fixed at M for
+/// the v0.2 surface and is not exposed as an option.
 pub const QR_MODULE_SIZE_PX_MIN: u32 = 1;
 pub const QR_MODULE_SIZE_PX_MAX: u32 = 64;
 pub const QR_MODULE_SIZE_PX_DEFAULT: u32 = 8;
@@ -1289,8 +1289,12 @@ candidate list. With `--out <path>` the QR is rendered via
 `--out`, the QR is rendered via `Vault::export_qr_ansi` to stdout;
 `--format=png` or `--format=svg` without `--out` is rejected at parse
 time as `validation_error` (`field: "out"`, `reason: "required_for_binary_format"`)
-because binary blobs to a terminal are unhelpful. Under `--json`, an
-ANSI render to stdout is also rejected at parse time
+because binary blobs to a terminal are unhelpful. Conversely,
+`--format=ansi` together with `--out` is rejected at parse time as
+`validation_error` (`field: "format"`, `reason: "ansi_requires_no_out"`)
+because the Unicode half-block render is a terminal-only surface; file
+output is PNG or SVG. Under `--json`, an ANSI render to stdout is also
+rejected at parse time
 (`field: "out"`, `reason: "required_under_json"`) so the strict-mode
 "only the JSON envelope on stdout" rule (§5) is preserved. Render
 parameters are validated before the warning text is printed and
@@ -1609,7 +1613,7 @@ reimplementing the comparison.
   UUID's de-hyphenated 32-char hex form (e.g. `id:a1b2c3d4` matches any
   UUID starting with `a1b2c3d4`), never as a substring match. If the
   prefix matches multiple entries, the same single-match rule above
-  applies for `copy`/`remove`/`rename`. `id:` is reserved as a query
+  applies for `copy`/`remove`/`rename`/`qr`. `id:` is reserved as a query
   prefix; the prefix after `id:` must be 8 to 32 hex chars, and invalid
   or shorter prefixes are validation errors. An account whose
   `issuer:label` happens to start with `id:` is still reachable by any
@@ -2772,12 +2776,13 @@ artifacts side by side.
 - The CLI surfaces the feature as a new top-level command
   `paladin qr <query>` rather than overloading `paladin export`,
   so the dual-positional `<query> + <out>` shape stays parseable
-  and the `--out` / `--format` / `--module-size-px` flags read
-  naturally.
+  and the `--out` / `--format` / `--module-size-px` / `--force`
+  flags read naturally.
 - Under `--json`, an ANSI render to stdout is rejected at parse
   time; the user must pass `--out` so the JSON envelope owns
   stdout. Binary formats without `--out` are also rejected at
-  parse time.
+  parse time, and `--format=ansi` with `--out` is rejected
+  because the half-block render is terminal-only.
 - The GTK dialog opens on a warning-ack gate and renders the QR
   only after the user toggles the gate on, so a closing-window
   glimpse cannot expose the secret. Dialog close, ack-off, and
