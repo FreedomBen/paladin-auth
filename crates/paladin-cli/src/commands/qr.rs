@@ -176,8 +176,11 @@ fn resolve_target(args: &QrArgs, mode: Mode) -> Result<Target, CliError> {
 /// `u32`. Missing → `QR_MODULE_SIZE_PX_DEFAULT`. Failure modes mirror
 /// the KDF flag pattern:
 ///
-/// - Non-base-10 / negative input → `validation_error` (`field:
-///   "module_size_px"`, `reason: "invalid_integer"`).
+/// - Non-base-10 / negative / non-numeric input → `validation_error`
+///   (`field: "module_size_px"`, `reason: "invalid_integer"`).
+/// - Parses as a non-negative integer but exceeds `u32::MAX` →
+///   `validation_error` (`field: "module_size_px"`, `reason:
+///   "overflow"`).
 /// - In-bounds parse but outside `[QR_MODULE_SIZE_PX_MIN,
 ///   QR_MODULE_SIZE_PX_MAX]` → `validation_error` (`field:
 ///   "module_size_px"`, `reason: "out_of_bounds"`).
@@ -185,9 +188,16 @@ fn parse_module_size_px(raw: Option<&str>) -> Result<u32, CliError> {
     let Some(text) = raw else {
         return Ok(QR_MODULE_SIZE_PX_DEFAULT);
     };
-    let value: u32 = text
-        .parse::<u32>()
+    // Two-step parse so we can distinguish "doesn't look like a
+    // non-negative integer" (`invalid_integer`) from "looks like a
+    // non-negative integer but overflows u32" (`overflow`). Mirrors
+    // the `kdf-memory-mib` precedent in `src/kdf.rs` where overflow
+    // is a distinct rejection reason from a malformed integer.
+    let wide: u64 = text
+        .parse::<u64>()
         .map_err(|_| validation_err("module_size_px", "invalid_integer"))?;
+    let value: u32 =
+        u32::try_from(wide).map_err(|_| validation_err("module_size_px", "overflow"))?;
     if !(QR_MODULE_SIZE_PX_MIN..=QR_MODULE_SIZE_PX_MAX).contains(&value) {
         return Err(validation_err("module_size_px", "out_of_bounds"));
     }

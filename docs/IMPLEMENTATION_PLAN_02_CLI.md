@@ -697,7 +697,7 @@ with `counter_used: null`.
 - [x] Add the CLI integration tests and JSON golden snapshots below.
   Tracked at the bullet level in the Tests checklist; this top-level
   item only ticks once every Tests sub-bullet is checked.
-- [ ] **v0.2 — `paladin qr <query>` command** per the §"QR export
+- [x] **v0.2 — `paladin qr <query>` command** per the §"QR export
   command (v0.2)" section above and DESIGN §4.6 / §5 / §10.
   - [x] Add the `qr` subcommand to the clap derive enum with the
     `<query>` positional, `--out`, `--format`, `--module-size-px`,
@@ -1072,13 +1072,12 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
   `validation_error` (`field: "out"`, `reason: "required_under_json"`)
   before any vault unlock attempt; stderr carries the JSON envelope
   per §5's `--json` parse-error contract.
-- [ ] **`--module-size-px` out of bounds rejects.** Both `0` and `65`
+- [x] **`--module-size-px` out of bounds rejects.** Both `0` and `65`
   reject with `validation_error` (`field: "module_size_px"`,
   `reason: "out_of_bounds"`) before vault unlock. Invalid integer
   (`-1`, `1.5`, `abc`) rejects with
   `reason: "invalid_integer"`. Overflowing `u32::MAX + 1` rejects
-  with `reason: "overflow"`. *(Status: `out_of_bounds` covered for
-  both edges; `invalid_integer` / `overflow` variants pending.)*
+  with `reason: "overflow"`.
 - [x] **`--module-size-px` precedence.** An out-of-range
   `--module-size-px` value rejects before `vault_missing` (set
   `--vault` to a non-existent path) and before query resolution
@@ -1087,20 +1086,18 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
 - [x] **`--module-size-px` accepted on `--format=ansi`.** Parser accepts
   the flag but the render output is unchanged from the default-flag
   case (the renderer ignores it). Exit 0; ANSI body byte-equal.
-- [ ] **PNG to `--out` writes 0600.** `paladin qr <query> --out
+- [x] **PNG to `--out` writes 0600.** `paladin qr <query> --out
   /tmp/qr.png` writes a PNG file with `0o600` permissions. The bytes
   decode through a test-local `rqrr` `dev-dependencies` import
   back to the same `otpauth://` URI that
   `paladin_core::export::otpauth_list(&vault)` emits for that
   account (parity with the core round-trip test in
   IMPLEMENTATION_PLAN_01_CORE.md Phase L). Exit 0; stdout carries
-  the success line; stderr carries the warning. *(Status: 0600 mode
-  + PNG magic-bytes signature covered; `rqrr` decode-back pending.)*
-- [ ] **SVG to `--out` writes 0600.** Same shape as the PNG case but
+  the success line; stderr carries the warning.
+- [x] **SVG to `--out` writes 0600.** Same shape as the PNG case but
   for `--format=svg`; assert the file starts with `<?xml` or `<svg`,
   is non-empty UTF-8, and decodes through a `quick-xml`-style sanity
-  check. *(Status: 0600 mode + `<?xml` / `<svg` prefix covered;
-  `quick-xml` decode pending.)*
+  check.
 - [x] **`--out` refuses overwrite without `--force`.** When the
   destination already exists, exit non-zero with `validation_error`
   (`field: "out"`, `reason: "exists"`, `path: <out_path>`). The
@@ -1109,7 +1106,7 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
 - [x] **`--out --force` overwrites.** Same as above but with
   `--force`; the destination is replaced with the new QR bytes,
   permissions stay `0600`, exit 0.
-- [ ] **`--out` writer failure surfaces durability errors.** Under
+- [x] **`--out` writer failure surfaces durability errors.** Under
   `PALADIN_FAULT_INJECT=pre_commit` the write surfaces
   `save_not_committed` (with `committed: false`); under
   `PALADIN_FAULT_INJECT=post_commit` it surfaces
@@ -1129,7 +1126,7 @@ bullets require the same `/dev/tty` harness the existing CLI tests use.
   Set either; the ANSI body bytes are byte-equal to the unset case.
   The QR Unicode half-blocks are not ANSI styling escapes; they are
   plain UTF-8 glyphs.
-- [ ] **Encrypted vault works end-to-end.** `[PTY]` Open an encrypted
+- [x] **Encrypted vault works end-to-end.** `[PTY]` Open an encrypted
   vault, run `paladin qr <query> --out /tmp/qr.png`, assert the
   Argon2id unlock prompt fires once and the resulting file
   decodes back to the matching `otpauth://` URI.
@@ -1297,7 +1294,7 @@ imported directly here — they belong in `paladin-core` per DESIGN §3.
   The crate manifest is also checked: `paladin-cli` must not declare
   any of those crates as a direct `[dependencies]` entry. Keeps the
   CLI a thin shell over `paladin_core::*`.
-- [ ] **v0.2 — extend the thinness guard for `qrcode`.** Add
+- [x] **v0.2 — extend the thinness guard for `qrcode`.** Add
   `qrcode` to the forbidden source-spelling list and to the
   forbidden `[dependencies]` manifest list. The existing
   `[dev-dependencies]` entry on `qrcode` stays (it backs the QR

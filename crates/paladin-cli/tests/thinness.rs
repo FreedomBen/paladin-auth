@@ -32,6 +32,7 @@ const FORBIDDEN_CRATES: &[&str] = &[
     "sha2",
     "rqrr",
     "image",
+    "qrcode",
     "getrandom",
     "directories",
     "url",

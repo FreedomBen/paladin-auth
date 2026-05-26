@@ -949,6 +949,448 @@ fn qr_empty_vault_returns_no_match() {
 }
 
 // ==========================================================================
+// --module-size-px: non-integer and overflow variants
+// ==========================================================================
+
+#[test]
+fn qr_module_size_px_non_integer_rejects_with_invalid_integer() {
+    // Three variants of "not a non-negative base-10 integer" — a
+    // word, a fractional value, and a negative — all surface the
+    // same `validation_error` (`field: "module_size_px"`,
+    // `reason: "invalid_integer"`). Paired with `--vault
+    // /nonexistent.bin` to also pin that parse-time validation wins
+    // over `vault_missing`. `--out` is supplied so `resolve_target`
+    // (which runs before `parse_module_size_px`) does not fire
+    // `required_under_json` first.
+    for raw in ["abc", "1.5", "-1"] {
+        let dir = test_tempdir();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir 0700");
+        let out = dir.path().join("qr.png");
+        // Use the `--flag=value` form so clap does not interpret a
+        // leading-minus value (e.g. "-1") as a separate flag — the
+        // `usage` parser would surface `field: "argv"` first and
+        // hide the per-flag rejection we are pinning here.
+        let module_arg = format!("--module-size-px={raw}");
+        let assert = paladin()
+            .args([
+                "--json",
+                "--vault",
+                "/nonexistent.bin",
+                "qr",
+                "alice",
+                "--out",
+                out.to_str().unwrap(),
+                module_arg.as_str(),
+            ])
+            .assert()
+            .failure();
+
+        let stdout = assert.get_output().stdout.clone();
+        assert!(
+            stdout.is_empty(),
+            "stdout must stay empty under --json parse rejection; got {stdout:?}",
+        );
+        let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+        let v: Value = serde_json::from_str(stderr.trim())
+            .unwrap_or_else(|e| panic!("non-JSON stderr for {raw:?}: {stderr:?} ({e})"));
+        assert_eq!(v["error_kind"], serde_json::json!("validation_error"));
+        assert_eq!(v["field"], serde_json::json!("module_size_px"));
+        assert_eq!(
+            v["reason"],
+            serde_json::json!("invalid_integer"),
+            "raw={raw:?} envelope={v}",
+        );
+        // The destination must not have been touched.
+        assert!(
+            !out.exists(),
+            "parse-time rejection must not create the --out path",
+        );
+    }
+}
+
+#[test]
+fn qr_module_size_px_overflow_rejects_with_overflow() {
+    // `u32::MAX + 1` parses cleanly as u64 but cannot be narrowed to
+    // u32 — `parse_module_size_px` must surface that as `overflow`,
+    // distinct from the malformed-integer family. Mirrors the
+    // `kdf-memory-mib` overflow precedent. As with the
+    // non-integer case, `--vault /nonexistent.bin` proves the
+    // overflow rejection wins over `vault_missing`.
+    let dir = test_tempdir();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("chmod tempdir 0700");
+    let out = dir.path().join("qr.png");
+
+    let raw = (u64::from(u32::MAX) + 1).to_string();
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            "/nonexistent.bin",
+            "qr",
+            "alice",
+            "--out",
+            out.to_str().unwrap(),
+            "--module-size-px",
+            &raw,
+        ])
+        .assert()
+        .failure();
+
+    let stdout = assert.get_output().stdout.clone();
+    assert!(
+        stdout.is_empty(),
+        "stdout must stay empty under --json parse rejection; got {stdout:?}",
+    );
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let v: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(v["error_kind"], serde_json::json!("validation_error"));
+    assert_eq!(v["field"], serde_json::json!("module_size_px"));
+    assert_eq!(v["reason"], serde_json::json!("overflow"));
+    assert!(
+        !out.exists(),
+        "parse-time rejection must not create the --out path",
+    );
+}
+
+// ==========================================================================
+// PNG / SVG decode-back round trips (test-side decoders)
+// ==========================================================================
+
+/// Decode a PNG byte slice via `rqrr` and return the embedded payload.
+/// Mirrors `paladin-core/tests/export_qr.rs::decode_png_to_payload` so
+/// the CLI test sees the same QR payload a real scanner would.
+fn decode_png_to_payload(path: &Path) -> String {
+    let img = image::open(path).expect("decode PNG file");
+    let luma = img.to_luma8();
+    let (w, h) = luma.dimensions();
+    let raw = luma.into_raw();
+    let buf = image::ImageBuffer::<image::Luma<u8>, _>::from_raw(w, h, raw).expect("rebuild luma");
+    let mut decoder = rqrr::PreparedImage::prepare(buf);
+    let grids = decoder.detect_grids();
+    assert_eq!(grids.len(), 1, "QR image must contain exactly one code");
+    let (_meta, content) = grids[0].decode().expect("decode QR grid");
+    content
+}
+
+/// Compute the `otpauth://` URI a real scanner would see for the
+/// single account in `vault_path`. Goes through
+/// `paladin_core::export::otpauth_list`, the same emitter the
+/// QR pipeline uses, so we are not rebaking parser-side normalisation
+/// into the test.
+fn expected_otpauth_uri_for_single_account_vault(vault_path: &Path) -> String {
+    let (vault, _store) =
+        paladin_core::Store::open(vault_path, paladin_core::VaultLock::Plaintext).expect("open");
+    let list = paladin_core::export::otpauth_list(&vault);
+    let trimmed = list.trim_end_matches('\n');
+    assert!(
+        !trimmed.contains('\n'),
+        "this helper assumes a single-account vault, got: {trimmed}",
+    );
+    trimmed.to_string()
+}
+
+#[test]
+fn qr_png_to_out_decodes_back_to_matching_otpauth_uri() {
+    // `paladin qr alice --out <path>.png` writes a PNG whose embedded
+    // payload, decoded through `rqrr`, must equal the URI
+    // `paladin_core::export::otpauth_list` would emit for the same
+    // account (parity with the core round-trip test
+    // `paladin-core/tests/export_qr.rs::
+    // export_qr_png_round_trips_through_rqrr_for_totp_and_hotp`).
+    let (dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_totp("alice", Some("Example"))], &path);
+    let out = dir.path().join("qr.png");
+
+    paladin()
+        .args([
+            "--vault",
+            path.to_str().unwrap(),
+            "qr",
+            "alice",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let expected = expected_otpauth_uri_for_single_account_vault(&path);
+    let decoded = decode_png_to_payload(&out);
+    assert_eq!(
+        decoded, expected,
+        "QR PNG must round-trip back to the same otpauth URI",
+    );
+    // Mode is checked elsewhere, but reaffirm here so the round-trip
+    // case also pins the §4.3 contract.
+    let mode = std::fs::metadata(&out).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+#[test]
+fn qr_svg_to_out_decodes_through_quick_xml_sanity_check() {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    // The SVG file must be well-formed XML, parseable by `quick-xml`,
+    // with an `<svg>` root and at least one `<rect>` or `<path>`
+    // child (so we know the QR modules were actually drawn). Pairs
+    // with the existing `qr_svg_to_out_writes_zero_six_zero_zero_
+    // mode_with_xml_or_svg_prefix` test which only checks the prefix.
+    let (dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_totp("alice", Some("Example"))], &path);
+    let out = dir.path().join("qr.svg");
+
+    paladin()
+        .args([
+            "--vault",
+            path.to_str().unwrap(),
+            "qr",
+            "alice",
+            "--out",
+            out.to_str().unwrap(),
+            "--format",
+            "svg",
+        ])
+        .assert()
+        .success();
+
+    let bytes = std::fs::read(&out).expect("read svg");
+    let s = std::str::from_utf8(&bytes).expect("utf-8 svg");
+    assert!(
+        s.starts_with("<?xml") || s.starts_with("<svg"),
+        "SVG file must start with <?xml or <svg, got: {:?}",
+        &s[..s.len().min(40)],
+    );
+
+    let mut reader = Reader::from_str(s);
+    reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut svg_root_seen = false;
+    let mut module_child_seen = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e) | Event::Empty(ref e)) => {
+                // `local_name()` is the tag without any namespace
+                // prefix; SVG documents may or may not declare one.
+                let name = e.local_name();
+                let local = std::str::from_utf8(name.as_ref()).expect("utf-8 tag name");
+                if local == "svg" {
+                    svg_root_seen = true;
+                }
+                if local == "rect" || local == "path" {
+                    module_child_seen = true;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => panic!("quick-xml parse error: {e}"),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    assert!(svg_root_seen, "SVG document must contain an <svg> element");
+    assert!(
+        module_child_seen,
+        "SVG document must contain at least one <rect> or <path> drawing the QR modules",
+    );
+}
+
+// ==========================================================================
+// `--out` durability — `PALADIN_FAULT_INJECT` round-trip
+// ==========================================================================
+
+#[cfg(feature = "test-hooks")]
+mod fault_inject {
+    use super::*;
+
+    #[test]
+    fn qr_out_pre_commit_fault_surfaces_save_not_committed() {
+        // §5: a `pre_commit` save fault on the QR `--out` atomic
+        // write must surface the `save_not_committed` envelope with
+        // `committed: false`. `paladin qr` opens its source vault
+        // read-only and writes a fresh `--out` path, so the only
+        // atomic write the fault can hit is the QR file's rename.
+        // Mirrors `cli_export.rs::fault_inject::
+        // pty_encrypted_export_pre_commit_surfaces_save_not_committed`
+        // but against a plaintext source vault — no unlock prompt
+        // fires, so we drive it with `assert_cmd` rather than the
+        // PTY harness.
+        let (dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_totp("alice", Some("Example"))], &path);
+        let out = dir.path().join("qr.png");
+
+        let assert = paladin()
+            .env("PALADIN_FAULT_INJECT", "pre_commit")
+            .args([
+                "--json",
+                "--vault",
+                path.to_str().unwrap(),
+                "qr",
+                "alice",
+                "--out",
+                out.to_str().unwrap(),
+            ])
+            .assert()
+            .failure();
+
+        let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+        let v: Value = serde_json::from_str(stderr.trim())
+            .unwrap_or_else(|e| panic!("non-JSON stderr: {stderr:?} ({e})"));
+        assert_eq!(v["error_kind"], serde_json::json!("save_not_committed"));
+        assert_eq!(v["committed"], serde_json::json!(false));
+
+        // §4.3 atomic-write rollback: the destination must not exist
+        // because the rename never landed.
+        assert!(
+            !out.exists(),
+            "pre-commit fault must leave the --out path untouched",
+        );
+    }
+
+    #[test]
+    fn qr_out_post_commit_fault_surfaces_save_durability_unconfirmed() {
+        // §5: a `post_commit` save fault on the QR `--out` atomic
+        // write must surface the `save_durability_unconfirmed`
+        // envelope — the rename succeeded, only the post-commit
+        // `fsync` of the parent directory failed.
+        // `SaveDurabilityUnconfirmed` is a unit variant in core, so
+        // the envelope carries no extra fields beyond `error_kind`.
+        let (dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_totp("alice", Some("Example"))], &path);
+        let out = dir.path().join("qr.png");
+
+        let assert = paladin()
+            .env("PALADIN_FAULT_INJECT", "post_commit")
+            .args([
+                "--json",
+                "--vault",
+                path.to_str().unwrap(),
+                "qr",
+                "alice",
+                "--out",
+                out.to_str().unwrap(),
+            ])
+            .assert()
+            .failure();
+
+        let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+        let v: Value = serde_json::from_str(stderr.trim())
+            .unwrap_or_else(|e| panic!("non-JSON stderr: {stderr:?} ({e})"));
+        assert_eq!(
+            v["error_kind"],
+            serde_json::json!("save_durability_unconfirmed"),
+        );
+
+        // The rename committed even though the post-commit fsync
+        // failed: the destination exists and starts with the PNG
+        // magic bytes.
+        let bytes = std::fs::read(&out).expect("read png");
+        assert!(
+            bytes.starts_with(PNG_MAGIC),
+            "post-commit fault must leave the PNG on disk"
+        );
+    }
+}
+
+// ==========================================================================
+// Encrypted vault end-to-end (PTY) — single unlock prompt, decode-back
+// ==========================================================================
+
+/// Stable §5 prompt label fired by `vault_open::open` for any
+/// encrypted-vault unlock — same string `cli_passphrase.rs` and
+/// `cli_export.rs` expect.
+const PROMPT_UNLOCK_QR: &str = "Vault passphrase: ";
+
+#[test]
+fn pty_qr_against_encrypted_vault_unlocks_once_and_decodes_correctly() {
+    use paladin_core::{Argon2Params, EncryptionOptions, VaultInit};
+    use secrecy::SecretString;
+
+    // 1. Seed an encrypted vault with §4.4 minimum Argon2 params so
+    //    the unlock derivation stays cheap. One TOTP account so the
+    //    decoded QR maps to exactly one `otpauth_list` line.
+    let (_dir, path) = fresh_vault_path();
+    let out_dir = common::test_tempdir();
+    std::fs::set_permissions(out_dir.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("chmod out_dir 0700");
+    let out = out_dir.path().join("qr.png");
+    let passphrase = "encrypted-qr-secret";
+
+    {
+        let pp = SecretString::from(passphrase.to_string());
+        let params = Argon2Params {
+            m_kib: 8192,
+            t: 1,
+            p: 1,
+        };
+        let opts = EncryptionOptions::with_params(pp, params).expect("opts");
+        let (mut vault, store) =
+            Store::create(&path, VaultInit::Encrypted(opts)).expect("create encrypted");
+        vault.add(make_totp("alice", Some("Example")));
+        vault.save(&store).expect("save");
+    }
+
+    // Expected URI uses the same passphrase to read back the seeded
+    // vault through `otpauth_list`.
+    let expected = {
+        let pp = SecretString::from(passphrase.to_string());
+        let (vault, _store) =
+            Store::open(&path, paladin_core::VaultLock::Encrypted(pp)).expect("open encrypted");
+        let list = paladin_core::export::otpauth_list(&vault);
+        list.trim_end_matches('\n').to_string()
+    };
+
+    // 2. Drive `paladin qr` through the PTY harness. `--json` keeps
+    //    the success envelope on stdout; the unlock prompt must fire
+    //    exactly once.
+    let mut pty = common::Pty::spawn(
+        [
+            "--json",
+            "--vault",
+            path.to_str().unwrap(),
+            "qr",
+            "alice",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+        &[],
+    );
+    pty.expect(PROMPT_UNLOCK_QR);
+    pty.send_line(passphrase);
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+
+    // Exactly one unlock prompt in the transcript.
+    let prompt_count = exit.transcript.matches(PROMPT_UNLOCK_QR).count();
+    assert_eq!(
+        prompt_count, 1,
+        "unlock prompt must fire exactly once, transcript:\n{}",
+        exit.transcript,
+    );
+
+    // 3. The JSON success envelope must appear in the transcript
+    //    (stdout muxes through the PTY).
+    assert!(
+        exit.transcript.contains("\"format\":\"qr_png\""),
+        "JSON success envelope must carry format=qr_png; transcript:\n{}",
+        exit.transcript,
+    );
+
+    // 4. The on-disk PNG must decode back to the expected URI via
+    //    the same `rqrr` helper the plaintext round-trip uses.
+    let decoded = decode_png_to_payload(&out);
+    assert_eq!(
+        decoded, expected,
+        "encrypted-vault QR PNG must round-trip back to the same otpauth URI",
+    );
+    let mode = std::fs::metadata(&out).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+// ==========================================================================
 // Thinness regression — `qrcode` must never be a production [dependencies]
 // entry of crates/paladin-cli/Cargo.toml. The dev-dependency stays.
 // ==========================================================================

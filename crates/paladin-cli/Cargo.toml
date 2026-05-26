@@ -72,4 +72,13 @@ tempfile = "3"
 # test boundary.
 qrcode = { version = "0.14", default-features = false, features = ["image"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# `rqrr` decodes the QR PNGs `paladin qr --out` writes back to the
+# embedded `otpauth://` URI so `cli_qr.rs` can prove the full
+# encode/decode round trip without leaking the decoder into the
+# runtime crate. `quick-xml` parses the SVG render to confirm
+# well-formed XML with the expected `<svg>` root + module child
+# elements. Both stay test-side; the thinness guard in
+# `tests/thinness.rs` only scans `[dependencies]`.
+rqrr = "0.7"
+quick-xml = "0.36"
 paladin-core = { path = "../paladin-core", version = "0.0.1", features = ["error-serde", "test-fault-injection"] }
