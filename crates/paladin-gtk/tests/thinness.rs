@@ -283,10 +283,7 @@ fn strip_string_literals_blanks_quoted_payloads_but_keeps_code() {
     // The check must not snag on identifier substrings outside of
     // strings — a `use image::Foo` reference should survive
     // stripping so the outer word-boundary scan flags it.
-    assert_eq!(
-        strip_string_literals("use image::Foo;"),
-        "use image::Foo;",
-    );
+    assert_eq!(strip_string_literals("use image::Foo;"), "use image::Foo;",);
 }
 
 #[test]
