@@ -4192,3 +4192,492 @@ mod copy_code {
         });
     }
 }
+
+// ---------------------------------------------------------------------------
+// Effect::QrExport — QR Export modal Save-as-PNG / Save-as-SVG executor
+//
+// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+// QR Export and `docs/DESIGN.md` §4.6 / §6:
+//   1. Build an `Unlocked` state with the target account.
+//   2. Dispatch `Effect::QrExport { format, .. }` through `execute(...)`.
+//   3. Assert `EffectResult::QrExport(Ok(target_path))` (or the right
+//      `Err(PaladinError::...)`).
+//   4. Read the file and assert bytes match `Vault::export_qr_{png,svg}`
+//      byte-for-byte, with mode `0600` on Unix.
+//
+// The executor is read-only on the vault — HOTP counters / `updated_at`
+// must be unchanged across modal open / close / save. The PNG /
+// SVG round-trip tests use `rqrr` (added as a `dev-dependency` for
+// this purpose; mirrors `paladin-core`'s `tests/export_qr.rs`).
+// ---------------------------------------------------------------------------
+
+mod qr_export {
+    use super::*;
+
+    use image::Luma;
+    use paladin_core::QrRenderOptions;
+    use paladin_tui::app::state::QrSaveFormat;
+    use paladin_tui::prompt::PassphraseBuffer;
+
+    /// Build an [`AppState::Unlocked`] backed by a real plaintext
+    /// vault at `path` containing a single HOTP account with the
+    /// given starting `counter`. Returns the state and the account's
+    /// [`AccountId`] so callers can target it.
+    fn unlocked_with_one_hotp(path: &Path, label: &str, counter: u64) -> (AppState, AccountId) {
+        let (mut vault, store) = Store::create(path, VaultInit::Plaintext).expect("create vault");
+        vault.save(&store).expect("commit empty vault");
+        let input = AccountInput {
+            label: label.to_string(),
+            issuer: None,
+            secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+            algorithm: Algorithm::Sha1,
+            digits: 6,
+            kind: AccountKindInput::Hotp,
+            period_secs: None,
+            counter: Some(counter),
+            icon_hint: IconHintInput::Default,
+        };
+        let validated = validate_manual(input, SystemTime::now()).expect("valid HOTP manual input");
+        let id = vault.add(validated.account);
+        vault.save(&store).expect("commit hotp account");
+        let state = AppState::Unlocked {
+            path: path.to_path_buf(),
+            vault,
+            store,
+            search_query: String::new(),
+            idle_deadline: None,
+            pending_clipboard_clear: None,
+            hotp_reveal: None,
+            modal: None,
+            selected: Some(id),
+            pending_chord_leader: None,
+            viewport_height: 0,
+            viewport_offset: 0,
+            focus: Focus::List,
+            status_line: None,
+            help_open: false,
+        };
+        (state, id)
+    }
+
+    /// Decode a PNG QR image back to the encoded `otpauth://` URI.
+    /// Mirrors `paladin-core`'s `tests/export_qr.rs::decode_png_to_payload`
+    /// so the two suites use the same decoder.
+    fn decode_png_to_payload(png_bytes: &[u8]) -> String {
+        let img = image::load_from_memory(png_bytes).expect("decode PNG");
+        let luma = img.to_luma8();
+        let (w, h) = luma.dimensions();
+        let raw = luma.into_raw();
+        let img =
+            image::ImageBuffer::<Luma<u8>, _>::from_raw(w, h, raw).expect("rebuild luma buffer");
+        let mut decoder = rqrr::PreparedImage::prepare(img);
+        let grids = decoder.detect_grids();
+        assert_eq!(grids.len(), 1, "QR image must contain exactly one code");
+        let (_meta, content) = grids[0].decode().expect("decode QR grid");
+        content
+    }
+
+    /// Read mode bits (`0o777` mask) off `path`. Unix-only.
+    #[cfg(unix)]
+    fn file_mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .expect("stat exported QR file")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    /// Happy-path PNG save: the executor writes the bytes that
+    /// `Vault::export_qr_png` returns to the requested target path with
+    /// mode `0600`. The pre-seeded garbage at `target_path` exercises
+    /// the overwrite path (the executor itself does not gate; the
+    /// reducer's `OverwriteGate` ack handles that side of the contract).
+    #[test]
+    fn execute_qr_export_png_with_overwrite_ack_writes_bytes_matching_export_qr_png_at_0600() {
+        let tmp = secure_tempdir();
+        let path = tmp.path().join("vault.bin");
+        let (mut state, id) = unlocked_with_one_totp(&path, "github");
+        let target_path = tmp.path().join("github.png");
+
+        // Pre-seed the target with garbage so the assertion below
+        // proves the executor *replaced* the file (not just refused
+        // to write because the file existed). The overwrite gate
+        // is reducer-side; the executor must blindly write.
+        std::fs::write(&target_path, b"GARBAGE-NOT-A-PNG").expect("seed target");
+
+        let expected_bytes = match &state {
+            AppState::Unlocked { vault, .. } => vault
+                .export_qr_png(id, &QrRenderOptions::default())
+                .expect("PNG render")
+                .to_vec(),
+            other => panic!("expected Unlocked, got {other:?}"),
+        };
+
+        let (tx, rx) = mpsc::channel::<AppEvent>();
+        let effect = Effect::QrExport {
+            path: path.clone(),
+            target_path: target_path.clone(),
+            account_id: id,
+            format: QrSaveFormat::Png,
+        };
+        let outcome = execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
+        );
+        assert_eq!(outcome, EffectOutcome::Continue);
+
+        match rx.try_recv() {
+            Ok(AppEvent::EffectResult(EffectResult::QrExport { result })) => match result {
+                Ok(p) => assert_eq!(
+                    p, target_path,
+                    "EffectResult::QrExport(Ok) must carry the target_path"
+                ),
+                other => panic!("expected EffectResult::QrExport(Ok), got {other:?}"),
+            },
+            other => panic!("expected EffectResult::QrExport, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "executor must emit exactly one AppEvent per Effect::QrExport"
+        );
+
+        let written = std::fs::read(&target_path).expect("read written PNG");
+        assert_eq!(
+            written, expected_bytes,
+            "PNG bytes on disk must equal Vault::export_qr_png(id, QrRenderOptions::default())"
+        );
+
+        #[cfg(unix)]
+        assert_eq!(
+            file_mode(&target_path),
+            0o600,
+            "QR PNG export file must land at mode 0600 via write_secret_file_atomic"
+        );
+    }
+
+    /// SVG save mirrors the PNG path: bytes on disk match
+    /// `Vault::export_qr_svg`, mode is `0600`, and the document
+    /// starts with the expected SVG / XML preamble.
+    #[test]
+    fn execute_qr_export_svg_writes_bytes_matching_export_qr_svg_at_0600() {
+        let tmp = secure_tempdir();
+        let path = tmp.path().join("vault.bin");
+        let (mut state, id) = unlocked_with_one_totp(&path, "github");
+        let target_path = tmp.path().join("github.svg");
+
+        let expected_bytes = match &state {
+            AppState::Unlocked { vault, .. } => vault
+                .export_qr_svg(id, &QrRenderOptions::default())
+                .expect("SVG render")
+                .as_bytes()
+                .to_vec(),
+            other => panic!("expected Unlocked, got {other:?}"),
+        };
+
+        let (tx, rx) = mpsc::channel::<AppEvent>();
+        let effect = Effect::QrExport {
+            path: path.clone(),
+            target_path: target_path.clone(),
+            account_id: id,
+            format: QrSaveFormat::Svg,
+        };
+        let outcome = execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
+        );
+        assert_eq!(outcome, EffectOutcome::Continue);
+
+        match rx.try_recv() {
+            Ok(AppEvent::EffectResult(EffectResult::QrExport { result })) => match result {
+                Ok(p) => assert_eq!(p, target_path),
+                other => panic!("expected EffectResult::QrExport(Ok), got {other:?}"),
+            },
+            other => panic!("expected EffectResult::QrExport, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "executor must emit exactly one AppEvent per Effect::QrExport"
+        );
+
+        let written = std::fs::read(&target_path).expect("read written SVG");
+        assert_eq!(
+            written, expected_bytes,
+            "SVG bytes on disk must equal Vault::export_qr_svg(id, QrRenderOptions::default())"
+        );
+
+        // Format sanity: the SVG document must begin with the
+        // XML / SVG preamble so a downstream renderer can parse it.
+        let head =
+            std::str::from_utf8(&written[..written.len().min(120)]).expect("SVG must be UTF-8");
+        assert!(
+            head.starts_with("<?xml") || head.starts_with("<svg"),
+            "SVG export must start with `<?xml` or `<svg`; got: {head:?}"
+        );
+
+        #[cfg(unix)]
+        assert_eq!(
+            file_mode(&target_path),
+            0o600,
+            "QR SVG export file must land at mode 0600 via write_secret_file_atomic"
+        );
+    }
+
+    /// When `write_secret_file_atomic` cannot resolve a parent
+    /// directory (the path has no usable parent component), the
+    /// executor surfaces `PaladinError::IoError` with the
+    /// `resolve_secret_file_parent` op tag from §5. (A path whose
+    /// parent exists as a string but is missing on disk surfaces
+    /// `save_not_committed` instead — `write_secret_file_atomic`
+    /// collapses pre-commit open / write / fsync failures into that
+    /// typed discriminator per the §4.7 commit-state contract; the
+    /// `io_error` channel only fires on path-shape rejection.)
+    #[test]
+    fn execute_qr_export_png_with_missing_parent_dir_returns_io_error() {
+        let tmp = secure_tempdir();
+        let path = tmp.path().join("vault.bin");
+        let (mut state, id) = unlocked_with_one_totp(&path, "github");
+        // Empty-parent path: `Path::new("github.png").parent()` is
+        // `Some("")`, which `write_secret_file_atomic` rejects with
+        // `IoError { operation: "resolve_secret_file_parent", .. }`.
+        let target_path = PathBuf::from("github.png");
+
+        let (tx, rx) = mpsc::channel::<AppEvent>();
+        let effect = Effect::QrExport {
+            path: path.clone(),
+            target_path: target_path.clone(),
+            account_id: id,
+            format: QrSaveFormat::Png,
+        };
+        let outcome = execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
+        );
+        assert_eq!(outcome, EffectOutcome::Continue);
+
+        match rx.try_recv() {
+            Ok(AppEvent::EffectResult(EffectResult::QrExport { result })) => match result {
+                Err(PaladinError::IoError { operation, .. }) => assert_eq!(
+                    operation, "resolve_secret_file_parent",
+                    "missing-parent path must surface the `resolve_secret_file_parent` io_error"
+                ),
+                other => panic!("expected EffectResult::QrExport(Err(IoError)), got {other:?}"),
+            },
+            other => panic!("expected EffectResult::QrExport, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "executor must emit exactly one AppEvent per Effect::QrExport"
+        );
+    }
+
+    /// A `QrExport` effect that arrives while the live state is not
+    /// `Unlocked` (e.g. auto-lock fired between submit and execute)
+    /// must be silently dropped: no `EffectResult::QrExport` is
+    /// posted, so the reducer cannot synthesize a fake mutation
+    /// attempt against unrelated state.
+    #[test]
+    fn execute_qr_export_drops_silently_when_state_is_not_unlocked() {
+        let tmp = secure_tempdir();
+        let path = tmp.path().join("vault.bin");
+        let target_path = tmp.path().join("github.png");
+        let mut state = AppState::Unlock {
+            path: path.clone(),
+            error: None,
+            passphrase: PassphraseBuffer::new(),
+        };
+
+        let (tx, rx) = mpsc::channel::<AppEvent>();
+        let effect = Effect::QrExport {
+            path: path.clone(),
+            target_path,
+            account_id: AccountId::new(),
+            format: QrSaveFormat::Png,
+        };
+        let outcome = execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
+        );
+        assert_eq!(outcome, EffectOutcome::Continue);
+        assert!(
+            rx.try_recv().is_err(),
+            "QrExport against non-Unlocked state must not emit an AppEvent"
+        );
+    }
+
+    /// A `QrExport` effect whose `path` does not match the live
+    /// `Unlocked` state's path (e.g. the user switched vaults) must
+    /// also be silently dropped, mirroring the same path-mismatch
+    /// guard `Effect::Rename` / `Effect::Remove` apply.
+    #[test]
+    fn execute_qr_export_drops_silently_when_path_mismatch() {
+        let tmp = secure_tempdir();
+        let path = tmp.path().join("vault.bin");
+        let (mut state, id) = unlocked_with_one_totp(&path, "github");
+        let target_path = tmp.path().join("github.png");
+
+        let (tx, rx) = mpsc::channel::<AppEvent>();
+        let effect = Effect::QrExport {
+            path: PathBuf::from("/tmp/some-other-vault.bin"),
+            target_path: target_path.clone(),
+            account_id: id,
+            format: QrSaveFormat::Png,
+        };
+        let outcome = execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
+        );
+        assert_eq!(outcome, EffectOutcome::Continue);
+        assert!(
+            rx.try_recv().is_err(),
+            "path-mismatched Effect::QrExport must not emit an AppEvent"
+        );
+        // No file was written either — the executor short-circuits
+        // before touching the renderer or the writer.
+        assert!(
+            !target_path.exists(),
+            "path-mismatched QrExport must not write the destination file"
+        );
+    }
+
+    /// HOTP read-only contract: the QR PNG that the Save sub-flow
+    /// writes for an HOTP account must decode back through `rqrr`
+    /// to an `otpauth://hotp/...&counter=N` URI whose `counter`
+    /// equals the *current stored counter*. The save path is
+    /// read-only — `Vault::export_qr_png` takes `&self`, the
+    /// executor never calls `Vault::save`, and the in-memory
+    /// counter is unchanged across submit. This pins the rule
+    /// down at the executor boundary.
+    #[test]
+    fn qr_export_modal_png_save_for_hotp_row_decodes_to_otpauth_uri_with_current_counter() {
+        const STARTING_COUNTER: u64 = 7;
+        let tmp = secure_tempdir();
+        let path = tmp.path().join("vault.bin");
+        let (mut state, id) = unlocked_with_one_hotp(&path, "github", STARTING_COUNTER);
+        let target_path = tmp.path().join("github.png");
+
+        let (tx, rx) = mpsc::channel::<AppEvent>();
+        let effect = Effect::QrExport {
+            path: path.clone(),
+            target_path: target_path.clone(),
+            account_id: id,
+            format: QrSaveFormat::Png,
+        };
+        let outcome = execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
+        );
+        assert_eq!(outcome, EffectOutcome::Continue);
+        match rx.try_recv() {
+            Ok(AppEvent::EffectResult(EffectResult::QrExport { result })) => {
+                assert!(result.is_ok(), "expected Ok, got {result:?}");
+            }
+            other => panic!("expected EffectResult::QrExport, got {other:?}"),
+        }
+
+        // Round-trip: decode the PNG bytes back to the encoded URI
+        // and assert HOTP scheme + counter equal the *current*
+        // stored counter.
+        let png_bytes = std::fs::read(&target_path).expect("read written PNG");
+        let decoded = decode_png_to_payload(&png_bytes);
+        assert!(
+            decoded.starts_with("otpauth://hotp/"),
+            "HOTP QR must encode as otpauth://hotp/...; got: {decoded:?}"
+        );
+        let expected_counter = format!("counter={STARTING_COUNTER}");
+        assert!(
+            decoded.contains(&expected_counter),
+            "HOTP QR must carry `counter={STARTING_COUNTER}`; got: {decoded:?}"
+        );
+
+        // Read-only contract: the live in-memory counter must NOT
+        // have advanced across the save.
+        match &state {
+            AppState::Unlocked { vault, .. } => {
+                let account = vault
+                    .iter()
+                    .find(|a| a.id() == id)
+                    .expect("HOTP account still present");
+                assert_eq!(
+                    account.counter(),
+                    Some(STARTING_COUNTER),
+                    "QR Export PNG save must not advance the HOTP counter"
+                );
+            }
+            other => panic!("expected Unlocked, got {other:?}"),
+        }
+    }
+
+    /// TOTP round-trip: the PNG that the Save sub-flow writes for a
+    /// TOTP row must decode back through `rqrr` to an
+    /// `otpauth://totp/...` URI carrying the matching algo, digits,
+    /// period, and secret. Mirrors the HOTP case at the executor
+    /// boundary so the QR payload is pinned to the live account
+    /// snapshot, not a stale projection.
+    #[test]
+    fn qr_export_modal_png_save_for_totp_row_decodes_to_otpauth_uri_with_matching_params() {
+        let tmp = secure_tempdir();
+        let path = tmp.path().join("vault.bin");
+        let (mut state, id) = unlocked_with_one_totp(&path, "github");
+        let target_path = tmp.path().join("github.png");
+
+        let (tx, rx) = mpsc::channel::<AppEvent>();
+        let effect = Effect::QrExport {
+            path: path.clone(),
+            target_path: target_path.clone(),
+            account_id: id,
+            format: QrSaveFormat::Png,
+        };
+        let outcome = execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
+        );
+        assert_eq!(outcome, EffectOutcome::Continue);
+        match rx.try_recv() {
+            Ok(AppEvent::EffectResult(EffectResult::QrExport { result })) => {
+                assert!(result.is_ok(), "expected Ok, got {result:?}");
+            }
+            other => panic!("expected EffectResult::QrExport, got {other:?}"),
+        }
+
+        let png_bytes = std::fs::read(&target_path).expect("read written PNG");
+        let decoded = decode_png_to_payload(&png_bytes);
+        // Scheme: TOTP.
+        assert!(
+            decoded.starts_with("otpauth://totp/"),
+            "TOTP QR must encode as otpauth://totp/...; got: {decoded:?}"
+        );
+        // OTP params from `unlocked_with_one_totp` / `add_totp_account`:
+        // secret `JBSWY3DPEHPK3PXP`, SHA1, 6 digits, 30s period.
+        assert!(
+            decoded.contains("secret=JBSWY3DPEHPK3PXP"),
+            "TOTP QR must carry the matching base32 secret; got: {decoded:?}"
+        );
+        assert!(
+            decoded.contains("algorithm=SHA1"),
+            "TOTP QR must carry algorithm=SHA1; got: {decoded:?}"
+        );
+        assert!(
+            decoded.contains("digits=6"),
+            "TOTP QR must carry digits=6; got: {decoded:?}"
+        );
+        assert!(
+            decoded.contains("period=30"),
+            "TOTP QR must carry period=30; got: {decoded:?}"
+        );
+    }
+}

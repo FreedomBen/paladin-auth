@@ -70,3 +70,9 @@ assert_cmd = "2.0"
 # QRs through the same encoder.
 qrcode = { version = "0.14", default-features = false, features = ["image"] }
 image = { version = "0.25", default-features = false }
+# QR-image decoder for the QR Export executor's PNG round-trip tests
+# in `tests/effect_tests.rs` (HOTP read-only counter contract and
+# TOTP param round-trip). Mirrors the version `paladin-core`'s
+# `tests/export_qr.rs` uses so the two suites decode QRs through the
+# same library.
+rqrr = "0.7"

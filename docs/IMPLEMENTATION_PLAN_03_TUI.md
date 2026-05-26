@@ -1599,7 +1599,7 @@ alongside the existing `execute_export_*` family.
   `format_plaintext_storage_warning_matches_fixture` and
   `format_plaintext_export_warning_matches_fixture` tests use; CLI /
   TUI / GUI share one source).
-- [ ] `Save as PNG…` from Page 2 opens the inline destination-path
+- [x] `Save as PNG…` from Page 2 opens the inline destination-path
   sub-flow (modal state moves to a `Save { format: Png, .. }`
   variant); the save effect itself is not dispatched until the
   user presses Confirm with a non-empty path that either does
@@ -1612,7 +1612,7 @@ alongside the existing `execute_export_*` family.
   `qr_export_modal_save_with_empty_destination_path_rejects_inline`,
   and
   `qr_export_modal_save_with_existing_destination_shows_overwrite_gate`.
-- [ ] Reducer routes a synthetic `EffectResult::QrExport(Err(io_error))`
+- [x] Reducer routes a synthetic `EffectResult::QrExport(Err(io_error))`
   (the variant the executor returns when
   `write_secret_file_atomic` fails on a missing parent
   directory, ENOSPC, EACCES, etc.) inline in the modal body and
@@ -1621,27 +1621,27 @@ alongside the existing `execute_export_*` family.
   (The fs-level production of `io_error` is covered executor-side
   in `tests/effect_tests.rs` by
   `execute_qr_export_png_with_missing_parent_dir_returns_io_error`.)
-- [ ] Overwrite gate — typing a destination that already exists,
+- [x] Overwrite gate — typing a destination that already exists,
   toggling overwrite ack on, and pressing Confirm writes the file
   through `paladin_core::write_secret_file_atomic`. Bytes match
   what `Vault::export_qr_png` returns; permissions are `0600`.
   (Executor-side coverage in `tests/effect_tests.rs`:
   `execute_qr_export_png_with_overwrite_ack_writes_bytes_matching_export_qr_png_at_0600`.)
-- [ ] Overwrite gate — destination exists, overwrite ack off, Confirm
+- [x] Overwrite gate — destination exists, overwrite ack off, Confirm
   rejects inline with a wording that points at the gate. The
   existing file is byte-unchanged. Pinned by
   `qr_export_modal_save_overwrite_ack_off_rejects_inline_and_leaves_existing_file_unchanged`.
-- [ ] `Save as SVG…` mirrors the PNG save path through
+- [x] `Save as SVG…` mirrors the PNG save path through
   `Vault::export_qr_svg` and `write_secret_file_atomic`. The
   resulting file is non-empty UTF-8 starting with `<?xml` / `<svg`.
   (Executor-side coverage in `tests/effect_tests.rs`:
   `execute_qr_export_svg_writes_bytes_matching_export_qr_svg_at_0600`.)
-- [ ] Inline success-path slot is replace-only — a successful PNG
+- [x] Inline success-path slot is replace-only — a successful PNG
   save followed by a successful SVG save leaves
   `QrExportModal::last_save_path` set to the SVG path (and vice
   versa); the prior path is not preserved. Pinned by
   `qr_export_modal_second_successful_save_replaces_inline_success_path`.
-- [ ] Save effect failure routing —
+- [x] Save effect failure routing —
   `PALADIN_FAULT_INJECT=pre_commit` surfaces `save_not_committed`
   inline in the modal body; `=post_commit` surfaces
   `save_durability_unconfirmed`. The modal stays open in both
@@ -1676,7 +1676,7 @@ alongside the existing `execute_export_*` family.
   `qr_export_modal_page2_done_button_closes_modal_and_drops_rendered_buffers`.
   *(Foundation slice pins this with
   `qr_export_modal_enter_on_done_button_closes_modal`.)*
-- [ ] `Esc` while focus is inside the Page-2 destination-path
+- [x] `Esc` while focus is inside the Page-2 destination-path
   sub-flow (text field or overwrite-gate confirmation) cancels
   only the sub-flow: the modal returns to the Page-2 QR body,
   the typed path buffer is zeroized, and the rendered ANSI body
@@ -1684,7 +1684,7 @@ alongside the existing `execute_export_*` family.
   `qr_export_modal_esc_in_destination_prompt_cancels_save_subflow_and_preserves_page2`
   and
   `qr_export_modal_esc_in_overwrite_gate_cancels_save_subflow_and_preserves_page2`.
-- [ ] Auto-lock (encrypted vaults only, per `IdlePolicy::should_arm`)
+- [x] Auto-lock (encrypted vaults only, per `IdlePolicy::should_arm`)
   with the QR Export modal open drops the modal, the rendered
   ANSI / any in-flight PNG / SVG buffers, **and** the in-memory
   vault, then re-presents the unlock screen. Pinned by
@@ -1693,7 +1693,7 @@ alongside the existing `execute_export_*` family.
   in `tests/reducer_tests.rs`; this bullet rides alongside the
   other modal auto-lock coverage in the auto-lock test file for
   fixture-sharing).
-- [ ] HOTP account QR export — assert the PNG that the
+- [x] HOTP account QR export — assert the PNG that the
   `Save as PNG…` worker writes for a HOTP row decodes back through
   `rqrr` (gated behind the existing `qrcode` / `rqrr` dev-dependency
   that the other QR tests use) to an `otpauth://hotp/...&counter=N`
@@ -4065,13 +4065,25 @@ terminal theme and survives `--no-color`.
     `qr_export_modal_pre_ack_body_does_not_stage_qr`,
     `qr_export_modal_ack_toggle_on_advances_to_page2_and_stages_ansi`,
     and `qr_export_modal_ack_toggle_off_drops_rendered_qr_and_returns_to_page1`.)*
-  - [ ] Wire `Save as PNG…` and `Save as SVG…` actions through
+  - [x] Wire `Save as PNG…` and `Save as SVG…` actions through
     `paladin_core::Vault::export_qr_png` /
     `paladin_core::Vault::export_qr_svg` and
     `paladin_core::write_secret_file_atomic` (0600); reuse the
     existing inline overwrite-gate UX from the Export modal so the
     wording stays consistent.
-  - [ ] Drop staged ANSI / PNG / SVG buffers on submit, cancel,
+    *(Save sub-flow slice: `QrSaveSubFlow` / `QrSaveFormat` /
+    `QrSaveStep` / `QrSaveFocus` types land in
+    `crates/paladin-tui/src/app/state.rs`; reducer arms
+    (`route_qr_save_sub_flow_input` / `submit_qr_save_sub_flow`)
+    own the destination-prompt / overwrite-gate state machine;
+    `Effect::QrExport` and `EffectResult::QrExport` carry the
+    `Result<PathBuf, PaladinError>` round-trip through
+    `execute_qr_export` (which never calls `Vault::save` — both
+    `export_qr_png` and `export_qr_svg` take `&self`). View slice
+    in `crates/paladin-tui/src/view/qr.rs` paints the destination
+    prompt + overwrite gate + inline error / inline success rows
+    on Page 2.)*
+  - [x] Drop staged ANSI / PNG / SVG buffers on submit, cancel,
     `Esc`, modal close, ack-toggle-off, and auto-lock per
     §"Modals (per §6)". The buffers live in `Zeroizing` wrappers
     so the drop zeroes the bytes in place.
@@ -4081,7 +4093,17 @@ terminal theme and survives `--no-color`.
     `qr_export_modal_enter_on_cancel_button_closes_modal`,
     `qr_export_modal_enter_on_done_button_closes_modal`, and
     `qr_export_modal_ack_toggle_off_drops_rendered_qr_and_returns_to_page1`.
-    PNG / SVG buffer drops land with the save sub-flow.)*
+    Save sub-flow slice adds: sub-flow drops on `Esc` inside the
+    sub-flow / modal close / ack-toggle-off — locked by
+    `qr_export_modal_esc_in_destination_prompt_cancels_save_subflow_and_preserves_page2`,
+    `qr_export_modal_esc_in_overwrite_gate_cancels_save_subflow_and_preserves_page2`,
+    and `qr_export_modal_ack_toggle_off_drops_save_sub_flow`.
+    Auto-lock drop covered by
+    `auto_lock_with_qr_export_modal_open_drops_modal_and_rendered_buffers`
+    in `tests/auto_lock_tests.rs`. The in-flight PNG / SVG buffer
+    is owned by the executor across one `execute_qr_export` call
+    and drops when the call returns — no modal state holds the
+    bytes.)*
   - [x] Read-only invariant — the reducer's `QrExport`-related
     arms never call any `&mut Vault` method, the executor's
     `execute_qr_*` workers never call `Vault::save`, and the

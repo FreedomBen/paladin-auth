@@ -18,13 +18,15 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use paladin_core::{
-    hotp_reveal_deadline, AccountId, Argon2Params, ClipboardClearPolicy, ClipboardClearToken,
-    EncryptionOptions, Store, Vault, VaultInit, VaultLock,
+    hotp_reveal_deadline, validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm,
+    Argon2Params, ClipboardClearPolicy, ClipboardClearToken, EncryptionOptions, IconHintInput,
+    Store, Vault, VaultInit, VaultLock,
 };
 use paladin_tui::app::event::{AppEvent, Effect};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     AppState, ChordLeader, Focus, HotpReveal, Modal, PassphraseModal, PendingClipboardClear,
+    QrExportFocus, QrExportPage, QrSaveFocus, QrSaveFormat, QrSaveStep,
 };
 
 // ---------------------------------------------------------------------------
@@ -467,6 +469,167 @@ fn tick_after_deadline_lock_discards_unlocked_modal() {
             );
         }
         other => panic!("expected Locked (modal and vault must be gone), got {other:?}"),
+    }
+}
+
+/// Add a TOTP account named `label` to `vault` and commit. Returns
+/// the new `AccountId`.
+fn add_totp_account(vault: &mut Vault, store: &Store, label: &str) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated = validate_manual(input, SystemTime::now()).expect("valid manual TOTP input");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added TOTP account");
+    id
+}
+
+/// Assert preconditions for the QR-Export auto-lock test: the modal
+/// must be on Page 2 with `staged_ansi` populated, the Save PNG sub-
+/// flow open on the path field with `path_text == expected_path`, and
+/// the idle deadline rebased to `expected_deadline`.
+fn assert_qr_export_modal_loaded(
+    state: &AppState,
+    expected_path: &str,
+    expected_deadline: Instant,
+) {
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::QrExport(qr)),
+            idle_deadline,
+            ..
+        } => {
+            assert!(qr.ack, "ack must be on after Space toggle");
+            assert_eq!(qr.page, QrExportPage::QrAndActions);
+            assert!(qr.staged_ansi.is_some(), "Page 2 must have ANSI staged");
+            assert_eq!(qr.focus, QrExportFocus::SavePngButton);
+            let sub = qr
+                .save_sub_flow
+                .as_ref()
+                .expect("Enter on Save PNG opens the sub-flow");
+            assert_eq!(sub.format, QrSaveFormat::Png);
+            assert_eq!(sub.step, QrSaveStep::EnterPath);
+            assert_eq!(sub.focus, QrSaveFocus::PathField);
+            assert_eq!(
+                sub.path_text, expected_path,
+                "typed path must populate the sub-flow's path buffer",
+            );
+            assert_eq!(
+                *idle_deadline,
+                Some(expected_deadline),
+                "each input rebased to t0 + 600s so the Tick boundary is deterministic",
+            );
+        }
+        other => panic!("expected Unlocked with QR Export modal Page 2 + sub-flow, got {other:?}",),
+    }
+}
+
+#[test]
+fn auto_lock_with_qr_export_modal_open_drops_modal_and_rendered_buffers() {
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Modals (per §6) >
+    // QR Export: "Auto-lock (encrypted vaults only, per
+    // `IdlePolicy::should_arm`) with the QR Export modal open drops
+    // the modal, the rendered ANSI / any in-flight PNG / SVG
+    // buffers, **and** the in-memory vault, then re-presents the
+    // unlock screen."
+    //
+    // Slice covered: a fully-loaded QR Export modal — Page 2 with
+    // `staged_ansi` populated, the Save PNG sub-flow open with a
+    // typed destination path — must be discarded alongside the
+    // `Vault` / `Store` on the idle-expiry Tick. The resulting
+    // `Locked` carries only the resolved vault path so the UI can
+    // re-present the unlock screen on the next render pass.
+    //
+    // The modal is driven through the reducer (Q → Space → Enter →
+    // typed path) so `staged_ansi` is populated by the real ack-
+    // toggle-on path rather than fabricated; that wires the
+    // zeroizing buffer drop through the same code path the runtime
+    // uses. Each input event passes `t0` as its `at` instant so
+    // every reducer call rebases `idle_deadline` to `t0 + 600s` —
+    // the lock Tick is then `t0 + 600s + 1ms`, guaranteed past the
+    // deadline.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+    let account_id = add_totp_account(&mut vault, &store, "alice");
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(account_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    // Q → open QR Export modal on Page 1 (ack off).
+    let (state, _) = reduce(state, key_input_at(KeyCode::Char('Q'), t0));
+    // Space → toggle ack on, auto-advance to Page 2, populate `staged_ansi`,
+    // land focus on `SavePngButton`.
+    let (state, _) = reduce(state, key_input_at(KeyCode::Char(' '), t0));
+    // Enter on Save PNG button → open the destination-path sub-flow.
+    let (state, _) = reduce(state, key_input_at(KeyCode::Enter, t0));
+    // Type a destination path so `save_sub_flow.path_text` is non-empty.
+    let dest_path = tmp.path().join("alice.png");
+    let dest_text = dest_path.to_str().expect("utf-8 path");
+    let mut state = state;
+    for ch in dest_text.chars() {
+        let (next, _) = reduce(state, key_input_at(KeyCode::Char(ch), t0));
+        state = next;
+    }
+
+    assert_qr_export_modal_loaded(&state, dest_text, deadline);
+
+    // Tick past the idle deadline — auto-lock must fire even with a
+    // fully loaded QR Export modal open. The `Modal::QrExport(_)`
+    // payload (with its `Zeroizing<String>` ANSI buffer) and the
+    // `QrSaveSubFlow` (carrying the typed destination path) are
+    // dropped alongside the `Vault` / `Store`; the resulting
+    // `Locked` carries only the vault path so the UI re-presents the
+    // unlock screen on the next render.
+    let now = deadline + Duration::from_millis(1);
+    let (next, effects) = reduce(state, tick_at(now));
+    assert!(
+        effects.is_empty(),
+        "auto-lock Tick must not emit effects; got {effects:?}",
+    );
+    match next {
+        AppState::Locked {
+            path: locked_path,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(
+                locked_path, path,
+                "Locked must carry the resolved vault path for the next unlock attempt",
+            );
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "pending clipboard clear was None on entry; lock must not fabricate one",
+            );
+        }
+        other => panic!(
+            "expected Locked (QR Export modal, staged ANSI, save sub-flow, and vault must be gone), got {other:?}",
+        ),
     }
 }
 
