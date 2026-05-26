@@ -43,3 +43,26 @@ pub const CLIPBOARD_CLEAR_SECS_MIN: u32 = 5;
 /// Inclusive upper bound for `Vault::set_clipboard_clear_secs`
 /// — 10 min (docs/DESIGN.md §4.7 / §5).
 pub const CLIPBOARD_CLEAR_SECS_MAX: u32 = 600;
+
+/// Inclusive lower bound for `QrRenderOptions::module_size_px`
+/// (docs/DESIGN.md §4.6 / §7).
+///
+/// One module = one pixel; the renderer accepts the minimum but most
+/// scanners need a few pixels per module to lock on. Front-ends should
+/// surface `QR_MODULE_SIZE_PX_DEFAULT` as the user-facing default.
+pub const QR_MODULE_SIZE_PX_MIN: u32 = 1;
+
+/// Inclusive upper bound for `QrRenderOptions::module_size_px`
+/// (docs/DESIGN.md §4.6 / §7).
+///
+/// 64 pixels per module is large enough for high-resolution print and
+/// small enough that a fully-quiet-zoned QR for a typical `otpauth://`
+/// URI stays well under a few megabytes of PNG even at QR version 10.
+pub const QR_MODULE_SIZE_PX_MAX: u32 = 64;
+
+/// Default value for `QrRenderOptions::module_size_px`
+/// (docs/DESIGN.md §4.6 / §7).
+///
+/// Eight pixels per module is a comfortable scan size on a typical
+/// laptop display while keeping the PNG byte count modest.
+pub const QR_MODULE_SIZE_PX_DEFAULT: u32 = 8;

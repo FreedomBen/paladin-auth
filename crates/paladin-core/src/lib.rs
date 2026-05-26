@@ -47,6 +47,7 @@ pub use domain::{
     SettingKey, SettingPatch, ValidatedAccount, ValidationWarning,
 };
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
+pub use export::QrRenderOptions;
 pub use import::{
     classify_paladin_import_precheck, detect, ImportFormat, ImportOptions, PaladinImportPrecheck,
 };
@@ -60,10 +61,12 @@ pub use storage::{
 };
 pub use text::{
     format_create_vault_dir_error, format_init_force_warning, format_plaintext_export_warning,
-    format_plaintext_storage_warning, format_unsafe_permissions, format_validation_warning,
+    format_plaintext_qr_export_warning, format_plaintext_storage_warning,
+    format_unsafe_permissions, format_validation_warning,
 };
 pub use ui_contract::{
     AUTO_LOCK_SECS_MAX, AUTO_LOCK_SECS_MIN, CLIPBOARD_CLEAR_SECS_MAX, CLIPBOARD_CLEAR_SECS_MIN,
-    HOTP_REVEAL_SECS, QR_RGBA_MAX_BYTES, TICK_INTERVAL_MS,
+    HOTP_REVEAL_SECS, QR_MODULE_SIZE_PX_DEFAULT, QR_MODULE_SIZE_PX_MAX, QR_MODULE_SIZE_PX_MIN,
+    QR_RGBA_MAX_BYTES, TICK_INTERVAL_MS,
 };
 pub use vault::Vault;

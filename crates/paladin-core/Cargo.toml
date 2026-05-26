@@ -64,9 +64,10 @@ directories = "5"
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "1"
 
-# QR / images (used by importers)
+# QR / images (used by importers and the per-account QR export pipeline).
 rqrr = "0.7"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+qrcode = { version = "0.14", default-features = false, features = ["image", "svg"] }
 
 [dev-dependencies]
 proptest = "1"
@@ -75,5 +76,3 @@ tempfile = "3"
 # Compile-time trait-non-impl assertions for Phase B audit
 # (`tests/secret_audits.rs` and the inline VaultSnapshot guard).
 static_assertions = "1"
-# QR fixture generator for `import::qr_image*` tests (Phase I).
-qrcode = { version = "0.14", default-features = false, features = ["image"] }

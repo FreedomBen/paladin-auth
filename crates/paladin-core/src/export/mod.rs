@@ -14,9 +14,15 @@
 // Front-end CLI / TUI / GUI export commands write the resulting bytes
 // through [`crate::write_secret_file_atomic`] for the §4.3 atomic-write
 // guarantees.
+//
+// A third format — per-account QR — lives in [`qr`] and is consumed
+// directly by the front-end QR modals (PNG/SVG file save plus an
+// in-place ANSI preview).
 
 mod encrypted;
 mod otpauth_list;
+mod qr;
 
 pub use encrypted::encrypted;
 pub use otpauth_list::otpauth_list;
+pub use qr::{qr_ansi, qr_png, qr_svg, QrRenderOptions};

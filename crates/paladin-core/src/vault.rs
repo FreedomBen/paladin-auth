@@ -287,6 +287,57 @@ impl Vault {
         self.accounts.iter().find(|a| a.id() == id)
     }
 
+    /// Render the matching account's `otpauth://` URI as PNG bytes.
+    ///
+    /// Read-only: never advances HOTP counters, never touches the
+    /// on-disk vault. Returns `invalid_state { operation:
+    /// "export_qr_png", state: "account_not_found" }` if `id` does not
+    /// resolve. See [`crate::export::qr_png`] for renderer details.
+    pub fn export_qr_png(
+        &self,
+        id: AccountId,
+        opts: &crate::QrRenderOptions,
+    ) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+        let account = self.get(id).ok_or(PaladinError::InvalidState {
+            operation: "export_qr_png",
+            state: "account_not_found",
+        })?;
+        crate::export::qr_png(account, opts)
+    }
+
+    /// Render the matching account's `otpauth://` URI as an SVG document.
+    ///
+    /// Read-only contract identical to [`Self::export_qr_png`]; returns
+    /// `invalid_state { operation: "export_qr_svg", state:
+    /// "account_not_found" }` on unknown `id`.
+    pub fn export_qr_svg(
+        &self,
+        id: AccountId,
+        opts: &crate::QrRenderOptions,
+    ) -> Result<zeroize::Zeroizing<String>> {
+        let account = self.get(id).ok_or(PaladinError::InvalidState {
+            operation: "export_qr_svg",
+            state: "account_not_found",
+        })?;
+        crate::export::qr_svg(account, opts)
+    }
+
+    /// Render the matching account's `otpauth://` URI as a Unicode
+    /// half-block grid (terminal preview).
+    ///
+    /// Read-only contract identical to [`Self::export_qr_png`]; returns
+    /// `invalid_state { operation: "export_qr_ansi", state:
+    /// "account_not_found" }` on unknown `id`. The output uses only the
+    /// glyphs `' '`, `'\u{2580}'`, `'\u{2584}'`, `'\u{2588}'`, and
+    /// `'\n'` — no ANSI escape sequences.
+    pub fn export_qr_ansi(&self, id: AccountId) -> Result<zeroize::Zeroizing<String>> {
+        let account = self.get(id).ok_or(PaladinError::InvalidState {
+            operation: "export_qr_ansi",
+            state: "account_not_found",
+        })?;
+        crate::export::qr_ansi(account)
+    }
+
     /// Filter accounts by the shared selector grammar (docs/DESIGN.md §4.7).
     ///
     /// `Search` queries delegate to the case-insensitive substring

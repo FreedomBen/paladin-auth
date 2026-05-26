@@ -132,6 +132,24 @@ pub fn format_plaintext_export_warning() -> String {
         .to_string()
 }
 
+/// Static warning shown before a per-account QR code is rendered or
+/// written to disk (CLI `qr` command, TUI per-account QR modal, GUI
+/// per-account QR dialog). The text calls out that the QR encodes the
+/// account secret, that anyone who sees or photographs it can clone the
+/// OTP, that saved QR files should be treated like a plaintext export,
+/// and that HOTP exports encode the *current* counter and do not
+/// advance — the user's existing device retains code parity with a
+/// second device that scans the QR.
+#[must_use]
+pub fn format_plaintext_qr_export_warning() -> String {
+    "WARNING: A QR code encodes the account secret. Anyone who sees or \
+     photographs it can clone the OTP, so treat the displayed code and any \
+     saved QR file like a plaintext export. HOTP exports encode the current \
+     counter and do not advance it; scanning the QR into a second device \
+     keeps both devices in sync."
+        .to_string()
+}
+
 /// Stable human-readable message for a `ValidationWarning`. Used as
 /// the JSON `message` field, by text-mode CLI stderr output, and by
 /// TUI / GUI inline warnings so wording never drifts.
@@ -375,6 +393,29 @@ mod tests {
             format_plaintext_storage_warning(),
             format_plaintext_export_warning()
         );
+    }
+
+    #[test]
+    fn format_plaintext_qr_export_warning_fixture() {
+        assert_eq!(
+            format_plaintext_qr_export_warning(),
+            "WARNING: A QR code encodes the account secret. Anyone who sees or \
+             photographs it can clone the OTP, so treat the displayed code and any \
+             saved QR file like a plaintext export. HOTP exports encode the current \
+             counter and do not advance it; scanning the QR into a second device \
+             keeps both devices in sync."
+        );
+    }
+
+    #[test]
+    fn format_plaintext_qr_export_warning_is_distinct_from_storage_and_export() {
+        // The QR warning covers a different surface (per-account QR
+        // render / save) than the vault-creation / export-to-disk
+        // warnings, so the three helpers must not collapse to the same
+        // wording at any of the three call sites that consume them.
+        let qr = format_plaintext_qr_export_warning();
+        assert_ne!(qr, format_plaintext_storage_warning());
+        assert_ne!(qr, format_plaintext_export_warning());
     }
 
     #[test]

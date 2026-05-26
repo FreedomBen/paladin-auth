@@ -12,7 +12,8 @@
 use std::path::PathBuf;
 
 use paladin_core::{
-    format_init_force_warning, format_plaintext_export_warning, format_plaintext_storage_warning,
+    format_init_force_warning, format_plaintext_export_warning, format_plaintext_qr_export_warning,
+    format_plaintext_storage_warning,
 };
 
 #[test]
@@ -46,6 +47,39 @@ fn format_plaintext_storage_and_export_warnings_are_distinct_strings() {
         format_plaintext_storage_warning(),
         format_plaintext_export_warning(),
     );
+}
+
+#[test]
+fn format_plaintext_qr_export_warning_is_parameter_free_and_starts_with_warning() {
+    let s = format_plaintext_qr_export_warning();
+    assert!(
+        s.starts_with("WARNING:"),
+        "must start with the WARNING marker every front end aligns on, got {s:?}",
+    );
+    assert_eq!(format_plaintext_qr_export_warning(), s);
+}
+
+#[test]
+fn format_plaintext_qr_export_warning_is_distinct_from_other_plaintext_warnings() {
+    // The CLI / TUI / GUI render this warning verbatim before any pixel
+    // of a per-account QR is shown or written (docs/DESIGN.md §4.6 /
+    // §6 / §7). A refactor that aliased it to either the storage or
+    // export warning would silently degrade the QR confirmation flow.
+    let qr = format_plaintext_qr_export_warning();
+    assert_ne!(qr, format_plaintext_storage_warning());
+    assert_ne!(qr, format_plaintext_export_warning());
+}
+
+#[test]
+fn format_plaintext_qr_export_warning_mentions_qr_secret_and_counter() {
+    // Wording is locked by the inline fixture in `src/text.rs`; this
+    // test pins the topical content so a future reword cannot quietly
+    // drop the QR / secret / counter callouts the modal flows depend
+    // on for informed consent.
+    let s = format_plaintext_qr_export_warning();
+    assert!(s.contains("QR"), "QR callout missing: {s}");
+    assert!(s.contains("secret"), "secret callout missing: {s}");
+    assert!(s.contains("counter"), "HOTP counter callout missing: {s}");
 }
 
 #[test]

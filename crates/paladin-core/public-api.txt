@@ -1,7 +1,33 @@
 pub mod paladin_core
 pub mod paladin_core::export
+pub struct paladin_core::export::QrRenderOptions
+pub paladin_core::export::QrRenderOptions::module_size_px: u32
+pub paladin_core::export::QrRenderOptions::quiet_zone: bool
+impl paladin_core::QrRenderOptions
+pub fn paladin_core::QrRenderOptions::validate(&self) -> paladin_core::Result<()>
+impl core::clone::Clone for paladin_core::QrRenderOptions
+pub fn paladin_core::QrRenderOptions::clone(&self) -> paladin_core::QrRenderOptions
+impl core::cmp::Eq for paladin_core::QrRenderOptions
+impl core::cmp::PartialEq for paladin_core::QrRenderOptions
+pub fn paladin_core::QrRenderOptions::eq(&self, other: &paladin_core::QrRenderOptions) -> bool
+impl core::default::Default for paladin_core::QrRenderOptions
+pub fn paladin_core::QrRenderOptions::default() -> Self
+impl core::fmt::Debug for paladin_core::QrRenderOptions
+pub fn paladin_core::QrRenderOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::QrRenderOptions
+impl core::marker::StructuralPartialEq for paladin_core::QrRenderOptions
+impl core::marker::Freeze for paladin_core::QrRenderOptions
+impl core::marker::Send for paladin_core::QrRenderOptions
+impl core::marker::Sync for paladin_core::QrRenderOptions
+impl core::marker::Unpin for paladin_core::QrRenderOptions
+impl core::marker::UnsafeUnpin for paladin_core::QrRenderOptions
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::QrRenderOptions
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::QrRenderOptions
 pub fn paladin_core::export::encrypted(vault: &paladin_core::Vault, options: paladin_core::EncryptionOptions) -> paladin_core::Result<alloc::vec::Vec<u8>>
 pub fn paladin_core::export::otpauth_list(vault: &paladin_core::Vault) -> alloc::string::String
+pub fn paladin_core::export::qr_ansi(account: &paladin_core::Account) -> paladin_core::Result<zeroize::Zeroizing<alloc::string::String>>
+pub fn paladin_core::export::qr_png(account: &paladin_core::Account, opts: &paladin_core::QrRenderOptions) -> paladin_core::Result<zeroize::Zeroizing<alloc::vec::Vec<u8>>>
+pub fn paladin_core::export::qr_svg(account: &paladin_core::Account, opts: &paladin_core::QrRenderOptions) -> paladin_core::Result<zeroize::Zeroizing<alloc::string::String>>
 pub mod paladin_core::import
 pub enum paladin_core::import::ImportFormat
 pub paladin_core::import::ImportFormat::Aegis
@@ -918,6 +944,29 @@ impl core::marker::Unpin for paladin_core::ImportWarning
 impl core::marker::UnsafeUnpin for paladin_core::ImportWarning
 impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::ImportWarning
 impl core::panic::unwind_safe::UnwindSafe for paladin_core::ImportWarning
+pub struct paladin_core::QrRenderOptions
+pub paladin_core::QrRenderOptions::module_size_px: u32
+pub paladin_core::QrRenderOptions::quiet_zone: bool
+impl paladin_core::QrRenderOptions
+pub fn paladin_core::QrRenderOptions::validate(&self) -> paladin_core::Result<()>
+impl core::clone::Clone for paladin_core::QrRenderOptions
+pub fn paladin_core::QrRenderOptions::clone(&self) -> paladin_core::QrRenderOptions
+impl core::cmp::Eq for paladin_core::QrRenderOptions
+impl core::cmp::PartialEq for paladin_core::QrRenderOptions
+pub fn paladin_core::QrRenderOptions::eq(&self, other: &paladin_core::QrRenderOptions) -> bool
+impl core::default::Default for paladin_core::QrRenderOptions
+pub fn paladin_core::QrRenderOptions::default() -> Self
+impl core::fmt::Debug for paladin_core::QrRenderOptions
+pub fn paladin_core::QrRenderOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::QrRenderOptions
+impl core::marker::StructuralPartialEq for paladin_core::QrRenderOptions
+impl core::marker::Freeze for paladin_core::QrRenderOptions
+impl core::marker::Send for paladin_core::QrRenderOptions
+impl core::marker::Sync for paladin_core::QrRenderOptions
+impl core::marker::Unpin for paladin_core::QrRenderOptions
+impl core::marker::UnsafeUnpin for paladin_core::QrRenderOptions
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::QrRenderOptions
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::QrRenderOptions
 pub struct paladin_core::Secret(_)
 impl bincode::enc::Encode for paladin_core::Secret
 pub fn paladin_core::Secret::encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> core::result::Result<(), bincode::error::EncodeError>
@@ -973,6 +1022,9 @@ pub fn paladin_core::Vault::accounts(&self) -> &[paladin_core::Account]
 pub fn paladin_core::Vault::add(&mut self, account: paladin_core::Account) -> paladin_core::AccountId
 pub fn paladin_core::Vault::apply_setting_patch(&mut self, patch: paladin_core::SettingPatch) -> paladin_core::Result<()>
 pub fn paladin_core::Vault::change_passphrase(&mut self, store: &paladin_core::Store, options: paladin_core::EncryptionOptions) -> paladin_core::Result<()>
+pub fn paladin_core::Vault::export_qr_ansi(&self, id: paladin_core::AccountId) -> paladin_core::Result<zeroize::Zeroizing<alloc::string::String>>
+pub fn paladin_core::Vault::export_qr_png(&self, id: paladin_core::AccountId, opts: &paladin_core::QrRenderOptions) -> paladin_core::Result<zeroize::Zeroizing<alloc::vec::Vec<u8>>>
+pub fn paladin_core::Vault::export_qr_svg(&self, id: paladin_core::AccountId, opts: &paladin_core::QrRenderOptions) -> paladin_core::Result<zeroize::Zeroizing<alloc::string::String>>
 pub fn paladin_core::Vault::find_duplicate(&self, account: &paladin_core::ValidatedAccount) -> core::option::Option<&paladin_core::Account>
 pub fn paladin_core::Vault::get(&self, id: paladin_core::AccountId) -> core::option::Option<&paladin_core::Account>
 pub fn paladin_core::Vault::hotp_advance(&mut self, store: &paladin_core::Store, id: paladin_core::AccountId, now: std::time::SystemTime) -> paladin_core::Result<paladin_core::Code>
@@ -1043,6 +1095,9 @@ pub const paladin_core::DIGITS_DEFAULT: u8
 pub const paladin_core::DIGITS_MAX: u8
 pub const paladin_core::DIGITS_MIN: u8
 pub const paladin_core::HOTP_REVEAL_SECS: u64
+pub const paladin_core::QR_MODULE_SIZE_PX_DEFAULT: u32
+pub const paladin_core::QR_MODULE_SIZE_PX_MAX: u32
+pub const paladin_core::QR_MODULE_SIZE_PX_MIN: u32
 pub const paladin_core::QR_RGBA_MAX_BYTES: usize
 pub const paladin_core::TICK_INTERVAL_MS: u64
 pub const paladin_core::TOTP_PERIOD_DEFAULT: u32
@@ -1057,6 +1112,7 @@ pub fn paladin_core::detect(bytes: &[u8]) -> paladin_core::import::ImportFormat
 pub fn paladin_core::format_create_vault_dir_error(err: &paladin_core::PaladinError, attempted_dir: &std::path::Path) -> core::option::Option<alloc::string::String>
 pub fn paladin_core::format_init_force_warning(existing_vault: &std::path::Path) -> alloc::string::String
 pub fn paladin_core::format_plaintext_export_warning() -> alloc::string::String
+pub fn paladin_core::format_plaintext_qr_export_warning() -> alloc::string::String
 pub fn paladin_core::format_plaintext_storage_warning() -> alloc::string::String
 pub fn paladin_core::format_unsafe_permissions(err: &paladin_core::PaladinError) -> core::option::Option<alloc::string::String>
 pub fn paladin_core::format_validation_warning(warning: &paladin_core::ValidationWarning) -> alloc::string::String
