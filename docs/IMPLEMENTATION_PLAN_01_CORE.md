@@ -1513,12 +1513,17 @@ land before the GTK / CLI / TUI work or alongside it.
 
 - [ ] **`qrcode` dep promotion.** Move `qrcode` from
   `[dev-dependencies]` to `[dependencies]` in
-  `crates/paladin-core/Cargo.toml`, preserving the existing
-  `default-features = false, features = ["image"]` configuration.
-  The crate is already vendored as a dev-dep used by the
-  `tests/import_qr.rs` and `tests/import_facade.rs` fixture
-  generators (DESIGN §10), so the supply-chain footprint does not
-  grow — only the link-time footprint changes. `cargo deny check`
+  `crates/paladin-core/Cargo.toml`. The existing dev-dep config is
+  `default-features = false, features = ["image"]`; extend it to
+  `default-features = false, features = ["image", "svg"]` because
+  `qrcode::render::svg::Color` (used by `export::qr_svg` below) is
+  gated behind the `svg` feature in `qrcode 0.14` (see the crate's
+  own `Cargo.toml` — `default = ["image", "svg", "pic"]`, with each
+  renderer behind a separate feature). The `pic` feature stays off
+  (Paladin does not render to PIC). The crate is already vendored as
+  a dev-dep used by the `tests/import_qr.rs` and `tests/import_facade.rs`
+  fixture generators (DESIGN §10), so the supply-chain footprint does
+  not grow — only the link-time footprint changes. `cargo deny check`
   and `cargo audit` must stay clean after the promotion (`qrcode`
   is a pure-Rust crate with permissive licensing under MIT/Apache-2.0
   per `cargo metadata`; the `deny.toml` allow-list does not need an
@@ -1545,9 +1550,10 @@ land before the GTK / CLI / TUI work or alongside it.
   the QR import path (an external scanner consuming the QR) lands
   the user back in the same `parse_otpauth` shape they would have
   gotten from a URI-list import. Re-use the existing internal
-  emitter (the helper that `otpauth_list` calls per-account) so
-  there is exactly one source of truth for URI construction.
-  Pinned by `export_qr_png_encodes_the_otpauth_list_uri_for_the_account`
+  emitter `crate::otpauth::emit_otpauth(account) -> String` (the
+  helper `export::otpauth_list` already calls per-account) so there
+  is exactly one source of truth for URI construction. Pinned by
+  `export_qr_png_encodes_the_otpauth_list_uri_for_the_account`
   below.
 
 - [ ] **`export::qr_png(account, options) -> Result<Zeroizing<Vec<u8>>>`.**
@@ -1572,23 +1578,27 @@ land before the GTK / CLI / TUI work or alongside it.
 - [ ] **`export::qr_svg(account, options) -> Result<Zeroizing<String>>`.**
   Implement in `src/export/qr.rs`. Same validation / URI / encoder
   / EC-level rules as `qr_png`. Renders via
-  `qrcode::render::svg::Color` (or the equivalent stable SVG
-  renderer in `qrcode`) so the SVG is a single self-contained text
-  document with no external resources. The `module_size_px` option
-  is honored as the SVG's `viewBox` module-cell size (the SVG
-  itself is unitless; `module_size_px` becomes a viewport pixel
-  hint via the `width` / `height` attributes). Returned string is
-  wrapped in `Zeroizing` for the same reason as PNG.
+  `qrcode::render::svg::Color` so the SVG is a single
+  self-contained text document with no external resources.
+  `module_size_px` is honored by calling
+  `qrcode::render::Renderer::module_dimensions(module_size_px, module_size_px)`
+  on the renderer builder, which maps one QR module to a
+  `module_size_px × module_size_px` viewport rectangle in the SVG's
+  `width` / `height` attributes (the SVG itself is unitless;
+  `module_size_px` is a viewport pixel hint). `quiet_zone = true`
+  emits the standard 4-module white border per the QR spec;
+  `quiet_zone = false` suppresses it. Returned string is wrapped
+  in `Zeroizing` for the same reason as PNG.
 
 - [ ] **`export::qr_ansi(account) -> Result<Zeroizing<String>>`.**
   Implement in `src/export/qr.rs`. Same URI / encoder / EC-level
-  rules as `qr_png`. Renders via `qrcode::render::unicode::Dense1x2`
-  (or the equivalent half-block Unicode renderer) so a single
-  module occupies a half-cell vertically — typical terminals can
-  scan the output with a phone camera held to the screen. No
-  `QrRenderOptions`: terminal cell size is fixed by the renderer,
-  and `quiet_zone` is always rendered for scannability. Returned
-  string is wrapped in `Zeroizing` for the same reason.
+  rules as `qr_png`. Renders via
+  `qrcode::render::unicode::Dense1x2` so a single module occupies
+  a half-cell vertically — typical terminals can scan the output
+  with a phone camera held to the screen. No `QrRenderOptions`:
+  terminal cell size is fixed by the renderer, and `quiet_zone`
+  is always rendered for scannability. Returned string is wrapped
+  in `Zeroizing` for the same reason.
 
 - [ ] **`Vault::export_qr_png` / `Vault::export_qr_svg` /
   `Vault::export_qr_ansi`.** Add three `&self` methods on `Vault`
@@ -1619,11 +1629,13 @@ land before the GTK / CLI / TUI work or alongside it.
   module) so the CLI status text, the TUI QR modal caption, the
   GTK `ExportQrDialog` caption, and the GTK rename / remove
   dialog subtitles all render identical wording. Returns
-  `"{issuer}:{label}"` when `issuer` is `Some(_)` and non-empty;
-  returns the bare label otherwise (no stray leading colon).
-  Pinned by a fixture test pairing
-  (`summary_display_label_renders_issuer_colon_label` and
-  `summary_display_label_with_empty_issuer_collapses_to_bare_label`)
+  `"{issuer}:{label}"` when `issuer` is `Some(s)` and
+  `s.trim().is_empty()` is false; returns the bare label
+  otherwise (no stray leading colon, no leading colon for a
+  whitespace-only issuer). Pinned by three fixture tests:
+  `summary_display_label_renders_issuer_colon_label`,
+  `summary_display_label_with_empty_issuer_collapses_to_bare_label`,
+  and `summary_display_label_with_whitespace_only_issuer_collapses_to_bare_label`,
   so the wording stays locked across front ends.
 
 - [ ] **Public-api snapshot update.** After landing the surface
@@ -1647,25 +1659,37 @@ land before the GTK / CLI / TUI work or alongside it.
   `export::otpauth_list(&vault)`. The HOTP row's decoded URI must
   carry the *current* `counter` parameter. Add the matching
   `export_qr_svg_renders_a_well_formed_svg`
-  (the SVG cannot be `rqrr`-decoded; instead assert it starts
-  with `<?xml` / `<svg` and passes an XML well-formedness check —
-  the SVG path catches encoder regressions even though we cannot
-  round-trip the URI through `rqrr`)
+  (the SVG cannot be `rqrr`-decoded; instead assert the output
+  starts with `<?xml` or `<svg`, contains a matching closing
+  `</svg>` as the final non-whitespace token, and is valid UTF-8.
+  Deliberately avoids adding a new XML parser dev-dep — the
+  prefix-plus-closing-tag check catches every encoder regression
+  the qrcode crate could plausibly produce while keeping the
+  supply-chain footprint flat. The SVG path catches encoder
+  regressions even though we cannot round-trip the URI through
+  `rqrr`.)
   and `export_qr_ansi_renders_a_unicode_half_block_grid`
   (assert non-empty UTF-8 text containing only the
-  `qrcode::render::unicode::Dense1x2` glyph alphabet).
+  `qrcode::render::unicode::Dense1x2` glyph alphabet — `' '`,
+  `'▀'`, `'▄'`, `'█'`, `'\n'` — matching DESIGN.md §4.6 and §10
+  byte-for-byte).
 
 - [ ] **Tests — read-only invariant.** Add
   `export_qr_png_does_not_advance_hotp_counter_or_bump_updated_at`
-  to `tests/export_qr.rs`. Use a tempfile-backed plaintext vault
-  carrying a HOTP account at a non-zero `counter`. Capture
-  `account.counter()`, `account.updated_at()`, and the on-disk
-  primary-file bytes. Call `Vault::export_qr_png` then
-  `export_qr_svg` then `export_qr_ansi` in sequence. Re-read all
-  three captured values and assert byte / value equality. Same
-  test against `&Vault` reuse (no `Store` reload between calls).
-  This is the load-bearing pin for the "QR export is a peek, not
-  a show" rule from DESIGN §4.6.
+  to `tests/export_qr.rs`, parameterized across both vault modes
+  (plaintext and encrypted) so the invariant is pinned for each.
+  For each mode, use a tempfile-backed vault carrying a HOTP
+  account at a non-zero `counter`. Capture `account.counter()`,
+  `account.updated_at()`, and the on-disk primary-file bytes.
+  Call `Vault::export_qr_png` then `export_qr_svg` then
+  `export_qr_ansi` in sequence. Re-read all three captured values
+  and assert byte / value equality. Same test against `&Vault`
+  reuse (no `Store` reload between calls). Although the QR
+  pipeline is structurally `&self` and mode-independent, the
+  encrypted-mode sibling catches a hypothetical future per-mode
+  branch the same way the existing round-trip suites do. This is
+  the load-bearing pin for the "QR export is a peek, not a show"
+  rule from DESIGN §4.6.
 
 - [ ] **Tests — `QrRenderOptions` bounds.** Add
   `qr_render_options_validate_rejects_module_size_px_below_min`,
@@ -1675,6 +1699,19 @@ land before the GTK / CLI / TUI work or alongside it.
   "module_size_px_out_of_bounds"`). The boundary cases assert
   `module_size_px = 0` rejects, `= 1` accepts, `= 64` accepts,
   `= 65` rejects.
+
+- [ ] **Tests — `quiet_zone = false`.** Add
+  `export_qr_png_with_quiet_zone_false_still_round_trips_through_rqrr`
+  to `tests/export_qr.rs`. Renders a TOTP account with
+  `QrRenderOptions { module_size_px: QR_MODULE_SIZE_PX_DEFAULT,
+  quiet_zone: false }` and decodes the resulting PNG through
+  `rqrr`. The decoded payload must equal the same single-account
+  substring of `export::otpauth_list(&vault)` that the
+  default-options test asserts, proving the encoder honors the
+  `quiet_zone` toggle without corrupting the payload. Pair with a
+  byte-size sanity check that the `quiet_zone: false` PNG is
+  strictly smaller than the `quiet_zone: true` PNG at the same
+  `module_size_px` (the white border is real pixels).
 
 - [ ] **Tests — account-not-found.** Add
   `export_qr_png_unknown_account_returns_invalid_state` (and the

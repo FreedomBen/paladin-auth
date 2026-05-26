@@ -806,10 +806,11 @@ pub fn account_matches_search(account: &Account, query: &str) -> bool;
 /// Format an account's display label used by CLI status text, the TUI
 /// QR modal caption, the GTK `ExportQrDialog` caption, and the GTK
 /// rename / remove dialog subtitles. Renders `"{issuer}:{label}"` when
-/// `issuer` is `Some(_)` and non-empty; renders the bare label
-/// otherwise (so accounts without an issuer display as just the
-/// label, not a stray leading colon). Lives in `paladin-core` so CLI,
-/// TUI, and GUI render identical wording without re-implementing it.
+/// `issuer` is `Some(s)` and `s.trim().is_empty()` is false; renders
+/// the bare label otherwise (so accounts without an issuer, or with
+/// an empty or whitespace-only issuer, display as just the label —
+/// not a stray leading colon). Lives in `paladin-core` so CLI, TUI,
+/// and GUI render identical wording without re-implementing it.
 pub fn summary_display_label(s: &AccountSummary) -> String;
 
 /// Parse the CLI query grammar's shared account-selector syntax. Plain text
