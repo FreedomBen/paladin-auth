@@ -549,8 +549,8 @@ dismiss deliberately.
     and `paladin_core::write_secret_file_atomic` (0600, tempfile
     / fsync / rename). Both save calls pass
     `QrRenderOptions::default()` — the TUI does not expose
-    `module_size_px` editing, matching the keyboard-only-UI
-    posture of the Settings modal's defaults-only choices. The
+    `module_size_px` editing; users who need to tune PNG/SVG
+    pixel sizing reach for the CLI `paladin qr --module-size-px`. The
     save sub-flow prompts inline for a destination path; an
     existing destination triggers an inline overwrite gate
     (parity with the existing Export modal — confirmation
@@ -558,7 +558,12 @@ dismiss deliberately.
     modal body surfaces the resulting `0600` path inline (DESIGN
     §6 "surface the resulting path inline on success") — the
     modal stays open so the user can also save the other
-    encoding. A `Done` button closes the modal. `Esc` while
+    encoding. The displayed path is the most recent success only
+    — a second successful save (e.g. SVG after PNG) replaces the
+    PNG path with the SVG path in the inline slot, rather than
+    accumulating both. (Reducer state: one
+    `last_save_path: Option<PathBuf>` slot, not a per-format
+    map.) A `Done` button closes the modal. `Esc` while
     focus is inside the destination-path sub-flow (text field
     or overwrite-gate confirmation) cancels just that sub-flow
     and returns to the Page-2 QR body, zeroizing the typed path
@@ -575,8 +580,11 @@ dismiss deliberately.
   the body is rendered (or the save worker is in flight) and
   drops them on submit / cancel / `Esc` / modal close /
   auto-lock. Toggling the Page-1 ack back off also drops the
-  Page-2 buffers and returns the body to Page 1, matching the
-  GTK `ExportQrDialog` behavior. Save failures
+  Page-2 buffers and returns the body to Page 1; the buffer
+  drop on ack-off matches the GTK `ExportQrDialog` behavior
+  (GTK does not auto-advance on ack-on, so the navigation
+  diverges, but both surfaces zeroize the rendered bytes the
+  moment the user un-acks the warning). Save failures
   (`save_not_committed`, `save_durability_unconfirmed`,
   `io_error`) stay inline in the modal as the existing Export
   modal handles them. `validation_error` (`field: "qr_render"`)
@@ -1551,11 +1559,12 @@ alongside the existing `execute_export_*` family.
   `qr_export_modal_ack_toggle_off_drops_rendered_qr` and
   `qr_export_modal_ack_toggle_off_returns_to_warning_ack_page`.
 - [ ] The cached ANSI render in modal state
-  (`QrExportModal::rendered_qr`, populated on ack-toggle-on)
-  byte-matches `paladin_core::Vault::export_qr_ansi(id)` against
-  the same fixture vault. The test compares the *stored render
-  slot*, not the rendered terminal frame — the modal body also
-  carries the `summary_display_label` caption above the QR, so a
+  (`QrExportModal::staged_buffers.ansi`, populated on
+  ack-toggle-on) byte-matches
+  `paladin_core::Vault::export_qr_ansi(id)` against the same
+  fixture vault. The test compares the *stored buffer*, not
+  the rendered terminal frame — the modal body also carries
+  the `summary_display_label` caption above the QR, so a
   full-body equality would not hold. Frame-level appearance is
   pinned by the insta snapshots below. Pinned by
   `qr_export_modal_rendered_qr_slot_matches_export_qr_ansi_byte_for_byte`.
@@ -1612,6 +1621,11 @@ alongside the existing `execute_export_*` family.
   resulting file is non-empty UTF-8 starting with `<?xml` / `<svg`.
   (Executor-side coverage in `tests/effect_tests.rs`:
   `execute_qr_export_svg_writes_bytes_matching_export_qr_svg_at_0600`.)
+- [ ] Inline success-path slot is replace-only — a successful PNG
+  save followed by a successful SVG save leaves
+  `QrExportModal::last_save_path` set to the SVG path (and vice
+  versa); the prior path is not preserved. Pinned by
+  `qr_export_modal_second_successful_save_replaces_inline_success_path`.
 - [ ] Save effect failure routing —
   `PALADIN_FAULT_INJECT=pre_commit` surfaces `save_not_committed`
   inline in the modal body; `=post_commit` surfaces
@@ -1626,9 +1640,12 @@ alongside the existing `execute_export_*` family.
   auto-saving. Pinned by
   `qr_export_modal_esc_drops_rendered_buffers`.
 - [ ] Pressing the Page-1 `Cancel` button (Enter on the focused
-  button or click) closes the modal without advancing to Page 2,
-  even when the ack is on at the moment of cancel. Pinned by
-  `qr_export_modal_page1_cancel_button_closes_modal_without_advance`.
+  button or click) closes the modal without advancing to Page 2.
+  (The ack auto-advances on toggle-on, so the cancel button is
+  only reachable while `ack == false` — pressing Tab from the
+  unchecked checkbox to focus the button and pressing Enter is
+  the canonical path. Pinned by
+  `qr_export_modal_page1_cancel_button_closes_modal_without_advance`.)
 - [ ] Pressing the Page-2 `Done` button (Enter on the focused
   button) closes the modal and drops the rendered ANSI / any
   in-flight PNG / SVG buffers (parity with `Esc` from Page-2
@@ -1646,7 +1663,11 @@ alongside the existing `execute_export_*` family.
   with the QR Export modal open drops the modal, the rendered
   ANSI / any in-flight PNG / SVG buffers, **and** the in-memory
   vault, then re-presents the unlock screen. Pinned by
-  `auto_lock_with_qr_export_modal_open_drops_modal_and_rendered_buffers`.
+  `auto_lock_with_qr_export_modal_open_drops_modal_and_rendered_buffers`
+  in `tests/auto_lock_tests.rs` (the rest of this section lives
+  in `tests/reducer_tests.rs`; this bullet rides alongside the
+  other modal auto-lock coverage in the auto-lock test file for
+  fixture-sharing).
 - [ ] HOTP account QR export — assert the PNG that the
   `Save as PNG…` worker writes for a HOTP row decodes back through
   `rqrr` (gated behind the existing `qrcode` / `rqrr` dev-dependency
@@ -1663,11 +1684,10 @@ alongside the existing `execute_export_*` family.
   `qr_export_modal_png_save_for_totp_row_decodes_to_otpauth_uri_with_matching_params`
   in `tests/effect_tests.rs`.
 - [ ] Insta snapshots — render the modal at each state:
-  `qr_export_modal_warning_ack_unchecked`,
-  `qr_export_modal_warning_ack_checked` (Page 1 with the ack on,
-  before navigating to Page 2),
+  `qr_export_modal_warning_ack_unchecked` (Page 1 on open, ack
+  off, Cancel-button reachable via Tab),
   `qr_export_modal_page2_totp` (Page 2 with a TOTP account's QR
-  rendered),
+  rendered, captured immediately after ack-toggle-on),
   `qr_export_modal_page2_hotp` (Page 2 with a HOTP account),
   `qr_export_modal_save_destination_prompt`,
   `qr_export_modal_save_overwrite_gate`,
@@ -3986,12 +4006,15 @@ terminal theme and survives `--no-color`.
   `QR Export` entry and DESIGN §4.6 / §6 / §10.
   - [ ] Add a new `QrExportModal` variant to the modal enum,
     holding `page: Page::{WarningAck, QrAndActions}`, `ack: bool`,
-    and `staged_buffers: Option<{ ansi: Zeroizing<String>, png:
+    `staged_buffers: Option<{ ansi: Zeroizing<String>, png:
     Option<Zeroizing<Vec<u8>>>, svg: Option<Zeroizing<String>> }>`
     (PNG / SVG are populated lazily when the user invokes the
-    matching save action). Wire the `Q` (Shift-q) keybinding from
-    list focus to the reducer arm that opens the modal on
-    `Page::WarningAck` against the focused account ID.
+    matching save action), and `last_save_path: Option<PathBuf>`
+    (replace-only — a second successful save overwrites the slot,
+    per the inline-success contract in §"Modals (per §6)"). Wire
+    the `Q` (Shift-q) keybinding from list focus to the reducer
+    arm that opens the modal on `Page::WarningAck` against the
+    focused account ID.
   - [ ] Render the warning body verbatim from
     `paladin_core::format_plaintext_qr_export_warning()` on Page 1
     and the ANSI body from
