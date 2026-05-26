@@ -219,6 +219,21 @@ expected routing.
     proceeds without prompting.
 - [ ] Import QR image file with each on-conflict policy; reported
   counts match.
+- [ ] Auto-lock fires while the Import dialog is open — the dialog's
+  buttons must not abort the process when clicked afterwards.
+  * Expected: with an encrypted vault, drop the auto-lock interval
+    to the minimum, open the Import dialog (optionally pick a
+    source file), leave the window idle until the timer fires.
+    The vault locks and the unlock prompt appears. If the Import
+    dialog widget is still visible on top, clicking its Cancel /
+    Import / Choose file… buttons (or pressing Escape) is a benign
+    no-op rather than a process abort, because the button closures
+    route through `Sender::send` instead of
+    `ComponentSender::input`. Same for the file-picker callback
+    landing after lock.
+  * Tied to: `crates/paladin-gtk/src/import_dialog.rs`
+    `connect_clicked` closures, `crates/paladin-gtk/src/app/model.rs`
+    `lock_on_auto_lock_expiry`.
 
 Exports:
 

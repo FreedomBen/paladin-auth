@@ -818,7 +818,13 @@ impl SimpleComponent for ImportDialogComponent {
                                 if let Some(choice) =
                                     format_choice_from_index(row.selected())
                                 {
-                                    sender.input(ImportDialogMsg::FormatChanged {
+                                    // See the Cancel button comment —
+                                    // route through `Sender::send` so
+                                    // a stray `notify::selected`
+                                    // dispatched while the controller
+                                    // is being torn down does not
+                                    // abort.
+                                    let _ = sender.input_sender().send(ImportDialogMsg::FormatChanged {
                                         format: choice,
                                         // The widget cannot run a new
                                         // precheck synchronously here
@@ -860,7 +866,10 @@ impl SimpleComponent for ImportDialogComponent {
                                 if let Some(choice) =
                                     conflict_choice_from_index(row.selected())
                                 {
-                                    sender.input(ImportDialogMsg::ConflictChanged(choice));
+                                    // See the Cancel button comment.
+                                    let _ = sender
+                                        .input_sender()
+                                        .send(ImportDialogMsg::ConflictChanged(choice));
                                 }
                             },
                         },
@@ -873,9 +882,12 @@ impl SimpleComponent for ImportDialogComponent {
                             #[watch]
                             set_sensitive: !model.state.is_busy(),
                             connect_changed[sender] => move |entry| {
-                                sender.input(ImportDialogMsg::PassphraseChanged(
-                                    entry.text().to_string(),
-                                ));
+                                // See the Cancel button comment.
+                                let _ = sender.input_sender().send(
+                                    ImportDialogMsg::PassphraseChanged(
+                                        entry.text().to_string(),
+                                    ),
+                                );
                             },
                         },
                     },
@@ -987,8 +999,20 @@ impl SimpleComponent for ImportDialogComponent {
                             set_visible: !compose_counts_panel_visible(&model.state),
                             #[watch]
                             set_sensitive: !model.state.is_busy(),
+                            // `Sender::send` is used in place of
+                            // `ComponentSender::input` (which
+                            // `.expect`s on a closed channel) so a
+                            // stray click that arrives after the
+                            // controller was dropped — e.g.
+                            // `lock_on_auto_lock_expiry` taking the
+                            // dialog into `UnlockedDiscards.modal`
+                            // while the `adw::Dialog` widget still
+                            // lives in the parent's dialog stack —
+                            // is a benign no-op instead of an abort.
+                            // Mirrors the precedent in
+                            // `passphrase_dialog::view!`.
                             connect_clicked[sender] => move |_| {
-                                sender.input(ImportDialogMsg::Cancel);
+                                let _ = sender.input_sender().send(ImportDialogMsg::Cancel);
                             },
                         },
 
@@ -1000,8 +1024,10 @@ impl SimpleComponent for ImportDialogComponent {
                             set_visible: !compose_counts_panel_visible(&model.state),
                             #[watch]
                             set_sensitive: compose_submit_button_sensitive(&model.state),
+                            // See the Cancel button comment — the same
+                            // post-shutdown-click guard applies.
                             connect_clicked[sender] => move |_| {
-                                sender.input(ImportDialogMsg::SubmitClicked);
+                                let _ = sender.input_sender().send(ImportDialogMsg::SubmitClicked);
                             },
                         },
 
@@ -1011,8 +1037,10 @@ impl SimpleComponent for ImportDialogComponent {
                             add_css_class: "suggested-action",
                             #[watch]
                             set_visible: compose_counts_panel_visible(&model.state),
+                            // See the Cancel button comment — the same
+                            // post-shutdown-click guard applies.
                             connect_clicked[sender] => move |_| {
-                                sender.input(ImportDialogMsg::DismissCounts);
+                                let _ = sender.input_sender().send(ImportDialogMsg::DismissCounts);
                             },
                         },
                     },
@@ -1025,9 +1053,10 @@ impl SimpleComponent for ImportDialogComponent {
             // both Cancel and Close; the variant stays distinct so a
             // future Close-only behavior (e.g. a "Discard draft?"
             // prompt) can attach to one dispatch arm without
-            // affecting Cancel.
+            // affecting Cancel. See the Cancel button comment for
+            // why this routes through the bare `Sender`.
             connect_closed[sender] => move |_| {
-                sender.input(ImportDialogMsg::Close);
+                let _ = sender.input_sender().send(ImportDialogMsg::Close);
             },
         }
     }
@@ -1072,8 +1101,18 @@ impl SimpleComponent for ImportDialogComponent {
                                 &path,
                                 forced_format,
                             );
-                            sender_inner
-                                .input(ImportDialogMsg::SourcePathPicked { path, precheck });
+                            // The `FileDialog::open` callback is
+                            // long-lived (it survives across the
+                            // whole open dialog session) and may
+                            // fire after the parent dialog's
+                            // controller has been dropped — e.g.
+                            // `lock_on_auto_lock_expiry` fires while
+                            // the file picker is up. Route through
+                            // `Sender::send` so a stray completion
+                            // is a benign no-op instead of an abort.
+                            let _ = sender_inner
+                                .input_sender()
+                                .send(ImportDialogMsg::SourcePathPicked { path, precheck });
                         }
                     }
                 },
