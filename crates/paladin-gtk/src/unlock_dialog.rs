@@ -818,6 +818,18 @@ impl SimpleComponent for UnlockDialogComponent {
                             entry.text().to_string(),
                         ));
                     },
+                    // `entry-activated` fires when the user presses
+                    // Enter inside the entry. Dispatching the same
+                    // `SubmitClicked` message the Unlock button fires
+                    // lets the user unlock without reaching for the
+                    // mouse; `UnlockDialogState::submit` handles the
+                    // empty-buffer case by staging the inline §5
+                    // `invalid_passphrase` / `zero_length` rejection,
+                    // matching the defense-in-depth path the button's
+                    // sensitivity gate already documents.
+                    connect_entry_activated[sender] => move |_| {
+                        sender.input(UnlockDialogMsg::SubmitClicked);
+                    },
                 },
             },
 
