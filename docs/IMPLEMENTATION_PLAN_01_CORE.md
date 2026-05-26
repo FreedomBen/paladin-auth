@@ -2069,7 +2069,7 @@ is a separate `#[test]` or table-driven case family.
   determinism, `parse_setting_patch` malformed-value rejection
   matrix, proptest case-count bump plus TOTP idempotency property,
   and 10,000-account plaintext round-trip stress.
-- [ ] Phase L per-account QR export tests — each enumerated as its
+- [x] Phase L per-account QR export tests — each enumerated as its
   own Phase L checklist entry above: PNG / SVG / ANSI URI-round-trip
   through `rqrr` against the matching slice of
   `export::otpauth_list(&vault)`; read-only invariant proving HOTP
