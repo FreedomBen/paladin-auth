@@ -1918,9 +1918,13 @@ Library: **Relm4** on **GTK4**. Component tree:
   between `Rename…` and `Remove…`. The dialog opens on a warning
   page rendered verbatim from
   `paladin_core::format_plaintext_qr_export_warning()` with an
-  `AdwSwitchRow` ack gate; the QR is **not** rendered until the
-  user toggles the ack on, so a closing-window glimpse can never
-  expose the secret. Once acknowledged the body switches to a
+  `AdwSwitchRow` ack gate alongside two footer buttons — `Cancel`
+  (always sensitive) and `Show QR` (`suggested-action`,
+  sensitive only while the ack switch is on). Toggling the ack on
+  arms the Show-QR button but does **not** itself render the QR;
+  the QR is rendered only after the user presses `Show QR`, so a
+  misclick on the ack switch or a closing-window glimpse cannot
+  expose the secret. On `Show QR` press the body switches to a
   `gtk::Picture` bound to the PNG bytes returned by
   `Vault::export_qr_png(id, QrRenderOptions::default())` (decoded
   via `gdk::Texture::from_bytes`) plus the account's
@@ -2329,8 +2333,10 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     and closes; `Esc` and auto-lock drop the rendered buffers.
   - GUI QR dialog (§7, §4.6): `Show QR…` kebab entry opens
     `ExportQrDialog`; the dialog opens on the warning page with the
-    ack `AdwSwitchRow` off and the QR `gtk::Picture` hidden; toggling
-    ack on renders the QR from `Vault::export_qr_png` bytes via
+    ack `AdwSwitchRow` off, the `Show QR` button insensitive, and
+    the QR `gtk::Picture` hidden; toggling ack on enables the
+    `Show QR` button but does not itself render; pressing
+    `Show QR` renders the QR from `Vault::export_qr_png` bytes via
     `gdk::Texture::from_bytes`; Save-as-PNG / Save-as-SVG run on
     `gio::spawn_blocking`, surface the resulting 0600 path, and apply
     the inline overwrite gate; `Copy image` pushes PNG bytes through
@@ -2784,10 +2790,12 @@ artifacts side by side.
   stdout. Binary formats without `--out` are also rejected at
   parse time, and `--format=ansi` with `--out` is rejected
   because the half-block render is terminal-only.
-- The GTK dialog opens on a warning-ack gate and renders the QR
-  only after the user toggles the gate on, so a closing-window
-  glimpse cannot expose the secret. Dialog close, ack-off, and
-  auto-lock all drop the rendered bytes.
+- The GTK dialog opens on a two-step warning-ack gate: toggling
+  the ack `AdwSwitchRow` on enables a separate `Show QR` button
+  (`suggested-action`), and the QR is rendered only after the user
+  presses that button. The two-step shape mitigates accidental
+  reveal from a misclick on the switch or a closing-window glimpse.
+  Dialog close, ack-off, and auto-lock all drop the rendered bytes.
 - The kebab menu order becomes Rename… / Show QR… / Remove…,
   inserting `Show QR…` between the existing entries.
 

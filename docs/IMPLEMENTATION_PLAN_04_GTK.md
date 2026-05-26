@@ -713,8 +713,9 @@ inclusion.
       `gio::spawn_blocking` hop exists only on the *save* path to
       keep `write_secret_file_atomic`'s `fsync` chain off the main
       loop — see §"QR export dialog implementation" / Design
-      contract / Thread isolation). A caption row above the
-      `Picture` shows the account's `summary_display_label` (CLI /
+      contract / Thread isolation). A `gtk::Label` caption above
+      the `Picture` (with the `title-3` style class for a heading
+      weight) shows the account's `summary_display_label` (CLI /
       TUI parity). Four buttons sit in the dialog footer:
       `Save as PNG…`, `Save as SVG…`, `Copy image`, and `Done`.
       `Save as PNG…` and `Save as SVG…` open a
@@ -743,10 +744,12 @@ inclusion.
   auto-lock fires (`AppModel`'s lock-transition pruning routes
   through `crate::export_qr_dialog::clear_for_lock`). The dialog
   surface is disabled while `AppModel` is `UnlockedBusy` per
-  §"In-flight effect ownership"; the save / copy actions stage their
-  own in-flight effect ownership through the same one-slot serializer
+  §"In-flight effect ownership"; the save actions stage their own
+  in-flight effect ownership through the same one-slot serializer
   used by other vault-touching workers so two saves cannot overlap
   even though the underlying operation does not touch `Vault::save`.
+  `Copy image` runs synchronously on the main loop and does not
+  claim the busy slot.
   Typed errors from
   `Vault::export_qr_png` / `export_qr_svg` (`invalid_state`
   `state: "account_not_found"`, `validation_error`
@@ -1468,7 +1471,7 @@ re-deriving the touch points.
   that `AppModel` consumes to mount `ExportQrDialogComponent`.
 * **Read-only.** The dialog never enters
   `Vault::mutate_and_save`, never advances a HOTP counter, and
-  never bumps `updated_at`. All three render calls go through the
+  never bumps `updated_at`. Every render call goes through the
   new `&self` methods `Vault::export_qr_png` /
   `Vault::export_qr_svg`; `export_qr_ansi` is not called by the
   GUI (the CLI / TUI consume it). The HOTP-counter-unchanged
@@ -1476,13 +1479,18 @@ re-deriving the touch points.
   reads `account.counter()` before and after a save-as-PNG worker
   round trip and asserts equality.
 * **Warning-ack gate.** `ExportQrDialogState` carries
-  `ack_revealed: bool` defaulting to `false`; the QR `gtk::Picture`
-  is mounted only while `ack_revealed == true`. Toggling the ack
-  switch off resets `ack_revealed` to `false`, replaces the
-  `Picture`'s paintable with `gdk::Paintable::new_empty`, and
-  drops the staged PNG / SVG / texture buffers (the staged values
-  are held in `Zeroizing<Vec<u8>>` / `Zeroizing<String>` so the
-  drop zeroes the bytes). The warning text is pulled verbatim from
+  `ack_revealed: bool` defaulting to `false`. The `AdwViewStack`'s
+  visible child is `"warning"` until a successful `ShowQr` render
+  switches it to `"qr"`; the `gtk::Picture` widget lives inside
+  the `"qr"` child from init with a `gdk::Paintable::new_empty`
+  paintable, and `ack_revealed` gates the Page-1 `Show QR`
+  button's sensitivity rather than the Picture's existence.
+  Toggling the ack switch off resets `ack_revealed` to `false`,
+  switches the view stack back to `"warning"`, replaces the
+  Picture's paintable with `gdk::Paintable::new_empty`, and drops
+  the staged PNG / SVG / texture buffers (the staged values are
+  held in `Zeroizing<Vec<u8>>` / `Zeroizing<String>` so the drop
+  zeroes the bytes). The warning text is pulled verbatim from
   `paladin_core::format_plaintext_qr_export_warning()` and rendered
   through `set_use_markup: false`, `set_title_lines: 0`,
   `set_subtitle_lines: 0` so long-form wording wraps without
@@ -1498,29 +1506,33 @@ re-deriving the touch points.
   *save* path because `write_secret_file_atomic` chains multiple
   `fsync`s, parity with the existing `ExportDialog` plaintext path
   rationale (§"Vault interaction").
-* **In-flight effect ownership.** Save and copy actions both
-  serialize through the existing one-slot
-  `UnlockedBusy { effect, ui_snapshot }` token so the dialog can
-  surface a spinner while a save / copy is in flight without
-  letting a second action overlap. The dialog's read-only render
-  does not count as a vault-touching effect — it does not move the
-  `(Vault, Store)` pair into a worker — so it does not enter
-  `UnlockedBusy` at all; only the save / copy worker actions do.
-  This matches `ExportDialog`'s shape, where the format / file
-  picker UI is responsive while the encrypted-bundle KDF worker
-  has the busy slot.
+* **In-flight effect ownership.** Save actions serialize through
+  the existing one-slot `UnlockedBusy { effect, ui_snapshot }`
+  token so the dialog can surface a spinner while a save is in
+  flight without letting a second save overlap. The dialog's
+  on-screen render and the `Copy image` action both run
+  synchronously on the main loop (the encoder is sub-millisecond
+  and `gdk::Clipboard::set_content` is a memcpy + GDK refcount),
+  so neither claims `UnlockedBusy`. This matches `ExportDialog`'s
+  shape, where the format / file picker UI is responsive while
+  only the encrypted-bundle KDF worker has the busy slot.
 * **Copy semantics.** `Copy image` builds a
   `gdk::ContentProvider::for_value` on a `glib::Bytes` of the PNG
   payload with content type `image/png`, then calls
   `gdk::Clipboard::set_content(Some(&provider))`. The PNG bytes
   are the same `Vault::export_qr_png` output that the on-screen
-  `Picture` renders; the staged `Zeroizing<Vec<u8>>` is consumed
-  by both surfaces inside the same handler so the bytes do not
-  outlive the dialog. No auto-clear schedule arms for QR image
-  copies — `clipboard.clear_enabled` covers OTP code copies only,
-  so QR image copies persist on the clipboard until the user
-  replaces or clears them; the dialog body still calls out the
-  clipboard-history risk in line with DESIGN §8 bullet 6 wording.
+  `Picture` renders: `state.staged_png` is the single in-dialog
+  `Zeroizing<Vec<u8>>` source for both the on-screen Picture's
+  `gdk::Texture` and the clipboard provider's `glib::Bytes`, so
+  the dialog never holds two copies of the secret. The
+  `Zeroizing<Vec<u8>>` is dropped (and its bytes zeroized) when
+  the dialog closes, when ack is toggled off, or when auto-lock
+  fires; the clipboard provider's `glib::Bytes` is an independent
+  copy owned by GDK and persists on the clipboard until the user
+  replaces or clears it. No auto-clear schedule arms for QR image
+  copies — `clipboard.clear_enabled` covers OTP code copies only;
+  the dialog body still calls out the clipboard-history risk in
+  line with DESIGN §8 bullet 6 wording.
 * **Save semantics.** Save-as-PNG and Save-as-SVG open a
   `gtk::FileDialog::save` for the destination, run the same inline
   overwrite gate `ExportDialog` uses
@@ -1650,9 +1662,11 @@ by ticking it.
   into `state.staged_png`; build a
   `gdk::Texture::from_bytes(&glib::Bytes::from(&bytes))` and bind
   it onto the `gtk::Picture::set_paintable` setter on the
-  `AdwViewStack`'s `"qr"` child. Mount the caption row above
-  the Picture from `summary_display_label(&summary)`, then call
-  `view_stack.set_visible_child_name("qr")` to switch the
+  `AdwViewStack`'s `"qr"` child. Set the caption `gtk::Label`'s
+  text to `summary_display_label(&summary)` (the Label widget is
+  built into the `"qr"` child at init alongside the Picture with
+  the `title-3` style class; `ShowQr` only updates its text), then
+  call `view_stack.set_visible_child_name("qr")` to switch the
   visible page. Toggling the ack back off (or hitting Cancel /
   Escape) routes through `view_stack.set_visible_child_name("warning")`,
   drops `state.staged_png` / `state.staged_svg`, and resets the
@@ -1667,13 +1681,19 @@ by ticking it.
   path, exists }`, and run the same overwrite-gate state as
   `ExportDialog` (`overwrite_gate_visible` keyed to the picked
   target's `Path::try_exists`). On confirm, dispatch
-  `run_export_qr_save_worker` on `gio::spawn_blocking` that calls
-  `vault.export_qr_png(...)` / `vault.export_qr_svg(...)` for the
-  selected kind and writes the resulting bytes through
-  `paladin_core::write_secret_file_atomic`. Stage the chosen
-  bytes in `state.staged_png` / `state.staged_svg` first so the
-  on-screen Picture reuses the same bytes the save writes (no
-  re-render). Pin the worker round-trip in
+  `run_export_qr_save_worker` on `gio::spawn_blocking`. For PNG,
+  the worker reuses the already-staged `state.staged_png` bytes
+  (populated when the user pressed Show-QR) and writes them
+  through `paladin_core::write_secret_file_atomic`; the worker
+  never calls `vault.export_qr_png` a second time, so on-screen
+  Picture bytes and on-disk bytes are byte-identical by
+  construction. For SVG, `state.staged_svg` is empty until the
+  first save-as-SVG fires, so the worker calls
+  `vault.export_qr_svg(...)` once, parks the result in
+  `state.staged_svg` (so a subsequent save-as-SVG to a different
+  path reuses it), and writes through
+  `paladin_core::write_secret_file_atomic`. Pin the worker
+  round-trip in
   `run_export_qr_save_worker_plaintext_png_succeeds_and_writes_0600_file`
   + the matching SVG variant.
 * [ ] **Copy image action.** Add a `Copy image` footer button
@@ -2470,6 +2490,15 @@ These run without a display server. Each lives under
   bound to the `gtk::Picture` (via
   `gdk::Texture::from_bytes(&glib::Bytes::from(&bytes))`) and that the
   matching `state.staged_png` slot is populated.
+- [ ] `apply_msg_show_qr_sets_caption_label_text_from_summary_display_label`
+  pins that the `gtk::Label` caption above the Picture has its
+  text set to `paladin_core::summary_display_label(&summary)`
+  exactly on `ShowQr`, so the issuer:label rendering matches CLI /
+  TUI parity and a future change to `summary_display_label`
+  propagates to the GUI through one helper. Companion
+  `compose_export_qr_dialog_caption_widget_uses_title_3_style_class`
+  pins that the caption widget carries the `title-3` style class
+  for the heading weight.
 - [ ] `apply_msg_ack_toggled_off_clears_staged_png_and_paintable_and_resets_visible_child`
   pins the reverse: toggling ack off drops `state.staged_png`,
   `state.staged_svg`, replaces the Picture's paintable with
@@ -2494,18 +2523,32 @@ These run without a display server. Each lives under
   `apply_msg_overwrite_acknowledged_*` pin the destination /
   ack reducer arms, matching `ExportDialogState`'s shape.
 - [ ] `run_export_qr_save_worker_plaintext_png_succeeds_and_writes_0600_file`
-  exercises a tempfile-backed plaintext-vault round trip:
-  `vault.export_qr_png(...)` →
-  `paladin_core::write_secret_file_atomic` → the resulting file
-  decodes back to the same `otpauth://` URI via `rqrr` (the test
-  pulls `rqrr` as a `[dev-dependencies]` crate-level import in the
-  test only, parity with the existing `qr_clipboard_logic.rs`
-  approach) and the file permission bits are `0600`.
+  exercises a tempfile-backed plaintext-vault round trip: seed
+  `state.staged_png` with the bytes returned by
+  `vault.export_qr_png(...)` on the main loop (matching the
+  Show-QR press path), then run the save worker which calls only
+  `paladin_core::write_secret_file_atomic` against the staged
+  bytes — the resulting file decodes back to the same
+  `otpauth://` URI via `rqrr` (the test pulls `rqrr` as a
+  `[dev-dependencies]` crate-level import in the test only,
+  parity with the existing `qr_clipboard_logic.rs` approach) and
+  the file permission bits are `0600`. Pin separately
+  (`run_export_qr_save_worker_png_does_not_call_export_qr_png`)
+  that the PNG worker never invokes `vault.export_qr_png` itself —
+  the staged-bytes contract is the only path on the PNG side.
 - [ ] `run_export_qr_save_worker_plaintext_svg_succeeds_and_writes_0600_file`
-  is the matching SVG variant — the resulting file is non-empty UTF-8
-  text starting with `<?xml` or `<svg`, and the permission bits are
-  `0600`. The test does not re-decode SVG (rqrr does not consume SVG);
-  the byte-roundtrip is enough.
+  is the SVG variant: with `state.staged_svg` empty, the worker
+  calls `vault.export_qr_svg(...)` once, parks the result in
+  `state.staged_svg`, and writes through
+  `paladin_core::write_secret_file_atomic`. The resulting file is
+  non-empty UTF-8 text starting with `<?xml` or `<svg`, and the
+  permission bits are `0600`. The test does not re-decode SVG
+  (rqrr does not consume SVG); the byte-roundtrip is enough. Pin
+  separately
+  (`run_export_qr_save_worker_svg_reuses_staged_svg_on_second_save`)
+  that a second save-as-SVG against a different path does not
+  re-call `vault.export_qr_svg` once `state.staged_svg` is
+  populated.
 - [ ] `run_export_qr_save_worker_returns_save_not_committed_before_rename`
   and `run_export_qr_save_worker_returns_save_durability_unconfirmed_after_rename`
   pin the two storage-failure surfaces by enabling the core's
@@ -4869,8 +4912,9 @@ sign-off.
     `ExportQrDialogMsg::ShowQr`). Page 2 (`AdwViewStack` child
     name `"qr"`): `gtk::Picture` populated by
     `gdk::Texture::from_bytes(&glib::Bytes::from(&staged_png))`,
-    a caption row above it bound to
-    `summary_display_label(&summary)`, and four footer buttons
+    a `gtk::Label` caption above it (with the `title-3` style
+    class) whose text is set from `summary_display_label(&summary)`
+    on `ShowQr`, and four footer buttons
     (`Save as PNG…`, `Save as SVG…`, `Copy image`, `Done`). The
     page switch is programmatic
     (`AdwViewStack::set_visible_child_name`) — no
@@ -4879,11 +4923,15 @@ sign-off.
   - [ ] Wire `Save as PNG…` / `Save as SVG…` through
     `gtk::FileDialog::save` and the same inline overwrite gate
     `ExportDialog` uses; dispatch
-    `run_export_qr_save_worker` on `gio::spawn_blocking` that
-    calls the matching `Vault::export_qr_*` and
-    `paladin_core::write_secret_file_atomic`. Surface the 0600
-    output path inline and via an `adw::Toast` on the shared
-    overlay.
+    `run_export_qr_save_worker` on `gio::spawn_blocking`. The PNG
+    worker reuses the already-staged `state.staged_png` bytes and
+    only calls `paladin_core::write_secret_file_atomic` (no second
+    `vault.export_qr_png` invocation). The SVG worker renders via
+    `vault.export_qr_svg(...)` on first save (parking the bytes in
+    `state.staged_svg` so a subsequent save-as-SVG reuses them)
+    and writes via `paladin_core::write_secret_file_atomic`.
+    Surface the 0600 output path inline and via an `adw::Toast`
+    on the shared overlay.
   - [ ] Wire `Copy image` through
     `gdk::ContentProvider::for_value` on a `glib::Bytes` of the
     staged PNG (MIME `image/png`) handed to
