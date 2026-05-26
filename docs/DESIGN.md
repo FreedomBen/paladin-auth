@@ -1974,27 +1974,41 @@ Library: **Relm4** on **GTK4**. Component tree:
   account's `AccountSummary`. Submit routes through
   `Vault::edit_account_metadata` inside `Vault::mutate_and_save`,
   bumps `updated_at`, and surfaces per-field validation errors inline
-  without closing. The Issuer row exposes an explicit "clear" affordance
-  (an inline `gtk::Button` adjacent to the row) that maps to
-  `AccountEdit::issuer = Some(None)`; leaving the row's text equal to
-  the prior issuer leaves the field untouched (`None`). The Icon hint
-  row's empty / `none` / explicit-slug grammar is parsed through
+  without closing. Before the effect dispatches, the dialog calls
+  `Vault::find_duplicate_after_edit(account_id, &edit)` and surfaces
+  any `Some(other)` collision inline as `duplicate_account` beside
+  the offending row without mutating the vault; the user must resolve
+  the collision before Save re-enables (no "edit anyway" override).
+  The Issuer row exposes an explicit "clear" affordance (an inline
+  `gtk::Button` mounted in the `AdwEntryRow` suffix area) that empties
+  the row's text in one click; the projection from the resulting
+  buffer onto `AccountEdit::issuer` follows the TUI Edit modal's
+  what-you-see-is-what-you-save rules — empty-buffer-on-prior-`Some`
+  maps to `Some(None)` (clear), buffer byte-equal to the prior issuer
+  maps to `None` (leave untouched), and any other non-empty buffer
+  maps to `Some(Some(_))`. The Icon hint row's empty / `none` /
+  explicit-slug grammar is parsed through
   `paladin_core::parse_icon_hint_token` so the GTK editor matches the
-  Add dialog's icon-hint behavior verbatim. OTP-affecting fields
-  (`secret`, `algorithm`, `digits`, `kind`, `period`, `counter`) are
-  intentionally absent — the dialog body carries a short footnote
-  pointing users at remove + re-add for secret rotation or OTP
-  parameter changes. The dialog is disabled on `UnlockedBusy` per the
-  shared `RenameDialog`-era effect-ownership contract.
+  Add dialog's icon-hint behavior verbatim; the same WYSIWYS layout
+  applies (buffer byte-equal to the pre-fill maps to `None`,
+  empty-on-prior-`Some` maps to `Some(IconHintInput::Default)` for
+  implicit re-derive, `none` to `Clear`, any other slug to `Slug`).
+  OTP-affecting fields (`secret`, `algorithm`, `digits`, `kind`,
+  `period`, `counter`) are intentionally absent — the dialog body
+  carries a short footnote pointing users at remove + re-add for
+  secret rotation or OTP parameter changes. The dialog is disabled
+  on `UnlockedBusy` per the shared `RenameDialog`-era
+  effect-ownership contract.
 - **Row context menu and per-row kebab** — every account row exposes
   a context menu with four entries in this order: *Copy code* /
   *Edit…* / *Export QR…* / *Delete…*. The same `gio::MenuModel` is
   bound to the row's kebab `gtk::MenuButton` and to a row-body
   `gtk::GestureClick` configured for the secondary mouse button
   (and to the GNOME-canonical `Menu` key / `Shift+F10` keyboard
-  equivalent via the row container's `popup-menu` signal), so
-  right-click, keyboard, and kebab click all converge on the same
-  actions. The menu is rendered as a `gtk::PopoverMenu` anchored at
+  equivalent via a `gtk::ShortcutController` on the row container —
+  the GTK4 idiom that replaces the deprecated `popup-menu` signal),
+  so right-click, keyboard, and kebab click all converge on the
+  same actions. The menu is rendered as a `gtk::PopoverMenu` anchored at
   the pointer for right-click / keyboard events and at the kebab
   button for kebab clicks; only one row popover may be mounted at a
   time, and dismissing it returns focus to the row that raised it.
@@ -2994,10 +3008,12 @@ artifacts side by side.
   *Rename…* / *Show QR…* / *Remove…*) is replaced by the four-entry
   shared model *Copy code* / *Edit…* / *Export QR…* / *Delete…*,
   and a right-click `gtk::GestureClick` on the row body binds the
-  same model. The `Menu` key / `Shift+F10` `popup-menu` signal is
-  routed through the same path so keyboard users get parity. Only
-  one row popover may be mounted at a time, and section header rows
-  do not raise the menu.
+  same model. The `Menu` key / `Shift+F10` keyboard equivalent is
+  routed through the same path via a `gtk::ShortcutController` on
+  the row container (the GTK4 idiom that replaces the deprecated
+  `popup-menu` signal) so keyboard users get parity. Only one row
+  popover may be mounted at a time, and section header rows do not
+  raise the menu.
 
 No open questions remain.
 
