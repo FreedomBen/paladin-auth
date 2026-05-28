@@ -48,7 +48,7 @@ crates/paladin-gtk/
 │   ├── row_item.rs        # RowItem GObject (account_id, display, icon_hint, issuer, busy) backing the gio::ListStore
 │   ├── add_account.rs     # AddAccountComponent (manual fields + otpauth:// URI paste + paste image)
 │   ├── remove_dialog.rs   # RemoveDialog (confirmation gate before Vault::remove inside Vault::mutate_and_save)
-│   ├── rename_dialog.rs   # v0.2 foundation: RenameDialog (label edit; calls Vault::rename inside Vault::mutate_and_save). Superseded by edit_dialog.rs starting at Milestone 9 slice 4: from slice 4 onward the kebab / row context menu's "Edit…" entry routes to EditDialog, not RenameDialog (slices 1–3 still relabel "Rename…" → "Edit…" cosmetically while continuing to mount RenameDialog; slices 1–3 are internal-only, not release-eligible). Source kept through slice 5 so its tests stay live while EditDialog is wired in, then dropped in slice 6 — the equivalent coverage is already pinned in tests/edit_dialog_logic.rs (no test migration is needed).
+│   ├── rename_dialog.rs   # v0.2 foundation: RenameDialog (label edit; calls Vault::rename inside Vault::mutate_and_save). Superseded by edit_dialog.rs starting at Milestone 9 slice 4: from slice 4 onward the kebab / row context menu's "Edit…" entry routes to EditDialog, not RenameDialog (slices 1–3 still relabel "Rename…" → "Edit…" cosmetically while continuing to mount RenameDialog; slices 1–3 are internal-only, not release-eligible). Source kept through slice 5 inclusive (retired in slice 6) so its tests stay live while EditDialog is wired in — the equivalent coverage is already pinned in tests/edit_dialog_logic.rs (no test migration is needed).
 │   ├── edit_dialog.rs     # v0.2 / DESIGN §7 Milestone 9: EditDialog — three editable AdwEntryRow widgets (Label / Issuer + inline clear / Icon hint slug) over an AccountEdit value; calls Vault::edit_account_metadata inside Vault::mutate_and_save. Pure-logic state machine in this module; widget binding mirrors RenameDialog conventions.
 │   ├── import_dialog.rs   # ImportDialog (file picker + format + on-conflict + bundle passphrase)
 │   ├── export_dialog.rs   # ExportDialog (file picker + format + overwrite + encrypted passphrase)
@@ -2003,14 +2003,23 @@ red until that ships.
       kebab today).
 * **EditDialog widget surface.** `EditDialog` is an `adw::Dialog`
   (matching `RenameDialog`'s shell) with the visible title
-  `Edit account` (matching the menu entry's verb and the TUI
-  modal heading) hosting three `AdwEntryRow` widgets in an
-  `AdwPreferencesGroup`. Each row is
+  `Edit account` — no ellipsis (the ellipsis convention
+  applies to the menu/button verb `Edit…` that *opens* the
+  dialog, not to the dialog's own titlebar) — hosting three
+  `AdwEntryRow` widgets in an `AdwPreferencesGroup`. Each row is
   pre-populated from the focused account's `AccountSummary`,
   resolved at mount time via
   `Vault::summaries().find(|s| s.id == account_id)` against
   the `(Vault, Store)` pair `AppModel` already owns through
-  the in-flight effect ownership slot.
+  the in-flight effect ownership slot. If the lookup returns
+  `None` (the account was removed between `RequestEdit` and
+  mount), the dialog never mounts; `AppModel` raises an
+  inline `invalid_state` toast (parity with show-qr at
+  L1689). Default action: Enter on any of the three rows
+  submits if Save is sensitive; else no-op. Tab cycles
+  row1 → row2 → row3 → Save → Cancel. Slice 4 calls
+  `controller.widget().present(&app_window)` after
+  `Controller::builder().launch(EditDialogInit { … })`.
   Per-keystroke projection runs through a pure-logic
   `classify_edit_draft(state, prior) -> AccountEdit` that
   implements the WYSIWYS rules below; the assembled
@@ -2060,12 +2069,29 @@ red until that ships.
        needs a fourth *Leave unchanged* mode because it
        cannot tell "buffer untouched" from "buffer typed
        blank", whereas the GTK dialog disambiguates via the
-       byte-equal pre-fill rule below). Parses through
+       byte-equal pre-fill rule below).
+       The GTK editor uses `parse_icon_hint_token` (not the
+       TUI's segmented selector + `validate_icon_hint_slug`
+       split) because GTK has no dedicated Default/Clear
+       selector. Same on-disk grammar, different widget shape
+       — DESIGN.md §6 vs §7 spells out the rationale. The
+       buffer is preserved byte-for-byte (no client-side
+       lowercasing): uppercase input surfaces the §5
+       `validation_error` (`field: "icon_hint"`, `reason:
+       "invalid_chars"`) inline beside the row. Parses through
        `paladin_core::parse_icon_hint_token` on each keystroke
        (driving the inline `error_message`, Save sensitivity,
        and the icon-preview suffix). Projection rules
        (mirroring the issuer's WYSIWYS layout so empty buffers
-       are never silently re-derived behind the user's back):
+       are never silently re-derived behind the user's back).
+       Note the deliberate asymmetry with the issuer rule:
+       the issuer projection uses *§4.1-normalized* equality
+       against the prior issuer, whereas the icon-hint
+       projection uses *byte-equality* against the pre-fill
+       string — intentional because persisted icon-hint slugs
+       are already canonical (`[a-z0-9_-]+`), so any
+       whitespace touch flips the row out of "untouched" and
+       into the validation path:
        - buffer byte-equal to the pre-fill (i.e. the user did
          not touch the row) → `None` (leave untouched);
        - empty buffer AND prior `icon_hint` was `None` →
@@ -2098,17 +2124,34 @@ red until that ships.
   `Vault::find_duplicate_after_edit(account_id, &edit)`
   (DESIGN §4.7) to project the would-be post-edit
   `(secret, issuer, label)` triple against every other
-  account. The check runs synchronously on the main thread:
-  between effects the `(Vault, Store)` pair lives on
-  `AppModel`'s `effect_ownership` slot rather than inside the
-  worker, so `&Vault` is available to the dialog handler
-  without spawning a worker (same affordance the AddDialog
-  uses for `Vault::find_duplicate`). The handler feeds the
+  account. **Pre-check order (locked):** per-field
+  `validate_account_edit` runs first; only on success does
+  the dialog issue `find_duplicate_after_edit`. Reversing
+  would surface `duplicate_account` against a partly-invalid
+  edit (pinned in DESIGN.md and Phase M). The check runs as
+  a synchronous main-thread call; no `spawn_blocking`. A
+  future migration to a worker would require a new
+  `Submitting` state to prevent double-submit. Between
+  effects the `(Vault, Store)` pair lives on `AppModel`'s
+  `effect_ownership` slot rather than inside the worker, so
+  `&Vault` is available to the dialog handler without
+  spawning a worker (same affordance the AddDialog uses for
+  `Vault::find_duplicate`). The single-writer-per-vault
+  contract holds for v0.2: cross-process races (e.g. a
+  concurrent `paladin edit` from the CLI) are handled by
+  `Vault::mutate_and_save`'s file lock under
+  last-writer-wins semantics; the GTK dialog does not poll
+  the vault between mount and submit. The handler feeds the
   resulting `Option<AccountId>` into
   `classify_submit(state, prior, duplicate) -> SubmitOutcome`,
-  which stays a pure decision function: a `Some(other)`
-  collapses to `SubmitOutcome::duplicate_detected(other)` and
-  surfaces the §5 `duplicate_account` error inline beside the
+  which stays a pure decision function. `classify_submit`
+  internally calls `classify_edit_draft(state, prior)`,
+  validates the projected `AccountEdit`, then routes — so
+  the WYSIWYS projection is computed in one place and Save
+  sensitivity, the submitted payload, and the duplicate
+  pre-check can never drift. A `Some(other)` collapses to
+  `SubmitOutcome::duplicate_detected(other)` and surfaces
+  the §5 `duplicate_account` error inline beside the
   offending row without mutating the vault; `None` collapses
   to `SubmitOutcome::dispatch_effect(edit)`. The CLI / TUI /
   GUI share this pre-flight so an Edit can never silently
@@ -2134,9 +2177,15 @@ red until that ships.
   posts the toast above; on `save_durability_unconfirmed`,
   the dialog stays open with an inline warning body and the
   post-edit state visible; on `save_not_committed` /
-  `validation_error` / `invalid_state` / `duplicate_account`,
-  the dialog stays open with the inline error and the rows
-  preserved for retry.
+  `invalid_state` / `duplicate_account`, the dialog stays
+  open with the inline error and the rows preserved for
+  retry. `validation_error` is intentionally absent from the
+  post-effect bucket: validation is pre-flighted client-side
+  via `classify_edit_draft` + `validate_account_edit` before
+  Save enables, so the mutator should never re-raise it. If
+  the core ever did re-raise `validation_error` against a
+  draft the client already cleared, that would be an
+  invariant violation, not a routine retry path.
 * **Disabled on `UnlockedBusy`.** Per DESIGN §7 and the
   shared `RenameDialog`-era effect-ownership contract, the
   open dialog dims its Save button and the three entry rows
@@ -2145,7 +2194,12 @@ red until that ships.
   always back out. The `effect_ownership` slot keeps the
   dialog as the in-flight effect's owner so a second
   concurrent EditDialog cannot be mounted from the same
-  list.
+  list. Save is gated on a populated `effect_ownership`
+  slot, so `classify_submit`'s synchronous pre-flight always
+  sees a live `&Vault`. The inline `duplicate_account` error
+  clears on any keystroke that changes the label or issuer
+  buffer (either field can resolve the collision); a
+  keystroke on the icon-hint row does not clear it.
 * **No secret material.** `EditDialog` never touches the
   account secret bytes; no `SecretString` / `Zeroizing`
   buffers are required. The three entry rows hold plain
@@ -2158,15 +2212,40 @@ red until that ships.
   three row buffers, the cached pre-edit `AccountSummary`,
   and any pending `classify_submit` outcome so none of them
   outlives the `(Vault, Store)` pair they're projected from.
-  `AppModel` calls `force_close()` on the EditDialog
-  controller before the pruning fires, so the `adw::Dialog`
-  widget is detached from the window before its backing
-  state goes away — matching the `RemoveDialog` /
-  `ExportQrDialog` contract enforced by commit 14026f6.
+  `RenameDialog` did not need this hook because it kept no
+  `AccountSummary` cache; EditDialog caches the pre-edit
+  summary for the success-toast label, so the hook becomes
+  necessary here. The three-step lock-transition sequence
+  is locked: `AppModel` calls `force_close()` on the
+  EditDialog controller first → drops the controller →
+  finally fires `clear_for_lock`. Calling `force_close()`
+  ahead of the controller drop detaches the `adw::Dialog`
+  widget from the window before its backing state goes away
+  — matching the `RemoveDialog` / `ExportQrDialog` contract
+  enforced by commit 14026f6 and `app/model.rs:2640`.
+  Escape dismisses via `adw::Dialog`'s default close binding,
+  routing through `EditDialogOutput::Cancel` so
+  `clear_for_lock` fires alongside the controller drop on
+  user-initiated dismissal too (same three-step sequence,
+  triggered by the close signal instead of the lock
+  transition).
   An in-flight save is allowed to complete; the auto-lock
   timer's `UnlockedBusy` guard (§"In-flight effect
   ownership") keeps the lock from firing until the worker
   returns.
+* **Post-effect outcome variants (locked).** The
+  `classify_post_effect_error(err) -> PostEffectOutcome`
+  helper pins three variants once:
+  `PostEffectOutcome::Close { post_summary: Option<AccountSummary> }`
+  (the `Ok` path — closes the dialog, threads the optional
+  summary into the toast); `PostEffectOutcome::StayOpenWithWarning(InlineWarning)`
+  (the `save_durability_unconfirmed` path); and
+  `PostEffectOutcome::StayOpenWithError(InlineError)`
+  (the `save_not_committed` / `invalid_state` /
+  `duplicate_account` paths). Slice 4's build-order
+  bullet, the test checklist, and the widget binding all
+  reference the same variant set, so a typed-error addition
+  in core forces a `PostEffectOutcome` extension here.
 * **Thread isolation.** `Vault::edit_account_metadata`
   runs on `gio::spawn_blocking` per the
   §"In-flight effect ownership" contract; the dialog never
@@ -2197,9 +2276,17 @@ entry from `Rename…` to `Edit…` while still mounting
 released between slice 1 and slice 4 would advertise "Edit…" and
 deliver a one-field rename. The v0.2 release cut waits until
 slice 4 has mounted the real `EditDialog`; only slices 4–7 are
-candidate release boundaries.
+candidate release boundaries. **Release-eligibility split:**
+slice 4 is *internal-release-eligible* (kebab `Edit…` and
+`Shift+E` reach the dialog, but right-click and the
+secondary `gtk::GestureClick` are not yet wired). The v0.2
+public cut lands at slice 5 or later, when the right-click
+gesture, `gtk::ShortcutController`, and shared
+`row_context_menu_logic.rs` coverage are in place — DESIGN
+§7 and Milestone 9 treat the right-click affordance as
+core.
 
-1. **Menu model + action constants** — Extend
+- [ ] **Slice 1 — Menu model + action constants.** Extend
    `account_row::build_kebab_menu_model` to add the
    *Copy code* entry at position 0 and rename
    `Rename…` → `Edit…` (still targeting `row.rename` for now).
@@ -2218,7 +2305,7 @@ candidate release boundaries.
    `EditDialog`. The relabel is intentionally cosmetic-only
    in slice 1 so the slice ships behind a green test bar
    without any behavioral drift.
-2. **Action rename** — Rename
+- [ ] **Slice 2 — Action rename.** Rename
    `ROW_RENAME_ACTION_NAME` (`"rename"`) to
    `ROW_EDIT_ACTION_NAME` (`"edit"`); rename the
    `AccountRowOutput::RequestRename` variant to
@@ -2229,14 +2316,14 @@ candidate release boundaries.
    ships. Tests in `tests/account_row_logic.rs` are renamed
    accordingly; the dispatch table coverage stays unchanged
    modulo names.
-3. **Shared menu model helper** — Add
+- [ ] **Slice 3 — Shared menu model helper.** Add
    `account_row::build_row_context_menu_model()` returning the
    `gio::Menu` constructed once and bound to both the kebab and
    the right-click popover. The existing
    `build_kebab_menu_model` becomes a thin wrapper around it for
    one slice, then is removed once every call site is migrated.
-4. **EditDialog scaffold + auto-lock plumbing** — Add
-   `edit_dialog.rs` with the pure-logic state machine
+- [ ] **Slice 4 — EditDialog scaffold + auto-lock plumbing.**
+   Add `edit_dialog.rs` with the pure-logic state machine
    (`EditDialogState`,
    `classify_edit_draft(state, prior) -> AccountEdit` — the
    per-keystroke projection driving Save sensitivity and the
@@ -2245,44 +2332,55 @@ candidate release boundaries.
    `classify_submit(state, prior, duplicate: Option<AccountId>) -> SubmitOutcome`
    — the final pre-effect routing (`empty_edit_reject` /
    `duplicate_detected(other_id)` /
-   `dispatch_effect(account_edit)`); the call site runs
-   `Vault::find_duplicate_after_edit(account_id, &edit)` and
+   `dispatch_effect(account_edit)`) that internally calls
+   `classify_edit_draft` so the WYSIWYS projection is
+   computed in one place; the call site runs
+   `Vault::find_duplicate_after_edit(account_id, &edit)`
+   *after* per-field `validate_account_edit` succeeds and
    feeds the `Option<AccountId>` result into the classifier,
    keeping it a pure decision function, and
    `classify_post_effect_error(err) -> PostEffectOutcome` —
-   the post-effect typed-error routing) and the widget
+   the post-effect typed-error routing pinned to the locked
+   variant set
+   `Close { post_summary: Option<AccountSummary> }` /
+   `StayOpenWithWarning(InlineWarning)` /
+   `StayOpenWithError(InlineError)`) and the widget
    binding. Wire `AppModel` to mount `EditDialog` on
    `AccountListOutput::OpenEditDialog`. Because this slice
    makes `EditDialog` reachable from the kebab `Edit…` entry,
    it also registers `crate::edit_dialog::clear_for_lock`
    with `AppModel`'s lock-transition pruning and wires
-   `force_close()` on the EditDialog controller into the same
-   path that already dismisses `ExportQrDialog` /
-   `ImportDialog` / `ExportDialog` / `SettingsDialog`, so an
-   auto-lock fires the dialog away before `(Vault, Store)` is
-   dropped (parity with commit 14026f6's contract). The
-   `rename_dialog.rs` source stays in the tree (and its tests
-   stay live) until slice 6, but nothing routes to it from
-   the menu, the per-row `gio::SimpleActionGroup`, or
-   `AppModel` once this slice lands. All new tests in
-   `tests/edit_dialog_logic.rs` cover each classifier, its
-   post-effect routing, and the `clear_for_lock` /
-   `force_close()` lock-transition coverage described in that
-   file's checklist.
-5. **Right-click `gtk::GestureClick` + `gtk::ShortcutController`
-   + popover lock-cleanup** — Extend the account column's
-   cell factory `bind` to install a secondary-button
-   `gtk::GestureClick` and a single `gtk::ShortcutController`
-   on the row container. The controller hosts the `Menu` /
-   `Shift+F10` (context menu) and `Shift+E` (direct Edit, via
-   `gtk::NamedAction("row.edit")`) shortcuts described in the
-   design contract. The gesture and the menu-popping shortcuts
-   both route through a new
+   `force_close()` on the EditDialog controller into the
+   same path that already dismisses `ExportQrDialog` /
+   `ImportDialog` / `ExportDialog` / `SettingsDialog`. The
+   lock-transition sequence is locked: `force_close()` →
+   drop controller → `clear_for_lock`, parity with
+   `app/model.rs:2640`. So an auto-lock fires the dialog
+   away before `(Vault, Store)` is dropped (parity with
+   commit 14026f6's contract). The `rename_dialog.rs` source
+   stays in the tree (and its tests stay live) until slice
+   6, but nothing routes to it from the menu, the per-row
+   `gio::SimpleActionGroup`, or `AppModel` once this slice
+   lands. All new tests in `tests/edit_dialog_logic.rs`
+   cover each classifier, its post-effect routing, and the
+   `clear_for_lock` / `force_close()` lock-transition
+   coverage described in that file's checklist.
+- [ ] **Slice 5 — Right-click `gtk::GestureClick` +
+   `gtk::ShortcutController` + popover lock-cleanup.**
+   Extend the account column's cell factory `bind` to
+   install a secondary-button `gtk::GestureClick` and a
+   single `gtk::ShortcutController` on the row container.
+   The controller hosts the `Menu` / `Shift+F10` (context
+   menu) and `Shift+E` (direct Edit, via
+   `gtk::NamedAction("row.edit")`) shortcuts described in
+   the design contract. The gesture and the menu-popping
+   shortcuts both route through a new
    `account_list::pop_row_context_menu(account_id, anchor)`
    that mounts the shared menu against the row's
-   `gio::SimpleActionGroup`. Section rows early-return and do
-   not install the controller. The `Option<gtk::PopoverMenu>`
-   lives on `AccountListComponent` state for the single-popover
+   `gio::SimpleActionGroup`. Section rows early-return and
+   do not install the controller. The
+   `Option<gtk::PopoverMenu>` lives on
+   `AccountListComponent` state for the single-popover
    invariant; this slice also wires its drop into the
    `AccountListMsg::Refresh` path and the lock-transition
    pruning so a popover never outlives its row or the
@@ -2290,13 +2388,14 @@ candidate release boundaries.
    `tests/row_context_menu_logic.rs` pin the pure-logic
    decisions (pop / suppress for section / unparent prior /
    `Shift+E` activates `row.edit` / `Shift+E` silently
-   rejected while another modal is open / popover dropped on
-   refresh and on lock).
-6. **RenameDialog retirement** — Drop `rename_dialog.rs` and
-   `tests/rename_dialog_logic.rs`. The validation /
-   save-rollback / durability-warning contracts are already
-   pinned in `tests/edit_dialog_logic.rs` by the slice 4
-   bullets (label projection, `save_not_committed`,
+   rejected while another modal is open / popover dropped
+   on refresh and on lock).
+- [ ] **Slice 6 — RenameDialog retirement.** Drop
+   `rename_dialog.rs` and `tests/rename_dialog_logic.rs`.
+   The validation / save-rollback / durability-warning
+   contracts are already pinned in
+   `tests/edit_dialog_logic.rs` by the slice 4 bullets
+   (label projection, `save_not_committed`,
    `save_durability_unconfirmed`, clean-validate Save
    sensitivity), so no test bullets need to migrate — only
    the now-empty source and test files are deleted. The
@@ -2304,12 +2403,15 @@ candidate release boundaries.
    `Effect::EditAccountMetadata { edit: AccountEdit {
    label: Some(...), ..Default::default() } }` matches what
    the retired `RenameDialog` used to send, locking the
-   regression contract. `Vault::rename` (and `paladin rename`
-   and the TUI Rename modal) stay — only the GTK rename
-   surface is retired.
-7. **Docs sync** — Update `DESIGN.md` §7 / §12 / §13 and this
-   plan's checklists to reflect the final shape; tick the
-   Milestone 9 entries as each slice lands.
+   regression contract. `Vault::rename` (and `paladin
+   rename` and the TUI Rename modal) stay — only the GTK
+   rename surface is retired. `Vault::rename` is
+   intentionally retained as a forwarder over
+   `edit_account_metadata` so the CLI / TUI rename surfaces
+   keep their existing single-call API.
+- [ ] **Slice 7 — Docs sync.** Update `DESIGN.md` §7 / §12 /
+   §13 and this plan's checklists to reflect the final
+   shape; tick the Milestone 9 entries as each slice lands.
 
 ### Open decisions / non-goals
 
@@ -2936,10 +3038,15 @@ ships in `paladin-core` and the GTK EditDialog lands.
   `AccountSummary` (label, issuer-or-empty-string, icon-hint
   slug-or-empty-string).
 - [ ] The `adw::Dialog` widget exposes `Edit account` as its
-  visible title (matching the menu entry's verb and the TUI
-  modal heading); pinned by a pure-logic helper that returns
-  the title constant so a string typo in the widget binding
-  fails the test bar.
+  visible title — no ellipsis (the ellipsis convention
+  applies to the menu/button verb, not the dialog title) —
+  matching the menu entry's verb and the TUI modal heading.
+  Pinned by a pure-logic helper
+  `format_edit_dialog_title() -> &'static str` returning the
+  title constant; the test
+  `format_edit_dialog_title_returns_edit_account` asserts
+  the exact string, so a typo in the widget binding fails
+  the test bar.
 - [ ] `classify_edit_draft(state, prior) -> AccountEdit` is the
   per-keystroke projection driving Save sensitivity and the
   submit payload. Pinned by table-driven tests covering all
@@ -3028,9 +3135,11 @@ ships in `paladin-core` and the GTK EditDialog lands.
 - [ ] Account-not-found `invalid_state` surfaces inline
   defensively (race against a concurrent remove); the dialog
   closes only on `Ok` (and never on
-  `save_durability_unconfirmed` /
-  `save_not_committed` / `validation_error` /
-  `invalid_state` / `duplicate_account`).
+  `save_durability_unconfirmed` / `save_not_committed` /
+  `invalid_state` / `duplicate_account`). `validation_error`
+  is not part of this post-effect bucket — it is
+  pre-flighted client-side and never surfaces from the
+  mutator on a draft the client cleared.
 - [ ] Post-edit summary lookup — the worker re-reads
   `Vault::summaries().find(|s| s.id == account_id)` after the
   mutator returns and threads
@@ -3055,7 +3164,71 @@ ships in `paladin-core` and the GTK EditDialog lands.
   pruning suite.
 - [ ] The dialog is disabled on `UnlockedBusy` (per the shared
   effect-ownership contract) — Save and the row entries dim
-  while a save is mid-flight; Cancel stays sensitive.
+  while a save is mid-flight; Cancel stays sensitive. Save
+  is disabled while `effect_ownership` is empty, so the
+  pre-flight always sees a populated slot and
+  `classify_submit` never runs against a phantom `&Vault`.
+- [ ] Validation-before-duplicate ordering — submit with an
+  invalid `AccountEdit` never calls
+  `find_duplicate_after_edit` (pinned via a recording-stub
+  vault that counts call sites; the stub asserts zero
+  `find_duplicate_after_edit` calls when the per-field
+  `validate_account_edit` would reject).
+- [ ] `apply_msg(EditDialogMsg::Cancel)` clears all three row
+  buffers, the cached pre-edit `AccountSummary`, and any
+  pending `classify_submit` outcome — leaving the state
+  identity-equal to `EditDialogState::default()` (parity
+  with `clear_for_lock` minus the lock-transition framing).
+- [ ] Enter on any of the three rows maps to
+  `EditDialogMsg::Submit` only if Save is sensitive
+  (assembled `AccountEdit` non-empty + every populated field
+  validates clean); otherwise it is a no-op. Tab cycles
+  row1 → row2 → row3 → Save → Cancel.
+- [ ] HOTP read-only invariant — `classify_edit_draft` is
+  account-kind-agnostic: a HOTP `Account` yields the same
+  `AccountEdit` projection as a TOTP one for identical
+  buffers (table-driven across both kinds). The dialog body
+  carries no widgets for `counter` / `algorithm` / `digits`
+  / `period` / `kind`, mirroring the `AccountEdit` field
+  list.
+- [ ] Multi-row revert — every row's buffer reverts to the
+  pre-fill → the assembled `AccountEdit` is empty → Save is
+  disabled and `classify_submit` yields
+  `SubmitOutcome::empty_edit_reject` without dispatching
+  any effect.
+- [ ] Icon-preview placeholder on parse failure — when the
+  icon-hint buffer fails `parse_icon_hint_token`, the inline
+  `gtk::Image` suffix resolves through
+  `crate::icon_resolution::resolve_display_icon` to the
+  placeholder rather than holding a stale preview. Pinned
+  by a pure-logic call against the icon-resolution helper.
+- [ ] Post-edit summary None branch — when the post-edit
+  `Vault::summaries().find(|s| s.id == account_id)` returns
+  `None` (concurrent-remove race), the dispatch site renders
+  the bare `Edited.` toast text without panic; `Some(summary)`
+  renders `Edited {summary_display_label(&summary)}.`.
+
+#### Manual test plan addendum (Milestone 9)
+
+The five EditDialog scenarios below land in
+`crates/paladin-gtk/tests/manual/MANUAL_TEST_PLAN.md` and are
+mirrored into the `REQUIRED_ITEMS` constant guarded by
+`crates/paladin-gtk/tests/manual_test_plan_doc.rs` (so the
+manual-plan doc-guard fails the test bar if any of the five
+goes missing). Each is a separate bullet pinned to the
+locked Phase M contract:
+
+- [ ] "Edit an account via the row kebab menu: label /
+  issuer / icon-hint persist on reopen."
+- [ ] "Edit an account: leaving every row at the pre-fill
+  keeps Save disabled (empty `AccountEdit`)."
+- [ ] "Edit an account that would collide with another:
+  `duplicate_account` surfaces inline; Save stays disabled
+  until resolved."
+- [ ] "Edit an account: pre-commit fault injection rolls
+  every field back."
+- [ ] "Edit a HOTP account: dialog exposes no controls for
+  `counter` / `algorithm` / `digits` (Phase M invariant)."
 
 #### `tests/row_context_menu_logic.rs`
 
