@@ -22,7 +22,11 @@ pub use prompt_input::parse_icon_hint_token;
 pub use query::{parse_account_query, select_after_filter, AccountQuery};
 pub use secret::Secret;
 pub use settings::{parse_setting_key, parse_setting_patch, SettingKey, SettingPatch};
-pub use validation::{validate_label, validate_manual, ValidatedAccount, ValidationWarning};
+pub use slug::validate_icon_hint_slug;
+pub use validation::{
+    validate_account_edit, validate_label, validate_manual, AccountEdit, ValidatedAccount,
+    ValidationWarning,
+};
 
 use std::fmt;
 use std::time::SystemTime;

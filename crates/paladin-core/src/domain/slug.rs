@@ -10,6 +10,8 @@
 
 use crate::error::PaladinError;
 
+use super::IconHintInput;
+
 pub const ICON_HINT_MAX_BYTES: usize = 64;
 
 /// Validate a user-supplied slug against the §4.1 grammar. Empty slugs
@@ -26,6 +28,36 @@ pub fn validate_slug(slug: &str) -> Result<String, PaladinError> {
         return Err(PaladinError::validation("icon_hint", "invalid_chars"));
     }
     Ok(slug.to_owned())
+}
+
+/// Slug-only public wrapper around [`validate_slug`] for UI surfaces
+/// that have already committed to the [`IconHintInput::Slug`] arm
+/// (docs/DESIGN.md §4.7 / Phase M).
+///
+/// Runs the §4.1 `[a-z0-9_-]+` check verbatim and returns
+/// `IconHintInput::Slug(slug.to_string())` on success. Failures are
+/// the same typed `validation_error` ([`field`][`PaladinError::ValidationError::field`] =
+/// `"icon_hint"`, reasons `"empty"` / `"too_long"` / `"invalid_chars"`)
+/// that [`validate_slug`] emits and that
+/// [`super::prompt_input::parse_icon_hint_token`] re-exports for its
+/// slug-shape arm.
+///
+/// **No trim**: any whitespace in the input is rejected as
+/// `invalid_chars`. Callers (TUI *Slug:* row, GTK slug input) are
+/// responsible for trimming user input before calling — there is one
+/// slug grammar in the crate, no caller-side / core-side normalization
+/// split.
+///
+/// The literal slugs `"default"` and `"none"` round-trip as slugs
+/// here: this entry point is for UI surfaces that have already
+/// resolved the `IconHintInput::Default` / `Clear` tri-state through
+/// dedicated affordances, so the textual `default` / `none` tokens
+/// must not silently reroute. The free-form CLI `--icon-hint <token>`
+/// flag and the CLI / GTK Add prompts continue to route through
+/// [`super::prompt_input::parse_icon_hint_token`] unchanged.
+pub fn validate_icon_hint_slug(slug: &str) -> Result<IconHintInput, PaladinError> {
+    let validated = validate_slug(slug)?;
+    Ok(IconHintInput::Slug(validated))
 }
 
 /// Derive a slug from an issuer string, returning `None` if the result

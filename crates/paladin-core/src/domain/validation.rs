@@ -14,6 +14,7 @@ use secrecy::{ExposeSecret, SecretString};
 use crate::error::{PaladinError, TimeRangeKind};
 
 use super::secret::Secret;
+use super::slug::validate_slug;
 use super::{Account, AccountId, AccountKindInput, Algorithm, IconHintInput, OtpKind};
 
 pub const LABEL_MAX_BYTES: usize = 128;
@@ -293,6 +294,164 @@ pub(crate) fn system_time_to_secs_for(
         });
     }
     Ok(secs)
+}
+
+/// Multi-field metadata edit for [`crate::Vault::edit_account_metadata`]
+/// (docs/DESIGN.md §4.7 / Phase M).
+///
+/// Only non-cryptographic metadata is editable: `label`, `issuer`,
+/// `icon_hint`. OTP-affecting fields (`secret`, `algorithm`, `digits`,
+/// `kind`, `period`, `counter`) are intentionally out of scope —
+/// changing them invalidates already-issued codes and is better
+/// expressed as remove + re-add.
+///
+/// Each top-level field uses `Option` for "leave untouched" semantics;
+/// the inner `Option` on `issuer` distinguishes "clear"
+/// (`Some(None)`) from "set" (`Some(Some(_))`). All present fields
+/// run through the same §4.1 validation as [`AccountInput`]; invalid
+/// values surface as `validation_error` without touching the vault.
+/// [`crate::Vault::edit_account_metadata`] bumps `updated_at`
+/// whenever at least one field is present, even when the resulting
+/// value equals the prior value — same-as-prior submits behave
+/// identically to [`crate::Vault::rename`]'s same-label-still-bumps
+/// contract.
+///
+/// An `AccountEdit` with every field `None` is rejected at the core
+/// boundary as `validation_error` (`field: "edit"`, `reason: "empty"`)
+/// so the front ends do not silently no-op behind the user's back.
+/// [`validate_account_edit`] deliberately does **not** reject empty
+/// drafts so front ends can drive per-field rendering against a
+/// draft that hasn't yet committed to a field.
+#[derive(Clone, Debug, Default)]
+pub struct AccountEdit {
+    /// `Some(new_label)` replaces; `None` leaves the prior label
+    /// untouched. The new value runs through the same trim / empty
+    /// rejection / 128-byte cap as [`validate_label`].
+    pub label: Option<String>,
+
+    /// `Some(Some(new_issuer))` sets; `Some(None)` clears;
+    /// `None` leaves the prior issuer untouched. A set value runs
+    /// through the same trim / 128-byte cap as [`validate_issuer`].
+    ///
+    /// The nested `Option` shape is locked by docs/DESIGN.md §4.7;
+    /// the outer `Option` carries leave-untouched and the inner
+    /// `Option<String>` distinguishes clear from set.
+    #[allow(clippy::option_option)]
+    pub issuer: Option<Option<String>>,
+
+    /// `Some(IconHintInput::...)` applies the tri-state
+    /// (`Default` re-derives from the **post-edit** issuer; `Clear`
+    /// stores `None`; `Slug(s)` validates `s` through the §4.1
+    /// `[a-z0-9_-]+` grammar and stores it literally); `None`
+    /// leaves the prior slug untouched.
+    pub icon_hint: Option<IconHintInput>,
+}
+
+/// Pure-logic pre-flight validator for [`AccountEdit`]
+/// (docs/DESIGN.md §4.7 / Phase M).
+///
+/// Routes the `label` field through [`validate_label`], the inner
+/// `Some(issuer)` arm of the `issuer` tri-state through
+/// [`validate_issuer`], and the `IconHintInput::Slug(_)` arm of the
+/// `icon_hint` tri-state through the §4.1 slug grammar
+/// (`crate::domain::slug::validate_slug`). `IconHintInput::Default`
+/// and `IconHintInput::Clear` carry no slug text so they need no
+/// validation here; the post-edit slug for `Default` is re-derived
+/// by [`crate::Vault::edit_account_metadata`] via
+/// `crate::domain::slug::derive_default_from_issuer`.
+///
+/// Returns the first per-field `validation_error` on rejection
+/// (consistent with [`validate_manual`]'s first-failure-wins shape).
+/// The walk order is `[label, issuer, icon_hint]`.
+///
+/// `validate_account_edit` does **not** reject an empty `AccountEdit`
+/// — that rejection lives on [`crate::Vault::edit_account_metadata`]
+/// so front ends can drive per-field rendering against a draft
+/// that hasn't yet committed to a field.
+///
+/// The `prior` and `now` parameters are accepted for forward
+/// compatibility with cross-field invariants (none today); callers
+/// may pass a snapshot read just before the call without worrying
+/// about staleness because the v0.2 implementation ignores them.
+/// The mutator re-resolves the live account at apply time anyway,
+/// so front ends do not need to re-fetch `prior` immediately before
+/// calling.
+pub fn validate_account_edit(
+    edit: &AccountEdit,
+    _prior: &Account,
+    _now: SystemTime,
+) -> Result<(), PaladinError> {
+    validate_and_normalize_account_edit(edit).map(|_| ())
+}
+
+/// Internal per-field walk shared by [`validate_account_edit`] and
+/// [`crate::Vault::edit_account_metadata`] so the two surfaces cannot
+/// drift. Returns the **normalized** values that the mutator
+/// applies to the resolved `Account`.
+///
+/// First-failure-wins ordering is `[label, issuer, icon_hint]`. The
+/// `prior` / `now` parameters that the public [`validate_account_edit`]
+/// accepts for forward-compat are currently unused by this v0.2
+/// implementation — see [`validate_account_edit`] for the rationale.
+pub(crate) fn validate_and_normalize_account_edit(
+    edit: &AccountEdit,
+) -> Result<NormalizedAccountEdit, PaladinError> {
+    let label = match edit.label.as_deref() {
+        Some(raw) => Some(validate_label(raw)?),
+        None => None,
+    };
+    let issuer = match edit.issuer.as_ref() {
+        Some(Some(raw)) => Some(validate_issuer(Some(raw.as_str()))?),
+        Some(None) => Some(None),
+        None => None,
+    };
+    let icon_hint = match edit.icon_hint.as_ref() {
+        Some(IconHintInput::Slug(s)) => {
+            // Re-walk the same slug grammar `validate_icon_hint_slug`
+            // wraps so the two surfaces share one rule. We store the
+            // normalized slug (a byte-for-byte copy of the validated
+            // input).
+            Some(NormalizedIconHint::Slug(validate_slug(s.as_str())?))
+        }
+        Some(IconHintInput::Default) => Some(NormalizedIconHint::Default),
+        Some(IconHintInput::Clear) => Some(NormalizedIconHint::Clear),
+        None => None,
+    };
+    Ok(NormalizedAccountEdit {
+        label,
+        issuer,
+        icon_hint,
+    })
+}
+
+/// Normalized projection of an `AccountEdit` after the per-field
+/// validators have trimmed / owned the inputs. Internal to the crate.
+pub(crate) struct NormalizedAccountEdit {
+    /// `Some(trimmed_label)` if the edit set a new label.
+    pub(crate) label: Option<String>,
+    /// `Some(Some(trimmed_issuer))` sets; `Some(None)` clears;
+    /// `None` leaves untouched. The inner `Option<String>` is the
+    /// value [`validate_issuer`] returns (an empty / whitespace-only
+    /// input collapses to `None`). The nested `Option` shape mirrors
+    /// [`AccountEdit::issuer`] (locked by docs/DESIGN.md §4.7), so
+    /// the helper preserves the leave-vs-clear-vs-set distinction
+    /// the mutator depends on.
+    #[allow(clippy::option_option)]
+    pub(crate) issuer: Option<Option<String>>,
+    /// Tri-state applied at mutation time — `Default` re-derives
+    /// from the **post-edit** issuer; `Clear` stores `None`;
+    /// `Slug(s)` stores the literal slug `s`.
+    pub(crate) icon_hint: Option<NormalizedIconHint>,
+}
+
+/// Normalized icon-hint tri-state used by [`NormalizedAccountEdit`].
+pub(crate) enum NormalizedIconHint {
+    /// Re-derive a slug from the post-edit issuer.
+    Default,
+    /// Store `None`, overriding any issuer-derived default.
+    Clear,
+    /// Store the literal slug (already validated against §4.1).
+    Slug(String),
 }
 
 /// Borrow-only construction used by the otpauth parser and importers

@@ -41,10 +41,11 @@ pub use domain::validation::{
 };
 pub use domain::{
     account_match_key, account_matches_search, parse_account_query, parse_icon_hint_token,
-    parse_setting_key, parse_setting_patch, select_after_filter, validate_label, validate_manual,
-    Account, AccountId, AccountKindInput, AccountKindSummary, AccountQuery, AccountSummary,
-    Algorithm, Code, IconHintInput, ImportConflict, ImportReport, ImportWarning, Secret,
-    SettingKey, SettingPatch, ValidatedAccount, ValidationWarning,
+    parse_setting_key, parse_setting_patch, select_after_filter, validate_account_edit,
+    validate_icon_hint_slug, validate_label, validate_manual, Account, AccountEdit, AccountId,
+    AccountKindInput, AccountKindSummary, AccountQuery, AccountSummary, Algorithm, Code,
+    IconHintInput, ImportConflict, ImportReport, ImportWarning, Secret, SettingKey, SettingPatch,
+    ValidatedAccount, ValidationWarning,
 };
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
 pub use export::QrRenderOptions;

@@ -22,10 +22,14 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::crypto::zeroize_witness::{observe, WitnessSite};
 use crate::crypto::{EncryptionOptions, AEAD_KEY_LEN};
-use crate::domain::validation::{system_time_to_secs_for, validate_label};
+use crate::domain::slug::derive_default_from_issuer;
+use crate::domain::validation::{
+    system_time_to_secs_for, validate_and_normalize_account_edit, NormalizedAccountEdit,
+    NormalizedIconHint,
+};
 use crate::domain::{
-    Account, AccountId, AccountSummary, Code, ImportConflict, ImportReport, ImportWarning, OtpKind,
-    ValidatedAccount,
+    Account, AccountEdit, AccountId, AccountSummary, Code, ImportConflict, ImportReport,
+    ImportWarning, OtpKind, ValidatedAccount,
 };
 use crate::error::{ErrorKind, PaladinError, Result};
 use crate::otp::{hotp, totp};
@@ -589,20 +593,211 @@ impl Vault {
     /// per docs/DESIGN.md §4.7. Inputs are validated before the account
     /// lookup so invalid label / timestamp surfaces consistently
     /// even when the ID is unknown.
+    ///
+    /// **Post-M9:** this method is a thin forwarder onto
+    /// [`Vault::edit_account_metadata`] — it builds
+    /// `AccountEdit { label: Some(label.into()), ..Default::default() }`
+    /// and delegates so there is exactly one mutation path through
+    /// the validator. Error envelopes (kinds, `operation` tags,
+    /// stable extra fields) stay **byte-identical** to the pre-M9
+    /// implementation; the in-mutator empty-`AccountEdit` check can
+    /// never fire on this path because the constructed edit always
+    /// carries `Some(label)`.
     pub fn rename(&mut self, id: AccountId, label: &str, now: SystemTime) -> Result<()> {
-        let trimmed_label = validate_label(label)?;
-        let now_secs = system_time_to_secs_for("rename", now)?;
-        let account =
+        let edit = AccountEdit {
+            label: Some(label.to_string()),
+            ..AccountEdit::default()
+        };
+        self.edit_metadata_with_operation(id, edit, now, "rename")
+    }
+
+    /// Apply a multi-field non-cryptographic metadata edit to the
+    /// account at `id` (docs/DESIGN.md §4.7 / Phase M Milestone 9).
+    ///
+    /// Editable fields are `label`, `issuer`, and `icon_hint`; OTP-
+    /// affecting fields are out of scope (see [`AccountEdit`]).
+    /// Pre-check order (locked so the §5 error taxonomy stays
+    /// stable):
+    ///
+    /// 1. Reject an empty `AccountEdit` (every field `None`) with
+    ///    `validation_error { field: "edit", reason: "empty" }`.
+    /// 2. Per-field validate + normalize via the shared walk
+    ///    (`validate_label` on `Some(label)`, `validate_issuer` on
+    ///    `Some(Some(issuer))`, slug grammar on
+    ///    `Some(IconHintInput::Slug(_))`). First-failure-wins ordering
+    ///    is `[label, issuer, icon_hint]`.
+    /// 3. Validate `now` via the §4.1 timestamp range
+    ///    (pre-epoch / year-9999 cap → `time_range`).
+    /// 4. Resolve `id`; missing IDs return
+    ///    `invalid_state { operation: "edit_account_metadata", state: "account_not_found" }`.
+    ///
+    /// On all four steps passing, the mutator applies the
+    /// **normalized** values (trimmed label / issuer / owned slug)
+    /// to the resolved account. The `icon_hint` tri-state resolves as
+    /// follows:
+    ///
+    /// | input                        | stored `icon_hint`                                  |
+    /// |------------------------------|------------------------------------------------------|
+    /// | `None` (untouched)           | unchanged                                            |
+    /// | `Some(IconHintInput::Clear)` | `None`                                               |
+    /// | `Some(IconHintInput::Slug)`  | the literal validated slug                           |
+    /// | `Some(IconHintInput::Default)` | re-derived from the **post-edit** issuer           |
+    ///
+    /// `updated_at` is bumped to `now` on success even when every
+    /// resulting value equals its prior — same as [`Vault::rename`]'s
+    /// same-label-still-bumps contract. The mutator is `&mut self`;
+    /// callers wrap it in [`Vault::mutate_and_save`] for atomic
+    /// persistence + rollback.
+    pub fn edit_account_metadata(
+        &mut self,
+        id: AccountId,
+        edit: AccountEdit,
+        now: SystemTime,
+    ) -> Result<()> {
+        self.edit_metadata_with_operation(id, edit, now, "edit_account_metadata")
+    }
+
+    /// Internal mutator owning the four-step pre-check order and apply
+    /// path used by both [`Vault::edit_account_metadata`] and the
+    /// post-M9 [`Vault::rename`] forwarder. `operation` carries the
+    /// caller's stable §5 operation tag onto `invalid_state` and
+    /// `time_range` errors.
+    ///
+    /// `edit` is taken by value because the public
+    /// [`Vault::edit_account_metadata`] does — the GTK / TUI dialog
+    /// state machines stash the in-flight edit alongside the
+    /// pending-save effect (`docs/IMPLEMENTATION_PLAN_01_CORE.md`
+    /// Phase M) — and forwarding by reference would force the public
+    /// caller to clone.
+    #[allow(clippy::needless_pass_by_value)]
+    fn edit_metadata_with_operation(
+        &mut self,
+        id: AccountId,
+        edit: AccountEdit,
+        now: SystemTime,
+        operation: &'static str,
+    ) -> Result<()> {
+        // Step 1: reject an empty edit. Only fires on the
+        // `edit_account_metadata` path because the post-M9 `rename`
+        // forwarder always builds a non-empty edit.
+        if edit.label.is_none() && edit.issuer.is_none() && edit.icon_hint.is_none() {
+            return Err(PaladinError::validation("edit", "empty"));
+        }
+
+        // Step 2: per-field validate + normalize. The helper is
+        // shared with `validate_account_edit` so the two surfaces
+        // cannot drift; it does not depend on a resolved `Account`
+        // or the timestamp in v0.2 (those are reserved for
+        // forward-compat cross-field rules).
+        let normalized = validate_and_normalize_account_edit(&edit)?;
+
+        // Step 3: validate `now`.
+        let now_secs = system_time_to_secs_for(operation, now)?;
+
+        // Step 4: resolve `id`.
+        let pos =
             self.accounts
-                .iter_mut()
-                .find(|a| a.id() == id)
+                .iter()
+                .position(|a| a.id() == id)
                 .ok_or(PaladinError::InvalidState {
-                    operation: "rename",
+                    operation,
                     state: "account_not_found",
                 })?;
-        account.label = trimmed_label;
-        account.updated_at = now_secs;
+
+        // Apply the normalized values. We capture `prior_issuer` /
+        // post-edit `issuer` separately so the `IconHintInput::Default`
+        // re-derivation honors the **post-edit** issuer per §4.7.
+        let NormalizedAccountEdit {
+            label,
+            issuer,
+            icon_hint,
+        } = normalized;
+
+        // Resolve the post-edit issuer first so a same-call
+        // `(issuer = Some(_), icon_hint = Default)` re-derive picks
+        // the new value.
+        let post_edit_issuer: Option<String> = match issuer {
+            Some(new) => new,
+            None => self.accounts[pos].issuer.clone(),
+        };
+
+        if let Some(new_label) = label {
+            self.accounts[pos].label = new_label;
+        }
+
+        // Resolve icon_hint per the tri-state, using the post-edit
+        // issuer for `Default`. We do this before writing
+        // `post_edit_issuer` so the icon derivation can borrow
+        // `post_edit_issuer` and we then move it into the account.
+        if let Some(hint) = icon_hint {
+            let new_icon: Option<String> = match hint {
+                NormalizedIconHint::Default => {
+                    derive_default_from_issuer(post_edit_issuer.as_deref())
+                }
+                NormalizedIconHint::Clear => None,
+                NormalizedIconHint::Slug(s) => Some(s),
+            };
+            self.accounts[pos].icon_hint = new_icon;
+        }
+
+        // Always write `post_edit_issuer` so the issuer field reflects
+        // the resolved post-edit value (even when the edit left it
+        // alone — that's a no-op assignment of the prior value).
+        self.accounts[pos].issuer = post_edit_issuer;
+
+        self.accounts[pos].updated_at = now_secs;
         Ok(())
+    }
+
+    /// Project the would-be post-edit `(secret, issuer, label)` triple
+    /// for the account identified by `id` and return the first
+    /// non-self account that collides on it (docs/DESIGN.md §4.7 /
+    /// Phase M Milestone 9).
+    ///
+    /// Companion to [`Vault::find_duplicate`] for edit flows: GTK
+    /// `EditDialog`, TUI Edit modal, and CLI `paladin edit` use this
+    /// to render `duplicate_account` before submitting the edit.
+    ///
+    /// Comparison is byte-for-byte / case-sensitive, matching
+    /// [`Vault::find_duplicate`]. The `id` account is **skipped** so
+    /// an unchanged self-comparison never reports a collision; the
+    /// skip is on the source id only (collisions against any other
+    /// account are still reported, even when those happen to match
+    /// the source in some fields).
+    ///
+    /// Candidate normalization mirrors
+    /// [`Vault::edit_account_metadata`]'s per-field walk so a
+    /// whitespace-padded candidate (`"  Foo  "`) collides with a
+    /// stored normalized value (`"Foo"`). Returns `None` for an
+    /// unknown `id` or when candidate normalization fails (overlong
+    /// label / issuer) — front ends are expected to call
+    /// [`validate_account_edit`][`crate::validate_account_edit`]
+    /// before this helper, so an invalid candidate is a *pending
+    /// validation error* rather than a collision to surface.
+    /// `icon_hint` is **not** part of the duplicate key per §4.7
+    /// and is not projected here.
+    #[must_use]
+    pub fn find_duplicate_after_edit(&self, id: AccountId, edit: &AccountEdit) -> Option<&Account> {
+        let prior = self.accounts.iter().find(|a| a.id() == id)?;
+        // Run the same per-field walk; invalid candidate → None.
+        let normalized = validate_and_normalize_account_edit(edit).ok()?;
+
+        let post_label: &str = match &normalized.label {
+            Some(s) => s.as_str(),
+            None => prior.label(),
+        };
+        let post_issuer: Option<&str> = match &normalized.issuer {
+            Some(new) => new.as_deref(),
+            None => prior.issuer(),
+        };
+        let candidate_secret = prior.secret();
+
+        self.accounts.iter().find(|existing| {
+            existing.id() != id
+                && existing.secret() == candidate_secret
+                && existing.issuer() == post_issuer
+                && existing.label() == post_label
+        })
     }
 
     /// Persist the vault through the supplied `Store`.
