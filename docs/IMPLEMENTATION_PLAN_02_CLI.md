@@ -1403,7 +1403,7 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   `parse_icon_hint_token` and rejects an invalid slug with the
   core `validation_error` (`field: "icon_hint"`,
   `reason: "invalid_slug"`); a valid slug round-trips.
-- [ ] `edit --icon-hint ""` (empty token after Unicode-whitespace
+- [x] `edit --icon-hint ""` (empty token after Unicode-whitespace
   trim) flows through `paladin_core::parse_icon_hint_token` as
   `IconHintInput::Default` and re-derives the stored slug from
   the account's current issuer (matching the `add` grammar's
@@ -1424,7 +1424,7 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
 - [x] `edit --no-icon-hint` clears the stored slug
   (`AccountSummary.icon_hint == null` in JSON); the prior label /
   issuer stay untouched.
-- [ ] `edit --no-issuer --icon-hint ""` re-derives the slug against
+- [x] `edit --no-issuer --icon-hint ""` re-derives the slug against
   the post-edit (now-cleared) issuer, producing
   `AccountSummary.icon_hint == null` — functionally equivalent to
   `--no-issuer --no-icon-hint` and pinning the

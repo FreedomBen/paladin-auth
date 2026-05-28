@@ -694,6 +694,101 @@ fn json_edit_icon_hint_empty_token_redefaults_against_post_edit_issuer() {
 }
 
 #[test]
+fn json_edit_icon_hint_empty_token_redefaults_against_current_issuer() {
+    // `--icon-hint ""` alone (no issuer change) flows through
+    // `parse_icon_hint_token` as `IconHintInput::Default` and re-derives
+    // the stored slug from the account's CURRENT issuer. Round-trip: set
+    // a custom slug, then re-default, and confirm the slug snaps back to
+    // the issuer-derived value the account was created with.
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+    // The created account auto-derives its icon-hint from issuer "Acme".
+    let seeded = list_accounts_json(&path);
+    let derived = seeded["accounts"][0]["icon_hint"].clone();
+    assert!(
+        derived.is_string(),
+        "issuer \"Acme\" must auto-derive a non-null icon-hint slug, got {derived:?}",
+    );
+
+    // Stomp the derived slug with a custom one.
+    let _ = paladin()
+        .args([
+            "--json",
+            "--vault",
+            path.to_str().unwrap(),
+            "edit",
+            "alice",
+            "--icon-hint",
+            "custom-slug",
+        ])
+        .assert()
+        .success();
+
+    // `--icon-hint ""` re-derives from the (unchanged) issuer "Acme".
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            path.to_str().unwrap(),
+            "edit",
+            "alice",
+            "--icon-hint",
+            "",
+        ])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let value: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(value["account"]["issuer"], serde_json::json!("Acme"));
+    assert_eq!(
+        value["account"]["icon_hint"], derived,
+        "empty icon-hint token must re-derive the issuer slug",
+    );
+
+    // Persisted state agrees.
+    let listed = list_accounts_json(&path);
+    assert_eq!(listed["accounts"][0]["icon_hint"], derived);
+}
+
+#[test]
+fn json_edit_no_issuer_with_empty_icon_hint_redefaults_to_null() {
+    // `--no-issuer --icon-hint ""` clears the issuer and re-derives the
+    // slug against the post-edit (now-cleared) issuer. With no issuer the
+    // default derivation yields null — functionally equivalent to
+    // `--no-issuer --no-icon-hint`.
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+    // Sanity: the seeded account has a non-null derived slug to clear.
+    let seeded = list_accounts_json(&path);
+    assert!(seeded["accounts"][0]["icon_hint"].is_string());
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            path.to_str().unwrap(),
+            "edit",
+            "alice",
+            "--no-issuer",
+            "--icon-hint",
+            "",
+        ])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let value: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(value["account"]["issuer"], serde_json::Value::Null);
+    assert_eq!(value["account"]["icon_hint"], serde_json::Value::Null);
+
+    // Persisted state agrees.
+    let listed = list_accounts_json(&path);
+    assert_eq!(listed["accounts"][0]["issuer"], serde_json::Value::Null);
+    assert_eq!(listed["accounts"][0]["icon_hint"], serde_json::Value::Null);
+}
+
+#[test]
 fn json_edit_label_issuer_icon_hint_all_in_one_call() {
     let (_dir, path) = fresh_vault_path();
     create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
