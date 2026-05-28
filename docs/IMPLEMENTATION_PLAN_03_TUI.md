@@ -2206,10 +2206,17 @@ ships in `paladin-core` and the TUI Edit modal lands.
   modal does not mount, and no effect is emitted. Asserted as
   `shift_e_while_rename_modal_open_is_silently_rejected` and
   `shift_r_while_edit_modal_open_is_silently_rejected`.
-- [ ] Per-field text editing routes through the shared
-  `tui-input` walker; typing into a row clears that row's inline
-  error. `←` / `→` on the icon-hint selector cycles its four
-  options without affecting the sibling slug buffer.
+- [x] Per-field text editing routes through the shared
+  `apply_modal_text_edit` text-edit helper (printable-`Char` append
+  + `Backspace` pop over the row's `String` buffer, mirroring the
+  Rename modal's buffer model rather than the `tui-input` widget);
+  typing into a row clears the modal's inline error. `←` / `→` on
+  the icon-hint selector cycles its four options without affecting
+  the sibling slug buffer.
+  *(`edit_modal_typing_routes_to_focused_label_row` /
+  `…_issuer_row` / `…_slug_row`,
+  `edit_modal_typing_clears_inline_error`,
+  `edit_modal_arrow_keys_cycle_selector_without_touching_slug_buffer`.)*
 - [ ] Typing in the slug row while the selector is on *Leave
   unchanged* / *Default from issuer* / *No icon* (i.e. the row
   is disabled and not focusable) is a **no-op**: the slug buffer

@@ -23173,6 +23173,94 @@ fn edit_modal_typing_in_disabled_slug_row_is_noop() {
     assert!(edit.error.is_none());
 }
 
+#[test]
+fn edit_modal_typing_routes_to_focused_label_row() {
+    // Default focus is Label; a printable char appends to the label
+    // buffer and leaves the sibling rows byte-identical.
+    let (_tmp, _id, _path, state) = fresh_unlocked_with_edit_modal_open(
+        "alice",
+        Some("Acme"),
+        IconHintInput::Slug("ac".into()),
+    );
+    let (state, effects) = reduce(state, key(KeyCode::Char('x')));
+    assert!(effects.is_empty(), "typing must not emit an effect");
+    let edit = expect_edit_modal(&state);
+    assert_eq!(edit.label_buffer, "alicex");
+    assert_eq!(edit.issuer_buffer, "Acme", "issuer row untouched");
+    assert_eq!(edit.icon_hint_slug, "ac", "slug row untouched");
+}
+
+#[test]
+fn edit_modal_typing_routes_to_focused_issuer_row() {
+    // Tab off Label onto Issuer; the char now lands on the issuer
+    // buffer while the label buffer stays byte-identical.
+    let (_tmp, _id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", Some("Acme"), IconHintInput::Default);
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    assert_eq!(expect_edit_modal(&state).focus, EditFocus::Issuer);
+    let (state, effects) = reduce(state, key(KeyCode::Char('Z')));
+    assert!(effects.is_empty());
+    let edit = expect_edit_modal(&state);
+    assert_eq!(edit.issuer_buffer, "AcmeZ");
+    assert_eq!(edit.label_buffer, "alice", "label row untouched");
+}
+
+#[test]
+fn edit_modal_typing_routes_to_focused_slug_row() {
+    // With the selector flipped to *Slug:* and focus walked onto the
+    // slug row, printable chars append to the slug buffer.
+    let (_tmp, _id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Slug("foo".into()));
+    let (state, _) = reduce(state, key(KeyCode::Tab)); // Issuer
+    let (state, _) = reduce(state, key(KeyCode::Tab)); // IconHint
+    let (state, _) = reduce(state, key(KeyCode::Right)); // Default
+    let (state, _) = reduce(state, key(KeyCode::Right)); // Clear
+    let (state, _) = reduce(state, key(KeyCode::Right)); // Slug
+    let (state, _) = reduce(state, key(KeyCode::Tab)); // Slug row
+    assert_eq!(expect_edit_modal(&state).focus, EditFocus::Slug);
+    let (state, effects) = reduce(state, key(KeyCode::Char('q')));
+    assert!(effects.is_empty());
+    assert_eq!(expect_edit_modal(&state).icon_hint_slug, "fooq");
+}
+
+#[test]
+fn edit_modal_typing_clears_inline_error() {
+    // An empty-edit submit stashes the inline error; the next
+    // keystroke into a row clears it so the user sees their retry.
+    let (_tmp, _id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    let (state, _) = reduce(state, key(KeyCode::Enter));
+    assert!(
+        expect_edit_modal(&state).error.is_some(),
+        "empty-edit submit must stash an inline error"
+    );
+    let (state, _) = reduce(state, key(KeyCode::Char('y')));
+    let edit = expect_edit_modal(&state);
+    assert!(edit.error.is_none(), "typing clears the inline error");
+    assert_eq!(edit.label_buffer, "alicey");
+}
+
+#[test]
+fn edit_modal_arrow_keys_cycle_selector_without_touching_slug_buffer() {
+    // `←` / `→` on the icon-hint selector cycle its four options and
+    // never mutate the sibling slug buffer.
+    let (_tmp, _id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Slug("keepme".into()));
+    let (state, _) = reduce(state, key(KeyCode::Tab)); // Issuer
+    let (state, _) = reduce(state, key(KeyCode::Tab)); // IconHint
+    let (state, _) = reduce(state, key(KeyCode::Right)); // Default
+    assert_eq!(expect_edit_modal(&state).icon_hint_slug, "keepme");
+    let (state, _) = reduce(state, key(KeyCode::Right)); // Clear
+    let (state, _) = reduce(state, key(KeyCode::Right)); // Slug
+    let (state, _) = reduce(state, key(KeyCode::Left)); // Clear
+    let edit = expect_edit_modal(&state);
+    assert_eq!(edit.icon_hint_selector, EditIconHintSelector::Clear);
+    assert_eq!(
+        edit.icon_hint_slug, "keepme",
+        "slug buffer survives cycling"
+    );
+}
+
 fn edit_result(
     path: PathBuf,
     account_id: AccountId,

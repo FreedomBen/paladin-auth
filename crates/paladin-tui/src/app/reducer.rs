@@ -2642,6 +2642,32 @@ fn route_rename_modal_input(
     }
 }
 
+/// Apply a single text-editing keystroke to a modal text buffer.
+///
+/// This is the shared per-field text-edit routine the v0.2 Edit modal
+/// rows (Label / Issuer / Slug) route through so the three rows cannot
+/// drift in their editing semantics. It handles the printable-`Char`
+/// append and `Backspace` pop. Returns `true` when the keystroke was a
+/// recognized text-editing key (so the caller can clear any inline
+/// error to surface the user's retry), `false` otherwise.
+///
+/// The shared `route_modal_input` Ctrl/Alt guard filters
+/// modifier-bearing `Char`s before this routing runs, so a bare `Char`
+/// is safe to append.
+fn apply_modal_text_edit(buffer: &mut String, key: &KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Char(c) => {
+            buffer.push(c);
+            true
+        }
+        KeyCode::Backspace => {
+            buffer.pop();
+            true
+        }
+        _ => false,
+    }
+}
+
 /// v0.2 Edit modal's input path (`Shift+E`).
 ///
 /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Edit"
@@ -2686,17 +2712,14 @@ fn route_edit_modal_input(
     }
 
     match key.code {
-        KeyCode::Char(c) => {
-            // The shared `route_modal_input` Ctrl/Alt guard filters
-            // modifier-bearing Chars before this routing runs, so a
-            // bare `c` is safe to append.
+        KeyCode::Char(_) | KeyCode::Backspace => {
             match edit.focus {
                 EditFocus::Label => {
-                    edit.label_buffer.push(c);
+                    apply_modal_text_edit(&mut edit.label_buffer, key);
                     edit.error = None;
                 }
                 EditFocus::Issuer => {
-                    edit.issuer_buffer.push(c);
+                    apply_modal_text_edit(&mut edit.issuer_buffer, key);
                     edit.error = None;
                 }
                 EditFocus::IconHint => {
@@ -2710,27 +2733,7 @@ fn route_edit_modal_input(
                     // `next_focus` / `prev_focus`, so this is a
                     // belt-and-braces guard for future refactors.
                     if edit.icon_hint_selector == EditIconHintSelector::Slug {
-                        edit.icon_hint_slug.push(c);
-                        edit.error = None;
-                    }
-                }
-            }
-            Vec::new()
-        }
-        KeyCode::Backspace => {
-            match edit.focus {
-                EditFocus::Label => {
-                    edit.label_buffer.pop();
-                    edit.error = None;
-                }
-                EditFocus::Issuer => {
-                    edit.issuer_buffer.pop();
-                    edit.error = None;
-                }
-                EditFocus::IconHint => {}
-                EditFocus::Slug => {
-                    if edit.icon_hint_selector == EditIconHintSelector::Slug {
-                        edit.icon_hint_slug.pop();
+                        apply_modal_text_edit(&mut edit.icon_hint_slug, key);
                         edit.error = None;
                     }
                 }
