@@ -32,12 +32,17 @@ use relm4::Sender;
 
 use crate::account_list::{row_section_header, AccountListOutput, AccountRowModel};
 use crate::account_row::{
-    build_kebab_menu_model, dispatch_row_action, format_counter_label, format_seconds_remaining,
-    progress_fraction, progress_urgency, AccountRowOutput, CodeDisplay, HIDDEN_CODE_PLACEHOLDER,
-    PROGRESS_URGENCY_CSS_CLASSES, ROW_ACTION_GROUP_NAME, ROW_COPY_ACTION_NAME,
-    ROW_EDIT_ACTION_NAME, ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_SHOW_QR_ACTION_NAME,
+    build_kebab_menu_model, build_row_context_menu_model, dispatch_row_action,
+    format_counter_label, format_seconds_remaining, progress_fraction, progress_urgency,
+    AccountRowOutput, CodeDisplay, HIDDEN_CODE_PLACEHOLDER, PROGRESS_URGENCY_CSS_CLASSES,
+    ROW_ACTION_GROUP_NAME, ROW_COPY_ACTION_NAME, ROW_EDIT_ACTION_NAME, ROW_NEXT_ACTION_NAME,
+    ROW_REMOVE_ACTION_NAME, ROW_SHOW_QR_ACTION_NAME,
 };
 use crate::icon_resolution::{resolve_display_icon, PLACEHOLDER_ICON_NAME};
+use crate::row_context_menu::{
+    install_row_context_menu_controllers_decision, prior_popover_disposition, PopoverInvalidation,
+    RowMenuTrigger,
+};
 use crate::row_item::{RowItem, RowKind, ROW_ITEM_DISPLAY_CHANGED_SIGNAL};
 
 /// Stable identity for a row in the `gtk::ColumnView`'s store.
@@ -388,6 +393,89 @@ pub fn apply_interleaved_splice_plan(
 /// for a row it is no longer rendering.
 type HandlerMap = Rc<RefCell<HashMap<usize, glib::SignalHandlerId>>>;
 
+/// Shared single-popover slot for the row-body context menu.
+///
+/// `AccountListComponent` owns one of these and clones it into the
+/// "Account" column factory so the right-click / keyboard popover and
+/// the component's refresh / lock teardown all address the same
+/// `Option<gtk::PopoverMenu>`. The single-popover invariant
+/// (`docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context menu …" >
+/// "Design contract" item 3) is enforced through
+/// [`crate::row_context_menu::prior_popover_disposition`] whenever a
+/// fresh popover is mounted or a refresh / lock invalidates the row.
+pub type RowPopoverSlot = Rc<RefCell<Option<gtk::PopoverMenu>>>;
+
+/// Unparent + drop any popover currently held in `slot` whenever the
+/// supplied `cause` invalidates it.
+///
+/// Drives the single-popover invariant from one tested decision
+/// ([`prior_popover_disposition`]): a fresh pop
+/// ([`PopoverInvalidation::Pop`]), a store splice
+/// ([`PopoverInvalidation::Refresh`]), or a vault teardown
+/// ([`PopoverInvalidation::Lock`]) all unparent + drop a prior
+/// popover so it never outlives its row or the `(Vault, Store)` pair.
+/// A no-op when the slot is already empty.
+pub fn drop_row_popover(slot: &RowPopoverSlot, cause: PopoverInvalidation) {
+    let has_prior = slot.borrow().is_some();
+    if prior_popover_disposition(cause, has_prior).should_unparent() {
+        if let Some(prior) = slot.borrow_mut().take() {
+            prior.unparent();
+        }
+    }
+}
+
+/// Mount the shared row context `gtk::PopoverMenu` against `parent`,
+/// anchored at `anchor`, enforcing the single-popover invariant.
+///
+/// Drops any prior popover via [`drop_row_popover`]
+/// ([`PopoverInvalidation::Pop`]), then builds a fresh
+/// `gtk::PopoverMenu` from [`build_row_context_menu_model`], parents
+/// it to `parent` (the row container, which already carries the
+/// per-row [`gio::SimpleActionGroup`] so the menu actions resolve),
+/// points it at `anchor`, stashes it in `slot`, and pops it up. The
+/// arrow is disabled so the menu reads as a flat context menu rather
+/// than a bubble.
+fn pop_row_popover(slot: &RowPopoverSlot, parent: &gtk::Widget, anchor: &gtk::gdk::Rectangle) {
+    drop_row_popover(slot, PopoverInvalidation::Pop);
+    let popover = gtk::PopoverMenu::from_model(Some(&build_row_context_menu_model()));
+    popover.set_has_arrow(false);
+    popover.set_parent(parent);
+    popover.set_pointing_to(Some(anchor));
+    *slot.borrow_mut() = Some(popover.clone());
+    popover.popup();
+}
+
+/// Build the per-row `gio::SimpleActionGroup` for the row body's
+/// context-menu surface and install it on `container`.
+///
+/// Account rows get a fresh group (same five actions as the kebab's
+/// [`build_kebab_action_group`]) so the right-click popover, the
+/// `Shift+E` `gtk::NamedAction`, and the keyboard popover all resolve
+/// `row.*` against the row container. Section rows clear the group so
+/// a reused cell never carries a stale account's actions.
+fn install_row_body_action_group(
+    container: &gtk::Box,
+    row_item: &RowItem,
+    sender: &Sender<AccountListOutput>,
+) {
+    if let Some(id) = row_item.account_id() {
+        let group = build_kebab_action_group(id, sender);
+        container.insert_action_group(ROW_ACTION_GROUP_NAME, Some(&group));
+    } else {
+        container.insert_action_group(ROW_ACTION_GROUP_NAME, gio::ActionGroup::NONE);
+    }
+}
+
+/// Anchor rectangle for a keyboard-raised popover: a zero-size point
+/// at the row container's top-left content corner.
+///
+/// `Menu` / `Shift+F10` have no pointer coordinates, so the popover
+/// is pointed at the row's own content origin. `set_has_arrow(false)`
+/// (in [`pop_row_popover`]) keeps it reading as a flat menu.
+fn keyboard_anchor(container: &gtk::Widget) -> gtk::gdk::Rectangle {
+    gtk::gdk::Rectangle::new(0, 0, container.width().max(0), container.height().max(0))
+}
+
 fn list_item_key(list_item: &gtk::ListItem) -> usize {
     list_item.as_ptr() as usize
 }
@@ -438,15 +526,42 @@ fn install_display_subscription<F>(
         .insert(list_item_key(list_item), handler);
 }
 
+/// Per-cell controllers installed on the "Account" column row body
+/// for the right-click + keyboard context-menu surface.
+///
+/// Kept so each `bind` can remove the prior cell's controllers
+/// before installing the current row's (account rows install both;
+/// section rows install neither) and so `unbind` can tear them down.
+struct RowMenuControllers {
+    gesture: gtk::GestureClick,
+    shortcuts: gtk::ShortcutController,
+}
+
+type RowMenuControllerMap = Rc<RefCell<HashMap<usize, RowMenuControllers>>>;
+
 /// Build the cell factory for the "Account" column.
 ///
 /// Cell layout (account row): leading icon (24 px) + ellipsized
 /// `<issuer>:<label>` `gtk::Label` (`hexpand`). Section rows render
 /// the heading text in a single bold-dim label and hide the icon.
+///
+/// Account rows also carry the row-body context-menu surface
+/// (Milestone 9 slice 5): a per-row [`gio::SimpleActionGroup`] (so
+/// `row.*` actions resolve), a secondary-button `gtk::GestureClick`
+/// that pops the shared [`build_row_context_menu_model`] popover at
+/// the click point, and a `gtk::ShortcutController` whose `Menu` /
+/// `Shift+F10` pop the same popover and whose `Shift+E` activates
+/// `row.edit` (TUI parity). The single-popover invariant is enforced
+/// through the shared `slot`. Section rows install none of these and
+/// have any prior controllers torn down on rebind.
 #[must_use]
-pub fn build_account_column_factory() -> gtk::SignalListItemFactory {
+pub fn build_account_column_factory(
+    sender: Sender<AccountListOutput>,
+    slot: RowPopoverSlot,
+) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     let handlers: HandlerMap = Rc::new(RefCell::new(HashMap::new()));
+    let controllers: RowMenuControllerMap = Rc::new(RefCell::new(HashMap::new()));
 
     factory.connect_setup(|_, item| {
         let list_item = cast_list_item(item);
@@ -471,6 +586,7 @@ pub fn build_account_column_factory() -> gtk::SignalListItemFactory {
     });
 
     let handlers_b = Rc::clone(&handlers);
+    let controllers_b = Rc::clone(&controllers);
     factory.connect_bind(move |_, item| {
         let list_item = cast_list_item(item);
         let Some(row_item) = try_row_item(&list_item) else {
@@ -483,6 +599,14 @@ pub fn build_account_column_factory() -> gtk::SignalListItemFactory {
         // Section rows are non-selectable; account rows are selectable.
         list_item.set_selectable(!row_item.is_section());
 
+        // (Re)install the row-body context-menu surface. Always drop
+        // the prior cell's controllers first so a reused cell never
+        // accumulates gestures or carries a stale row's controllers.
+        let key = list_item_key(&list_item);
+        remove_row_menu_controllers(&controllers_b, &container, key);
+        install_row_body_action_group(&container, &row_item, &sender);
+        install_row_menu_controllers(&controllers_b, &container, key, &row_item, &slot);
+
         let container_for_rebind = container.clone();
         install_display_subscription(&handlers_b, &list_item, &row_item, move |item| {
             bind_account_cell(&container_for_rebind, item);
@@ -490,12 +614,107 @@ pub fn build_account_column_factory() -> gtk::SignalListItemFactory {
     });
 
     let handlers_u = Rc::clone(&handlers);
+    let controllers_u = Rc::clone(&controllers);
     factory.connect_unbind(move |_, item| {
         let list_item = cast_list_item(item);
         drop_handler(&handlers_u, &list_item);
+        let key = list_item_key(&list_item);
+        if let Some(container) = list_item.child().and_downcast::<gtk::Box>() {
+            remove_row_menu_controllers(&controllers_u, &container, key);
+            container.insert_action_group(ROW_ACTION_GROUP_NAME, gio::ActionGroup::NONE);
+        }
     });
 
     factory
+}
+
+/// Remove and drop the context-menu controllers previously installed
+/// on `container` for `key`, if any. Called from `bind` (before
+/// reinstalling) and `unbind` so reused cells never accumulate
+/// gestures.
+fn remove_row_menu_controllers(map: &RowMenuControllerMap, container: &gtk::Box, key: usize) {
+    if let Some(prev) = map.borrow_mut().remove(&key) {
+        container.remove_controller(&prev.gesture);
+        container.remove_controller(&prev.shortcuts);
+    }
+}
+
+/// Install the secondary-button `gtk::GestureClick` + keyboard
+/// `gtk::ShortcutController` on an account row's `container`.
+///
+/// Section rows install nothing per
+/// [`install_row_context_menu_controllers_decision`]. For account
+/// rows the gesture pops the shared popover at the click point, the
+/// `Menu` / `Shift+F10` shortcuts pop it at the row's content
+/// origin, and `Shift+E` activates `row.edit`. All popovers go
+/// through the single-popover [`slot`].
+fn install_row_menu_controllers(
+    map: &RowMenuControllerMap,
+    container: &gtk::Box,
+    key: usize,
+    row_item: &RowItem,
+    slot: &RowPopoverSlot,
+) {
+    let decision = install_row_context_menu_controllers_decision(row_item.is_section());
+    if decision.is_empty() {
+        return;
+    }
+
+    // Secondary-button right-click → pop the shared menu at the
+    // click point.
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gtk::gdk::BUTTON_SECONDARY);
+    let slot_for_press = Rc::clone(slot);
+    gesture.connect_pressed(move |gesture, _, x, y| {
+        let Some(widget) = gesture.widget() else {
+            return;
+        };
+        // Gesture coordinates are small, non-negative widget-local
+        // pixel offsets, so the truncating cast to the
+        // `gdk::Rectangle` anchor is benign (same pattern as the
+        // urgency-band casts above).
+        #[allow(clippy::cast_possible_truncation)]
+        let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 0, 0);
+        pop_row_popover(&slot_for_press, &widget, &rect);
+    });
+    container.add_controller(gesture.clone());
+
+    // Keyboard: Menu / Shift+F10 pop the shared popover; Shift+E
+    // activates `row.edit` (the per-row action group installed on
+    // the container resolves it). One ShortcutController in the
+    // bubble phase carries all three, matching
+    // `install_row_context_menu_controllers_decision`.
+    let shortcuts = gtk::ShortcutController::new();
+    shortcuts.set_propagation_phase(gtk::PropagationPhase::Bubble);
+    for trigger in decision.shortcut_triggers {
+        let Some(trigger_str) = trigger.shortcut_trigger_string() else {
+            continue;
+        };
+        let Some(parsed) = gtk::ShortcutTrigger::parse_string(trigger_str) else {
+            continue;
+        };
+        let action: gtk::ShortcutAction = if trigger == RowMenuTrigger::ShiftE {
+            // Shift+E activates `row.edit` (TUI parity); the per-row
+            // action group installed on the container resolves it.
+            gtk::NamedAction::new(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_EDIT_ACTION_NAME}"))
+                .upcast()
+        } else {
+            // Menu / Shift+F10 pop the shared popover at the row's
+            // content origin.
+            let slot_for_kbd = Rc::clone(slot);
+            gtk::CallbackAction::new(move |widget, _| {
+                let anchor = keyboard_anchor(widget);
+                pop_row_popover(&slot_for_kbd, widget, &anchor);
+                glib::Propagation::Stop
+            })
+            .upcast()
+        };
+        shortcuts.add_shortcut(gtk::Shortcut::new(Some(parsed), Some(action)));
+    }
+    container.add_controller(shortcuts.clone());
+
+    map.borrow_mut()
+        .insert(key, RowMenuControllers { gesture, shortcuts });
 }
 
 fn bind_account_cell(container: &gtk::Box, item: &RowItem) {

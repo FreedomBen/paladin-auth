@@ -21,7 +21,9 @@
 //! `gio::ListStore` + `SignalListItemFactory` setup hit on every
 //! `splice` call stays fixed.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use relm4::gtk;
 use relm4::gtk::gio;
@@ -41,7 +43,9 @@ use crate::column_view::{
     any_totp, apply_interleaved_splice_plan, build_account_column_factory,
     build_account_column_sorter, build_code_column_factory, build_copy_column_factory,
     build_kebab_column_factory, build_next_code_column_factory, build_time_column_factory,
+    drop_row_popover, RowPopoverSlot,
 };
+use crate::row_context_menu::PopoverInvalidation;
 use crate::row_item::RowItem;
 use crate::search::filtered_account_ids;
 
@@ -1009,6 +1013,18 @@ pub struct AccountListComponent {
     /// (preference toggle) and by [`Self::handle_refresh`] (row
     /// set transitions between TOTP-bearing and HOTP-only).
     next_code_column: gtk::ColumnViewColumn,
+    /// Single shared slot for the row-body context-menu
+    /// `gtk::PopoverMenu` (Milestone 9 slice 5). Cloned into the
+    /// "Account" column factory so the right-click / keyboard
+    /// popover and the component share one
+    /// `Option<gtk::PopoverMenu>`; popping a fresh one unparents +
+    /// drops any prior. [`AccountListMsg::Refresh`] drops it (the
+    /// row's `RowItem` may have been spliced), and dropping the whole
+    /// controller on lock drops it with the component so a popover
+    /// never outlives its row or the `(Vault, Store)` pair — see
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context menu …" >
+    /// "Design contract" item 3.
+    row_popover: crate::column_view::RowPopoverSlot,
 }
 
 /// Messages handled by [`AccountListComponent`].
@@ -1201,9 +1217,18 @@ impl SimpleComponent for AccountListComponent {
         // forwarder is needed.
         let output_sender = sender.output_sender().clone();
 
+        // Single shared slot for the row-body context-menu popover.
+        // Cloned into the "Account" column factory so the right-click
+        // / keyboard popover and the component's refresh / lock
+        // teardown all address one `Option<gtk::PopoverMenu>`.
+        let row_popover: RowPopoverSlot = Rc::new(RefCell::new(None));
+
         let account_column = gtk::ColumnViewColumn::builder()
             .title("Account")
-            .factory(&build_account_column_factory())
+            .factory(&build_account_column_factory(
+                output_sender.clone(),
+                Rc::clone(&row_popover),
+            ))
             .expand(true)
             .resizable(true)
             .build();
@@ -1357,6 +1382,7 @@ impl SimpleComponent for AccountListComponent {
             show_column_headers: init.show_column_headers,
             show_next_code_column: init.show_next_code_column,
             next_code_column,
+            row_popover,
         };
         ComponentParts {
             model: component,
@@ -1525,6 +1551,13 @@ impl AccountListComponent {
         let prev = selection.or(self.current_selection);
         let effective_selection = selected_row_after_refresh(prev, &rows);
         prune_cache_to_rows(&mut self.live_displays, &rows);
+
+        // Drop any open row-body context-menu popover before the
+        // splice: its row `RowItem` may be replaced, so the popover
+        // must not outlive it (single-popover invariant,
+        // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context menu …" >
+        // "Design contract" item 3).
+        drop_row_popover(&self.row_popover, PopoverInvalidation::Refresh);
 
         apply_interleaved_splice_plan(&self.store, &rows, self.show_section_headers);
 

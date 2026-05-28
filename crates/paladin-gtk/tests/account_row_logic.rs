@@ -917,10 +917,15 @@ fn account_row_output_request_advance_carries_account_id() {
 #[test]
 fn column_view_cell_factory_builders_are_exposed() {
     use paladin_gtk::account_list::AccountListOutput;
+    use paladin_gtk::column_view::RowPopoverSlot;
     use relm4::gtk;
     use relm4::Sender;
 
-    let _: fn() -> gtk::SignalListItemFactory =
+    // The "Account" factory gained a sender + shared popover slot in
+    // Milestone 9 slice 5 so it can install the row-body right-click /
+    // keyboard context-menu surface and enforce the single-popover
+    // invariant.
+    let _: fn(Sender<AccountListOutput>, RowPopoverSlot) -> gtk::SignalListItemFactory =
         paladin_gtk::column_view::build_account_column_factory;
     let _: fn() -> gtk::SignalListItemFactory = paladin_gtk::column_view::build_time_column_factory;
     let _: fn(Sender<AccountListOutput>) -> gtk::SignalListItemFactory =

@@ -2050,8 +2050,8 @@ red until that ships.
   `gio::Menu` with four entries in this order:
     1. *Copy code* → `row.copy`
     2. *Edit…* → `row.edit`
-    3. *Export QR…* → `row.show-qr`
-    4. *Delete…* → `row.remove`
+    3. *Show QR…* → `row.show-qr`
+    4. *Remove…* → `row.remove`
   This menu replaces the existing
   `account_row::build_kebab_menu_model()` once the work lands;
   the kebab `gtk::MenuButton`, the row-body right-click popover,
@@ -2119,7 +2119,7 @@ red until that ships.
     * *Copy code* is sensitive iff `RowDisplay::copy_enabled`
       (hidden HOTP rows dim the entry, exactly like the inline
       copy button).
-    * *Edit…*, *Export QR…*, *Delete…* are sensitive iff the row
+    * *Edit…*, *Show QR…*, *Remove…* are sensitive iff the row
       is an account row (always true once the menu has popped on
       one — section rows never raise it) and the app is not
       `UnlockedBusy` (the busy mask flips them off as it does the
@@ -2488,7 +2488,7 @@ core.
    cover each classifier, its post-effect routing, and the
    `clear_for_lock` / `force_close()` lock-transition
    coverage described in that file's checklist.
-- [ ] **Slice 5 — Right-click `gtk::GestureClick` +
+- [x] **Slice 5 — Right-click `gtk::GestureClick` +
    `gtk::ShortcutController` + popover lock-cleanup.**
    Extend the account column's cell factory `bind` to
    install a secondary-button `gtk::GestureClick` and a
@@ -3360,8 +3360,8 @@ right-click gesture slice lands.
 
 - [ ] `build_row_context_menu_model()` returns a `gio::Menu` with
   the four entries in this order: *Copy code* → `row.copy`,
-  *Edit…* → `row.edit`, *Export QR…* → `row.show-qr`,
-  *Delete…* → `row.remove`. Pinned by a table-driven assertion
+  *Edit…* → `row.edit`, *Show QR…* → `row.show-qr`,
+  *Remove…* → `row.remove`. Pinned by a table-driven assertion
   against the menu's `n_items()` and per-position attribute
   pair (`label`, `action`).
 - [ ] `pop_row_context_menu_decision(row_kind, busy, hidden_hotp)`
