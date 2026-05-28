@@ -23295,6 +23295,211 @@ fn edit_modal_icon_hint_selector_no_icon_projects_clear() {
 }
 
 #[test]
+fn edit_modal_icon_hint_leave_unchanged_projects_none() {
+    // Option 1: *Leave unchanged* projects `icon_hint = None`. A
+    // diverging label keeps the empty-edit guard from firing.
+    let (_tmp, _id, _path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", Some("Acme"), IconHintInput::Default);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = state
+    {
+        assert_eq!(
+            edit.icon_hint_selector,
+            EditIconHintSelector::LeaveUnchanged
+        );
+        edit.label_buffer = "alice2".to_string();
+    }
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata { edit: ae, .. } => {
+            assert!(ae.icon_hint.is_none(), "LeaveUnchanged → None");
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_modal_icon_hint_default_projects_default() {
+    // Option 2: *Default from issuer* projects `Some(Default)`.
+    let (_tmp, _id, _path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = state
+    {
+        edit.icon_hint_selector = EditIconHintSelector::Default;
+    }
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata { edit: ae, .. } => {
+            assert!(
+                matches!(ae.icon_hint, Some(IconHintInput::Default)),
+                "Default → Some(Default), got {:?}",
+                ae.icon_hint
+            );
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_modal_icon_hint_slug_valid_projects_slug() {
+    // Option 4: a valid *Slug:* projects `Some(Slug(text))` routed
+    // through `validate_icon_hint_slug`.
+    let (_tmp, _id, _path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = state
+    {
+        edit.icon_hint_selector = EditIconHintSelector::Slug;
+        edit.icon_hint_slug = "my-icon_1".to_string();
+    }
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata { edit: ae, .. } => {
+            assert!(
+                matches!(&ae.icon_hint, Some(IconHintInput::Slug(s)) if s == "my-icon_1"),
+                "valid slug → Some(Slug), got {:?}",
+                ae.icon_hint
+            );
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_modal_icon_hint_slug_invalid_surfaces_validation_error() {
+    // Fifth test: an invalid slug under *Slug:* surfaces the inline
+    // `validation_error { field: "icon_hint", reason: "invalid_chars" }`
+    // (the §4.1 grammar's concrete reason — the core has no
+    // "invalid_slug" reason) and emits no effect.
+    let (_tmp, _id, _path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = state
+    {
+        edit.icon_hint_selector = EditIconHintSelector::Slug;
+        edit.icon_hint_slug = "bad slug".to_string();
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(effects.is_empty(), "invalid slug must not emit an effect");
+    let edit = expect_edit_modal(&state);
+    let err = edit
+        .error
+        .as_ref()
+        .expect("expected inline icon_hint error");
+    assert!(
+        err.contains("icon_hint") && err.contains("invalid_chars"),
+        "expected icon_hint invalid_chars, got {err:?}"
+    );
+}
+
+#[test]
+fn edit_modal_icon_hint_toggle_away_and_back_preserves_slug_buffer() {
+    // Sixth test: switching the selector off *Slug:* and back keeps
+    // the slug buffer's text so the user does not lose typed input.
+    let (_tmp, _id, _path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = state
+    {
+        edit.icon_hint_selector = EditIconHintSelector::Slug;
+        edit.icon_hint_slug = "typed-slug".to_string();
+        edit.focus = EditFocus::IconHint;
+    }
+    let (state, _) = reduce(state, key(KeyCode::Left)); // Slug → Clear
+    assert_eq!(
+        expect_edit_modal(&state).icon_hint_selector,
+        EditIconHintSelector::Clear
+    );
+    let (state, _) = reduce(state, key(KeyCode::Right)); // Clear → Slug
+    let edit = expect_edit_modal(&state);
+    assert_eq!(edit.icon_hint_selector, EditIconHintSelector::Slug);
+    assert_eq!(
+        edit.icon_hint_slug, "typed-slug",
+        "slug text survives toggling off Slug: and back"
+    );
+}
+
+#[test]
+fn edit_modal_icon_hint_slug_reserved_tokens_stay_literal_slugs() {
+    // Seventh test: with the selector on *Slug:*, the literal tokens
+    // `default` / `none` submit as `Some(Slug("default"))` /
+    // `Some(Slug("none"))` rather than collapsing to Default / Clear —
+    // the reserved-token grammar of `parse_icon_hint_token` does not
+    // leak into this row.
+    for token in ["default", "none"] {
+        let (_tmp, _id, _path, mut state) =
+            fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+        if let AppState::Unlocked {
+            modal: Some(Modal::Edit(ref mut edit)),
+            ..
+        } = state
+        {
+            edit.icon_hint_selector = EditIconHintSelector::Slug;
+            edit.icon_hint_slug = token.to_string();
+        }
+        let (_state, effects) = reduce(state, key(KeyCode::Enter));
+        assert_eq!(effects.len(), 1, "token {token:?} should submit");
+        match &effects[0] {
+            Effect::EditAccountMetadata { edit: ae, .. } => {
+                assert!(
+                    matches!(&ae.icon_hint, Some(IconHintInput::Slug(s)) if s == token),
+                    "token {token:?} must stay a literal Slug, got {:?}",
+                    ae.icon_hint
+                );
+            }
+            other => panic!("expected EditAccountMetadata, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn edit_modal_icon_hint_slug_out_of_grammar_rejected_without_mutation() {
+    // Eighth test: uppercase / out-of-grammar slugs under *Slug:*
+    // surface `validation_error { field: "icon_hint", reason:
+    // "invalid_chars" }`, emit no effect, and leave the buffer
+    // byte-identical (no auto-lowercasing, no character stripping) —
+    // pinning the §4.7 no-mutation contract.
+    for bad in ["Acme", "foo bar", "foo.bar"] {
+        let (_tmp, _id, _path, mut state) =
+            fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+        if let AppState::Unlocked {
+            modal: Some(Modal::Edit(ref mut edit)),
+            ..
+        } = state
+        {
+            edit.icon_hint_selector = EditIconHintSelector::Slug;
+            edit.icon_hint_slug = bad.to_string();
+        }
+        let (state, effects) = reduce(state, key(KeyCode::Enter));
+        assert!(effects.is_empty(), "{bad:?} must not emit an effect");
+        let edit = expect_edit_modal(&state);
+        let err = edit.error.as_ref().expect("expected inline error");
+        assert!(
+            err.contains("icon_hint") && err.contains("invalid_chars"),
+            "expected icon_hint invalid_chars for {bad:?}, got {err:?}"
+        );
+        assert_eq!(
+            edit.icon_hint_slug, bad,
+            "buffer must be byte-identical (no lowercasing / stripping)"
+        );
+    }
+}
+
+#[test]
 fn edit_modal_typing_in_disabled_slug_row_is_noop() {
     // The slug row is disabled when the selector is on LeaveUnchanged
     // / Default / Clear. Focus cannot land on Slug via Tab when the

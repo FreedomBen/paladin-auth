@@ -2333,7 +2333,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   `Ctrl-U` is routed to the Edit modal via the new
   `is_modal_clear_line` dispatch gate and applied by
   `apply_modal_text_edit`.)*
-- [ ] Icon-hint selector — four reducer tests, one per option:
+- [x] Icon-hint selector — four reducer tests, one per option:
   *Leave unchanged* → `AccountEdit.icon_hint = None`;
   *Default from issuer* → `Some(IconHintInput::Default)`;
   *No icon* → `Some(IconHintInput::Clear)`;
@@ -2341,8 +2341,10 @@ ships in `paladin-core` and the TUI Edit modal lands.
   (routed through `paladin_core::validate_icon_hint_slug`, not
   `parse_icon_hint_token`). A fifth test asserts an invalid slug
   under *Slug:* surfaces the inline `validation_error`
-  (`field: "icon_hint"`, `reason: "invalid_slug"`) and emits no
-  effect. A sixth test asserts that switching the selector away
+  (`field: "icon_hint"`, `reason: "invalid_chars"` — the §4.1
+  grammar's concrete reason; the locked core defines no
+  `"invalid_slug"` reason, only `"empty"` / `"too_long"` /
+  `"invalid_chars"`) and emits no effect. A sixth test asserts that switching the selector away
   from *Slug:* and back preserves the slug buffer's text (so the
   user does not lose typed input by toggling modes). A seventh
   test pins the slug-only semantics: with the selector on *Slug:*
@@ -2359,6 +2361,14 @@ ships in `paladin-core` and the TUI Edit modal lands.
   byte-identical before and after the rejected submit (no
   auto-lowercasing, no character stripping), pinning the §4.7
   no-mutation contract.
+  *(`edit_modal_icon_hint_leave_unchanged_projects_none`,
+  `edit_modal_icon_hint_default_projects_default`,
+  `edit_modal_icon_hint_selector_no_icon_projects_clear`,
+  `edit_modal_icon_hint_slug_valid_projects_slug`,
+  `edit_modal_icon_hint_slug_invalid_surfaces_validation_error`,
+  `edit_modal_icon_hint_toggle_away_and_back_preserves_slug_buffer`,
+  `edit_modal_icon_hint_slug_reserved_tokens_stay_literal_slugs`,
+  `edit_modal_icon_hint_slug_out_of_grammar_rejected_without_mutation`.)*
 - [ ] Opening Edit on an account whose prior `icon_hint` is `None`
   with a non-empty issuer, then pressing `Enter` without touching
   the selector, emits an effect whose `AccountEdit.icon_hint`
