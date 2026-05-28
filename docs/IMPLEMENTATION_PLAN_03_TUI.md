@@ -2286,12 +2286,13 @@ ships in `paladin-core` and the TUI Edit modal lands.
   reducer's **explicit empty check** (the validator does not
   reject emptiness; the reducer mirrors the mutator-side guard),
   rendered in the modal body slot, without emitting an effect.
-- [ ] Whitespace-only label buffer surfaces the inline
+- [x] Whitespace-only label buffer surfaces the inline
   `validation_error { field: "label", reason: "empty" }` beside
   the label row (post-§4.1-trim the buffer is empty, so the
   required-field check fires); the test exercises both a
   pure-ASCII-space buffer (`"   "`) and a mix of Unicode
   whitespace (`"\u{00A0}\u{2003}\t"`) to lock the trim semantics.
+  *(`edit_modal_whitespace_only_label_surfaces_label_empty_validation_error`.)*
 - [x] Pre-check ordering: with a draft that would fail all three
   checks (empty `AccountEdit`, invalid icon-hint slug under
   *Slug:*, and a duplicate-bearing label/issuer projection), the

@@ -22704,6 +22704,38 @@ fn edit_modal_empty_edit_submit_surfaces_validation_error() {
 }
 
 #[test]
+fn edit_modal_whitespace_only_label_surfaces_label_empty_validation_error() {
+    // A whitespace-only label buffer diverges from the prior label, so
+    // the empty-edit guard does not fire; the projection carries
+    // `label: Some(ws)` into `validate_account_edit`, whose §4.1 trim
+    // collapses it to empty and surfaces `field: "label", reason:
+    // "empty"`. Exercise both a pure-ASCII-space buffer and a mix of
+    // Unicode whitespace to lock the trim semantics.
+    for ws in ["   ", "\u{00A0}\u{2003}\t"] {
+        let (_tmp, _id, _path, mut state) =
+            fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+        if let AppState::Unlocked {
+            modal: Some(Modal::Edit(ref mut edit)),
+            ..
+        } = state
+        {
+            edit.label_buffer = ws.to_string();
+        }
+        let (state, effects) = reduce(state, key(KeyCode::Enter));
+        assert!(
+            effects.is_empty(),
+            "whitespace-only label ({ws:?}) must not emit an effect"
+        );
+        let edit = expect_edit_modal(&state);
+        let err = edit.error.as_ref().expect("expected inline label error");
+        assert!(
+            err.contains("label") && err.contains("empty"),
+            "expected 'label: empty' validation error for {ws:?}, got {err:?}"
+        );
+    }
+}
+
+#[test]
 fn edit_modal_precheck_order_empty_wins_over_invalid_slug_and_duplicate() {
     // Set up: vault has two accounts that collide on the
     // (secret, issuer, label) triple after a hypothetical edit. The
