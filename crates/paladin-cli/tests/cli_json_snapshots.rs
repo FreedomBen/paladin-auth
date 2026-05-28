@@ -253,6 +253,34 @@ fn snapshot_rename_envelope() {
 }
 
 #[test]
+fn snapshot_edit_envelope() {
+    // `paladin edit` mirrors the `rename` success envelope:
+    // `{ "account": AccountSummary }`. The volatile UUID and the
+    // timestamps are redacted so the golden stays stable.
+    let (_dir, path) = fresh_vault_path();
+    seed_populated_plaintext_vault(&path);
+    let out = run_paladin(&[
+        "--json",
+        "--vault",
+        path.to_str().unwrap(),
+        "edit",
+        "alice",
+        "--label",
+        "alice2",
+        "--issuer",
+        "GitHub",
+        "--icon-hint",
+        "github",
+    ]);
+    assert_success(&out);
+    assert_json_snapshot!(parse_stdout_json(&out), {
+        ".account.id" => "[uuid]",
+        ".account.created_at" => "[timestamp]",
+        ".account.updated_at" => "[timestamp]",
+    });
+}
+
+#[test]
 fn snapshot_settings_get_envelope() {
     let (_dir, path) = fresh_vault_path();
     seed_empty_plaintext_vault(&path);
@@ -446,6 +474,15 @@ fn snapshot_help_envelope_top_level() {
 #[test]
 fn snapshot_help_envelope_subcommand() {
     let out = run_paladin(&["--json", "init", "--help"]);
+    assert_success(&out);
+    assert_json_snapshot!(parse_stdout_json(&out), {
+        ".help.text" => "[help-text]",
+    });
+}
+
+#[test]
+fn snapshot_edit_help_envelope() {
+    let out = run_paladin(&["--json", "edit", "--help"]);
     assert_success(&out);
     assert_json_snapshot!(parse_stdout_json(&out), {
         ".help.text" => "[help-text]",

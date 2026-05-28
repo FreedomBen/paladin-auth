@@ -1492,7 +1492,7 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   agreement; a follow-up bullet covers raw byte equality.)
   Pinned analog of the `qr` read-only HOTP bullet — `paladin edit`
   must never advance a counter or decode a secret.
-- [ ] `edit --json` envelopes match the
+- [x] `edit --json` envelopes match the
   `cli_json_snapshots.rs` golden shape; volatile fields
   (`updated_at`) are redacted in the snapshot.
 - [x] Pre-commit save failure (via the core
@@ -1518,7 +1518,7 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   matches a golden `insta` snapshot — covers the human-facing
   rendering of `validation_error` for `edit` (parallel to the
   per-command error-rendering snapshots elsewhere).
-- [ ] `paladin edit --help` (text + `--json --help`) snapshot:
+- [x] `paladin edit --help` (text + `--json --help`) snapshot:
   `--json --help` envelope shape is
   `{ "help": { "command": "paladin edit", "text": "..." } }` per
   `output::help::resolve_command_path`; the `text` field is
