@@ -57,13 +57,14 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use paladin_core::{
-    policy::auto_lock::IdlePolicy, Account, AccountId, PaladinError, Store, ValidatedAccount,
-    Vault, VaultLock, VaultSettings, VaultStatus,
+    policy::auto_lock::IdlePolicy, Account, AccountEdit, AccountId, PaladinError, Store,
+    ValidatedAccount, Vault, VaultLock, VaultSettings, VaultStatus,
 };
 
 use crate::add_account::{
     AddAccountMsg, AddWorkerEffect, AddWorkerInput, QrWorkerEffect, QrWorkerInput,
 };
+use crate::edit_dialog::{EditWorkerEffect, EditWorkerInput};
 use crate::effect_ownership::{
     CompleteOutcome, EffectKind, EffectOwnership, EffectStart, LockDecision, QuitDecision,
 };
@@ -1087,6 +1088,92 @@ pub fn compose_rename_worker_input(
     }
 }
 
+/// Decide the [`AppState`] transition when `AppModel::update`
+/// receives the validated [`crate::edit_dialog::EditDialogOutput::Submit`]
+/// dispatch from [`crate::edit_dialog::EditDialogComponent`].
+///
+/// Symmetric partner of [`submit_rename_app_state`] for the edit
+/// path: both cover `Unlocked → UnlockedBusy` (the worker takes the
+/// already-decrypted `(Vault, Store)` pair through
+/// `Vault::mutate_and_save`), differing only in the dispatch origin
+/// (`EditDialogOutput::Submit` vs `RenameDialogOutput::SubmitLabel`).
+///
+/// The helper is a name-the-entry-point wrapper over
+/// [`AppState::enter_busy`]: it returns `Some(UnlockedBusy { path })`
+/// iff `current` is `Unlocked { path }`, and `None` for every other
+/// source state (`Missing`, `Locked`, `UnlockedBusy`,
+/// `StartupError`). The `None` arm is the defensive case for a stray
+/// dispatch — an edit submit that arrives from any other source
+/// state leaves `AppModel` in place rather than installing a phantom
+/// `UnlockedBusy`.
+///
+/// The composer stays shape-only — it delegates the transition to
+/// [`AppState::enter_busy`] — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+#[must_use]
+pub fn submit_edit_app_state(current: &AppState) -> Option<AppState> {
+    current.clone().enter_busy()
+}
+
+/// Bundle the live `(Vault, Store)` pair and the
+/// [`crate::edit_dialog::EditDialogOutput::Submit`] payload into an
+/// [`EditWorkerInput`] for the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.edit_account_metadata(...))` worker.
+///
+/// Symmetric partner of [`compose_rename_worker_input`] on the edit
+/// path: where the rename composer captures the live
+/// `(Vault, Store)` pair plus the account id, trimmed label, and
+/// dispatch-site wall-clock, this composer captures the live
+/// `(Vault, Store)` pair plus the account id, the assembled
+/// [`AccountEdit`], and the dispatch-site wall-clock. Both composers
+/// inspect `current` before the busy-gate transition so the source
+/// state is verified before [`submit_edit_app_state`] consumes the
+/// variant per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+/// interaction".
+///
+/// Returns `Ok(EditWorkerInput)` iff `current` is
+/// [`AppState::Unlocked`]. The `Err((vault, store))` branch is the
+/// defensive case for a stray dispatch from any other source state
+/// (`Missing` / `Locked` / `UnlockedBusy` / `StartupError`): the
+/// non-`Clone` live `(Vault, Store)` pair would be lost if the
+/// composer dropped it, so it is handed back so the caller can
+/// reinstall it into `AppModel.vault` rather than leaking the
+/// unlocked state. The contract mirrors the `Some` / `None`
+/// agreement with [`submit_edit_app_state`] — both helpers return
+/// success iff the source is `Unlocked`.
+///
+/// The composer stays shape-only — it inspects only the variant
+/// discriminant on `current` — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` against real `(Vault, Store)` pairs
+/// constructed via `paladin_core::Store::create` over a tempfile
+/// vault.
+pub fn compose_edit_worker_input(
+    current: &AppState,
+    pair: (Vault, Store),
+    account_id: AccountId,
+    edit: AccountEdit,
+    now: SystemTime,
+) -> Result<EditWorkerInput, (Vault, Store)> {
+    match current {
+        AppState::Unlocked { .. } => {
+            let (vault, store) = pair;
+            Ok(EditWorkerInput {
+                vault,
+                store,
+                account_id,
+                edit,
+                now,
+            })
+        }
+        AppState::Missing { .. }
+        | AppState::Locked { .. }
+        | AppState::UnlockedBusy { .. }
+        | AppState::StartupError { .. } => Err(pair),
+    }
+}
+
 /// Bundle the live `(Vault, Store)` pair and the validated
 /// [`paladin_core::Account`] payload from
 /// [`crate::add_account::classify_manual_submit`] /
@@ -1577,6 +1664,44 @@ pub fn apply_submit_rename_inplace(state: &mut AppState) -> bool {
     }
 }
 
+/// Apply [`submit_edit_app_state`] in-place to `state`, leaving it
+/// unchanged when the composer returns `None`.
+///
+/// Symmetric partner of [`apply_submit_rename_inplace`] for the edit
+/// path: both cover `Unlocked → UnlockedBusy` (the worker takes the
+/// already-decrypted `(Vault, Store)` pair through
+/// `Vault::mutate_and_save`), but they bridge different dispatch
+/// origins. `apply_submit_rename_inplace` fires from
+/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`]; this
+/// wrapper fires from [`crate::edit_dialog::EditDialogOutput::Submit`].
+/// Both bridge the owned-`self` [`AppState::enter_busy`] contract to
+/// the mut-reference call site so `AppModel::update`'s
+/// `EditDialogOutput::Submit` handler does not have to manage a
+/// take-and-restore dance around `submit_edit_app_state`'s
+/// `Option<AppState>` return.
+///
+/// Returns `true` when the state actually transitioned (source was
+/// `Unlocked` → destination is `UnlockedBusy`), `false` otherwise.
+/// `AppModel::update` uses the `true` return to gate the
+/// `gio::spawn_blocking Vault::mutate_and_save(|v|
+/// v.edit_account_metadata(...))` worker spawn — a `false` return is
+/// the defensive no-op for a stray `Submit` from any non-`Unlocked`
+/// source state (`Missing`, `Locked`, `UnlockedBusy`,
+/// `StartupError`).
+///
+/// The wrapper stays shape-only — it delegates to
+/// [`submit_edit_app_state`] without re-deriving the transition — so
+/// the side-effect decision in `AppModel::update` stays unit-testable
+/// in `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+pub fn apply_submit_edit_inplace(state: &mut AppState) -> bool {
+    if let Some(new_state) = submit_edit_app_state(state) {
+        *state = new_state;
+        true
+    } else {
+        false
+    }
+}
+
 /// Apply [`submit_add_app_state`] in-place to `state`, leaving it
 /// unchanged when the composer returns `None`.
 ///
@@ -1705,6 +1830,38 @@ pub fn rename_final_app_state(
     current: &AppState,
     _effect: &RenameWorkerEffect,
 ) -> Option<AppState> {
+    current.clone().leave_busy()
+}
+
+/// Unified state-transition composer for the edit worker outcome.
+///
+/// Symmetric partner of [`rename_final_app_state`] for the edit
+/// path. Every [`EditWorkerEffect`] variant — `Success` and the
+/// `Failure(PostEffectOutcome)` projection — lands on the same
+/// `UnlockedBusy → Unlocked` rollback via [`AppState::leave_busy`]
+/// because the edit worker reinstalls the live `(Vault, Store)` pair
+/// through [`apply_edit_vault_install_inplace`] regardless of effect
+/// (`Vault::mutate_and_save` is authoritative for the rollback /
+/// durability-unconfirmed semantics per docs/DESIGN.md §4.3). The
+/// dialog drop / inline-message routing handled at the dispatch site
+/// is what differs across effects.
+///
+/// `effect` is accepted for signature symmetry with
+/// [`rename_final_app_state`] (and so a future routing refinement can
+/// branch on it without changing call sites) but is not inspected.
+///
+/// Returns `Some(Unlocked { path })` iff `current` is
+/// [`AppState::UnlockedBusy`], and `None` from every other state. The
+/// `None` arm is the defensive case for a stray completion: an edit
+/// completion arriving while `current` is not `UnlockedBusy` must not
+/// silently install a phantom `Unlocked` over another idle state.
+///
+/// The composer is shape-only — it delegates to
+/// [`AppState::leave_busy`] without re-deriving the transition — so
+/// the side-effect decision in `AppModel::update` stays unit-testable
+/// in `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+#[must_use]
+pub fn edit_final_app_state(current: &AppState, _effect: &EditWorkerEffect) -> Option<AppState> {
     current.clone().leave_busy()
 }
 
@@ -2222,6 +2379,42 @@ pub fn apply_unlock_vault_install_inplace(
 /// `(Vault, Store)` pairs constructed via `paladin_core::Store::create`
 /// over a tempfile vault.
 pub fn apply_rename_vault_install_inplace(
+    vault_slot: &mut Option<(Vault, Store)>,
+    pair: (Vault, Store),
+) {
+    *vault_slot = Some(pair);
+}
+
+/// Install the worker's `(Vault, Store)` pair from
+/// [`crate::edit_dialog::EditWorkerCompletion`] into
+/// `AppModel::vault` in-place.
+///
+/// Symmetric partner of [`apply_rename_vault_install_inplace`] for
+/// the edit path. The shape is identical because the edit worker
+/// also returns the pair on *every* effect branch — `Success`,
+/// `save_durability_unconfirmed`, `save_not_committed`, and the
+/// defensive `invalid_state` / `duplicate_account` projections all
+/// come back with the same `(Vault, Store)`, because
+/// `Vault::mutate_and_save` is the authoritative rollback /
+/// durability source per docs/DESIGN.md §4.3. There is no `None` case
+/// to dispatch on, so the helper takes the pair by value and always
+/// installs.
+///
+/// `AppModel::update`'s `AppMsg::EditWorkerCompleted` handler holds
+/// the live vault slot behind `&mut Option<(Vault, Store)>` next to
+/// the state machine; this wrapper unconditionally writes through
+/// `Some(pair)`. That keeps it idempotent against a stray double-fire
+/// and safe against a stray completion arriving while the slot is
+/// empty (reinstalling the worker's pair is still the right behavior
+/// because it owns the authoritative post-`mutate_and_save` state).
+///
+/// `pair` is consumed by value because [`Vault`] and [`Store`] are
+/// non-`Clone`. The wrapper stays shape-only — it does not inspect
+/// the pair — so the side-effect decision in `AppModel::update` stays
+/// unit-testable in `tests/app_state_logic.rs` against real
+/// `(Vault, Store)` pairs constructed via `paladin_core::Store::create`
+/// over a tempfile vault.
+pub fn apply_edit_vault_install_inplace(
     vault_slot: &mut Option<(Vault, Store)>,
     pair: (Vault, Store),
 ) {

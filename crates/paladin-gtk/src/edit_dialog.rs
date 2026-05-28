@@ -1080,6 +1080,23 @@ pub struct EditDialogComponent {
     prior_account: Account,
 }
 
+impl EditDialogComponent {
+    /// Mutable view into the component's draft state.
+    ///
+    /// Exposed so `AppModel`'s auto-lock pruning can invoke
+    /// [`clear_for_lock`] on the live controller through
+    /// `controller.state().get_mut().model.state_mut()` before the
+    /// controller itself is dropped — the explicit
+    /// state-clear-then-drop sequence the lock-transition path uses
+    /// for every dialog that owns secret-adjacent buffers. Not
+    /// intended for in-flight UX mutations; route those through
+    /// `ComponentSender::input(EditDialogMsg::...)` so [`apply_msg`]
+    /// stays the single source of truth.
+    pub fn state_mut(&mut self) -> &mut EditDialogState {
+        &mut self.state
+    }
+}
+
 #[allow(missing_docs)]
 #[relm4::component(pub)]
 impl SimpleComponent for EditDialogComponent {

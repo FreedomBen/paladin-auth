@@ -39,24 +39,27 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use paladin_core::{
-    format_unsafe_permissions, AccountId, ErrorKind, PaladinError, PermissionSubject, Store, Vault,
-    VaultLock, VaultMode, VaultStatus,
+    format_unsafe_permissions, AccountEdit, AccountId, ErrorKind, PaladinError, PermissionSubject,
+    Store, Vault, VaultLock, VaultMode, VaultStatus,
 };
 
 use paladin_gtk::add_account::{AddWorkerInput, QrWorkerInput};
 use paladin_gtk::app::state::{
-    apply_add_vault_install_inplace, apply_submit_add_inplace, apply_submit_rename_inplace,
-    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_failure_action,
-    apply_unlock_vault_install_inplace, compose_add_worker_input, compose_qr_worker_input,
+    apply_add_vault_install_inplace, apply_edit_vault_install_inplace, apply_submit_add_inplace,
+    apply_submit_edit_inplace, apply_submit_rename_inplace, apply_submit_unlock_inplace,
+    apply_unlock_dispatch_inplace, apply_unlock_failure_action, apply_unlock_vault_install_inplace,
+    compose_add_worker_input, compose_edit_worker_input, compose_qr_worker_input,
     compose_rename_worker_input, compose_unlock_dispatch, compose_unlock_worker_input,
     decide_state_from_inspect, decide_state_from_open_error, decide_state_from_path_resolution,
-    decide_unlock_failure_action, decide_unlock_success_state, route_unlock_failure_effect,
-    route_unlock_success_effect, route_unlock_worker_outcome, run_unlock_worker,
-    should_drop_unlock_dialog_after, submit_add_app_state, submit_rename_app_state,
-    submit_unlock_app_state, unlock_app_state_after, unlock_dialog_msg_after,
-    unlock_final_app_state, AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect,
-    UnlockSuccessEffect, UnlockWorkerEffect, UnlockWorkerInput,
+    decide_unlock_failure_action, decide_unlock_success_state, edit_final_app_state,
+    route_unlock_failure_effect, route_unlock_success_effect, route_unlock_worker_outcome,
+    run_unlock_worker, should_drop_unlock_dialog_after, submit_add_app_state,
+    submit_edit_app_state, submit_rename_app_state, submit_unlock_app_state,
+    unlock_app_state_after, unlock_dialog_msg_after, unlock_final_app_state, AppState,
+    OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
+    UnlockWorkerEffect, UnlockWorkerInput,
 };
+use paladin_gtk::edit_dialog::{EditWorkerEffect, EditWorkerInput};
 use paladin_gtk::rename_dialog::RenameWorkerInput;
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -12552,4 +12555,593 @@ fn format_app_busy_spinner_visible_startup_error_returns_false() {
         error: StartupError::from_inspect(&err),
     };
     assert!(!format_app_busy_spinner_visible(Some(&state)));
+}
+
+// ---------------------------------------------------------------------------
+// compose_edit_worker_input — pre-worker `(Vault, Store, AccountId,
+//                                          AccountEdit, now)` bundler
+// ---------------------------------------------------------------------------
+//
+// Edit-path sibling of `compose_rename_worker_input` (Milestone 9
+// slice 4 supersedes the rename AppModel route with the edit route).
+// Where the rename composer captures the live `(Vault, Store)` pair
+// plus the `RenameDialogOutput::SubmitLabel` payload (account id,
+// trimmed label) and the dispatch-site wall-clock, the edit composer
+// captures the same pair plus the `EditDialogOutput::Submit` payload
+// (account id, assembled `AccountEdit`) and the wall-clock for the
+// `gio::spawn_blocking Vault::mutate_and_save(|v|
+// v.edit_account_metadata(...))` worker. Both gate on the
+// pre-transition source state (`Unlocked`) so `AppModel::update` can
+// call the composer before `submit_edit_app_state` consumes the
+// variant, and both return `Result<_, (Vault, Store)>` so the
+// non-`Clone` live pair is handed back on a stray dispatch rather
+// than dropped on the floor.
+
+#[test]
+fn compose_edit_worker_input_from_unlocked_bundles_pair_and_payload() {
+    // Happy path: `AppModel::update` receives `EditDialogOutput::Submit`
+    // while the model is `AppState::Unlocked(path)` with the live
+    // `(Vault, Store)` pair available in the sibling
+    // `Option<(Vault, Store)>` slot. The composer must move the pair
+    // plus the payload (account id, assembled `AccountEdit`, captured
+    // `SystemTime`) into an `EditWorkerInput` so the
+    // `gio::spawn_blocking` closure can hand the bundle straight to
+    // `run_edit_worker`.
+    let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+    let unlocked = AppState::Unlocked { path: path.clone() };
+    let account_id = AccountId::new();
+    let edit = AccountEdit {
+        label: Some("renamed".to_string()),
+        ..AccountEdit::default()
+    };
+    let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12_345);
+
+    let input: EditWorkerInput =
+        compose_edit_worker_input(&unlocked, (vault, store), account_id, edit, now)
+            .expect("Unlocked source must produce an EditWorkerInput");
+
+    assert_eq!(input.account_id, account_id);
+    assert_eq!(input.edit.label.as_deref(), Some("renamed"));
+    assert_eq!(input.now, now);
+    // The `(Vault, Store)` pair moved into the bundle; smoke-check the
+    // carried vault still names the same `Store` by exercising a fresh,
+    // empty account list.
+    assert_eq!(
+        input.vault.summaries().count(),
+        0,
+        "fresh plaintext vault should carry zero accounts into the worker bundle",
+    );
+}
+
+#[test]
+fn compose_edit_worker_input_from_non_unlocked_returns_pair_back() {
+    // Defensive: a stray `Submit` dispatch from any source other than
+    // `Unlocked` is a no-op for the worker spawn. The composer must
+    // hand the `(Vault, Store)` pair back via `Err((vault, store))`
+    // so the caller can restore it into `AppModel.vault` instead of
+    // leaking the live unlocked state. The `AccountEdit` payload is
+    // dropped on the `Err` branch — it carries no filesystem state.
+    let account_id = AccountId::new();
+    let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12_345);
+    for variant in ["missing", "locked", "unlocked_busy", "startup_error"] {
+        let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+        let source = match variant {
+            "missing" => AppState::Missing { path: path.clone() },
+            "locked" => AppState::Locked { path: path.clone() },
+            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
+            "startup_error" => decide_state_from_inspect(&path, Err(invalid_header_err()))
+                .expect("inspect Err yields StartupError state"),
+            _ => unreachable!(),
+        };
+        let edit = AccountEdit {
+            label: Some("renamed".to_string()),
+            ..AccountEdit::default()
+        };
+        let outcome = compose_edit_worker_input(&source, (vault, store), account_id, edit, now);
+        let Err((returned_vault, _returned_store)) = outcome else {
+            panic!(
+                "compose_edit_worker_input must return the pair back via Err for variant={variant}",
+            );
+        };
+        assert_eq!(
+            returned_vault.summaries().count(),
+            0,
+            "returned vault must still be the same live pair for variant={variant}",
+        );
+    }
+}
+
+#[test]
+fn compose_edit_worker_input_mirrors_submit_edit_app_state_gating() {
+    // Cross-check: the two entry-side edit composers — state
+    // transition (`submit_edit_app_state`) and worker bundling
+    // (`compose_edit_worker_input`) — must agree on the `Some`/`None`
+    // (resp. `Ok`/`Err`) gating decision so `AppModel::update` can
+    // call them in series without either one accepting a dispatch the
+    // other refuses.
+    let account_id = AccountId::new();
+    let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12_345);
+    for variant in [
+        "missing",
+        "locked",
+        "unlocked",
+        "unlocked_busy",
+        "startup_error",
+    ] {
+        let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+        let source = match variant {
+            "missing" => AppState::Missing { path: path.clone() },
+            "locked" => AppState::Locked { path: path.clone() },
+            "unlocked" => AppState::Unlocked { path: path.clone() },
+            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
+            "startup_error" => decide_state_from_inspect(&path, Err(invalid_header_err()))
+                .expect("inspect Err yields StartupError state"),
+            _ => unreachable!(),
+        };
+        let edit = AccountEdit {
+            label: Some("renamed".to_string()),
+            ..AccountEdit::default()
+        };
+        let submit_ok = submit_edit_app_state(&source).is_some();
+        let worker_ok =
+            compose_edit_worker_input(&source, (vault, store), account_id, edit, now).is_ok();
+        assert_eq!(
+            submit_ok, worker_ok,
+            "submit_edit_app_state and compose_edit_worker_input must agree on Ok/Err \
+             for variant={variant}: submit_ok={submit_ok}, worker_ok={worker_ok}",
+        );
+    }
+}
+
+#[test]
+fn compose_edit_worker_input_agrees_with_compose_rename_worker_input_gating() {
+    // Cross-check the two mutating-worker composers gate identically:
+    // the edit route supersedes the rename route in `AppModel`, but
+    // both still bracket the same `Unlocked`-only source-state
+    // contract, so a single change to the gating must move them
+    // together.
+    let account_id = AccountId::new();
+    let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12_345);
+    for variant in [
+        "missing",
+        "locked",
+        "unlocked",
+        "unlocked_busy",
+        "startup_error",
+    ] {
+        let source = |path: &PathBuf| match variant {
+            "missing" => AppState::Missing { path: path.clone() },
+            "locked" => AppState::Locked { path: path.clone() },
+            "unlocked" => AppState::Unlocked { path: path.clone() },
+            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
+            "startup_error" => decide_state_from_inspect(path, Err(invalid_header_err()))
+                .expect("inspect Err yields StartupError state"),
+            _ => unreachable!(),
+        };
+        let (_t1, p1, v1, s1) = fresh_plaintext_pair();
+        let edit = AccountEdit {
+            label: Some("renamed".to_string()),
+            ..AccountEdit::default()
+        };
+        let edit_ok =
+            compose_edit_worker_input(&source(&p1), (v1, s1), account_id, edit, now).is_ok();
+        let (_t2, p2, v2, s2) = fresh_plaintext_pair();
+        let rename_ok =
+            compose_rename_worker_input(&source(&p2), (v2, s2), account_id, "renamed".into(), now)
+                .is_ok();
+        assert_eq!(
+            edit_ok, rename_ok,
+            "compose_edit_worker_input and compose_rename_worker_input must agree on Ok/Err for \
+             variant={variant}: edit_ok={edit_ok}, rename_ok={rename_ok}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// apply_submit_edit_inplace — `AppModel::update` mut-state wrapper
+// ---------------------------------------------------------------------------
+//
+// Edit-path sibling of `apply_submit_rename_inplace`. Both cover
+// `Unlocked → UnlockedBusy` (the worker takes the already-decrypted
+// `(Vault, Store)` pair through `Vault::mutate_and_save`); the edit
+// wrapper fires from `EditDialogOutput::Submit` where the rename
+// wrapper fired from `RenameDialogOutput::SubmitLabel`. Both are thin
+// mut-reference wrappers over their matching `submit_*_app_state`
+// composer so `AppModel::update` does not have to manage the
+// take-and-restore dance around the composer's `Option<AppState>`
+// return.
+
+#[test]
+fn apply_submit_edit_inplace_from_unlocked_mutates_to_unlocked_busy_and_returns_true() {
+    // Happy path: `AppModel::update` mutates `self.state` in place via
+    // the helper when `EditDialogOutput::Submit` arrives from
+    // `AppState::Unlocked`. The resolved path is preserved verbatim so
+    // the rest of `AppModel` still names the same vault destination.
+    // The `true` return signals that the state actually transitioned
+    // so the caller can spawn the `gio::spawn_blocking
+    // Vault::mutate_and_save(|v| v.edit_account_metadata(...))` worker.
+    let path = vault_path();
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let transitioned = apply_submit_edit_inplace(&mut state);
+    assert!(
+        transitioned,
+        "apply_submit_edit_inplace must return true on the Unlocked → UnlockedBusy transition",
+    );
+    assert!(matches!(state, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_submit_edit_inplace_from_non_unlocked_leaves_state_unchanged_and_returns_false() {
+    // Defensive: a stray `Submit` dispatch from any non-`Unlocked`
+    // source is a no-op. The wrapped state must survive the call
+    // byte-for-byte so `AppModel::update` cannot accidentally clobber
+    // an idle state with a phantom `UnlockedBusy`. The `false` return
+    // tells the caller not to spawn the edit worker.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in sources {
+        let original_discriminant = std::mem::discriminant::<AppState>(&source);
+        let original_path = source.path().map(Path::to_path_buf);
+        let mut state = source.clone();
+        let transitioned = apply_submit_edit_inplace(&mut state);
+        assert!(
+            !transitioned,
+            "apply_submit_edit_inplace must return false for non-Unlocked source={source:?}",
+        );
+        assert_eq!(
+            std::mem::discriminant::<AppState>(&state),
+            original_discriminant,
+            "apply_submit_edit_inplace must leave variant unchanged for source={source:?}",
+        );
+        assert_eq!(
+            state.path().map(Path::to_path_buf),
+            original_path,
+            "apply_submit_edit_inplace must leave path unchanged for source={source:?}",
+        );
+    }
+}
+
+#[test]
+fn apply_submit_edit_inplace_mirrors_submit_edit_app_state_for_every_variant() {
+    // Cross-check: the wrapper must mirror `submit_edit_app_state`
+    // exactly. It is a name-the-call-site wrapper, not a
+    // re-derivation — the `true` / `false` partition matches the
+    // `Some` / `None` partition of the composer, and the resulting
+    // state on `true` matches the `Some(_)` variant + path the
+    // composer reports.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in &sources {
+        let composed = submit_edit_app_state(source);
+        let mut state = source.clone();
+        let transitioned = apply_submit_edit_inplace(&mut state);
+        if let Some(expected) = composed {
+            assert!(
+                transitioned,
+                "wrapper must return true when composer returns Some for source={source:?}",
+            );
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&state),
+                std::mem::discriminant::<AppState>(&expected),
+                "wrapper variant must mirror composer for source={source:?}",
+            );
+            assert_eq!(
+                state.path().map(Path::to_path_buf),
+                expected.path().map(Path::to_path_buf),
+                "wrapper path must mirror composer for source={source:?}",
+            );
+        } else {
+            assert!(
+                !transitioned,
+                "wrapper must return false when composer returns None for source={source:?}",
+            );
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&state),
+                std::mem::discriminant::<AppState>(source),
+                "wrapper must leave variant unchanged when composer returns None for source={source:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn apply_submit_edit_inplace_agrees_with_apply_submit_rename_inplace() {
+    // Both wrappers cover the same `Unlocked → UnlockedBusy`
+    // busy-gate transition from different dispatch origins (edit vs
+    // rename). Pin that they agree on the true/false partition and on
+    // the resulting variant for every source state.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in &sources {
+        let mut edit_state = source.clone();
+        let edit_transitioned = apply_submit_edit_inplace(&mut edit_state);
+        let mut rename_state = source.clone();
+        let rename_transitioned = apply_submit_rename_inplace(&mut rename_state);
+        assert_eq!(
+            edit_transitioned, rename_transitioned,
+            "apply_submit_edit_inplace and apply_submit_rename_inplace must agree on true/false \
+             for source={source:?}",
+        );
+        assert_eq!(
+            std::mem::discriminant::<AppState>(&edit_state),
+            std::mem::discriminant::<AppState>(&rename_state),
+            "apply_submit_edit_inplace and apply_submit_rename_inplace must land on the same \
+             variant for source={source:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// apply_edit_vault_install_inplace — `AppModel::vault` mut-slot wrapper
+// ---------------------------------------------------------------------------
+//
+// Edit-path sibling of `apply_rename_vault_install_inplace`.
+// `EditWorkerCompletion` carries the live `(Vault, Store)` pair
+// *unconditionally* (every effect branch — `Success`,
+// `save_durability_unconfirmed`, `save_not_committed`, defensive
+// `invalid_state` / `duplicate_account` — comes back with the same
+// pair because `Vault::mutate_and_save` is the authoritative
+// rollback / durability source per docs/DESIGN.md §4.3), so this
+// wrapper takes the pair by value and always installs.
+
+#[test]
+fn apply_edit_vault_install_inplace_writes_pair_into_empty_slot() {
+    // Defensive: the edit flow enters with `AppModel::vault = Some(_)`
+    // (the dispatch comes from `Unlocked`), but a stray dispatch from
+    // a non-`Unlocked` source could leave the slot empty when the
+    // completion arrives. The wrapper must still install the pair —
+    // `Vault::mutate_and_save` returned an authoritative
+    // `(Vault, Store)` and silently dropping it would leak the
+    // unlocked state.
+    let (_tempdir, _path, pair) = fresh_plaintext_vault_pair();
+    let mut slot: Option<(paladin_core::Vault, paladin_core::Store)> = None;
+    apply_edit_vault_install_inplace(&mut slot, pair);
+    assert!(
+        slot.is_some(),
+        "apply_edit_vault_install_inplace must install the pair into an empty slot",
+    );
+}
+
+#[test]
+fn apply_edit_vault_install_inplace_replaces_existing_slot() {
+    // Happy path: edit dispatch enters with `AppModel::vault =
+    // Some(pair_a)` from the pre-`UnlockedBusy` snapshot. The worker
+    // takes the pair out, runs `mutate_and_save`, and returns a fresh
+    // `(Vault, Store)` pair (`pair_b`). The wrapper must overwrite
+    // `pair_a` with `pair_b` so the live slot reflects the post-save
+    // state.
+    let (_tempdir_a, _path_a, pair_a) = fresh_plaintext_vault_pair();
+    let (_tempdir_b, _path_b, pair_b) = fresh_plaintext_vault_pair();
+    let mut slot = Some(pair_a);
+    apply_edit_vault_install_inplace(&mut slot, pair_b);
+    assert!(
+        slot.is_some(),
+        "apply_edit_vault_install_inplace must leave the slot filled after a replacement",
+    );
+}
+
+#[test]
+fn apply_edit_vault_install_inplace_consumes_run_edit_worker_completion_pair() {
+    // Cross-check: the wrapper must round-trip the unconditional
+    // `(Vault, Store)` pair carried by `EditWorkerCompletion`
+    // regardless of the `EditWorkerEffect` variant. The edit worker
+    // always returns the pair — `Success`, durability-unconfirmed
+    // warnings, and `save_not_committed` rollbacks all come back with
+    // the same shape — so the wrapper is contract-identical across
+    // every effect branch. On the happy `Success` path the post-edit
+    // vault reflects the assembled `AccountEdit`.
+    use paladin_core::{validate_manual, AccountInput, AccountKindInput, Algorithm, IconHintInput};
+    use paladin_gtk::edit_dialog::run_edit_worker;
+    use secrecy::SecretString;
+
+    let (_tempdir, _vault_path, pair) = fresh_plaintext_vault_pair();
+    let (mut vault, store) = pair;
+    let input = AccountInput {
+        label: "label".to_string(),
+        issuer: Some("issuer".to_string()),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::UNIX_EPOCH).expect("totp account input validates");
+    let account_id = vault.add(validated.account);
+    vault.save(&store).expect("commit seeded account");
+
+    let edit = AccountEdit {
+        label: Some("edited-label".to_string()),
+        ..AccountEdit::default()
+    };
+    let worker_input = EditWorkerInput {
+        vault,
+        store,
+        account_id,
+        edit,
+        now: SystemTime::UNIX_EPOCH,
+    };
+    let completion = run_edit_worker(worker_input);
+    assert!(
+        matches!(completion.effect, EditWorkerEffect::Success { .. }),
+        "plaintext edit_account_metadata must succeed",
+    );
+
+    let mut slot: Option<(paladin_core::Vault, paladin_core::Store)> = None;
+    apply_edit_vault_install_inplace(&mut slot, (completion.vault, completion.store));
+    assert!(
+        slot.is_some(),
+        "run_edit_worker completion pair must install (edit always returns the pair)",
+    );
+    let (installed_vault, _installed_store) = slot.expect("installed pair");
+    let edited = installed_vault
+        .accounts()
+        .iter()
+        .find(|a| a.id() == account_id)
+        .expect("edited account survives the install");
+    assert_eq!(
+        edited.label(),
+        "edited-label",
+        "post-install vault must reflect the edited label (mirrors run_edit_worker output)",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// edit_final_app_state — unified state-transition composer
+// ---------------------------------------------------------------------------
+//
+// Edit-path sibling of `rename_final_app_state`. Every
+// `EditWorkerEffect` variant — `Success` and the
+// `Failure(PostEffectOutcome)` projection — lands on the same
+// `UnlockedBusy → Unlocked` transition via `AppState::leave_busy`.
+// The `None` return is reserved for the defensive case where the
+// completion arrives but `current` is not `UnlockedBusy` — a stray
+// call from an unexpected source state.
+
+#[test]
+fn edit_final_app_state_success_rolls_back_to_unlocked_preserving_path() {
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = EditWorkerEffect::Success { post_summary: None };
+    let next = edit_final_app_state(&busy, &effect)
+        .expect("success outcome rolls back UnlockedBusy → Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn edit_final_app_state_failure_rolls_back_to_unlocked_preserving_path() {
+    use paladin_gtk::edit_dialog::classify_post_effect_error;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    // Every `Failure` projection rolls back the busy gate identically;
+    // exercise the `save_durability_unconfirmed` (warning) and
+    // `save_not_committed` (error) arms so the rollback is pinned for
+    // both the warning and the error branches.
+    let warning = EditWorkerEffect::Failure(classify_post_effect_error(
+        &PaladinError::SaveDurabilityUnconfirmed,
+    ));
+    let error = EditWorkerEffect::Failure(classify_post_effect_error(
+        &PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        },
+    ));
+    for effect in [warning, error] {
+        let next = edit_final_app_state(&busy, &effect)
+            .expect("failure outcome rolls back UnlockedBusy → Unlocked (dialog stays open)");
+        assert!(matches!(next, AppState::Unlocked { .. }));
+        assert_path_eq(&next, &path);
+    }
+}
+
+#[test]
+fn edit_final_app_state_from_non_unlocked_busy_returns_none() {
+    // Defensive: a stray completion arriving while `current` is not
+    // `UnlockedBusy` must not silently install a phantom `Unlocked`
+    // transition over another idle state. Pinned across every typed
+    // effect so the defensive arm cannot drift with the effect
+    // routing.
+    use paladin_gtk::edit_dialog::classify_post_effect_error;
+
+    let path = vault_path();
+    let effects = [
+        EditWorkerEffect::Success { post_summary: None },
+        EditWorkerEffect::Failure(classify_post_effect_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        EditWorkerEffect::Failure(classify_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            },
+        )),
+    ];
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for effect in &effects {
+        for source in &sources {
+            assert!(
+                edit_final_app_state(source, effect).is_none(),
+                "edit_final_app_state must return None for non-UnlockedBusy source={source:?} effect={effect:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn edit_final_app_state_mirrors_rename_final_for_every_source() {
+    // Cross-check: the edit composer is a name-the-call-site wrapper
+    // over `AppState::leave_busy`, the same underlying transition the
+    // rename composer uses. The `Some` / `None` partition across
+    // source states (and the resulting variant on `Some`) must match
+    // `rename_final_app_state` so the edit route inherits the exact
+    // busy-gate rollback the rename route had.
+    use paladin_gtk::app::state::rename_final_app_state;
+    use paladin_gtk::rename_dialog::RenameWorkerEffect;
+
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    let edit_effect = EditWorkerEffect::Success { post_summary: None };
+    let rename_effect = RenameWorkerEffect::Success;
+    for source in &sources {
+        let edit_next = edit_final_app_state(source, &edit_effect);
+        let rename_next = rename_final_app_state(source, &rename_effect);
+        assert_eq!(
+            edit_next.is_some(),
+            rename_next.is_some(),
+            "edit_final_app_state and rename_final_app_state must agree on Some/None for \
+             source={source:?}",
+        );
+        if let (Some(edit_state), Some(rename_state)) = (edit_next, rename_next) {
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&edit_state),
+                std::mem::discriminant::<AppState>(&rename_state),
+                "edit_final_app_state and rename_final_app_state must land on the same variant \
+                 for source={source:?}",
+            );
+            assert_eq!(
+                edit_state.path().map(Path::to_path_buf),
+                rename_state.path().map(Path::to_path_buf),
+                "edit_final_app_state and rename_final_app_state must preserve the same path for \
+                 source={source:?}",
+            );
+        }
+    }
 }

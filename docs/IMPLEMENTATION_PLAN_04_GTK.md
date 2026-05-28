@@ -2445,7 +2445,7 @@ core.
    the right-click popover. The existing
    `build_kebab_menu_model` becomes a thin wrapper around it for
    one slice, then is removed once every call site is migrated.
-- [ ] **Slice 4 — EditDialog scaffold + auto-lock plumbing.**
+- [x] **Slice 4 — EditDialog scaffold + auto-lock plumbing.**
    Add `edit_dialog.rs` with the pure-logic state machine
    (`EditDialogState`,
    `classify_edit_draft(state, prior) -> AccountEdit` — the
