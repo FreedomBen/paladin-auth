@@ -935,7 +935,7 @@ impl Vault {
     pub fn remove(&mut self, id: AccountId) -> Option<Account>;
     pub fn iter(&self) -> impl Iterator<Item = &Account>;                          // insertion order
     pub fn summaries(&self) -> impl Iterator<Item = AccountSummary>;                // insertion order, non-secret projections
-    pub fn rename(&mut self, id: AccountId, label: &str, now: SystemTime) -> Result<()>;
+    pub fn rename(&mut self, id: AccountId, label: &str, now: SystemTime) -> Result<()>;  // Retained for source compatibility post-M9; reimplemented as a thin forwarder that builds `AccountEdit { label: Some(label.into()), ..Default::default() }` and delegates to `edit_account_metadata`. Error envelopes are byte-identical to the pre-M9 implementation (the in-mutator empty-`AccountEdit` check can never fire on this path because the constructed edit always carries `Some(label)`).
     pub fn edit_account_metadata(&mut self, id: AccountId, edit: AccountEdit, now: SystemTime) -> Result<()>;  // Multi-field non-cryptographic edit (label / issuer / icon_hint). See `AccountEdit` below. Reuses §4.1 validation per supplied field. `rename` is the label-only shorthand; both bump `updated_at` and route through `mutate_and_save`.
     pub fn find_duplicate(&self, account: &ValidatedAccount) -> Option<&Account>;  // exact (secret, issuer, label) collision helper for single-entry add flows
     pub fn find_duplicate_after_edit(&self, id: AccountId, edit: &AccountEdit) -> Option<&Account>;  // companion to `find_duplicate` for edit flows: projects the would-be post-edit (secret, issuer, label) for `id` (secret is never edited) and runs the same byte-for-byte / case-sensitive comparison, skipping the account at `id` so an unchanged self-comparison never reports a collision. Returns `None` for unknown `id`. Used by CLI `paladin edit`, TUI Edit modal, and GUI `EditDialog` to render `duplicate_account` before submission.
@@ -1016,7 +1016,9 @@ pub struct AccountEdit {
     pub icon_hint: Option<IconHintInput>,  // Some(...) applies the IconHintInput tri-state (Default re-derives from the post-edit issuer; Clear stores None; Slug validates §4.1); None leaves the prior slug untouched.
 }
 
-pub fn validate_account_edit(edit: &AccountEdit, prior: &Account, now: SystemTime) -> Result<()>;  // pure-logic pre-flight validator routing the present fields through `validate_label`, `validate_issuer`, and the §4.1 slug-shape check (the same `[a-z0-9_-]+` rule `validate_icon_hint_slug` enforces) on the `IconHintInput::Slug(_)` arm; `IconHintInput::Default` / `Clear` carry no slug text so they need no validator. No mutation. Returns `validation_error` with the offending field on first failure. `Vault::edit_account_metadata` calls this internally; the front ends may also call it directly to drive inline per-field error rendering before the user submits.
+pub fn validate_account_edit(edit: &AccountEdit, prior: &Account, now: SystemTime) -> Result<()>;  // pure-logic pre-flight validator routing the present fields through `validate_label`, `validate_issuer`, and the §4.1 slug-shape check (the same `[a-z0-9_-]+` rule `validate_icon_hint_slug` enforces) on the `IconHintInput::Slug(_)` arm; `IconHintInput::Default` / `Clear` carry no slug text so they need no validator. Deliberately does **not** reject an entirely empty `AccountEdit` — that rejection lives on `Vault::edit_account_metadata` so the front ends can use the validator for per-field rendering without it short-circuiting on a draft the user is mid-way through filling. The `prior` and `now` parameters are accepted for forward compatibility with cross-field invariants (none today); callers may pass a snapshot read just before the call without worrying about staleness because the v0.2 implementation ignores them. No mutation. Returns `validation_error` with the offending field on first failure. `Vault::edit_account_metadata` calls this internally; the front ends may also call it directly to drive inline per-field error rendering before the user submits.
+
+Each front end additionally owns its own *draft-classification* helpers — the TUI Edit modal reducer and the GTK `EditDialog`'s `classify_edit_draft` / `classify_submit` pair — that project raw widget buffers onto an `AccountEdit`, decide Save sensitivity, and route the submit/reject/show-error decision. These are pure functions local to each front-end crate; the core's public contract for edit is `validate_account_edit` + `Vault::find_duplicate_after_edit` + `Vault::edit_account_metadata`. Promoting the classifiers into `paladin-core` is deferred until a third caller justifies the shared surface.
 
 pub mod import {
     pub enum ImportFormat { Otpauth, Aegis, Paladin, Qr, Unknown }
@@ -1192,7 +1194,7 @@ Built with `clap` (derive). Commands:
 | `paladin copy <query>`                      | Copy code to clipboard. For HOTP, advances and saves before attempting the clipboard write. (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see security consideration 6.) |
 | `paladin remove <query>`                    | Remove an account. Prompts for confirmation; `--yes` skips the prompt. Required under `--json` (no confirmation prompt available). |
 | `paladin rename <query> <label>`            | Rename an account.                                               |
-| `paladin edit <query> [--label <label>] [--issuer <issuer> \| --no-issuer] [--icon-hint <slug> \| --no-icon-hint] [--allow-duplicate]` | Edit an account's non-cryptographic metadata: label, issuer, and/or icon hint. Requires at least one of `--label` / `--issuer` / `--no-issuer` / `--icon-hint` / `--no-icon-hint`; a no-flag invocation is rejected at parse time as `validation_error` (`field: "argv"`, `reason: "no_edit_fields"`). `--issuer` and `--no-issuer` are mutually exclusive; `--icon-hint` and `--no-icon-hint` are mutually exclusive. Single-match cardinality (like `copy` / `remove` / `rename` / `qr`). After per-field validation, calls `Vault::find_duplicate_after_edit(id, &edit)` and rejects a `(secret, issuer, label)` collision with `duplicate_account` (the existing collision's `account` summary in the envelope) unless `--allow-duplicate` is supplied — mirroring `paladin add`'s collision path. Routes through `Vault::edit_account_metadata` inside `Vault::mutate_and_save`; bumps `updated_at`. Read-only on the secret bytes — never advances HOTP counters and never re-derives a slug from secret content. The narrower `paladin rename <query> <label>` stays as the label-only positional shorthand. |
+| `paladin edit <query> [--label <label>] [--issuer <issuer> \| --no-issuer] [--icon-hint <slug> \| --no-icon-hint] [--allow-duplicate] [--dry-run]` | Edit an account's non-cryptographic metadata: label, issuer, and/or icon hint. Requires at least one of `--label` / `--issuer` / `--no-issuer` / `--icon-hint` / `--no-icon-hint`; a no-flag invocation is rejected at parse time as `validation_error` (`field: "argv"`, `reason: "no_edit_fields"`). `--allow-duplicate` is an override modifier and does **not** satisfy that requirement. `--issuer` and `--no-issuer` are mutually exclusive; `--icon-hint` and `--no-icon-hint` are mutually exclusive. Single-match cardinality (like `copy` / `remove` / `rename` / `qr`). After per-field validation, calls `Vault::find_duplicate_after_edit(id, &edit)` and rejects a `(secret, issuer, label)` collision with `duplicate_account` (the existing collision's `account` summary in the envelope) unless `--allow-duplicate` is supplied — mirroring `paladin add`'s collision path. Routes through `Vault::edit_account_metadata` inside `Vault::mutate_and_save`; bumps `updated_at` (even on no-op-but-non-empty edits where every field matches the prior summary). Read-only on the secret bytes — never advances HOTP counters and never re-derives a slug from secret content. Text mode prints nothing on success; under `--json` the shape is `{ "account": AccountSummary }`. `--dry-run` runs the full pre-flight read-only and emits the projected post-edit summary with `committed: false` under `--json`; text mode stays silent. The narrower `paladin rename <query> <label>` stays as the label-only positional shorthand. |
 | `paladin passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
 | `paladin passphrase change`                 | Re-encrypt under a new passphrase.                               |
 | `paladin passphrase remove`                 | Decrypt to plaintext. Warns and prompts for destructive confirmation unless `--yes` is passed. Required under `--json` (no confirmation prompt available). |
@@ -1368,7 +1370,10 @@ advisories), since the user opting into `--out <path>` plus
 at least one of `--label <label>`, `--issuer <issuer>`, `--no-issuer`,
 `--icon-hint <slug>`, or `--no-icon-hint`; a no-flag invocation is
 rejected at parse time as `validation_error` (`field: "argv"`,
-`reason: "no_edit_fields"`) before the query is resolved. `--issuer`
+`reason: "no_edit_fields"`) before the query is resolved.
+`--allow-duplicate` is a collision *override* — it does **not** satisfy
+the at-least-one requirement; `paladin edit foo --allow-duplicate`
+with no edit flags still rejects as `no_edit_fields`. `--issuer`
 and `--no-issuer` are mutually exclusive, as are `--icon-hint` and
 `--no-icon-hint`; either collision is rejected at parse time as
 `validation_error` (`field: "argv"`, `reason: "mutually_exclusive"`).
@@ -1397,8 +1402,20 @@ restore the pre-edit account state; `save_durability_unconfirmed`
 leaves the edit visible with the standard durability warning.
 `paladin edit` is read-only on the secret bytes — it never advances
 HOTP counters, never decodes the stored secret, and never re-derives
-a slug from secret content. `paladin rename <query> <label>` stays
-as the single-positional shorthand for the label-only path and is
+a slug from secret content. Text mode prints nothing to stdout on
+success (parity with `rename` / `remove --yes`); under `--json` the
+success shape is `{ "account": AccountSummary }` (the post-edit
+summary). `--dry-run` runs the full pre-flight (parse + per-field
+validation via `validate_account_edit` + `find_duplicate_after_edit`)
+and reports the resolved outcome without invoking
+`edit_account_metadata` — `--json` returns the same
+`{ "account": AccountSummary }` shape but `account` is the projected
+post-edit summary and an additional `committed: false` field
+disambiguates it from a real save; text mode prints nothing. CLI is
+stateless and ignores `clipboard.clear_*` / `auto_lock.*` settings.
+The duplicate check is independent of the §"Import merge details"
+policy. `paladin rename <query> <label>` stays as the
+single-positional shorthand for the label-only path and is
 implemented on top of the same `Vault::edit_account_metadata`
 mutator.
 
@@ -1848,27 +1865,72 @@ Layout (single-screen MVP):
   imported/skipped/warning counts. Rename calls `Vault::rename(id,
   new_label, now)` inside `Vault::mutate_and_save`; issuer is not
   editable here (parity with `paladin rename`). Edit (opened with
-  `Shift+E` on the focused account row) opens an `AccountEdit`-bearing
-  modal pre-populated from the current `AccountSummary`: a `tui-input`
-  row for the label, a `tui-input` row for the issuer, and a
-  four-option segmented icon-hint selector (*Leave unchanged* /
-  *Default from issuer* / *No icon* / *Slug:*) with a sibling
-  `tui-input` slug row that activates when the selector is on *Slug:*.
-  The *Leave unchanged* default keeps the prior `icon_hint`
-  untouched; the other three options map 1:1 to the three
-  `IconHintInput` variants the Add modal collects through
+  `Shift+E` on the focused account row — always enabled, HOTP and TOTP
+  alike, because edit never touches the secret) opens an
+  `AccountEdit`-bearing modal pre-populated from the current
+  `AccountSummary`: a `tui-input` row for the label, a `tui-input`
+  row for the issuer, and a four-option segmented icon-hint selector
+  (*Leave unchanged* / *Default from issuer* / *No icon* / *Slug:*)
+  with a sibling `tui-input` slug row that activates when the
+  selector is on *Slug:*. The *Leave unchanged* default keeps the
+  prior `icon_hint` untouched; the other three options map 1:1 to
+  the three `IconHintInput` variants the Add modal collects through
   `parse_icon_hint_token`. The *Slug:* row routes its buffer
   through `validate_icon_hint_slug` so a user who types literal
   `default` or `none` saves those as slugs rather than collapsing
-  them into the `Default` / `Clear` tri-state. Submit routes
-  through `Vault::edit_account_metadata` inside
-  `Vault::mutate_and_save`, bumping `updated_at` and surfacing
-  per-field validation errors inline without closing. The Rename modal stays for muscle-memory continuity
-  as the label-only shorthand; the Edit modal is the full surface and
-  is the one the GUI's `EditDialog` (§7) mirrors. OTP-affecting fields
-  (`secret`, `algorithm`, `digits`, `kind`, `period`, `counter`) are
-  intentionally absent — changing them invalidates already-issued
-  codes and the user is directed to remove + re-add. Import takes a file path and
+  them into the `Default` / `Clear` tri-state — the TUI takes this
+  path because the segmented selector already owns the `Default` /
+  `Clear` tri-state, leaving the slug row to mean "verbatim slug
+  bytes". The GUI's `EditDialog` (§7) has no dedicated tri-state
+  selector and instead parses its single icon-hint row through
+  `parse_icon_hint_token` (matching the Add dialog's behavior), which
+  is the deliberate per-surface divergence: same on-disk grammar,
+  different widget shape.
+  **WYSIWYS projection (what you see is what you save):**
+  - *Label* buffer byte-equal to the prior label projects to
+    `AccountEdit::label = None` (leave untouched); whitespace-only
+    surfaces `validation_error` (`field: "label"`, `reason: "empty"`)
+    after `validate_label` trims; any other non-empty buffer
+    projects to `Some(_)` after trimming.
+  - *Issuer* buffer byte-equal to the prior issuer projects to
+    `None`; empty-over-prior-`Some` (including whitespace-only)
+    projects to `Some(None)` (clear); any other non-empty buffer
+    projects to `Some(Some(_))` after trimming.
+  - *Icon hint* selector on *Leave unchanged* with the slug row
+    byte-equal to the prior stored slug projects to `None`;
+    *Default from issuer* projects to `Some(IconHintInput::Default)`
+    (re-derives against the **post-edit** issuer); *No icon*
+    projects to `Some(IconHintInput::Clear)`; *Slug:* projects to
+    `Some(IconHintInput::Slug(_))` after `validate_icon_hint_slug`
+    accepts the trimmed buffer. Uppercase or other out-of-grammar
+    input surfaces `validation_error` (`field: "icon_hint"`,
+    `reason: "invalid_chars"`) rather than auto-lowercasing — the
+    buffer is never mutated by the modal.
+  Before submit, the reducer rejects an entirely empty `AccountEdit`
+  inline (`validation_error`, `field: "edit"`, `reason: "empty"`) —
+  the same belt-and-braces check the core mutator runs — and then
+  calls `Vault::find_duplicate_after_edit(id, &edit)`, rendering any
+  `Some(other)` collision as `duplicate_account` inline beside the
+  offending rows. There is no "edit anyway" override (parity with
+  the GUI `EditDialog`); the CLI's `--allow-duplicate` is the only
+  escape hatch. Per-field `too_long` errors surface post-submit
+  through `validate_account_edit`; the buffers themselves are not
+  length-clamped client-side. Submit routes through
+  `Vault::edit_account_metadata` inside `Vault::mutate_and_save`,
+  bumping `updated_at` (even on no-op-but-non-empty edits where every
+  field matches the prior summary), and surfacing per-field
+  validation errors inline without closing. `Esc` closes the modal
+  and drops the in-progress `AccountEdit` draft (zeroizing any
+  label / issuer / slug row buffers) without an "unsaved changes"
+  prompt. Auto-lock during a live Edit modal does the same: drop
+  the draft, zeroize the buffers, dismiss the modal, then switch
+  to the unlock screen. The Rename modal stays for muscle-memory
+  continuity as the label-only shorthand; the Edit modal is the full
+  surface and is the one the GUI's `EditDialog` (§7) mirrors.
+  OTP-affecting fields (`secret`, `algorithm`, `digits`, `kind`,
+  `period`, `counter`) are intentionally *omitted from the form*
+  (no disabled rows displayed) — changing them invalidates
+  already-issued codes and the user is directed to remove + re-add. Import takes a file path and
   optional explicit format, calls `classify_paladin_import_precheck` before
   any Paladin bundle passphrase prompt, prompts only for encrypted-Paladin
   sources, applies a user-selected on-conflict
@@ -2035,12 +2097,30 @@ Library: **Relm4** on **GTK4**. Component tree:
   applies (buffer byte-equal to the pre-fill maps to `None`,
   empty-on-prior-`Some` maps to `Some(IconHintInput::Default)` for
   implicit re-derive, `none` to `Clear`, any other slug to `Slug`).
-  OTP-affecting fields (`secret`, `algorithm`, `digits`, `kind`,
-  `period`, `counter`) are intentionally absent — the dialog body
-  carries a short footnote pointing users at remove + re-add for
-  secret rotation or OTP parameter changes. The dialog is disabled
-  on `UnlockedBusy` per the shared `RenameDialog`-era
-  effect-ownership contract.
+  Uppercase or other out-of-grammar slug input surfaces
+  `validation_error` (`field: "icon_hint"`, `reason: "invalid_chars"`)
+  rather than auto-lowercasing — the row buffer is never mutated by
+  the dialog. Per-field `too_long` errors surface post-submit through
+  `validate_account_edit`; the entry rows themselves are not
+  length-clamped client-side. The dialog's draft-classification and
+  Save-sensitivity decisions live in two pure helpers — `classify_edit_draft`
+  (raw buffers → tentative `AccountEdit` projection) and
+  `classify_submit` (projection + caller-injected duplicate result →
+  submit / reject / show-error decision). Both are GTK-internal
+  (not part of `paladin-core`'s public API surface); the public
+  contract the front ends share is `validate_account_edit` +
+  `Vault::find_duplicate_after_edit`. `Esc` (via `adw::Dialog`'s
+  default close binding) discards the draft silently with no
+  "unsaved changes" prompt; auto-lock during a live EditDialog
+  uses the established `force_close` → controller drop → `clear_for_lock`
+  sequence so the draft buffers are dropped and the dialog is
+  dismissed before the unlock view appears. OTP-affecting fields
+  (`secret`, `algorithm`, `digits`, `kind`, `period`, `counter`)
+  are intentionally *omitted from the form* (no disabled rows
+  displayed) — the dialog body carries a short footnote pointing
+  users at remove + re-add for secret rotation or OTP parameter
+  changes. The dialog is disabled on `UnlockedBusy` per the shared
+  `RenameDialog`-era effect-ownership contract.
 - **Row context menu and per-row kebab** — every account row exposes
   a context menu with four entries in this order: *Copy code* /
   *Edit…* / *Export QR…* / *Delete…*. The same `gio::MenuModel` is
@@ -2237,6 +2317,21 @@ Concrete obligations and explicit user-controlled tradeoffs:
     the GUI never reaches around `relm4` to use `tokio` as a runtime.
 11. **Reproducible builds.** Pin `rust-toolchain.toml`. Lock all deps.
 12. **Threat model documented separately** in `SECURITY.md` before v1.
+13. **Per-account metadata edit isolates secret material *(v0.2, Milestone 9).*** The
+    Edit modal / `EditDialog` / `paladin edit` surface mutate only
+    `AccountEdit { label, issuer, icon_hint }` — none of which are
+    secret. The edit path never reads, decodes, displays, or copies the
+    stored `Secret`; validation errors render inline without ever
+    materializing secret bytes. `AccountEdit` itself carries no
+    `Zeroize` derive (it is metadata, not key material), but the
+    front-end draft buffers (label / issuer / slug entry rows) are
+    dropped — and any sensitive intermediates zeroized — on Esc,
+    Cancel, save-success, and auto-lock. HOTP counters are not
+    advanced on edit, slugs are never re-derived from secret content,
+    and OTP-affecting fields (`secret`, `algorithm`, `digits`, `kind`,
+    `period`, `counter`) are omitted from the form entirely so a UI
+    regression cannot expose them — verified by widget-contract tests
+    in §10.
 
 > **Approved 2026-05-04.** All decisions in §4.3, §4.4, §4.5, §4.6, and §8
 > are locked in for v0.1. Tests in `paladin-core` will assert round-trip
@@ -2479,16 +2574,36 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     `vault.bin.bak`), `unsafe_permissions` rendered via
     `format_unsafe_permissions`, and pre-commit /
     durability-unconfirmed save errors. v0.2.
-  - GUI rename + add-via-URI: rename round-trip via `Vault::rename`,
+  - GUI rename + add-via-URI: rename round-trip via
+    `Vault::edit_account_metadata` (post-M9 `Vault::rename` is a thin
+    forwarder; pre-M9 milestones may exercise the legacy direct path),
     paste-`otpauth://`-URI Add route through
     `paladin_core::parse_otpauth` with shared duplicate / validation
     / `mutate_and_save` rules, and inline rejection of malformed URIs
     and validation failures. v0.2.
-  - TUI add-via-URI + rename: paste-`otpauth://`-URI Add route through
-    `paladin_core::parse_otpauth` with the same duplicate /
-    validation behavior as manual mode; rename modal round-trips
-    through `Vault::rename`, including unchanged labels so `updated_at`
-    matches CLI behavior, with prior-label restore on `save_not_committed`.
+  - GUI EditDialog (§7, M9): three pre-populated `AdwEntryRow` widgets
+    (label / issuer / icon-hint), per-field WYSIWYS projection onto
+    `AccountEdit`, pre-flight `validate_account_edit` then
+    `Vault::find_duplicate_after_edit` (validation strictly before
+    duplicate detection — a `validation_error` short-circuits the
+    duplicate call), `duplicate_account` inline with no "edit anyway"
+    override, no-op-but-non-empty submit still bumps `updated_at`,
+    `force_close` → drop controller → `clear_for_lock` on auto-lock,
+    HOTP read-only invariant (counter and `updated_at` unchanged when
+    a HOTP account's edit fails any pre-flight gate), and rollback to
+    the pre-edit on-disk state on `save_not_committed`. v0.2.
+  - TUI add-via-URI + rename + Edit (M9): paste-`otpauth://`-URI Add
+    route through `paladin_core::parse_otpauth` with the same
+    duplicate / validation behavior as manual mode; rename modal
+    round-trips through `Vault::edit_account_metadata` (via the
+    `Vault::rename` forwarder), including unchanged labels so
+    `updated_at` matches CLI behavior, with prior-label restore on
+    `save_not_committed`. The Edit modal (`Shift+E`) covers the
+    full WYSIWYS surface — four-case issuer projection, five-case
+    icon-hint projection (including the segmented-selector tri-state
+    and literal `default`/`none` slug round-trip), reducer-side
+    empty-`AccountEdit` rejection, validation strictly before
+    duplicate detection, and auto-lock drops the draft buffers.
   - TUI QR modal (§6, §4.6): `Q` on the focused row opens the modal
     on the warning page; rendering / save actions are disabled until
     the user acks the warning; ANSI body matches `Vault::export_qr_ansi`
@@ -2803,34 +2918,87 @@ artifacts side by side.
 
 ### Milestone 9 — Per-account metadata edit *(v0.2)*
 - [ ] `paladin-core`: `AccountEdit` struct, `Vault::edit_account_metadata`,
-  and `validate_account_edit` per §4.7. Tests cover label-only /
-  issuer-only / icon-hint-only / multi-field paths, the "leave
-  untouched" tri-state on `issuer`, validation rejection for each
-  field, `updated_at` bump on no-op-but-non-empty submits, empty
+  `Vault::find_duplicate_after_edit`, `validate_account_edit`, and
+  `validate_icon_hint_slug` per §4.7. The locked in-mutator pre-check
+  order is [reject empty `AccountEdit`, per-field validate +
+  normalize, validate `now`, resolve `id`] — validation strictly
+  before duplicate detection so a partly-invalid edit never reaches
+  `find_duplicate_after_edit`. Tests cover label-only / issuer-only
+  / icon-hint-only / multi-field paths, the "leave untouched"
+  tri-state on `issuer`, validation rejection for each field,
+  `updated_at` bump on no-op-but-non-empty submits, empty
   `AccountEdit` rejection (`validation_error` (`field: "edit"`,
-  `reason: "empty"`)), and `mutate_and_save` pre-commit rollback
-  preserving the prior `Account` byte-for-byte.
+  `reason: "empty"`)), `mutate_and_save` pre-commit rollback
+  preserving the prior `Account` byte-for-byte, NFC-vs-NFD
+  non-collision in `find_duplicate_after_edit` (byte-equality after
+  §4.1 normalization; visually-identical strings in different
+  Unicode forms do **not** collide), self-skip on the source `id`
+  with collisions still reported against any other account in the
+  vault, the post-edit issuer driving `IconHintInput::Default`
+  re-derivation (including the post-edit `issuer = None` →
+  `icon_hint = None` arm), and `Vault::rename` retained as a thin
+  forwarder with byte-identical error envelopes to the pre-M9
+  implementation. Cross-process races (two `paladin edit`
+  invocations, or CLI + GTK) are resolved by the file-locking
+  already inside `Vault::mutate_and_save` — last-writer-wins with
+  the same `save_durability_unconfirmed` / `save_not_committed`
+  contract as `rename`.
 - [ ] CLI `paladin edit <query>` with the flag grammar per §5 and the
   success / error JSON shapes. Tests in `tests/cli_edit.rs` covering
   each editable field independently, the `--no-issuer` /
   `--no-icon-hint` clear paths, the parse-time
-  mutually-exclusive-flag rejection, the no-flag rejection, the
-  single-match cardinality, and the `paladin rename` shorthand
-  routing through the same core mutator.
+  mutually-exclusive-flag rejection, the no-flag rejection (including
+  `--allow-duplicate` alone), the single-match cardinality, text-mode
+  silent-on-success rendering, `--dry-run` returning the projected
+  post-edit `AccountSummary` with `committed: false` and zero
+  on-disk mutation, and the `paladin rename` shorthand routing
+  through the same core mutator. A `[PTY]` smoke test exercises
+  `paladin edit --label new` against an encrypted vault to lock the
+  passphrase-then-resolve precedence.
 - [ ] TUI Edit modal opened with `Shift+E`: three pre-populated text
-  rows, inline validation, save-effect plumbing parity with the
-  Rename modal. Snapshot test for the modal layout; logic tests for
-  the state machine.
+  rows (Label / Issuer / Icon hint via segmented selector + slug
+  row), four-case issuer WYSIWYS projection, five-case icon-hint
+  WYSIWYS projection (including the literal `default` / `none`
+  slug round-trip via `validate_icon_hint_slug`), reducer-side
+  empty-`AccountEdit` rejection ahead of `find_duplicate_after_edit`,
+  pre-flight in the order [validate, then duplicate-check],
+  `duplicate_account` inline with no "edit anyway" override,
+  close-only-on-Ok, no-op-but-non-empty submit still bumps
+  `updated_at`, status-line confirmation on success. Auto-lock
+  during the modal drops the draft buffers, zeroizes the
+  in-progress `AccountEdit`, dismisses the modal, and switches to
+  the unlock screen. Snapshot test for the modal layout (including
+  one snapshot per pinned state: blank, validation-error,
+  duplicate-account, durability-warning, slug-mode, status-line
+  confirmation); logic tests for the reducer state machine
+  including a cross-modal regression test (`Shift+E` while Rename
+  is open is silently rejected, and vice versa).
 - [ ] GTK `EditDialog` superseding `RenameDialog`: three editable
-  rows (Label / Issuer + clear button / Icon hint slug), inline
-  validation, save-effect plumbing per §7. Row context menu (and
-  `Menu` / `Shift+F10` keyboard equivalent) bound to the same
+  `AdwEntryRow` widgets (Label / Issuer with an `AdwEntryRow`
+  *suffix-area* clear button / Icon hint slug parsed via
+  `parse_icon_hint_token`), inline validation, save-effect plumbing
+  per §7. The pre-submit `find_duplicate_after_edit` runs only on
+  successful per-field validation (locked rule: validation BEFORE
+  duplicate detection — a recording-stub test asserts the dup
+  helper is never reached on an invalid draft). Row context menu
+  (and `Menu` / `Shift+F10` keyboard equivalent) bound to the same
   `gio::MenuModel` as the per-row kebab, four entries in order
   *Copy code* / *Edit…* / *Export QR…* / *Delete…*. Pure-logic
   tests for the new menu model, the `AccountEdit` projection, the
-  per-field clear/leave-untouched semantics, and the right-click
-  gesture / popover-menu wiring; integration test for the menu /
-  dialog round-trip and for the single-popover-at-a-time invariant.
+  per-field clear/leave-untouched semantics, the
+  account-kind-agnostic HOTP-vs-TOTP rendering (identical
+  `AccountEdit` projection for identical buffers across both
+  kinds), and the right-click gesture / popover-menu wiring;
+  integration test for the menu / dialog round-trip, the
+  single-popover-at-a-time invariant, and the post-edit success
+  toast surfacing on no-op-but-non-empty submits (parity with
+  `Edited.` vs `Edited GitHub:work.` wording when the post-edit
+  summary lookup is `Some` vs `None`).
+- [ ] Auto-lock + dialog lifecycle parity across all three front
+  ends: a live Edit modal / `EditDialog` reacting to an auto-lock
+  fire drops every in-progress draft buffer, zeroizes any
+  `AccountEdit` intermediates, and dismisses the dialog before the
+  unlock view appears. Integration tests cover each front end.
 
 ## 13. Open questions
 
