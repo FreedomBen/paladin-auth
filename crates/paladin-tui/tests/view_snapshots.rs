@@ -47,10 +47,10 @@ use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     format_account_display_label, format_duplicate_account_message, format_qr_import_failure,
     render_error_message, AddModal, AddMode, AppState, CountsPanel, CreateVaultMode,
-    CreateVaultStep, ExportFormat, ExportModal, Focus, HotpReveal, ImportModal, Modal,
-    PassphraseFieldFocus, PassphraseModal, PassphraseSubFlow, PendingDuplicateAdd, QrSaveFocus,
-    QrSaveStep, RemoveModal, RenameModal, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED,
-    NO_ACCOUNT_SELECTED,
+    CreateVaultStep, EditFocus, EditIconHintSelector, EditModal, EditPrior, ExportFormat,
+    ExportModal, Focus, HotpReveal, ImportModal, Modal, PassphraseFieldFocus, PassphraseModal,
+    PassphraseSubFlow, PendingDuplicateAdd, QrSaveFocus, QrSaveStep, RemoveModal, RenameModal,
+    SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -2477,6 +2477,171 @@ fn snapshot_rename_modal_save_durability_unconfirmed() {
     insta::assert_snapshot!(rendered);
 }
 
+/// Build a fresh `AppState::Unlocked` carrying a pre-populated
+/// [`EditModal`] over a single TOTP account. Used by the three Edit
+/// modal snapshots.
+fn fresh_edit_modal_state(
+    label: &str,
+    issuer: Option<&str>,
+    selector: EditIconHintSelector,
+    slug: &str,
+    error: Option<String>,
+    focus: EditFocus,
+    kind_is_hotp: bool,
+) -> AppState {
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = if kind_is_hotp {
+        push_hotp_account(&mut vault, &store, issuer, label, 0)
+    } else {
+        push_totp_account(&mut vault, &store, issuer, label)
+    };
+    let prior_issuer = issuer.map(str::to_owned);
+    let prior_icon_hint = vault
+        .iter()
+        .find(|a| a.id() == id)
+        .and_then(|a| a.icon_hint().map(str::to_owned));
+    let modal = EditModal {
+        account_id: id,
+        prior: EditPrior {
+            label: label.to_string(),
+            issuer: prior_issuer.clone(),
+            icon_hint: prior_icon_hint,
+        },
+        label_buffer: label.to_string(),
+        issuer_buffer: prior_issuer.unwrap_or_default(),
+        icon_hint_selector: selector,
+        icon_hint_slug: slug.to_string(),
+        focus,
+        error,
+    };
+    // tempdir intentionally leaked into the function-scope so the
+    // vault file survives the snapshot rendering. We must keep `tmp`
+    // alive: convert it into a path-owned form by leaking; tests
+    // rebuild the world on every snapshot call so this drops on
+    // process exit.
+    std::mem::forget(tmp);
+    AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Edit(modal)),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    }
+}
+
+#[test]
+fn snapshot_edit_modal_default() {
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Edit modal > snapshot
+    // bullet: "Snapshot test for the Edit modal default layout
+    // (`snapshot_edit_modal_default`), matching the Rename snapshot
+    // conventions (centered region, three labeled controls, footer
+    // hint line)." The icon-hint selector renders with `▶ Leave
+    // unchanged ◀` active markers parallel to other segmented
+    // selectors.
+    let state = fresh_edit_modal_state(
+        "ben@example.com",
+        Some("GitHub"),
+        EditIconHintSelector::LeaveUnchanged,
+        "github",
+        None,
+        EditFocus::Label,
+        false,
+    );
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 20));
+}
+
+#[test]
+fn snapshot_edit_modal_hotp_account() {
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Edit modal > "Render-
+    // independence-from-`AccountKind`": opening Edit on a HOTP
+    // account produces the same three-control layout as a TOTP
+    // account, with no counter row and no kind-specific OTP fields.
+    let state = fresh_edit_modal_state(
+        "ben@example.com",
+        Some("GitHub"),
+        EditIconHintSelector::LeaveUnchanged,
+        "github",
+        None,
+        EditFocus::Label,
+        true,
+    );
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 20));
+}
+
+#[test]
+fn snapshot_edit_modal_duplicate_account() {
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Edit modal > snapshot
+    // bullet: "Snapshot test for the duplicate-account variant
+    // (`snapshot_edit_modal_duplicate_account`) with the pre-submit
+    // `Vault::find_duplicate_after_edit` check rejecting the
+    // projected edit, so the inline
+    // `format_duplicate_account_message(&existing_summary)` text
+    // renders in the modal body parallel to the Add modal's
+    // `snapshot_add_modal_duplicate_account` fixture."
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let sibling = push_totp_account(&mut vault, &store, Some("GitHub"), "bob@example.com");
+    let target = push_totp_account(&mut vault, &store, Some("GitHub"), "alice@example.com");
+    let sibling_summary = vault
+        .iter()
+        .find(|a| a.id() == sibling)
+        .expect("sibling")
+        .summary();
+    let dup_msg = format_duplicate_account_message(&sibling_summary);
+    let modal = EditModal {
+        account_id: target,
+        prior: EditPrior {
+            label: "alice@example.com".to_string(),
+            issuer: Some("GitHub".to_string()),
+            icon_hint: Some("github".to_string()),
+        },
+        label_buffer: "bob@example.com".to_string(),
+        issuer_buffer: "GitHub".to_string(),
+        icon_hint_selector: EditIconHintSelector::LeaveUnchanged,
+        icon_hint_slug: "github".to_string(),
+        focus: EditFocus::Label,
+        error: Some(dup_msg),
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Edit(modal)),
+        selected: Some(target),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("account already exists"),
+        "expected duplicate-account wording, got:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
 #[test]
 fn snapshot_import_modal_default() {
     // Plan L1886: "Import modal." Drive `view::render` against an
@@ -4086,10 +4251,10 @@ fn snapshot_help_overlay() {
         status_line: None,
         help_open: true,
     };
-    // Bumped to 32 rows (was 31) for the v0.2 `Q` QR-Export keybind
-    // row that the Help overlay enumerates from
+    // Bumped to 33 rows (was 32) for the v0.2 `Shift+E` Edit
+    // keybind row that the Help overlay enumerates from
     // `keybindings::KEYBINDINGS`.
-    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 32));
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 33));
 }
 
 #[test]

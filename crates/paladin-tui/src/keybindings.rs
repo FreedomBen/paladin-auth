@@ -97,6 +97,10 @@ pub const KEYBINDINGS: &[Keybinding] = &[
         action: "Open Rename modal",
     },
     Keybinding {
+        keys: "E",
+        action: "Open Edit modal for the focused row (label / issuer / icon hint)",
+    },
+    Keybinding {
         keys: "i",
         action: "Open Import modal",
     },

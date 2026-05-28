@@ -1,0 +1,24 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+expression: rendered
+---
+┌ Paladin [plaintext] ─────────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│   GitH┌ Edit account ────────────────────────────────────────────────┐55 062 │
+│ ▶ GitH│ Editing the following account:                               │55 062 │
+│       │ GitHub:alice@example.com                                     │       │
+│       │                                                              │       │
+│       │ Label:      [ bob@example.com ]                              │       │
+│       │ Issuer:     [ GitHub ]                                       │       │
+│       │ Icon hint:  ▶ Leave unchanged ◀    Default from issuer       │       │
+│       │ Slug:       [ github ]                                       │       │
+│       │                                                              │       │
+│       │ account already exists with the same (secret, issuer, label) │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │      Tab/Shift-Tab cycle  ·  Enter submit  ·  Esc cancel     │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find     │
+└──────────────────────────────────────────────────────────────────────────────┘

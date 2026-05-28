@@ -25,8 +25,9 @@ use paladin_core::{
 use paladin_tui::app::event::{AppEvent, Effect};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
-    AppState, ChordLeader, Focus, HotpReveal, Modal, PassphraseModal, PendingClipboardClear,
-    QrExportFocus, QrExportPage, QrSaveFocus, QrSaveFormat, QrSaveStep,
+    AppState, ChordLeader, EditFocus, EditIconHintSelector, EditModal, EditPrior, Focus,
+    HotpReveal, Modal, PassphraseModal, PendingClipboardClear, QrExportFocus, QrExportPage,
+    QrSaveFocus, QrSaveFormat, QrSaveStep,
 };
 
 // ---------------------------------------------------------------------------
@@ -1364,5 +1365,86 @@ fn clipboard_clear_timer_scheduled_before_lock_survives_and_fires_after_lock() {
             );
         }
         other => panic!("expected Locked after wake, got {other:?}"),
+    }
+}
+
+#[test]
+fn auto_lock_with_edit_modal_open_drops_modal_and_buffers() {
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Tests > Edit modal bullet
+    // (auto-lock): "Auto-lock with the Edit modal open drops the
+    // modal and every modal-local buffer (label, issuer, icon-hint
+    // slug) and resets the selector to *Leave unchanged* before
+    // re-presenting the unlock screen. The dismissal is silent: no
+    // toast fires, no status-line message is posted, and no other
+    // user-visible feedback surfaces — matching Add and Rename
+    // auto-lock behavior."
+    //
+    // The modal drop is structural (the resulting `Locked` carries
+    // only `path` plus pending clipboard clear), so this test
+    // mirrors the QR Export auto-lock shape: build an Unlocked with
+    // a fully-loaded Edit modal (custom buffers, slug-mode selector,
+    // populated slug buffer), fire a tick past the idle deadline,
+    // and assert the resulting state is `Locked` with no
+    // status-line, modal, or vault state surviving.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+    let account_id = add_totp_account(&mut vault, &store, "alice");
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let modal = EditModal {
+        account_id,
+        prior: EditPrior {
+            label: "alice".to_string(),
+            issuer: Some("Acme".to_string()),
+            icon_hint: Some("acme".to_string()),
+        },
+        label_buffer: "alice-edited".to_string(),
+        issuer_buffer: "Acme".to_string(),
+        icon_hint_selector: EditIconHintSelector::Slug,
+        icon_hint_slug: "custom-slug".to_string(),
+        focus: EditFocus::Slug,
+        error: None,
+    };
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Edit(modal)),
+        selected: Some(account_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let now = deadline + Duration::from_millis(1);
+    let (next, effects) = reduce(state, tick_at(now));
+    assert!(effects.is_empty(), "lock transition emits no effects");
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path, "Locked must carry the original vault path");
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "pending clipboard clear was None on entry; lock must not fabricate one",
+            );
+            // Modal / vault / buffers are gone by construction (the
+            // `Locked` variant has no slots for them); the typed
+            // buffers + selector wiped alongside the variant change.
+        }
+        other => {
+            panic!("expected Locked (Edit modal, buffers, and vault must be gone), got {other:?}",)
+        }
     }
 }

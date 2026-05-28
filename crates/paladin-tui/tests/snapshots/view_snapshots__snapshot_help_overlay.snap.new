@@ -1,6 +1,7 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
-expression: "render_to_text(&state, snapshot_now(), 80, 33)"
+assertion_line: 4092
+expression: "render_to_text(&state, snapshot_now(), 80, 32)"
 ---
 ┌┌ Help — keybindings ────────────────────────────────────────────────────────┐┐
 ││ Read-only — keys are listed for reference.                                 ││
@@ -32,6 +33,5 @@ expression: "render_to_text(&state, snapshot_now(), 80, 33)"
 ││ q                            Quit from list, startup-error, and            ││
 ││                              create-vault ChooseMode / ConfirmPlaintext    ││
 ││                              (otherwise a typed passphrase character)      ││
-││ Ctrl-C                       Quit (any screen)                             ││
 ││                                 Esc closes                                 ││
 └└────────────────────────────────────────────────────────────────────────────┘┘
