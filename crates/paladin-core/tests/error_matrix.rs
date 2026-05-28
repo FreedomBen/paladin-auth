@@ -29,9 +29,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use paladin_core::import;
 use paladin_core::{
     detect, parse_account_query, parse_otpauth, parse_setting_patch, validate_manual, Account,
-    AccountId, AccountInput, AccountKindInput, AccountKindSummary, Algorithm, Argon2Params,
-    EncryptionOptions, ErrorKind, IconHintInput, ImportFormat, ImportOptions, PaladinError,
-    PermissionSubject, Store, TimeRangeKind, VaultInit, VaultLock, VaultMode,
+    AccountEdit, AccountId, AccountInput, AccountKindInput, AccountKindSummary, Algorithm,
+    Argon2Params, EncryptionOptions, ErrorKind, IconHintInput, ImportFormat, ImportOptions,
+    PaladinError, PermissionSubject, Store, TimeRangeKind, VaultInit, VaultLock, VaultMode,
 };
 use secrecy::SecretString;
 use tempfile::TempDir;
@@ -274,6 +274,51 @@ fn invalid_state_rename_account_not_found() {
     let bogus = AccountId::new();
     let err = vault.rename(bogus, "alice", fixture_now()).unwrap_err();
     assert_invalid_state(&err, "rename", "account_not_found");
+}
+
+#[test]
+fn invalid_state_edit_account_metadata_account_not_found() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, _store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    let bogus = AccountId::new();
+    let edit = AccountEdit {
+        label: Some("alice".to_string()),
+        ..Default::default()
+    };
+    let err = vault
+        .edit_account_metadata(bogus, edit, fixture_now())
+        .unwrap_err();
+    assert_invalid_state(&err, "edit_account_metadata", "account_not_found");
+}
+
+#[test]
+fn validation_error_edit_account_metadata_empty_edit_carries_field_and_reason() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, _store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    let id = vault.add(make_account("alice", Some("Acme")));
+    let err = vault
+        .edit_account_metadata(id, AccountEdit::default(), fixture_now())
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::ValidationError);
+    let PaladinError::ValidationError {
+        field,
+        reason,
+        source_index,
+        decoded_len,
+        recommended_min,
+        entry_type,
+    } = err
+    else {
+        panic!("expected ValidationError, got {err:?}");
+    };
+    assert_eq!(field, "edit");
+    assert_eq!(reason, "empty");
+    assert!(source_index.is_none());
+    assert!(decoded_len.is_none());
+    assert!(recommended_min.is_none());
+    assert!(entry_type.is_none());
 }
 
 #[test]

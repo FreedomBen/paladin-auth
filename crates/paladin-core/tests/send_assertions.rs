@@ -30,8 +30,8 @@
 // Phase J.
 
 use paladin_core::{
-    Account, AccountId, AccountInput, AccountKindInput, AccountKindSummary, AccountQuery,
-    AccountSummary, Algorithm, Argon2Params, Code, EncryptionOptions, IconHintInput,
+    Account, AccountEdit, AccountId, AccountInput, AccountKindInput, AccountKindSummary,
+    AccountQuery, AccountSummary, Algorithm, Argon2Params, Code, EncryptionOptions, IconHintInput,
     ImportConflict, ImportFormat, ImportOptions, ImportReport, ImportWarning, InitPrecheck,
     PaladinError, PaladinImportPrecheck, QrRenderOptions, SettingKey, SettingPatch, Store,
     ValidatedAccount, ValidationWarning, Vault, VaultInit, VaultLock, VaultSettings, VaultStatus,
@@ -72,6 +72,7 @@ const _: fn() = || {
     assert_send::<IconHintInput>();
     assert_send::<AccountInput>();
     assert_send::<AccountQuery>();
+    assert_send::<AccountEdit>();
     assert_send::<InitPrecheck>();
     assert_send::<PaladinImportPrecheck>();
     assert_send::<PaladinError>();
@@ -108,6 +109,7 @@ const _: fn() = || {
     assert_sync::<IconHintInput>();
     assert_sync::<AccountInput>();
     assert_sync::<AccountQuery>();
+    assert_sync::<AccountEdit>();
     assert_sync::<InitPrecheck>();
     assert_sync::<PaladinImportPrecheck>();
     assert_sync::<PaladinError>();
@@ -152,6 +154,7 @@ fn worker_boundary_types_are_send() {
     assert_send::<IconHintInput>();
     assert_send::<AccountInput>();
     assert_send::<AccountQuery>();
+    assert_send::<AccountEdit>();
     assert_send::<InitPrecheck>();
     assert_send::<PaladinImportPrecheck>();
     assert_send::<PaladinError>();
@@ -189,6 +192,7 @@ fn worker_boundary_types_are_sync_except_store() {
     assert_sync::<IconHintInput>();
     assert_sync::<AccountInput>();
     assert_sync::<AccountQuery>();
+    assert_sync::<AccountEdit>();
     assert_sync::<InitPrecheck>();
     assert_sync::<PaladinImportPrecheck>();
     assert_sync::<PaladinError>();

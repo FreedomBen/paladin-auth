@@ -32,8 +32,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use paladin_core::{
-    parse_otpauth, write_secret_file_atomic, Account, Argon2Params, EncryptionOptions, ErrorKind,
-    PaladinError, Store, VaultInit, VaultLock, VaultMode,
+    parse_otpauth, write_secret_file_atomic, Account, AccountEdit, Argon2Params,
+    EncryptionOptions, ErrorKind, IconHintInput, PaladinError, Store, VaultInit, VaultLock,
+    VaultMode,
 };
 use secrecy::SecretString;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1365,5 +1366,60 @@ fn mutate_and_save_cross_field_save_durability_unconfirmed_keeps_both_fields() {
         assert_eq!(reopened_labels, vec!["alice", "bob"]);
         assert!(reopened.settings().auto_lock_enabled());
         assert_eq!(reopened.settings().clipboard_clear_secs(), 120);
+    });
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Vault::edit_account_metadata rollback (Phase M).
+//
+// Mirrors the rename-rollback contract — a pre-commit save failure
+// on an `edit_account_metadata` call routed through
+// `Vault::mutate_and_save` must restore the `Account`'s `label`,
+// `issuer`, `icon_hint`, and `updated_at` to their pre-call byte
+// values. Pins that both mutators share one rollback-correctness
+// contract.
+// ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn edit_account_metadata_mutate_and_save_pre_commit_rolls_back_all_fields() {
+    run_serial(|| {
+        let dir = test_tempdir();
+        let path = vault_path_in(&dir);
+        let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+        // Seed with an account that has a known issuer + icon_hint so
+        // we can prove every field rolls back.
+        let uri = format!("otpauth://totp/Acme:alice?secret={HOTP_SECRET_B32}");
+        let stored = parse_otpauth(&uri, fixture_now()).unwrap();
+        let id = vault.add(stored.account);
+        vault.save(&store).unwrap();
+        let primary_before = std::fs::read(&path).unwrap();
+
+        let pre_label = vault.get(id).unwrap().label().to_string();
+        let pre_issuer = vault.get(id).unwrap().issuer().map(str::to_string);
+        let pre_icon = vault.get(id).unwrap().icon_hint().map(str::to_string);
+        let pre_updated_at = vault.get(id).unwrap().updated_at();
+
+        let err = with_fault(PRE, || {
+            vault.mutate_and_save(&store, |v| -> Result<(), PaladinError> {
+                let edit = AccountEdit {
+                    label: Some("alice-prime".to_string()),
+                    issuer: Some(Some("NewCorp".to_string())),
+                    icon_hint: Some(IconHintInput::Slug("newcorp".to_string())),
+                };
+                v.edit_account_metadata(id, edit, later_now())
+            })
+        })
+        .expect_err("pre_commit must fail");
+        assert_save_not_committed(&err, false);
+
+        // Every editable field reverted to its pre-call value, plus
+        // updated_at.
+        let after = vault.get(id).unwrap();
+        assert_eq!(after.label(), pre_label);
+        assert_eq!(after.issuer().map(str::to_string), pre_issuer);
+        assert_eq!(after.icon_hint().map(str::to_string), pre_icon);
+        assert_eq!(after.updated_at(), pre_updated_at);
+        // On-disk primary unchanged.
+        assert_eq!(std::fs::read(&path).unwrap(), primary_before);
     });
 }

@@ -14,8 +14,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use paladin_core::{
-    parse_otpauth, validate_manual, AccountInput, AccountKindInput, Algorithm, IconHintInput,
-    Store, VaultInit,
+    parse_otpauth, validate_icon_hint_slug, validate_manual, AccountInput, AccountKindInput,
+    Algorithm, IconHintInput, PaladinError, Store, VaultInit,
 };
 use proptest::prelude::*;
 use secrecy::SecretString;
@@ -119,5 +119,52 @@ proptest! {
         prop_assert_eq!(a.valid_until, b.valid_until);
         prop_assert_eq!(a.seconds_remaining, b.seconds_remaining);
         prop_assert_eq!(a.counter_used, b.counter_used);
+    }
+
+    /// `validate_icon_hint_slug` round-trip property (Phase M /
+    /// docs/DESIGN.md §4.1 slug grammar): any string drawn from the
+    /// `[a-z0-9_-]{1,64}` alphabet round-trips through the validator
+    /// to `IconHintInput::Slug(_)` with byte-identical content. Pairs
+    /// with the inline `validate_slug_*` unit tests in
+    /// `src/domain/slug.rs`, raising property coverage to match the
+    /// `validate_label` / `validate_issuer` per-field tests.
+    #[test]
+    fn validate_icon_hint_slug_round_trips_valid_grammar(
+        slug in "[a-z0-9_-]{1,64}",
+    ) {
+        match validate_icon_hint_slug(&slug).expect("grammar member") {
+            IconHintInput::Slug(s) => prop_assert_eq!(s, slug),
+            other => panic!("expected IconHintInput::Slug, got {other:?}"),
+        }
+    }
+
+    /// `validate_icon_hint_slug` rejects strings outside the grammar
+    /// or beyond the 64-byte cap with a typed `validation_error`
+    /// (`field: "icon_hint"`, reason ∈
+    /// `{"empty", "too_long", "invalid_chars"}`).
+    #[test]
+    fn validate_icon_hint_slug_rejects_non_grammar_or_overlong(
+        // Any ASCII printable string, optionally combined with
+        // explicitly disallowed bytes so the strategy reaches
+        // uppercase / space / punctuation.
+        s in "[\\x20-\\x7e]{0,80}",
+    ) {
+        // Skip strings that happen to land inside the accepted grammar
+        // — those are the round-trip property's domain.
+        let len_ok = (1..=64).contains(&s.len());
+        let all_in_grammar = s.bytes().all(|b| {
+            matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-')
+        });
+        prop_assume!(!(len_ok && all_in_grammar));
+
+        match validate_icon_hint_slug(&s) {
+            Ok(other) => panic!("expected typed validation_error, got {other:?}"),
+            Err(PaladinError::ValidationError { field, reason, .. }) => {
+                prop_assert_eq!(field, "icon_hint");
+                let r: &str = reason.as_ref();
+                prop_assert!(matches!(r, "empty" | "too_long" | "invalid_chars"));
+            }
+            Err(other) => panic!("expected ValidationError, got {other:?}"),
+        }
     }
 }
