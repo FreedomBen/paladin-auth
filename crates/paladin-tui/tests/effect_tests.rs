@@ -23,14 +23,15 @@ use secrecy::SecretString;
 use tempfile::TempDir;
 
 use paladin_core::{
-    export as core_export, validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm,
-    Argon2Params, EncryptionOptions, IconHintInput, ImportConflict, ImportFormat, PaladinError,
-    SettingPatch, Store, Vault, VaultInit, VaultLock,
+    export as core_export, validate_manual, AccountEdit, AccountId, AccountInput, AccountKindInput,
+    Algorithm, Argon2Params, EncryptionOptions, IconHintInput, ImportConflict, ImportFormat,
+    PaladinError, SettingPatch, Store, Vault, VaultInit, VaultLock,
 };
 
 use paladin_tui::app::effect::{execute, EffectOutcome};
 use paladin_tui::app::event::{
-    AddFailure, AddSuccess, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess,
+    AddFailure, AddSuccess, AppEvent, EditFailure, Effect, EffectResult, ImportFailure,
+    ImportSuccess,
 };
 use paladin_tui::app::state::{AppState, ExportFormat, Focus};
 
@@ -4707,5 +4708,226 @@ mod qr_export {
             decoded.contains("period=30"),
             "TOTP QR must carry period=30; got: {decoded:?}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Effect::EditAccountMetadata
+// ---------------------------------------------------------------------------
+
+/// `Effect::EditAccountMetadata` against an `AppState::Unlocked` whose
+/// live `Vault` owns the target account routes through
+/// `Vault::mutate_and_save` → `Vault::edit_account_metadata` and sends
+/// back `EffectResult::EditAccountMetadata { Ok(summary) }`.
+#[test]
+fn execute_edit_account_metadata_with_label_renames_and_sends_ok() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::EditAccountMetadata {
+        path: path.clone(),
+        account_id: id,
+        edit: AccountEdit {
+            label: Some("github-personal".to_string()),
+            issuer: None,
+            icon_hint: None,
+        },
+    };
+    let outcome = with_save_env_lock(|| {
+        execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
+        )
+    });
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::EditAccountMetadata {
+            path: p,
+            account_id,
+            result: Ok(summary),
+        }) => {
+            assert_eq!(p, path);
+            assert_eq!(account_id, id);
+            assert_eq!(summary.label, "github-personal");
+        }
+        other => panic!("expected EditAccountMetadata Ok, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::EditAccountMetadata"
+    );
+    // The in-memory vault carries the new label.
+    match &state {
+        AppState::Unlocked { vault, .. } => assert_eq!(
+            vault.iter().find(|a| a.id() == id).unwrap().label(),
+            "github-personal",
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+    // Re-open the on-disk primary and verify the new label persisted.
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    assert_eq!(
+        reopened.iter().find(|a| a.id() == id).unwrap().label(),
+        "github-personal",
+    );
+}
+
+/// `Effect::EditAccountMetadata` whose projection would collide with a
+/// sibling account on the (secret, issuer, label) triple must:
+///
+/// 1. Re-run `Vault::find_duplicate_after_edit` against the live vault
+///    pre-mutate.
+/// 2. Emit `EffectResult::EditAccountMetadata { Err(EditFailure::Duplicate { existing }) }`.
+/// 3. **Not** call `Vault::mutate_and_save` — the on-disk vault must
+///    be byte-identical before and after the rejected effect.
+#[test]
+fn execute_edit_account_metadata_with_duplicate_emits_failure_and_does_not_mutate_vault() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, _existing_id) = unlocked_with_one_totp(&path, "github");
+
+    // Append a sibling account that we'll try to collide with.
+    let sibling_id = match &mut state {
+        AppState::Unlocked { vault, store, .. } => {
+            with_save_env_lock(|| add_totp_account(vault, store, "personal"))
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let target_id = match &state {
+        AppState::Unlocked { vault, .. } => vault
+            .iter()
+            .find(|a| a.label() == "github")
+            .map(paladin_core::Account::id)
+            .expect("github account"),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    // Pre-attempt: capture the on-disk vault bytes.
+    let pre_bytes = std::fs::read(&path).expect("read pre-attempt vault");
+    let pre_count = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().count(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    // Try to edit `github` to label `personal` — same secret, same
+    // issuer (None) ⇒ duplicate.
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::EditAccountMetadata {
+        path: path.clone(),
+        account_id: target_id,
+        edit: AccountEdit {
+            label: Some("personal".to_string()),
+            issuer: None,
+            icon_hint: None,
+        },
+    };
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::EditAccountMetadata {
+            path: p,
+            account_id,
+            result: Err(EditFailure::Duplicate { existing }),
+        }) => {
+            assert_eq!(p, path);
+            assert_eq!(account_id, target_id);
+            assert_eq!(existing.id, sibling_id);
+            assert_eq!(existing.label, "personal");
+        }
+        other => panic!("expected EditAccountMetadata Duplicate, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err());
+
+    // The in-memory vault is untouched.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(vault.iter().count(), pre_count);
+            assert_eq!(
+                vault.iter().find(|a| a.id() == target_id).unwrap().label(),
+                "github",
+                "duplicate detection must run before any mutation",
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+    // The on-disk vault must be byte-identical (no mutate_and_save
+    // ran during the rejected effect).
+    let post_bytes = std::fs::read(&path).expect("read post-attempt vault");
+    assert_eq!(
+        pre_bytes, post_bytes,
+        "duplicate detection must not commit to the on-disk primary"
+    );
+}
+
+/// Off-`Unlocked` deliveries to the executor must be silently dropped:
+/// no `AppEvent` is emitted and no mutation happens.
+#[test]
+fn execute_edit_account_metadata_on_non_unlocked_state_is_silently_dropped() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let mut state = dummy_state();
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let _ = &tmp;
+    let effect = Effect::EditAccountMetadata {
+        path: path.clone(),
+        account_id: AccountId::default(),
+        edit: AccountEdit::default(),
+    };
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(rx.try_recv().is_err(), "no AppEvent must be sent");
+}
+
+#[test]
+fn execute_edit_account_metadata_with_mismatched_path_is_silently_dropped() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, id) = unlocked_with_one_totp(&path, "github");
+    let other = tmp.path().join("other-vault.bin");
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::EditAccountMetadata {
+        path: other,
+        account_id: id,
+        edit: AccountEdit {
+            label: Some("zzz".to_string()),
+            issuer: None,
+            icon_hint: None,
+        },
+    };
+    let outcome = execute(
+        effect,
+        &mut state,
+        &tx,
+        &mut paladin_tui::clipboard::ClipboardSession::new(),
+    );
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(rx.try_recv().is_err(), "path-mismatch must drop silently");
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().find(|a| a.id() == id).unwrap().label(),
+                "github",
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
     }
 }
