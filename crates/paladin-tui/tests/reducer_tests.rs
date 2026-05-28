@@ -23131,46 +23131,68 @@ fn edit_modal_typing_in_disabled_slug_row_is_noop() {
     // selector is non-Slug (next_focus skips it), so this test
     // constructs the modal with focus already on Slug (defensive
     // invariant guard) and then types — the buffer must not change.
-    let tmp = secure_tempdir();
-    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
-    let id =
-        add_totp_account_with_metadata(&mut vault, &store, "alice", None, IconHintInput::Default);
-    let modal = EditModal {
-        account_id: id,
-        prior: EditPrior {
-            label: "alice".to_string(),
-            issuer: None,
-            icon_hint: None,
-        },
-        label_buffer: "alice".to_string(),
-        issuer_buffer: String::new(),
-        icon_hint_selector: EditIconHintSelector::LeaveUnchanged,
-        icon_hint_slug: "preserved".to_string(),
-        focus: EditFocus::Slug,
-        error: None,
-    };
-    let state = AppState::Unlocked {
-        path,
-        vault,
-        store,
-        search_query: String::new(),
-        idle_deadline: None,
-        pending_clipboard_clear: None,
-        hotp_reveal: None,
-        modal: Some(Modal::Edit(modal)),
-        selected: Some(id),
-        pending_chord_leader: None,
-        viewport_height: 0,
-        viewport_offset: 0,
-        focus: Focus::List,
-        status_line: None,
-        help_open: false,
-    };
-    let (state, effects) = reduce(state, key(KeyCode::Char('z')));
-    assert!(effects.is_empty());
-    let edit = expect_edit_modal(&state);
-    assert_eq!(edit.icon_hint_slug, "preserved");
-    assert!(edit.error.is_none());
+    // Asserted across all three disabled-selector positions to guard
+    // against buffer mutation when focus state leaks.
+    for disabled in [
+        EditIconHintSelector::LeaveUnchanged,
+        EditIconHintSelector::Default,
+        EditIconHintSelector::Clear,
+    ] {
+        let tmp = secure_tempdir();
+        let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+        let id = add_totp_account_with_metadata(
+            &mut vault,
+            &store,
+            "alice",
+            None,
+            IconHintInput::Default,
+        );
+        let modal = EditModal {
+            account_id: id,
+            prior: EditPrior {
+                label: "alice".to_string(),
+                issuer: None,
+                icon_hint: None,
+            },
+            label_buffer: "alice".to_string(),
+            issuer_buffer: String::new(),
+            icon_hint_selector: disabled,
+            icon_hint_slug: "preserved".to_string(),
+            focus: EditFocus::Slug,
+            error: None,
+        };
+        let state = AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query: String::new(),
+            idle_deadline: None,
+            pending_clipboard_clear: None,
+            hotp_reveal: None,
+            modal: Some(Modal::Edit(modal)),
+            selected: Some(id),
+            pending_chord_leader: None,
+            viewport_height: 0,
+            viewport_offset: 0,
+            focus: Focus::List,
+            status_line: None,
+            help_open: false,
+        };
+        let (state, effects) = reduce(state, key(KeyCode::Char('z')));
+        assert!(
+            effects.is_empty(),
+            "typing in disabled slug row ({disabled:?}) must emit no effect"
+        );
+        let edit = expect_edit_modal(&state);
+        assert_eq!(
+            edit.icon_hint_slug, "preserved",
+            "slug buffer must stay byte-identical under {disabled:?}"
+        );
+        assert!(
+            edit.error.is_none(),
+            "no inline error fires under {disabled:?}"
+        );
+    }
 }
 
 #[test]

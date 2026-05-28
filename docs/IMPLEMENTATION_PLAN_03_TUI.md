@@ -2217,13 +2217,15 @@ ships in `paladin-core` and the TUI Edit modal lands.
   `…_issuer_row` / `…_slug_row`,
   `edit_modal_typing_clears_inline_error`,
   `edit_modal_arrow_keys_cycle_selector_without_touching_slug_buffer`.)*
-- [ ] Typing in the slug row while the selector is on *Leave
+- [x] Typing in the slug row while the selector is on *Leave
   unchanged* / *Default from issuer* / *No icon* (i.e. the row
   is disabled and not focusable) is a **no-op**: the slug buffer
   remains byte-identical to its pre-keystroke value, no inline
   error fires, and no effect is emitted. Asserted across all
   three disabled-selector positions to guard against accidental
   buffer mutation when focus state leaks.
+  *(`edit_modal_typing_in_disabled_slug_row_is_noop` loops the
+  three disabled selector positions.)*
 - [x] Submit with at least one control diverging from its prior
   value emits `Effect::EditAccountMetadata { path, account_id,
   edit: AccountEdit }` carrying only the changed fields populated;
