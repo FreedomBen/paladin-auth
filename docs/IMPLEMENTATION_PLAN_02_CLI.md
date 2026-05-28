@@ -1088,12 +1088,12 @@ with `counter_used: null`.
     used by `tests/cli_add.rs` stays). Enforced by
     `tests/cli_qr.rs::deny_qrcode_in_runtime_deps`. All QR work
     routes through `paladin-core`.
-- [ ] **v0.2 — `paladin edit <query>` command** per the §"Edit
+- [x] **v0.2 — `paladin edit <query>` command** per the §"Edit
   command (v0.2)" section above and DESIGN §5 / §4.7 Milestone 9.
   Depends on IMPLEMENTATION_PLAN_01_CORE.md Phase M
   (`AccountEdit`, `validate_account_edit`,
   `Vault::edit_account_metadata`, `Vault::find_duplicate_after_edit`).
-  - [ ] Add the `edit` subcommand to the clap derive enum with the
+  - [x] Add the `edit` subcommand to the clap derive enum with the
     `<query>` positional and the `--label` / `--issuer` /
     `--no-issuer` / `--icon-hint` / `--no-icon-hint` /
     `--allow-duplicate` / `--dry-run` flags. The flags are parsed
@@ -1102,7 +1102,7 @@ with `counter_used: null`.
     and never prompt. `--allow-duplicate` alone does not satisfy the
     "at least one editable flag" requirement (a no-edit-field
     invocation still rejects with `no_edit_fields`).
-  - [ ] Wire `--dry-run` so it runs the full pre-flight (parse-time
+  - [x] Wire `--dry-run` so it runs the full pre-flight (parse-time
     rejections, query resolution, `AccountEdit` construction,
     explicit `validate_account_edit`, `find_duplicate_after_edit`)
     and short-circuits **before** `Vault::edit_account_metadata`
@@ -1113,7 +1113,7 @@ with `counter_used: null`.
     applying the in-mutator re-walk in-memory, and stamping the
     sampled `now` into `updated_at`. The vault file is never
     written.
-  - [ ] Build a thin dispatch handler that resolves `<query>`
+  - [x] Build a thin dispatch handler that resolves `<query>`
     through `paladin_core::parse_account_query` +
     `Vault::matching_accounts` with single-match cardinality (same
     helper as `copy` / `remove` / `rename` / `qr`), constructs an
@@ -1124,7 +1124,7 @@ with `counter_used: null`.
     `Vault::edit_account_metadata` inside `Vault::mutate_and_save`.
     The CLI never re-implements §4.1 validation, issuer
     normalization, or slug derivation.
-  - [ ] Implement the post-validation duplicate-account check via
+  - [x] Implement the post-validation duplicate-account check via
     `Vault::find_duplicate_after_edit(id, &edit)` between
     `AccountEdit` construction and `Vault::mutate_and_save`,
     skipped when `--allow-duplicate` is supplied. On a non-`None`
@@ -1134,17 +1134,17 @@ with `counter_used: null`.
     vault byte-identical to its pre-edit state. The CLI never
     re-implements the byte-for-byte comparison — core owns the
     helper and the §4.1 normalization that feeds it.
-  - [ ] Wire the JSON success shape `{ "account": AccountSummary }`
+  - [x] Wire the JSON success shape `{ "account": AccountSummary }`
     through the existing `error-serde` envelope serializer so
     `--json` callers see the post-edit account state in one shape
     that mirrors `rename`.
-  - [ ] Add `edit` to the `--help` / `--version` JSON help shape
+  - [x] Add `edit` to the `--help` / `--version` JSON help shape
     enumeration so help requests for `paladin edit` carry the
     correct `{ "help": { "command": "paladin edit", "text": "..." } }`
     payload per §5. (Automatic via the clap subcommand tree walked
     by `output::help::resolve_command_path`; the `cli_json_snapshots.rs`
     golden snapshot adds the `paladin edit` help envelope.)
-  - [ ] Confirm `paladin rename` keeps its existing behavior and
+  - [x] Confirm `paladin rename` keeps its existing behavior and
     test inventory once `Vault::rename`'s Phase M internal refactor
     lands. The CLI `rename.rs` is unchanged; the parity is pinned by
     the existing `cli_remove_rename.rs` bullets continuing to pass.
@@ -1512,7 +1512,7 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   Directly pins the locked rule that per-field validation runs
   before the duplicate gate (and before `--allow-duplicate` can
   bypass anything).
-- [ ] **Text-mode error rendering (insta snapshot)**: redirect
+- [x] **Text-mode error rendering (insta snapshot)**: redirect
   stdout/stderr from a `paladin edit --label ""` invocation against
   a seeded plaintext vault and assert the rendered error block
   matches a golden `insta` snapshot — covers the human-facing

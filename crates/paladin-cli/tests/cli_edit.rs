@@ -433,6 +433,35 @@ fn json_edit_invalid_icon_hint_slug_propagates_validation_error() {
 }
 
 // =========================================================================
+// Text-mode error rendering (insta snapshot)
+// =========================================================================
+
+#[test]
+fn text_edit_invalid_label_error_block_matches_snapshot() {
+    // Human-facing rendering of a `validation_error` for `edit`:
+    // `paladin edit alice --label ""` against a seeded plaintext vault
+    // prints the §5 text-mode error block to stderr. `--no-color` keeps
+    // the block free of ANSI escapes so the golden stays stable.
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+    let assert = paladin()
+        .args([
+            "--no-color",
+            "--vault",
+            path.to_str().unwrap(),
+            "edit",
+            "alice",
+            "--label",
+            "",
+        ])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("stderr is UTF-8");
+    insta::assert_snapshot!(stderr);
+}
+
+// =========================================================================
 // Happy-path commits: label, issuer, icon-hint, combined
 // =========================================================================
 
