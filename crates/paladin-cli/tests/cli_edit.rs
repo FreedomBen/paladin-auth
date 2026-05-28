@@ -1325,3 +1325,96 @@ fn json_edit_dry_run_with_allow_duplicate_skips_collision_gate_without_mutation(
     let after_bytes = std::fs::read(&path).expect("read vault");
     assert_eq!(before_bytes, after_bytes);
 }
+
+// =========================================================================
+// Durability fault injection (PALADIN_FAULT_INJECT). Gated behind the
+// `test-hooks` feature, which transitively enables
+// `paladin-core/test-fault-injection`. Run with:
+//   cargo test -p paladin-cli --features test-hooks
+// =========================================================================
+
+#[cfg(feature = "test-hooks")]
+mod fault_inject {
+    use super::*;
+
+    #[test]
+    fn json_edit_pre_commit_save_failure_rolls_back_and_surfaces_save_not_committed() {
+        // §8: a pre-commit save fault during `mutate_and_save` rolls the
+        // in-memory edit back and surfaces `save_not_committed`
+        // (`committed: false`). `paladin edit` rewrites the whole vault
+        // atomically, so the only write the fault can hit is the vault
+        // file's rename; the on-disk vault must stay byte-identical.
+        let (_dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+        let before_bytes = std::fs::read(&path).expect("read vault");
+
+        let assert = paladin()
+            .env("PALADIN_FAULT_INJECT", "pre_commit")
+            .args([
+                "--json",
+                "--vault",
+                path.to_str().unwrap(),
+                "edit",
+                "alice",
+                "--label",
+                "alice2",
+            ])
+            .assert()
+            .failure();
+        let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+        let value: Value = serde_json::from_str(stderr.trim())
+            .unwrap_or_else(|e| panic!("non-JSON stderr: {stderr:?} ({e})"));
+        assert_eq!(value["error_kind"], serde_json::json!("save_not_committed"));
+        assert_eq!(value["committed"], serde_json::json!(false));
+        assert!(assert.get_output().stdout.is_empty());
+
+        // Atomic-write rollback: the vault on disk is byte-identical and
+        // the persisted label is still the pre-edit value.
+        let after_bytes = std::fs::read(&path).expect("read vault");
+        assert_eq!(before_bytes, after_bytes);
+        let listed = list_accounts_json(&path);
+        assert_eq!(listed["accounts"][0]["label"], serde_json::json!("alice"));
+    }
+
+    #[test]
+    fn json_edit_post_commit_fault_surfaces_save_durability_unconfirmed_with_mutation_persisted() {
+        // §8: a post-commit fault (parent-dir fsync failure) lands the
+        // rename but cannot confirm durability, so the CLI surfaces
+        // `save_durability_unconfirmed`. `SaveDurabilityUnconfirmed` is a
+        // unit variant in core, so the envelope carries no extra fields
+        // beyond `error_kind` — the "committed: true" semantics are
+        // proven by re-reading the persisted vault, which already shows
+        // the post-edit label (and preserves `created_at`).
+        let (_dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+        let created_at = list_accounts_json(&path)["accounts"][0]["created_at"].clone();
+
+        let assert = paladin()
+            .env("PALADIN_FAULT_INJECT", "post_commit")
+            .args([
+                "--json",
+                "--vault",
+                path.to_str().unwrap(),
+                "edit",
+                "alice",
+                "--label",
+                "alice2",
+            ])
+            .assert()
+            .failure();
+        let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+        let value: Value = serde_json::from_str(stderr.trim())
+            .unwrap_or_else(|e| panic!("non-JSON stderr: {stderr:?} ({e})"));
+        assert_eq!(
+            value["error_kind"],
+            serde_json::json!("save_durability_unconfirmed"),
+        );
+        assert!(assert.get_output().stdout.is_empty());
+
+        // Mutation committed despite unconfirmed durability: the
+        // persisted vault shows the new label and preserves created_at.
+        let listed = list_accounts_json(&path);
+        assert_eq!(listed["accounts"][0]["label"], serde_json::json!("alice2"));
+        assert_eq!(listed["accounts"][0]["created_at"], created_at);
+    }
+}

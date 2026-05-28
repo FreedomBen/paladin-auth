@@ -1495,10 +1495,10 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
 - [ ] `edit --json` envelopes match the
   `cli_json_snapshots.rs` golden shape; volatile fields
   (`updated_at`) are redacted in the snapshot.
-- [ ] Pre-commit save failure (via the core
+- [x] Pre-commit save failure (via the core
   `test-fault-injection` feature) leaves the vault byte-identical
   to its pre-edit state and surfaces `save_not_committed`.
-- [ ] Post-commit durability-unconfirmed failure surfaces
+- [x] Post-commit durability-unconfirmed failure surfaces
   `save_durability_unconfirmed` with `committed: true` and the
   post-edit account state visible in the persisted vault.
 - [x] Whitespace-only `--label "   "` propagates a core
