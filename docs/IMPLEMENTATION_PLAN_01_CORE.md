@@ -1792,21 +1792,36 @@ matching the existing `add` / `remove` / `rename` pattern.
   `domain::slug::derive_default_from_issuer`. Returns
   `validation_error` with the offending field name on the first
   failure (consistent with `validate_manual`'s per-field error
-  shape). The `prior` and `now` parameters are currently unused
-  but are required so the signature stays stable when (post-v0.2)
-  we add cross-field invariants — `prior` reserves room for
-  rules that compare the proposed edit against the existing
-  account state (e.g. "rename must preserve the canonical match
-  key when issuer is `None`"), and `now` reserves room for a
-  freshness check that rejects an `updated_at` value drifted
-  beyond an acceptable clock skew. Keeping both parameters now
-  avoids a breaking signature change once those rules land. The
-  validator does **not** reject an empty `AccountEdit` — that
-  decision belongs to `Vault::edit_account_metadata` so front ends
-  can drive per-field rendering against a draft that hasn't yet
-  committed to a field. Errors include the `field` name
-  (`"label"`, `"issuer"`, `"icon_hint"`) and the typed `reason`
-  from the underlying validator (`"empty"`, `"too_long"`,
+  shape). **Normalization ownership:** each per-field validator
+  returns a normalized value (trimmed label / trimmed issuer /
+  owned slug), but `validate_account_edit`'s public surface
+  returns `Result<()>` and discards them — front ends call it
+  for inline per-field error rendering without committing to
+  apply. `Vault::edit_account_metadata` re-walks the same
+  per-field validators in its own pre-check step; in practice
+  both code paths share a private
+  `validate_and_normalize_account_edit` helper, so any rule
+  added in one is mechanically present in the other and the
+  two surfaces cannot drift. The **normalized values are the
+  ones the mutator applies to the resolved `Account`** —
+  `AccountEdit { label: Some("  Foo  "), .. }` lands as `"Foo"`
+  on disk, matching how `validate_label`-routed paths already
+  write account fields. The `prior` and `now` parameters are
+  currently unused but are required so the signature stays
+  stable when (post-v0.2) we add cross-field invariants —
+  `prior` reserves room for rules that compare the proposed
+  edit against the existing account state (e.g. "rename must
+  preserve the canonical match key when issuer is `None`"), and
+  `now` reserves room for a freshness check that rejects an
+  `updated_at` value drifted beyond an acceptable clock skew.
+  Keeping both parameters now avoids a breaking signature change
+  once those rules land. The validator does **not** reject an
+  empty `AccountEdit` — that decision belongs to
+  `Vault::edit_account_metadata` so front ends can drive
+  per-field rendering against a draft that hasn't yet committed
+  to a field. Errors include the `field` name (`"label"`,
+  `"issuer"`, `"icon_hint"`) and the typed `reason` from the
+  underlying validator (`"empty"`, `"too_long"`,
   `"invalid_chars"`, etc., per `validate_slug` for the icon-hint
   case).
 
@@ -1816,23 +1831,31 @@ matching the existing `add` / `remove` / `rename` pattern.
   `IconHintInput::Slug` arm (the TUI Edit modal's *Slug:* row per
   §6 / IMPLEMENTATION_PLAN_03_TUI.md, and the v0.2 GTK
   EditDialog's slug input per IMPLEMENTATION_PLAN_04_GTK.md).
-  Runs the §4.1 `[a-z0-9_-]+` check and returns
-  `IconHintInput::Slug(slug.to_string())` on success; returns
-  `validation_error` (`field: "icon_hint"`,
-  `reason: "invalid_slug"`) on failure — same error site
-  `parse_icon_hint_token` uses for slug-shape failures. The
-  point of the separate entry is that `parse_icon_hint_token`
-  reserves the empty / `default` / `none` tokens for the
-  `IconHintInput::Default` / `Clear` tri-state outcomes;
-  surfaces that expose dedicated UI affordances for those
-  outcomes need a slug-only path so literal `default` / `none`
-  round-trip as slugs instead of being silently rerouted. The
-  free-form CLI `--icon-hint <token>` flag and the CLI / GTK Add
-  prompts continue to route through `parse_icon_hint_token`
+  Runs the §4.1 `[a-z0-9_-]+` check verbatim and returns
+  `IconHintInput::Slug(slug.to_string())` on success; passes
+  through the underlying `validation_error` (`field: "icon_hint"`,
+  reasons `"empty"` / `"too_long"` / `"invalid_chars"`) on
+  failure — same error sites `validate_slug` emits and that
+  `parse_icon_hint_token` re-exports for its slug-shape arm.
+  **No trim:** `validate_slug` rejects any whitespace as
+  `invalid_chars`, so an input of `"  github  "` does not
+  round-trip. Callers (TUI *Slug:* row, GTK slug input) are
+  responsible for trimming user input before calling — there is
+  one slug grammar in the crate, no caller-side / core-side
+  normalization split. The point of the separate entry is that
+  `parse_icon_hint_token` reserves the empty / `default` / `none`
+  tokens for the `IconHintInput::Default` / `Clear` tri-state
+  outcomes; surfaces that expose dedicated UI affordances for
+  those outcomes need a slug-only path so literal `default` /
+  `none` round-trip as slugs instead of being silently rerouted.
+  The free-form CLI `--icon-hint <token>` flag and the CLI / GTK
+  Add prompts continue to route through `parse_icon_hint_token`
   unchanged. Internally `validate_icon_hint_slug` is a one-line
-  wrapper over the existing private slug helper that
-  `parse_icon_hint_token` and `validate_account_edit` already
-  reach for, so there is exactly one slug grammar in the crate.
+  wrapper over the existing slug helper that
+  `parse_icon_hint_token` and the per-field walk shared by
+  `validate_account_edit` / `Vault::edit_account_metadata`
+  already reach for, so there is exactly one slug grammar in
+  the crate.
 
 - [ ] **`Vault::edit_account_metadata(id, edit, now)` mutator.**
   Single public mutator. Routes through a private inner helper
@@ -1842,24 +1865,49 @@ matching the existing `add` / `remove` / `rename` pattern.
   field on `invalid_state` and `time_range` errors is set by the
   caller — the public `edit_account_metadata` passes
   `"edit_account_metadata"` and the post-refactor `rename` passes
-  `"rename"` (see below). The public mutator resolves `id`, returns
-  `invalid_state` (`operation: "edit_account_metadata"`,
-  `state: "account_not_found"`) when no account exists for `id`
-  (matches the existing `rename` shape). Rejects an empty
-  `AccountEdit` (every field `None`) with `validation_error`
-  (`field: "edit"`, `reason: "empty"`). Validates `now` via
-  `system_time_to_secs_for(operation, now)` so pre-epoch / year-9999
-  cap inputs surface as `time_range` before any mutation —
-  parity with `rename`. Calls `validate_account_edit`
-  against the resolved `Account`; on validation failure returns the
-  typed `validation_error` without mutating. On validation success
-  applies the present fields to the account, derives the post-edit
-  icon-hint slug through the `IconHintInput` tri-state (the
-  `Default` variant re-derives from the **post-edit** `issuer`, not
-  the prior one), bumps `updated_at` to `now`, and returns `Ok(())`.
-  The mutator is `&mut self` and the caller wraps it in
-  `Vault::mutate_and_save` for atomic persistence + rollback — same
-  pattern as `rename` / `add` / `remove`.
+  `"rename"` (see below). Pre-checks run in **exactly this
+  order**, chosen so the post-refactor `rename` reproduces the
+  pre-refactor [`validate_label`, `system_time_to_secs_for`, id]
+  sequence byte-for-byte and the CI-locked semantic test passes:
+
+  1. **Reject an empty `AccountEdit`** (every field `None`) with
+     `validation_error` (`field: "edit"`, `reason: "empty"`). This
+     never fires on the rename path because that AccountEdit
+     always carries `Some(label)`.
+  2. **Per-field validate + normalize** by calling
+     `validate_label` on `Some(label)`, `validate_issuer` on
+     `Some(Some(issuer))` (short-circuiting to a cleared issuer
+     on `Some(None)` without further work), and
+     `domain::slug::validate_slug` on
+     `Some(IconHintInput::Slug(s))`. Same first-failure-wins
+     rules as `validate_account_edit` — in practice both code
+     paths share a private
+     `validate_and_normalize_account_edit` helper so the two
+     surfaces cannot drift. Each per-field validator returns its
+     **normalized** value (trimmed label / trimmed issuer /
+     owned slug), which the mutator stashes for the apply step.
+  3. **Validate `now`** via
+     `system_time_to_secs_for(operation, now)` so pre-epoch /
+     year-9999 cap inputs surface as `time_range` — parity with
+     `rename`.
+  4. **Resolve `id`**, returning `invalid_state`
+     (`operation: "edit_account_metadata"`,
+     `state: "account_not_found"`) when no account exists for
+     `id` (matches the existing `rename` shape).
+
+  All four steps passing, the mutator applies the **stashed
+  normalized values** (not the raw `AccountEdit` strings) to the
+  resolved account, derives the post-edit icon-hint slug through
+  the `IconHintInput` tri-state (the `Default` variant re-derives
+  from the **post-edit** `issuer`, not the prior one), bumps
+  `updated_at` to `now`, and returns `Ok(())`. Applying the
+  normalized strings means `AccountEdit { label: Some("  Foo  "),
+  .. }` lands as `"Foo"` on disk — same trim-on-write contract
+  the pre-refactor `rename` enforced via its
+  `let trimmed_label = validate_label(label)?;` call. The mutator
+  is `&mut self` and the caller wraps it in
+  `Vault::mutate_and_save` for atomic persistence + rollback —
+  same pattern as `rename` / `add` / `remove`.
 
 - [ ] **`Vault::find_duplicate_after_edit(&self, id: AccountId, edit: &AccountEdit) -> Option<&Account>`.**
   Companion to the existing `find_duplicate(&ValidatedAccount)` so
@@ -1872,16 +1920,34 @@ matching the existing `add` / `remove` / `rename` pattern.
   `AccountEdit` tri-state against the prior values) and runs the
   same byte-for-byte / case-sensitive comparison as
   `find_duplicate`, **skipping the account at `id`** so an
-  unchanged self-comparison never reports a collision. Returns
+  unchanged self-comparison never reports a collision.
+  **Candidate normalization:** the helper runs `validate_label`
+  and `validate_issuer` on the candidate `label` / `issuer`
+  before comparison so a candidate of `"  Acme  "` correctly
+  collides with a stored `"Acme"` — stored accounts are already
+  normalized at construction, so comparing raw input against
+  them would silently miss whitespace-padded collisions. The
+  comparison uses the same per-field walk as
+  `Vault::edit_account_metadata`, so a candidate that this
+  helper reports as a collision is the same candidate the
+  mutator would otherwise have written byte-for-byte. Returns
   `None` for an unknown `id` (front ends already handle the
   account-not-found path before opening the dialog; if they
   haven't, the subsequent `edit_account_metadata` call surfaces
-  `invalid_state` `account_not_found`). The method takes `&self`
-  and never mutates. As a method on `Vault`, it adds no new field
-  and inherits the existing `Vault: Send + Sync` posture asserted
-  in `tests/send_assertions.rs` — no new Send/Sync entry is
-  needed for the method itself. DESIGN.md §4.7 is updated to list
-  this method alongside `find_duplicate`.
+  `invalid_state` `account_not_found`). **Returns `None` when
+  candidate normalization fails** (e.g. overlong label) rather
+  than reporting a spurious collision against a not-actually-
+  reachable post-edit state: front ends are expected to call
+  `validate_account_edit` before this helper, so an invalid
+  candidate is a *pending validation error*, not a duplicate to
+  surface. The mutator's own per-field validation will emit the
+  typed `validation_error` when the user actually submits. The
+  method takes `&self` and never mutates. As a method on
+  `Vault`, it adds no new field and inherits the existing
+  `Vault: Send + Sync` posture asserted in
+  `tests/send_assertions.rs` — no new Send/Sync entry is needed
+  for the method itself. DESIGN.md §4.7 lists this method
+  alongside `find_duplicate`.
 
 - [ ] **`Vault::rename` reimplementation on top of
   `edit_account_metadata`.** Internal refactor: the existing
@@ -1918,11 +1984,28 @@ matching the existing `add` / `remove` / `rename` pattern.
   re-derivation against the **post-edit** issuer (verify by editing
   issuer + setting `icon_hint = Some(Default)` in one call),
   no-op-but-non-empty `updated_at` bump (every field set to its
-  prior value still bumps `updated_at` to `now`), and validation
-  rejection preserving the prior `Account` byte-for-byte. Run each
-  test through `Vault::mutate_and_save` with a tempfile-backed
-  plaintext vault so the persistence + rollback contract is
-  exercised end-to-end.
+  prior value still bumps `updated_at` to `now`),
+  **trim-on-write normalization** (`AccountEdit { label:
+  Some("  Foo  "), .. }` lands on disk as `"Foo"`; same for
+  `Some(Some("  Acme  "))` on issuer — parity with
+  `validate_label` / `validate_issuer`'s normalized return), and
+  validation rejection preserving the prior `Account`
+  byte-for-byte. Also pin the **pre-check ordering** on doubly-
+  invalid inputs so a future refactor cannot reorder the four
+  pre-check steps undetected:
+  `edit_account_metadata(missing_id, AccountEdit::default(),
+  t_ok)` → `validation_error("edit", "empty")` (empty fires
+  before id-resolution);
+  `edit_account_metadata(missing_id, AccountEdit { label:
+  Some(""), ..Default::default() }, t_ok)` →
+  `validation_error("label", "empty")` (per-field validate fires
+  before id-resolution);
+  `edit_account_metadata(missing_id, AccountEdit { label:
+  Some("ok"), ..Default::default() }, t_bad)` → `time_range`
+  (`now` validation fires before id-resolution).
+  Run each test through `Vault::mutate_and_save` with a
+  tempfile-backed plaintext vault so the persistence + rollback
+  contract is exercised end-to-end.
 
 - [ ] **Tests — `mutate_and_save` rollback.** Use the
   `test-fault-injection` feature to inject a pre-commit save failure
@@ -1944,17 +2027,36 @@ matching the existing `add` / `remove` / `rename` pattern.
   that leaves both label and issuer untouched still returns
   `None` (self-skip covers the unchanged case). Case-sensitive
   comparison parity with `find_duplicate` (mixed-case issuer not
-  matching) is asserted.
+  matching) is asserted. **Candidate normalization** is asserted
+  in both directions: a candidate label `"  Foo  "` against a
+  stored `"Foo"` returns `Some(&that_account)` (whitespace-padded
+  candidate normalized before comparison); a candidate issuer
+  `Some(Some("  Acme  "))` against stored `"Acme"` likewise
+  collides; conversely, a candidate that **fails normalization**
+  (overlong label past `LABEL_MAX_BYTES`; overlong issuer past
+  `ISSUER_MAX_BYTES`) returns `None` rather than reporting a
+  spurious collision, with a follow-on assertion that the
+  matching call to `edit_account_metadata` surfaces the typed
+  `validation_error` for the same input.
   In `tests/vault_edit_account_metadata.rs` (or the existing
   `tests/vault_rename.rs` as the natural home — pick one to avoid
   duplication), pin that the post-refactor `Vault::rename`
   surfaces the same `PaladinError` variants and the same
   stable extra fields (notably the `operation` tag on
   `invalid_state` and `time_range`) as the pre-refactor
-  implementation. This locks the "Public signature, error kinds,
-  and `updated_at`-on-same-label semantics all stay
+  implementation, including the **error-precedence** cases that
+  the [validate, time, id] pre-check order exists to protect:
+  `rename(missing_id, "", t_ok)` → `validation_error("label",
+  "empty")` (label validation fires before id-resolution);
+  `rename(missing_id, "ok", t_bad)` → `time_range` (time
+  validation fires before id-resolution);
+  `rename(missing_id, "ok", t_ok)` → `invalid_state(rename,
+  account_not_found)`. This locks the "Public signature, error
+  kinds, and `updated_at`-on-same-label semantics all stay
   byte-identical" claim against a regression where the operation
-  field silently flips to `"edit_account_metadata"`.
+  field silently flips to `"edit_account_metadata"` *or* the
+  refactor accidentally reorders id-resolution ahead of label or
+  time validation.
 
 - [ ] **Tests — Send / Sync assertions.** Extend
   `tests/send_assertions.rs` with `assert_send::<AccountEdit>()`
