@@ -32,6 +32,7 @@ crates/paladin-cli/
 │   ├── clipboard.rs      # `paladin copy` clipboard adapter (arboard in production, `test-hooks`-feature dryrun bypass for integration tests); never schedules auto-clear (CLI is stateless per §8)
 │   ├── commands/
 │   │   ├── init.rs
+│   │   ├── destroy.rs    # path-targeted vault wipe; never opens / decrypts; loud-confirm + --yes; calls paladin_core::destroy_vault
 │   │   ├── add.rs
 │   │   ├── list.rs
 │   │   ├── show.rs       # advances HOTP
@@ -47,6 +48,7 @@ crates/paladin-cli/
 │   └── select.rs         # thin wrapper around paladin_core::parse_account_query, Vault::matching_accounts, and Vault::shortest_unique_id_prefix; CLI owns only command-specific cardinality errors and rendering.
 └── tests/
     ├── cli_init.rs
+    ├── cli_destroy.rs              # paladin destroy: confirmation grammar, --yes, --json envelope, vault_missing idempotence, symlink rejection, partial-failure envelopes
     ├── cli_add.rs
     ├── cli_show_peek_copy.rs
     ├── cli_remove_rename.rs
@@ -104,6 +106,7 @@ valid custom KDF values are accepted but unused.
 | Command                                                | Notes |
 |--------------------------------------------------------|-------|
 | `init [--force]`                                       | The pre-check routes `paladin_core::inspect(path)` through `paladin_core::classify_init_precheck`, which returns `InitPrecheck::{ Clear, Existing, Propagate(err) }`; the CLI surfaces `vault_exists` (or, with `--force`, the clobber path) on `Existing` and propagates verbatim on `Propagate`. Without `--force`, `Existing` surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` in text mode before any prompt whenever the pre-check returns `Existing` (Paladin or not), then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old file verbatim to `.bak`, overwriting any existing backup). The verbatim rotation matches `create_force`'s file-type-agnostic semantics. Accepts and validates the KDF flags above before prompting; valid custom KDF values are used only when the new-vault passphrase is non-empty. If the first passphrase entry is empty, text mode prints `paladin_core::format_plaintext_storage_warning()` before creating the plaintext vault. |
+| `destroy [--yes]`                                      | Path-targeted vault wipe (DESIGN §4.3 / §5; Milestone 10). Resolves the vault path (same `--vault` / `default_vault_path()` resolution as every other command); probes the sibling `vault.bin.bak` with `std::fs::try_exists` to populate the warning text; calls `paladin_core::destroy_vault(path)`. Never opens or decrypts the vault; never runs the §4.4 KDF; never enforces the §4.3 permissions gate before unlink (a vault with drifted perms is still deletable). KDF flags reject at parse time as `validation_error` (`field: "argv"`, `reason: "kdf_flags_not_supported"`). Text mode prints `paladin_core::format_destroy_warning(path, backup_present)` and prompts for the exact string `yes` (after Unicode whitespace trim); `--yes` skips the prompt and is required under `--json` (no confirmation prompt). Confirmation declines exit with `validation_error` (`field: "confirmation"`, `reason: "declined"`) before any I/O. `/dev/tty` unavailable for the confirmation prompt exits with `io_error` (`operation: "confirmation_prompt"`). On success, text mode prints `Deleted vault.` (or `Deleted vault (backup remained on disk).` when no `.bak` was present) and JSON emits `{ "destroyed": { "vault_path", "primary_deleted": true, "backup_deleted": bool } }`. `vault_missing` exits non-zero with the standard envelope (no `.bak` is touched). Symlinked primary or backup rejects before any unlink with `io_error` (`operation: "vault_file_is_symlink"` / `"backup_file_is_symlink"`). Partial outcomes (primary unlinked, backup unlink or parent `fsync` failed) surface as `io_error` with `operation: "unlink_backup_file"` or `"fsync_vault_dir"`; the error envelope adds `primary_deleted: true` and `backup_deleted: bool` so callers see the on-disk state. |
 | `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. Under `--json`, interactive mode is rejected at parse time — one of `--uri`, `--qr`, or a complete manual flag set (`--label` and `--secret`, plus optional manual fields) must be supplied. |
 | `list`                                                 | Account metadata plus the current TOTP code, seconds remaining in the current TOTP window, and the next TOTP code. Time is sampled once per invocation from `SystemTime::now()` and reused for every TOTP row so all rows share the same window. TOTP codes come from `Vault::totp_code(id, now)` and `Vault::totp_next_code(id, now)`; HOTP rows leave the code columns empty (`-` in text mode, `null` under `--json`) because `list` never advances or peeks an HOTP counter. |
 | `show <query>`                                         | Advances HOTP; persists before printing. Matching queries print all matches when every match is TOTP; if any match is HOTP, requires a single match. |
@@ -551,6 +554,114 @@ without changing the CLI's `rename.rs`). Implementation owes:
   `clipboard.clear_enabled` / `clipboard.clear_secs` and by
   `auto_lock.enabled` / `auto_lock.timeout_secs`. Those settings
   are TUI/GUI-only.
+
+## Destroy command (Milestone 10)
+
+`paladin destroy` is the CLI surface for the §4.3 / §5 path-targeted
+vault wipe. It is the inverse of `paladin init` and is the in-app
+escape hatch for a forgotten passphrase or drifted-perms vault. The
+implementation owes:
+
+- **Argv shape.** No positional arguments. Single optional flag:
+  - `--yes` — skip the destructive-confirmation prompt. Required under
+    `--json` (parallel to `passphrase remove --yes` and
+    `remove --yes`).
+- **Parse-time rejections.** Fire before path resolution or any I/O
+  so an invalid invocation never touches disk:
+  - Any KDF flag (`--kdf-memory-mib`, `--kdf-time`,
+    `--kdf-parallelism`) → `validation_error` (`field: "argv"`,
+    `reason: "kdf_flags_not_supported"`). Destroy runs no Argon2id
+    work; surfacing KDF flags as supported would be a lie. The
+    rejection wins precedence over `vault_missing` and the
+    confirmation prompt, parity with the `qr` / `edit` parse-time
+    precedence rules above.
+  - `--json` without `--yes` → `validation_error`
+    (`field: "argv"`, `reason: "confirmation_required"`).
+    Matches `passphrase remove` / `remove` strict-mode wiring.
+- **Pre-dispatch I/O.** After parse, the CLI:
+  1. Resolves the vault path through the same `--vault` /
+     `default_vault_path()` pipeline `init` and every other command
+     use. A `default_vault_path()` failure surfaces as `io_error`
+     (`operation: "resolve_default_vault_path"`).
+  2. Probes the sibling backup with
+     `std::fs::try_exists(path.with_file_name("vault.bin.bak"))`.
+     The result populates the `backup_present` parameter the warning
+     helper needs; an I/O error from `try_exists` (e.g. the parent
+     directory is unreadable) surfaces as `io_error`
+     (`operation: "stat_backup_file"`) before any warning is
+     rendered. The CLI deliberately does **not** call
+     `paladin_core::inspect(path)` first — `inspect` reads the
+     header, and destroy must work on a corrupted vault that
+     `inspect` would reject. The presence of the primary at `path`
+     is decided by `destroy_vault` itself (it returns
+     `vault_missing` when absent).
+- **Confirmation grammar.** Text mode prints
+  `paladin_core::format_destroy_warning(path, backup_present)` to
+  stderr and prompts on `/dev/tty` for the exact string `yes`
+  (after Unicode-whitespace trim). Reuses `prompt::confirm_yes`
+  (the same helper backing `passphrase remove`, `remove`, and
+  `init --force`). Decline → `validation_error`
+  (`field: "confirmation"`, `reason: "declined"`) before any I/O.
+  `/dev/tty` unavailable → `io_error`
+  (`operation: "confirmation_prompt"`). `--yes` skips the prompt
+  and the warning is still printed to stderr in text mode
+  (parallel to `passphrase remove --yes`); under `--json` the
+  warning is suppressed because the caller opted in to
+  machine-readable output and the JSON envelope owns stdout.
+- **Dispatch.** With confirmation cleared, the CLI calls
+  `paladin_core::destroy_vault(path)`. The core function performs
+  the §4.3 symlink probe, primary unlink, optional backup unlink,
+  and parent `fsync`. The CLI does **not** call `Store::open` or
+  `inspect` before dispatch (the design contract: destroy operates
+  on the path directly, even when the vault is unreadable).
+- **Success rendering.**
+  - Text mode: `Deleted vault.` to stdout on
+    `DestroyReport { primary_deleted: true, backup_deleted: true }`;
+    `Deleted vault (backup remained on disk).` when
+    `backup_deleted: false` because no backup was present at probe
+    time. Exit 0.
+  - `--json`: `{ "destroyed": { "vault_path": "<resolved-path>",
+    "primary_deleted": true, "backup_deleted": <bool> } }` on
+    stdout. Exit 0. The path is the resolved absolute path the
+    CLI handed to `destroy_vault`, not the literal `--vault` argv.
+- **Error rendering.** All errors use the existing §5 envelope
+  shapes with the `kind` discriminator and stable per-kind fields:
+  - `vault_missing` — `{ "kind": "vault_missing", "path": "<path>" }`.
+    Idempotent under repeat invocation: a script that runs
+    `paladin destroy --yes` twice sees `0`, then `vault_missing`
+    on the second call. No `.bak` was touched on this path.
+  - `io_error` with `operation` ∈ {
+    `vault_file_is_symlink`, `backup_file_is_symlink`,
+    `unlink_vault_file`, `unlink_backup_file`,
+    `fsync_vault_dir`, `stat_backup_file`,
+    `confirmation_prompt`, `resolve_default_vault_path` } —
+    standard `io_error` envelope plus the `path` that surfaced the
+    error. For the post-unlink failure modes
+    (`unlink_backup_file`, `fsync_vault_dir`) the envelope also
+    carries `primary_deleted: true` and `backup_deleted: <bool>`
+    so JSON callers see the on-disk state without re-reading the
+    filesystem. Exit non-zero.
+  - `validation_error` — for parse-time rejections
+    (`kdf_flags_not_supported`, `confirmation_required`) and the
+    declined-confirmation path. Exit non-zero.
+- **Strict-mode `--json` constraints.** No advisories on stdout
+  (parallel to `passphrase remove --yes` and the QR `--json` path).
+  In text mode the warning prints to stderr so stdout stays empty
+  until `Deleted vault.` is emitted. Under `--json` the warning is
+  suppressed entirely and only the JSON envelope appears on stdout;
+  any error envelope appears on stderr per the existing §5
+  stdout/stderr split.
+- **Where the work lives.** The unlink + `fsync` sequence, the
+  symlink defense-in-depth, and the report shape all live in
+  `paladin-core` (`paladin_core::destroy_vault` /
+  `DestroyReport`). The shared warning text lives in
+  `paladin_core::format_destroy_warning` so the CLI text-mode
+  prompt, the TUI modal body, and the GTK dialog body render byte-
+  identical wording. The CLI owns only: argv parsing, parse-time
+  rejections, the backup-present probe, the confirmation prompt,
+  and envelope rendering. There is no `--force` flag on `destroy`
+  — the loud confirmation grammar is the only override surface;
+  callers who want non-interactive destruction use `--yes`.
 
 ## Settings keys
 
@@ -1037,6 +1148,53 @@ with `counter_used: null`.
     test inventory once `Vault::rename`'s Phase M internal refactor
     lands. The CLI `rename.rs` is unchanged; the parity is pinned by
     the existing `cli_remove_rename.rs` bullets continuing to pass.
+- [ ] **`paladin destroy [--yes]` command** per the §"Destroy command
+  (Milestone 10)" section above and DESIGN §4.3 / §5 / Milestone 10.
+  Depends on `paladin_core::destroy_vault`, `DestroyReport`, and
+  `format_destroy_warning` landing in `paladin-core` (Milestone 10
+  core bullet).
+  - [ ] Add the `destroy` subcommand to the clap derive enum with the
+    sole optional `--yes` flag. KDF flags reject at parse time as
+    `validation_error` (`field: "argv"`,
+    `reason: "kdf_flags_not_supported"`); `--json` without `--yes`
+    rejects at parse time as `validation_error` (`field: "argv"`,
+    `reason: "confirmation_required"`). Both rejections fire before
+    any I/O so an invalid invocation never touches disk.
+  - [ ] Build a thin dispatch handler that resolves the vault path
+    (same `--vault` / `default_vault_path()` pipeline as every other
+    command), probes the sibling `vault.bin.bak` via
+    `std::fs::try_exists` to populate `backup_present` (mapping any
+    I/O error to `io_error` (`operation: "stat_backup_file"`)),
+    renders `paladin_core::format_destroy_warning(path,
+    backup_present)` to stderr in text mode, runs
+    `prompt::confirm_yes` (the same helper backing `passphrase
+    remove`, `remove`, and `init --force`), and calls
+    `paladin_core::destroy_vault(path)`. The CLI never calls
+    `Store::open` or `inspect` before dispatch — destroy operates
+    on the path directly even when the vault is unreadable.
+  - [ ] Render text-mode success as `Deleted vault.` or `Deleted
+    vault (backup remained on disk).` (the latter when
+    `DestroyReport.backup_deleted == false`) to stdout, and JSON
+    success as `{ "destroyed": { "vault_path", "primary_deleted":
+    true, "backup_deleted": <bool> } }` with `vault_path` set to the
+    resolved absolute path. Error envelopes reuse the existing §5
+    `vault_missing`, `io_error`, and `validation_error` shapes; for
+    `unlink_backup_file` / `fsync_vault_dir` the envelope adds
+    `primary_deleted: true` and `backup_deleted: <bool>` so JSON
+    callers see the on-disk state without re-reading the
+    filesystem.
+  - [ ] Wire the strict-mode `--json` advisory suppression so the
+    destroy warning is rendered to stderr in text mode but suppressed
+    under `--json` (parallel to `--force` / `--yes` / `--plaintext`).
+    The cross-command `cli_advisory_suppression.rs` sweep gains a
+    destroy bullet.
+  - [ ] Add `destroy` to the `--help` / `--version` JSON help shape
+    enumeration so help requests for `paladin destroy` carry the
+    correct `{ "help": { "command": "paladin destroy", "text": "..." } }`
+    payload per §5. (Automatic via the clap subcommand tree walked
+    by `output::help::resolve_command_path`; the
+    `cli_json_snapshots.rs` golden snapshot adds the `paladin
+    destroy` help envelope.)
 - [x] Run the definition-of-done checks (ticks only when every
   Tests sub-bullet is also ticked).
 
@@ -1399,6 +1557,101 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   every other CLI test file (enforced by the workspace SPDX
   audit, but pinned here so a fresh test file is not added
   without the header).
+
+### `destroy` (`tests/cli_destroy.rs`, Milestone 10)
+
+Each test creates a fresh temp dir, `--vault`s a path inside it,
+sets up the on-disk state (plaintext / encrypted / corrupted /
+missing / symlinked / `.bak`-only), invokes `paladin destroy`, and
+asserts stdout / stderr / exit code and post-condition on disk
+(primary present / absent, `.bak` present / absent). PTY tests
+mark themselves `[PTY]` and skip on CI runners without a pseudo-
+terminal, matching the rest of the suite.
+
+- [ ] `[PTY]` `destroy` against a plaintext vault prompts, accepts
+  `yes`, unlinks the primary, and exits 0 with `Deleted vault.` on
+  stdout. The vault file is gone after the call.
+- [ ] `[PTY]` `destroy` against an encrypted vault prompts, accepts
+  `yes`, unlinks the primary, and exits 0 without ever calling the
+  KDF or prompting for a passphrase (asserted by leaving the env
+  passphrase-prompt fixture untouched). Pinpoints the design
+  decision that destroy is the forgotten-passphrase escape hatch.
+- [ ] `[PTY]` `destroy` against a vault with a sibling `.bak`
+  unlinks both files. Stdout reads `Deleted vault.`; JSON envelope
+  carries `backup_deleted: true`.
+- [ ] `[PTY]` `destroy` against a vault with no `.bak` exits 0,
+  unlinks only the primary, prints `Deleted vault (backup remained
+  on disk).` (the helper text branch for `backup_deleted: false`).
+  *(Title labels the branch; on disk no `.bak` exists either before
+  or after.)*
+- [ ] `[PTY]` `destroy --yes` skips the confirmation prompt; the
+  warning text still prints to stderr in text mode.
+- [ ] `destroy --json --yes` succeeds and emits the
+  `{ "destroyed": { "vault_path", "primary_deleted": true,
+  "backup_deleted": <bool> } }` envelope on stdout. The
+  `cli_json_snapshots.rs` golden snapshot pins the shape.
+- [ ] `destroy --json` without `--yes` rejects at parse time with
+  `validation_error` (`field: "argv"`,
+  `reason: "confirmation_required"`). Parallel to `passphrase
+  remove --json` / `remove --json`.
+- [ ] `[PTY]` `destroy` confirmation decline (any string other than
+  `yes` after trim) exits non-zero with `validation_error`
+  (`field: "confirmation"`, `reason: "declined"`) before any
+  unlink. The primary and `.bak` are still on disk after the call.
+- [ ] `[PTY]` `destroy` with no `/dev/tty` available surfaces
+  `io_error` (`operation: "confirmation_prompt"`).
+- [ ] `destroy` against a missing vault exits non-zero with
+  `vault_missing` and the resolved `path` field; no `.bak` is
+  touched (asserted by leaving a `.bak` file in place and verifying
+  it survives the call).
+- [ ] `destroy` is idempotent across two invocations: the first
+  succeeds, the second exits non-zero with `vault_missing`. A
+  script using `|| true` sees the same end-state either way.
+- [ ] `destroy` against a vault whose primary is a symlink rejects
+  with `io_error` (`operation: "vault_file_is_symlink"`) before any
+  unlink. The symlink target is byte-identical after the call.
+- [ ] `destroy` against a vault whose `.bak` is a symlink rejects
+  with `io_error` (`operation: "backup_file_is_symlink"`) before
+  any unlink. The primary is still on disk after the call.
+- [ ] `destroy` with a parent directory the user cannot stat (e.g.
+  parent flipped to `0000` between resolution and probe) surfaces
+  `io_error` (`operation: "stat_backup_file"`).
+- [ ] `destroy` partial-failure: under a test harness that makes
+  the `.bak` unlink fail (e.g. POSIX ACL strips write on the
+  parent between the primary and backup unlinks), the primary is
+  unlinked and the call exits non-zero with `io_error`
+  (`operation: "unlink_backup_file"`,
+  `primary_deleted: true, backup_deleted: false`).
+- [ ] `destroy` partial-failure: under a harness that makes the
+  parent-`fsync` fail after both unlinks succeed, the call exits
+  non-zero with `io_error` (`operation: "fsync_vault_dir"`,
+  `primary_deleted: true, backup_deleted: true`).
+- [ ] `destroy` rejects KDF flags
+  (`--kdf-memory-mib` / `--kdf-time` / `--kdf-parallelism`) at parse
+  time with `validation_error` (`field: "argv"`,
+  `reason: "kdf_flags_not_supported"`) — destroy runs no Argon2id
+  work. Rejection wins precedence over `vault_missing`.
+- [ ] `destroy` operates on a vault that `open` would refuse
+  (e.g. parent dir mode drifted to `0755`): the unlink still
+  succeeds because `destroy` does not run the §4.3 permissions
+  gate. Pinpoints the design decision that a vault the user can
+  no longer open is still deletable.
+- [ ] `destroy` operates on a vault whose header is corrupted
+  (`unsupported_format_version` or `invalid_payload`): the unlink
+  still succeeds because `destroy` does not call `inspect`.
+- [ ] `destroy --json` envelope under the partial-failure paths
+  preserves the `primary_deleted` / `backup_deleted` fields on the
+  `io_error` envelope. The `cli_json_snapshots.rs` golden snapshot
+  pins both shapes.
+- [ ] Cross-front-end advisory suppression: a destroy run under
+  `--json --yes` emits no advisory on stdout; the
+  `cli_advisory_suppression.rs` sweep verifies parity with
+  `init --force` / `passphrase remove --yes` / `export --plaintext`
+  / `qr --json`.
+- [ ] `destroy` does not invoke `arboard` (clipboard adapter) or
+  touch `clipboard.clear_enabled`. Pinpoints the parity with the
+  CLI's stateless contract — destroy is an unlink, not a runtime
+  with side effects.
 
 ### `passphrase set` / `change` / `remove` (`tests/cli_passphrase.rs`)
 

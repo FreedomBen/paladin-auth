@@ -327,6 +327,54 @@ salt, `aead_id`, and 24-byte nonce).
   the exception: it stages the new vault first, then rotates the old
   primary verbatim during its clobber commit sequence (§5), so it never
   rewrites the old payload under the new mode/key.
+- **Destroy.** `paladin_core::destroy_vault(path)` is the file-level wipe
+  used by `paladin destroy` (§5), the TUI Destroy modal (§6), and the GTK
+  `DestroyDialog` (§7). It operates on `path` directly — the vault need
+  not be open, and a forgotten passphrase does not block the operation,
+  because file access already lets any local actor `rm` the bytes. The
+  steps:
+  1. If `path` does not exist, return `vault_missing` without touching
+     anything (including any sibling `.bak`). This keeps `destroy`
+     idempotent under a script that re-runs after a previous successful
+     destroy and matches the §5 path-targeted error vocabulary.
+  2. Probe `path` and the sibling `vault.bin.bak` with `symlink_metadata`.
+     The same defense-in-depth gate `open` / `create` / `create_force`
+     apply: if either is a symbolic link, return `io_error` with one of
+     `vault_file_is_symlink` / `backup_file_is_symlink` from §5 before
+     anything is unlinked, so a hostile symlink cannot redirect the
+     delete to a chosen file.
+  3. `unlink` the primary `vault.bin`. If this fails, return the I/O
+     error as `io_error { operation: "unlink_vault_file" }` and do not
+     attempt the backup unlink — the primary is still authoritative on
+     disk.
+  4. If `vault.bin.bak` exists, `unlink` it. `NotFound` on the backup is
+     not an error (an `init --force` may have run without ever rotating
+     a backup, or a prior `destroy` may have already removed it).
+     Any other I/O failure returns `io_error { operation:
+     "unlink_backup_file" }` after the primary has already been unlinked;
+     the error envelope carries `primary_deleted: true, backup_deleted:
+     false` so front ends render an accurate "primary wiped, backup
+     still on disk" message and surface the failing backup path.
+  5. `fsync` the parent directory so the unlinks are durable across
+     power loss. Failure to `fsync` after both unlinks succeeded returns
+     `io_error { operation: "fsync_vault_dir" }` with `primary_deleted`
+     and `backup_deleted` populated to reflect what completed.
+  6. Return `DestroyReport { primary_deleted, backup_deleted }`.
+
+  `destroy_vault` does **not** secure-erase the underlying disk blocks.
+  On modern file systems (SSD wear-leveling, journaling, copy-on-write
+  snapshots, removable-media write caches), best-effort overwrite-then-
+  unlink does not survive and would only be theatrical. The user's
+  actual at-rest protection is the encrypted-vault path (§4.4); for a
+  plaintext vault, `destroy` is exactly equivalent to `rm vault.bin
+  vault.bin.bak`. §8 calls this limitation out for the user.
+  `destroy_vault` does not remove the parent data directory — it was
+  created `0700` by `init` / `create_force` and may still be useful for
+  a follow-on `init`. Any leftover `vault.bin.tmp` or `vault.bin.bak.tmp`
+  from a crashed prior save is treated like `.bak`: unlinked when
+  present, ignored when absent, but neither file's failure to unlink
+  blocks the report — the report tracks only the primary and the
+  one-generation backup.
 - **Versioning.** `format_ver` starts at `1` for v0.1 and is bumped on any
   breaking change to the header layout or `VaultPayload` schema. Old
   versions are read by an explicit migration path — never silently coerced.
@@ -720,6 +768,19 @@ pub struct ImportReport {
     pub warnings: Vec<ImportWarning>,
 }
 
+/// Report returned by `destroy_vault` (§4.3). `primary_deleted` is `true`
+/// when `vault.bin` was unlinked successfully. `backup_deleted` is `true`
+/// when a sibling `vault.bin.bak` was present and unlinked, and `false`
+/// when no backup was present or when its unlink failed after the primary
+/// had already been removed (the latter is also surfaced as an
+/// `io_error { operation: "unlink_backup_file" }`). Front ends render
+/// "Deleted vault." vs. "Deleted vault (backup remained on disk)" off
+/// these fields.
+pub struct DestroyReport {
+    pub primary_deleted: bool,
+    pub backup_deleted: bool,
+}
+
 impl Default for Argon2Params { /* m_kib = 65536, t = 3, p = 1 */ }
 impl Argon2Params {
     pub fn validate(&self) -> Result<()>;                                  // enforces §4.4 bounds, returns kdf_params_out_of_bounds
@@ -747,6 +808,7 @@ pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // hea
 pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;      // errors if `lock` doesn't match the file mode
 pub fn create(path: &Path, init: VaultInit) -> Result<(Vault, Store)>;    // errors if `path` already exists; encrypted init uses `EncryptionOptions` default or custom Argon2 params; for the `init --force` clobber semantics use `create_force`
 pub fn create_force(path: &Path, init: VaultInit) -> Result<(Vault, Store)>;  // §5 `init --force` staged clobber: stages the new vault to `vault.bin.tmp` and `fsync`s it; if staging succeeds and a primary already exists, renames `vault.bin` → `vault.bin.bak` verbatim (overwriting any existing backup) without re-encryption; renames `vault.bin.tmp` → `vault.bin`; `fsync`s the parent directory. Pre-rename failures leave the previous primary recoverable — when failure occurs after backup rotation, the old vault is at `vault.bin.bak` and the error is `save_not_committed` with `backup_path` set. Post-commit failures surface as `save_durability_unconfirmed`. Identical to `create` when no primary exists at `path`.
+pub fn destroy_vault(path: &Path) -> Result<DestroyReport>;                   // §4.3 file-level wipe used by `paladin destroy` (§5) and its TUI / GUI mirrors. Returns `vault_missing` when `path` does not exist (no `.bak` is touched). Rejects symlinked primary or backup with `io_error` (`vault_file_is_symlink` / `backup_file_is_symlink`) before unlinking anything. Unlinks the primary, then the sibling `vault.bin.bak` if present, then `fsync`s the parent directory; the `DestroyReport` fields reflect what completed. Backup-unlink and parent-`fsync` failures after the primary has already been unlinked surface as `io_error` with `primary_deleted` / `backup_deleted` populated. Plain unlink, **not** secure-erase; §4.4 encryption is the at-rest protection.
 
 /// Format the human-readable §4.3 `unsafe_permissions` text — failing
 /// path, `subject`, `actual_mode`, `expected_mode`, and the `chmod`
@@ -761,6 +823,18 @@ pub fn format_unsafe_permissions(err: &PaladinError) -> Option<String>;
 /// `paladin-core` so the CLI confirmation prompt and the GUI
 /// `InitDialog` destructive gate render identical wording.
 pub fn format_init_force_warning(existing_vault: &Path) -> String;
+
+/// Format the destructive-confirmation text shown by `paladin destroy`
+/// (§5 text mode), the TUI Destroy modal (§6), and the GTK
+/// `DestroyDialog` (§7). Names the resolved primary path and — when
+/// `backup_present` is `true` — the `vault.bin.bak` path, states the
+/// operation is irreversible, and notes that the unlink is **not** a
+/// secure-erase (encryption is the at-rest protection, per §4.4). Lives
+/// in `paladin-core` so the three front ends render identical wording.
+/// `backup_present` is supplied by callers from `path.with_extension("bin.bak")`
+/// + `try_exists`; passing `false` when no backup is on disk keeps the
+/// warning text honest.
+pub fn format_destroy_warning(vault_path: &Path, backup_present: bool) -> String;
 
 /// Format the plaintext-storage warning shown by CLI `init` when the first
 /// passphrase entry is empty, by `passphrase remove` (CLI / TUI / GUI), and
@@ -1186,6 +1260,7 @@ Built with `clap` (derive). Commands:
 | Command                                     | Behavior                                                         |
 | ------------------------------------------- | ---------------------------------------------------------------- |
 | `paladin init [--force]`                    | Create a new vault. Without `--force`, checks for an existing primary and returns `vault_exists` before prompting for a new-vault passphrase. Prompts: passphrase? (empty = plaintext; text mode prints the plaintext-storage warning). Refuses to clobber an existing vault unless `--force` (which stages the new vault first, then rotates the old file to `vault.bin.bak`, overwriting any existing backup). The rotated `.bak` is preserved verbatim — a plaintext-to-encrypted clobber leaves plaintext secrets in `.bak` until the user removes it manually. |
+| `paladin destroy [--yes]`                   | Permanently delete `vault.bin` and `vault.bin.bak` (if present). Loud destructive confirmation: text mode prints the §4.3 destroy warning (sourced from `paladin_core::format_destroy_warning(path, backup_present)`) and prompts for `yes`; `--yes` skips the prompt and is **required under `--json`** (no confirmation prompt available). Does **not** require the current passphrase for an encrypted vault — file access is already the actual security boundary, and this path is the in-app escape hatch for a forgotten passphrase. Operates on the resolved vault path directly: never opens, decrypts, or loads the vault payload, never runs the §4.4 KDF, and never enforces the §4.3 `unsafe_permissions` gate (a vault the user can no longer open is still a vault they can decide to delete). |
 | `paladin add`                               | Add an account interactively (or via flags / URI).               |
 | `paladin add --qr <path>`                   | Add by scanning a QR image file. Every decoded QR in the image is added (errors if none decode); collisions use the default `import` merge policy (`skip`). For other policies, use `import --format=qr`. |
 | `paladin list`                              | List accounts with the current TOTP code, seconds remaining in the current TOTP window, and the next TOTP code (matching the TUI/GTK list view). HOTP rows render the code columns as dashes in text mode and `null` under `--json` — `list` never advances or peeks an HOTP counter. |
@@ -1306,6 +1381,38 @@ failure after backup rotation but before the primary rename leaves the old
 vault available at `vault.bin.bak`; the CLI error names that path so the user
 can restore it. A failure after the primary rename is reported as
 durability-unconfirmed, matching the normal save semantics.
+
+`destroy` is the path-targeted inverse of `init`. The CLI never opens or
+decrypts the vault: it resolves the vault path (the same `--vault <path>`
+or `default_vault_path()` resolution every other command uses), checks
+the sibling `vault.bin.bak` with `std::fs::try_exists` to populate the
+warning text, and calls `paladin_core::destroy_vault(path)` (§4.3). Text
+mode renders `format_destroy_warning(path, backup_present)` before the
+confirmation prompt; `--yes` skips the prompt and is required under
+`--json` so the JSON envelope is the only thing on stdout. Confirmation
+uses the same exact-`yes`-after-trim grammar as `passphrase remove` and
+`remove`; any other response exits with `validation_error`
+(`field: "confirmation"`, `reason: "declined"`) before any I/O. Missing
+`/dev/tty` for the confirmation prompt exits with `io_error`
+(`operation: "confirmation_prompt"`), parity with the other destructive
+confirmations. `destroy` deliberately does **not** call the §4.3
+permissions gate before unlinking — a vault whose perms drifted to
+`0644` is still a vault the user can delete from the app — but the
+symlink defense-in-depth gate is enforced so a hostile `vault.bin` →
+`/etc/passwd` link cannot redirect the unlink. KDF flags are rejected
+at parse time (`destroy` runs no Argon2id work). On success, text mode
+prints `Deleted vault.` (or `Deleted vault (backup remained on disk)`
+when `backup_deleted` is false because no backup was present) and the
+exit code is 0; under `--json` the envelope is
+`{ "destroyed": { "vault_path": "<path>", "primary_deleted": true,
+"backup_deleted": <bool> } }`. On `vault_missing` the command exits
+non-zero with the standard envelope (no `.bak` is touched), so a
+script that runs `paladin destroy` twice sees `0`, then `vault_missing`
+— idempotent enough for a `|| true` pattern without silently
+masking other errors. Partial outcomes (primary unlinked but backup
+unlink or parent `fsync` failed) surface as `io_error` with the
+relevant `operation` and added `primary_deleted` / `backup_deleted`
+fields so callers can render an accurate state.
 
 All mutating CLI commands call the atomic save path before returning
 success. If save fails, the command exits non-zero. The primary vault file
@@ -1501,6 +1608,7 @@ Success shapes:
 | `qr`                          | With `--out`: `{ "written": "/path/to/out", "format": "qr_png_or_qr_svg", "account": AccountSummary }`. Without `--out`: rejected at parse time under `--json` because ANSI stdout output cannot share the JSON envelope; `--json` callers must pass `--out`. |
 | `settings get`, `settings set` | `{ "settings": VaultSettings }` (always full settings; `[key]` on `get` only filters text-mode display, never the JSON shape) |
 | `init`, `passphrase *`        | `{ "ok": true, "status": "plaintext_or_encrypted" }`                           |
+| `destroy`                     | `{ "destroyed": { "vault_path": "/path/to/vault.bin", "primary_deleted": true, "backup_deleted": bool } }` — `vault_path` is the resolved primary path; `backup_deleted` is `true` when a sibling `vault.bin.bak` was present and unlinked, `false` when no backup was present. `primary_deleted` is always `true` on success (a primary that could not be unlinked surfaces as `io_error` instead). |
 | `--help` / subcommand help    | `{ "help": { "command": "paladin ...", "text": "..." } }`                      |
 | `--version`                   | `{ "version": { "name": "paladin", "version": "x.y.z" } }`                     |
 
@@ -1856,6 +1964,44 @@ Layout (single-screen MVP):
   The flow never writes to disk before the user confirms in the
   final step, and never silently downgrades an encrypted choice
   to plaintext.
+- **Destroy-vault flow.** Opens from any vault state: pressing
+  `Ctrl+Shift+D` on the unlock screen, the create-vault flow, the
+  startup-error screen, or the unlocked list opens the Destroy modal.
+  The binding is intentionally a chord (not a bare letter) so the
+  loudest destructive action in the app cannot be triggered by a stray
+  keystroke. The unlock and startup-error screens additionally render a
+  footer hint of the form `Ctrl+Shift+D delete vault` so the
+  forgot-passphrase user discovers the escape hatch without dropping to
+  the shell. The modal body renders the warning text from
+  `paladin_core::format_destroy_warning(path, backup_present)` (the same
+  helper the CLI text mode uses), names the primary and `.bak` paths
+  it will unlink, and gates submission behind a confirmation `tui-input`
+  field that must contain the exact string `yes` after trimming Unicode
+  whitespace — matching the CLI's destructive-confirmation grammar. The
+  modal has two actions, *Cancel* (`Esc`) and *Delete vault* (`Enter`,
+  enabled only when the confirmation field reads `yes`); the loud action
+  is never the default focus on open. On confirm the modal calls
+  `paladin_core::destroy_vault(path)` on a worker (the unlink + parent
+  `fsync` is fast but the model boundary stays consistent with other
+  effects). On success the in-memory vault — if any — is dropped and
+  zeroized, every open modal closes, secret buffers (search, add, edit,
+  passphrase, QR, next-code) are wiped, and the TUI transitions to the
+  same `VaultStatus::Missing` create-vault flow it shows at first launch
+  with a status-line note (`Vault deleted.` or `Vault deleted (backup
+  remained on disk).`). On `vault_missing` the modal closes with the
+  same status-line note (`Vault already gone.`) and the app moves to
+  the create-vault flow. On `io_error` with one of
+  `vault_file_is_symlink` / `backup_file_is_symlink` /
+  `unlink_vault_file` / `unlink_backup_file` / `fsync_vault_dir`, the
+  modal stays open with an inline error that names the failing path and
+  surfaces `primary_deleted` / `backup_deleted` so the user can decide
+  whether to retry or drop to a shell. Auto-lock during the modal's
+  lifecycle closes the modal and locks (or transitions to Missing if
+  the destroy already committed). The modal is the only TUI surface
+  that operates against the vault path without `Vault::mutate_and_save`,
+  so there is no save-rollback to consider — `destroy_vault` is the
+  commit. The CLI and GTK render the same warning text and same
+  confirmation grammar.
 - Modal dialogs for add / remove / rename / edit / import / export / qr /
   passphrase / settings. Add supports manual entry, paste of an `otpauth://` URI
   (decoded via `paladin_core::parse_otpauth`), and QR scan from
@@ -2198,6 +2344,43 @@ Library: **Relm4** on **GTK4**. Component tree:
 - `PassphraseDialog` — `set` / `change` / `remove` sub-flows mirroring the
   CLI; `set` is enabled only on plaintext vaults, `change` and `remove`
   only on encrypted vaults.
+- `DestroyDialog` — destructive vault deletion (CLI / TUI parity). An
+  `AdwAlertDialog` (GNOME HIG: irreversible-action heading + body +
+  destructive button) opened from two entry points: a primary-menu
+  item *Delete Vault…* (window-scoped, available in all app states) and
+  a footer link *Delete vault…* in the `UnlockComponent` body and the
+  `StartupError` view so a forgot-passphrase or perms-stuck user
+  discovers the escape hatch without dropping to the shell. The dialog
+  body renders the warning text from
+  `paladin_core::format_destroy_warning(path, backup_present)` (the
+  shared CLI / TUI / GUI helper), names the primary and `.bak` paths,
+  and gates submission behind an `AdwEntryRow` confirmation field that
+  must read `yes` after trimming Unicode whitespace — the same grammar
+  the CLI text-mode prompt and TUI Destroy modal enforce. The two
+  actions are *Cancel* (default focus; `Esc` dismisses) and *Delete
+  vault* (`destructive-action` style class for the GNOME red treatment;
+  sensitive only while the confirmation field reads `yes`). On confirm
+  the dialog calls `paladin_core::destroy_vault(path)` on
+  `gio::spawn_blocking` (the unlink + parent `fsync` is fast, but the
+  threading model stays consistent with the rest of the GUI's effect
+  path) and the `AppModel` transitions to `Missing` on success,
+  dropping any held `(Vault, Store)` and routing back to `InitDialog`.
+  Sensitive UI buffers across the app (passphrase fields, add/edit form
+  values, search entry, in-flight code reveal state, QR render bytes)
+  wipe in lockstep with the vault drop, matching the auto-lock teardown
+  contract. A `gtk::Toast` is added to the `adw::ToastOverlay` reading
+  `Vault deleted.` or `Vault deleted (backup remained on disk).` based
+  on `DestroyReport.backup_deleted`. `vault_missing` closes the dialog
+  with a `Vault already gone.` toast and the app moves to `Missing`.
+  `io_error` (any of `vault_file_is_symlink`, `backup_file_is_symlink`,
+  `unlink_vault_file`, `unlink_backup_file`, `fsync_vault_dir`) keeps
+  the dialog open with an inline error label naming the failing path
+  and `DestroyReport` status so the user can retry or quit. The
+  dialog is disabled on `UnlockedBusy` for parity with other dialog
+  surfaces; auto-lock fires during the dialog drop the held secrets
+  and close the dialog before locking. The dialog operates against
+  the vault path and never opens or decrypts the vault, so the
+  forgotten-passphrase / drifted-perms flow is supported by design.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts.
 
@@ -2218,6 +2401,7 @@ lockstep.
 | `Ctrl+,`          | Window             | Open Preferences.                                                            |
 | `Ctrl+?`          | Window             | Open the Keyboard Shortcuts window (GNOME-canonical accelerator).            |
 | `Ctrl+Q`          | Window             | Quit.                                                                        |
+| `Ctrl+Shift+Delete` | Window           | Open the Delete Vault dialog (mirrors the primary-menu *Delete Vault…* entry; available in all app states — Missing, Locked, Unlocked, and StartupError — so the forgot-passphrase escape hatch is reachable without a pointer). Chord-only (no bare-letter alternative) so the loudest destructive action is hard to trigger by accident. Listed in the `GtkShortcutsWindow` and the primary-menu accelerator hint so it stays discoverable. |
 | `/` or `Ctrl+L`   | Window             | Reveal the search bar, focus the entry, and select its contents.             |
 | Printable key     | Window             | "Type to search": reveals the search bar and forwards the keystroke.         |
 | `Up` / `Down`     | Account list       | Move selection one row (bare arrows; no wrap).                               |
@@ -2332,12 +2516,35 @@ Concrete obligations and explicit user-controlled tradeoffs:
     `period`, `counter`) are omitted from the form entirely so a UI
     regression cannot expose them — verified by widget-contract tests
     in §10.
+14. **`destroy` is unlink, not secure-erase.** `paladin destroy` and its TUI
+    / GUI mirrors call `paladin_core::destroy_vault` (§4.3), which `unlink`s
+    `vault.bin` and `vault.bin.bak` and `fsync`s the parent directory. It
+    does **not** overwrite the underlying disk blocks. On modern file
+    systems (SSD wear-leveling, journaling, copy-on-write snapshots,
+    removable-media write caches) best-effort overwrite is theatrical and
+    does not survive, so the operation is deliberately a clean unlink.
+    The encrypted-vault path (§4.4) is the real at-rest protection: a
+    user who wants their secrets unrecoverable after deletion should use
+    encrypted mode in the first place. The destroy warning text rendered
+    by `format_destroy_warning` calls this out so the user understands
+    what unlink does and does not do. `destroy` is also the in-app
+    escape hatch for a forgotten passphrase (no passphrase prompt before
+    unlink) — file access is already the security boundary, and adding
+    a passphrase gate would only block the legitimate recovery use case
+    without raising the bar against an attacker with shell access.
 
-> **Approved 2026-05-04.** All decisions in §4.3, §4.4, §4.5, §4.6, and §8
-> are locked in for v0.1. Tests in `paladin-core` will assert round-trip
-> properties for both modes, tamper detection, file-permission enforcement,
-> and passphrase-transition commit-point behavior so regressions are caught
-> in CI.
+> **Approved 2026-05-04 (destroy added 2026-05-28).** All decisions in
+> §4.3, §4.4, §4.5, §4.6, and §8 are locked in for v0.1. The 2026-05-28
+> revision adds the `destroy_vault` storage operation in §4.3, the
+> `DestroyReport` / `destroy_vault` / `format_destroy_warning` API in
+> §4.7, the `paladin destroy` command in §5, the TUI Destroy modal in
+> §6, the GTK `DestroyDialog` in §7, and security note 14 above; no
+> existing locked decision is altered. Tests in `paladin-core` will
+> assert round-trip properties for both modes, tamper detection,
+> file-permission enforcement, passphrase-transition commit-point
+> behavior, and the destroy contract (missing-vault idempotence, symlink
+> guard, primary-only / primary-plus-backup outcomes, partial-failure
+> reporting) so regressions are caught in CI.
 
 ## 9. Key dependencies (proposed)
 
@@ -2999,6 +3206,53 @@ artifacts side by side.
   fire drops every in-progress draft buffer, zeroizes any
   `AccountEdit` intermediates, and dismisses the dialog before the
   unlock view appears. Integration tests cover each front end.
+
+### Milestone 10 — Vault destroy *(v0.1 CLI + TUI, v0.2 GTK)*
+- [ ] `paladin-core`: `DestroyReport`, `destroy_vault(path)`,
+  `format_destroy_warning(path, backup_present)`, and the §5 error
+  vocabulary additions (`io_error` operations `unlink_vault_file`,
+  `unlink_backup_file`, `fsync_vault_dir`; reuse of the existing
+  `vault_file_is_symlink` / `backup_file_is_symlink` operations and
+  the existing `vault_missing` error kind). Tests cover: missing
+  vault returns `vault_missing` without touching `.bak`; primary or
+  backup symlink rejected before any unlink; primary-only delete
+  (no `.bak` on disk); primary + backup delete; partial outcome
+  (primary deleted, backup unlink fails — error envelope carries
+  `primary_deleted: true, backup_deleted: false`); parent-`fsync`
+  failure after both unlinks; leftover `.tmp` files do not block the
+  report; idempotence when called twice in succession.
+- [ ] CLI `paladin destroy [--yes]`: confirmation grammar parity with
+  `passphrase remove` (exact `yes` after trim; `--yes` required under
+  `--json`); KDF flags rejected at parse time; `unsafe_permissions`
+  is **not** enforced before unlink (a vault the user can no longer
+  open is still deletable); text-mode warning text from
+  `format_destroy_warning`; JSON success envelope
+  `{ "destroyed": { "vault_path", "primary_deleted", "backup_deleted" } }`
+  per §5; `vault_missing` envelope idempotent under repeat invocation.
+  `tests/cli_destroy.rs` covers each path including the partial-failure
+  envelopes and the `/dev/tty`-unavailable path.
+- [ ] TUI Destroy modal: `Ctrl+Shift+D` chord from any state
+  (unlock, create-vault, startup-error, unlocked); footer hint on
+  unlock and startup-error screens; warning body via
+  `format_destroy_warning`; `yes`-literal confirmation field gates the
+  Delete-vault action; success transitions to `VaultStatus::Missing`
+  + create-vault flow with toast text branching on
+  `backup_deleted`; per-error inline rendering for the symlink and
+  unlink / fsync failure modes; sensitive UI buffers wipe alongside
+  the vault drop. Reducer + snapshot tests cover each branch.
+- [ ] GTK `DestroyDialog` *(v0.2)*: `AdwAlertDialog` with destructive
+  styling; opened from the primary-menu *Delete Vault…* entry and the
+  unlock / startup-error footer link; `Ctrl+Shift+Delete` accelerator;
+  `format_destroy_warning` body; `AdwEntryRow` `yes` confirmation
+  gating the destructive button; effect runs on
+  `gio::spawn_blocking`; success transitions `AppModel` to `Missing`,
+  drops `(Vault, Store)`, wipes sensitive UI buffers (passphrase,
+  add/edit, search, code reveal, QR render bytes), and emits the
+  toast; per-error inline rendering for the symlink and unlink /
+  fsync failure modes; auto-lock during the dialog drops held secrets
+  and closes the dialog before locking. Pure-logic tests cover the
+  state machine and the warning / report projections; smoke test
+  exercises the dialog lifecycle.
 
 ## 13. Open questions
 

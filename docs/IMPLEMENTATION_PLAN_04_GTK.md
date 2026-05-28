@@ -54,6 +54,7 @@ crates/paladin-gtk/
 │   ├── export_dialog.rs   # ExportDialog (file picker + format + overwrite + encrypted passphrase)
 │   ├── export_qr_dialog.rs # ExportQrDialog — per-account QR export: adw::Dialog wrapping an AdwViewStack with "warning"/"qr" pages (warning-ack gate → Page-1 Cancel/Show-QR footer → on-screen gtk::Picture + Save PNG / Save SVG / Copy image to GDK clipboard / Done)
 │   ├── passphrase_dialog.rs # PassphraseDialog (set / change / remove flows)
+│   ├── destroy_dialog.rs  # DestroyDialog (Milestone 10) — AdwAlertDialog with destructive styling; calls paladin_core::destroy_vault on gio::spawn_blocking; opened from the primary-menu *Delete Vault…* entry, the unlock-dialog and startup-error footer link, and the Ctrl+Shift+Delete accelerator
 │   ├── init_dialog.rs     # InitDialog — vault creation from the GUI (incl. create_force clobber confirmation)
 │   ├── unlock_dialog.rs   # UnlockComponent — encrypted vaults only (passphrase entry)
 │   ├── startup_error.rs   # non-mutating startup / open error view
@@ -102,6 +103,7 @@ crates/paladin-gtk/
     ├── export_dialog_logic.rs
     ├── export_qr_dialog_logic.rs
     ├── passphrase_dialog_logic.rs
+    ├── destroy_dialog_logic.rs     # DestroyDialog (Milestone 10): warning body sourcing, yes-confirm gate, AppMsg projection from DestroyReport / typed errors, sensitive-buffer wipe on success, primary-menu / unlock-footer / startup-error-footer / accelerator routing, AdwAlertDialog `destructive-action` styling pin
     ├── settings_logic.rs
     ├── gsettings_logic.rs          # pure logic; loads build.rs-compiled gschema from OUT_DIR
     ├── effect_ownership_logic.rs
@@ -773,6 +775,119 @@ inclusion.
   returns `true`. Switching sub-flows clears all passphrase rows and any
   pending plaintext-removal confirmation. Any stale invalid-state error stays
   in the dialog and does not mutate visible state.
+- `DestroyDialog` *(Milestone 10; DESIGN §4.3 / §7)* — destructive
+  path-targeted vault wipe with CLI / TUI parity. An `AdwAlertDialog`
+  (GNOME-HIG irreversible-action pattern: heading + warning body +
+  destructive-styled action button). The heading reads
+  `Delete vault?` and the body is sourced verbatim from
+  `paladin_core::format_destroy_warning(path, backup_present)` so
+  the GTK, CLI text mode, and TUI modal all render byte-identical
+  wording. `backup_present` is populated at open time by probing
+  the sibling `vault.bin.bak` via `std::fs::try_exists`; an I/O
+  error on the probe falls back to `backup_present = false` and an
+  inline cautionary line is appended to the body (no separate
+  dialog).
+  Entry points (three, all routed through the same
+  `app.delete-vault` `gio::SimpleAction`):
+  1. **Primary menu item *Delete Vault…*** — installed by
+     `format_app_menu_delete_vault_accelerator()` /
+     `format_app_menu_delete_vault_action()`, listed in the
+     primary menu under the destructive group with the
+     accelerator hint. Available in every `AppState` (`Missing`,
+     `Locked`, `Unlocked`, `UnlockedBusy`, `StartupError`); the
+     dialog can run against a vault the GUI cannot open, which
+     is the design contract.
+  2. **`UnlockComponent` footer link *Delete vault…*** — an
+     inline `gtk::LinkButton` (rendered as a Adwaita-styled flat
+     button with `caption-heading` class downscale) below the
+     passphrase row, activating the `app.delete-vault` action.
+     Discoverable for the forgot-passphrase user without
+     dropping to the shell.
+  3. **`StartupErrorView` footer link *Delete vault…*** —
+     identical placement and action target, so a user stuck on
+     an `unsafe_permissions` / `invalid_header` /
+     `unsupported_format_version` startup error can still wipe
+     and start over from inside the app.
+  Body: the warning text above plus an `AdwEntryRow` labelled
+  *Type `yes` to confirm* whose buffer must read `yes` after
+  Unicode-whitespace trim (the same grammar the CLI text-mode
+  prompt and TUI Destroy modal enforce). The buffer's
+  `changed` signal updates a `sensitive` binding on the
+  destructive action so the loudest button is dim until the
+  user types the confirmation. The dialog exposes two responses
+  on `AdwAlertDialog::add_response` (close-on-default for both):
+  *Cancel* (default focus on open; `Esc` dismisses) and
+  *Delete vault* (`destructive-action` style class for the
+  GNOME red treatment; sensitive only while the confirmation
+  field reads `yes`; never the default focus). The `default-
+  response` is set to *Cancel* per HIG so `Enter` does **not**
+  fire the destructive action unless the user has explicitly
+  focused it.
+  On confirm the dialog dispatches an `AppMsg::DestroyVault {
+  path }` to the `AppModel`, which calls
+  `paladin_core::destroy_vault(path)` on `gio::spawn_blocking`
+  (the unlink + `fsync` is fast, but `spawn_blocking` keeps the
+  threading model consistent with every other vault-touching
+  effect — and lets the in-flight ownership state machine in
+  `effect_ownership.rs` serialize destroy alongside Add /
+  Edit / Import / Export / Passphrase). The `AppModel`
+  transitions to `UnlockedBusy` for the duration; the
+  `DestroyDialog` is disabled (insensitive) while the effect is
+  in flight, parallel to every other mutating dialog.
+  On `Ok(DestroyReport { primary_deleted: true, backup_deleted })`,
+  the model:
+  * Drops the held `(Vault, Store)` if any — even though the
+    primary on disk is gone, the in-memory copy retains the
+    decrypted accounts and must wipe through the same
+    auto-lock teardown contract.
+  * Wipes every secret-bearing UI buffer in lockstep via
+    `secret_fields::clear_all`: passphrase fields (Unlock /
+    Passphrase set / change), `AddAccountComponent`'s manual
+    secret + URI entry buffers + pending duplicate state,
+    `InitDialog`'s pending `VaultInit`, the search query (not
+    secret-bearing but reset for hygiene), the HOTP reveal
+    state + its captured `SecretString`, any pending clipboard
+    auto-clear value, and the `ExportQrDialog`'s rendered PNG /
+    SVG / Texture buffers if it is open.
+  * Transitions `AppModel` to `Missing` and routes back to
+    `InitDialog`, parallel to the missing-vault startup path.
+  * Adds a `gtk::Toast` to the shared `adw::ToastOverlay`
+    reading `Vault deleted.` when `backup_deleted == true` or
+    no backup was present at probe time, and `Vault deleted
+    (backup remained on disk).` when an `unlink_backup_file`
+    failure left the `.bak` behind. The toast goes through
+    `toast_queue.rs` like every other notification so back-to-
+    back toasts (e.g. an in-flight clipboard-clear toast at
+    the moment of destroy) collapse cleanly under the
+    newest-wins rule.
+  On `Err(vault_missing)` (the on-disk vault disappeared
+  between dialog open and dispatch), the dialog closes, the
+  model drops any held vault, emits a `Vault already gone.`
+  toast, and transitions to `Missing`.
+  On `Err(io_error)` for `vault_file_is_symlink` /
+  `backup_file_is_symlink` / `unlink_vault_file` /
+  `unlink_backup_file` / `fsync_vault_dir`, the dialog stays
+  open with an inline error label (rendered as an
+  `AdwActionRow` below the warning body with the
+  `error` CSS class) that names the failing path and surfaces
+  the partial `DestroyReport` (`primary_deleted` /
+  `backup_deleted`) so the user can decide whether to retry or
+  quit. The destructive button re-arms on a second `yes`
+  confirmation entry (the buffer is preserved across an error
+  re-display so the user does not have to retype it; the focus
+  returns to the action button).
+  Auto-lock firing while the dialog is open with no effect in
+  flight zeroizes the partial confirmation buffer, closes the
+  dialog, and transitions to `Locked` (or `Missing` if the
+  vault was plaintext). Auto-lock firing after the effect has
+  dispatched is queued behind the result; the success branch
+  transitions to `Missing` so the auto-lock idle deadline is
+  reset to `None` (no vault to lock).
+  The dialog operates against the vault path and never opens
+  or decrypts the vault. There is no `Vault::mutate_and_save`
+  wrapper; `destroy_vault` is the commit point. The dialog
+  is disabled on `UnlockedBusy` for parity with other dialog
+  surfaces.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts. Spinners clamp to
   `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
@@ -868,18 +983,19 @@ human-readable form is in DESIGN §7.
 ### Application-action accelerators
 
 Installed by `wire_app_window_accelerators(&gtk::Application)` from the
-`format_app_window_accelerator_bindings() -> [(&'static str, &'static str); 4]`
+`format_app_window_accelerator_bindings() -> [(&'static str, &'static str); 5]`
 array, which pairs each accelerator string with its fully-qualified
 `gio::SimpleAction` target. Iteration order is held stable for
 `set_accels_for_action` and is intentionally distinct from the
 `format_app_shortcuts_window_entries` display order.
 
-| Accelerator         | Helper                                            | Action target                                | DESIGN §7 row |
-| ------------------- | ------------------------------------------------- | -------------------------------------------- | ------------- |
-| `<Control><Shift>n` | `format_app_add_button_accelerator`               | `format_app_add_button_action`               | Add Account   |
-| `<Control>q`        | `format_app_menu_quit_accelerator`                | `format_app_menu_quit_action`                | Quit          |
-| `<Control>comma`    | `format_app_menu_preferences_accelerator`         | `format_app_menu_preferences_action`         | Preferences   |
-| `<Control>question` | `format_app_menu_keyboard_shortcuts_accelerator`  | `format_app_menu_keyboard_shortcuts_action`  | Keyboard Shortcuts |
+| Accelerator               | Helper                                            | Action target                                | DESIGN §7 row |
+| ------------------------- | ------------------------------------------------- | -------------------------------------------- | ------------- |
+| `<Control><Shift>n`       | `format_app_add_button_accelerator`               | `format_app_add_button_action`               | Add Account   |
+| `<Control>q`              | `format_app_menu_quit_accelerator`                | `format_app_menu_quit_action`                | Quit          |
+| `<Control>comma`          | `format_app_menu_preferences_accelerator`         | `format_app_menu_preferences_action`         | Preferences   |
+| `<Control>question`       | `format_app_menu_keyboard_shortcuts_accelerator`  | `format_app_menu_keyboard_shortcuts_action`  | Keyboard Shortcuts |
+| `<Control><Shift>Delete`  | `format_app_menu_delete_vault_accelerator`        | `format_app_menu_delete_vault_action`        | Delete Vault (Milestone 10; chord-only — no bare-letter alternative; available in every `AppState` so the forgot-passphrase escape hatch is reachable without a pointer) |
 
 ### Window-level search-focus controller
 
@@ -957,9 +1073,13 @@ propagate untouched so focused entries, dropdowns, and the Save button keep
 their own keyboard handling. The dispatch table is pinned by the
 `dispatch_root_dismiss_key` unit tests. Other dialogs (`InitDialog`,
 `UnlockComponent`, `RemoveDialog`, `RenameDialog`, `ImportDialog`,
-`ExportDialog`, `PassphraseDialog`, `SettingsComponent`, `StartupError`)
-inherit GTK / Adwaita's stock Escape-to-cancel and Enter-to-default-action
-behavior.
+`ExportDialog`, `PassphraseDialog`, `SettingsComponent`, `DestroyDialog`,
+`StartupError`) inherit GTK / Adwaita's stock Escape-to-cancel and
+Enter-to-default-action behavior. `DestroyDialog` additionally sets
+`default-response = "cancel"` on its `AdwAlertDialog` so a stray
+`Enter` cannot fire the destructive action; the user must explicitly
+focus the *Delete vault* button (after the confirmation field reads
+`yes`) and activate it.
 
 ### Shortcuts window
 
@@ -967,11 +1087,14 @@ The primary menu's "Keyboard Shortcuts" entry opens a
 `gtk::ShortcutsWindow` constructed from
 `format_app_shortcuts_window_xml()` (in `shortcuts_window.rs`), which in
 turn iterates
-`format_app_shortcuts_window_entries() -> [(&'static str, &'static str); 5]`.
+`format_app_shortcuts_window_entries() -> [(&'static str, &'static str); 6]`
+(Milestone 10 adds the *Delete Vault* row).
 Display order (most-frequent-use flow) is **Add → Search → Preferences →
-Keyboard Shortcuts → Quit**, intentionally distinct from the
-`format_app_window_accelerator_bindings` iteration order. The Search row
-is included here even though it is not a `gio::SimpleAction` accelerator,
+Keyboard Shortcuts → Quit → Delete Vault**, intentionally distinct from
+the `format_app_window_accelerator_bindings` iteration order; Delete
+Vault sits last in the display order so the loudest action is the last
+the user reads. The Search row is included here even though it is not a
+`gio::SimpleAction` accelerator,
 because it is a user-visible window-level binding; both `/` and `<Control>l`
 are listed in the row's single space-separated `accelerator` property so
 `gtk::Builder` renders them side by side.
@@ -7454,6 +7577,142 @@ sign-off.
   contract through cell factories, GSettings, and the
   `Ctrl+Shift+C` accelerator. Tick each box in the dedicated
   "Build order" list as the corresponding code lands.
+- [ ] **`DestroyDialog` (Milestone 10; DESIGN §4.3 / §7).** Depends
+  on `paladin_core::destroy_vault`, `DestroyReport`, and
+  `format_destroy_warning` landing in `paladin-core`. The GTK side
+  replays the CLI / TUI contract through an `AdwAlertDialog` with
+  destructive styling, a `gio::SpawnBlocking`-routed effect, and the
+  same `effect_ownership.rs` serialization every mutating dialog
+  uses. The work breaks down into ordered build steps so it can land
+  as one or two focused commits:
+  - [ ] **Component scaffold.** Add
+    `crates/paladin-gtk/src/destroy_dialog.rs` with the
+    `relm4::SimpleComponent` shape (`DestroyDialogInit`,
+    `DestroyDialogMsg`, `DestroyDialogOutput`) shared by every
+    other dialog. The init carries the resolved vault path; the
+    component probes `vault.bin.bak` on mount via
+    `std::fs::try_exists` to populate `backup_present` (falling
+    back to `false` with an inline cautionary line on I/O error)
+    and stores it alongside the confirmation buffer in the
+    component state. Sensitive fields stay out of `AppModel` /
+    `AppMsg` / `AppOutput` per DESIGN §8 (the confirmation
+    string is non-secret, but the surrounding state pattern is
+    preserved).
+  - [ ] **Widget tree.** Use `AdwAlertDialog` for the GNOME-HIG
+    irreversible-action pattern. Heading: `Delete vault?` body:
+    the multi-paragraph warning from
+    `paladin_core::format_destroy_warning(path, backup_present)`
+    rendered into an `AdwActionRow` (one row per paragraph) inside
+    a `gtk::Box` extra-child. Add an `AdwEntryRow` labelled
+    `Type 'yes' to confirm` whose buffer's `changed` signal
+    triggers a `DestroyDialogMsg::ConfirmationChanged`. Add two
+    `AdwAlertDialog` responses: `cancel` (set as
+    `default-response`) and `destroy` (set with
+    `response_appearance = AdwResponseAppearance::Destructive` so
+    GTK applies the `destructive-action` style class for the GNOME
+    red treatment). Wire the `destroy` response to be insensitive
+    until the buffer reads `yes` after Unicode-whitespace trim;
+    use `AdwAlertDialog::set_response_enabled("destroy", false)`
+    on mount and toggle via the buffer signal.
+  - [ ] **Action wiring.** Install the
+    `app.delete-vault` `gio::SimpleAction` on the `AppModel` and
+    install the `Ctrl+Shift+Delete` accelerator via the new
+    `format_app_menu_delete_vault_accelerator` /
+    `format_app_menu_delete_vault_action` helper pair in
+    `crates/paladin-gtk/src/app/model.rs`. Extend
+    `format_app_window_accelerator_bindings()` from 4 to 5
+    entries and the
+    `format_app_shortcuts_window_entries()` array from 5 to 6
+    entries with the *Delete Vault* row appended last (loudest
+    action last in the display order). Add the `Delete Vault…`
+    item to the primary menu under a separator below the existing
+    entries so it visually reads as the destructive group. Add a
+    `gtk::LinkButton`-shaped footer link `Delete vault…` to both
+    `UnlockComponent` and `StartupErrorView` that activates the
+    same `app.delete-vault` action. Tests in
+    `tests/startup_probes.rs` extend to assert lockstep between
+    the primary menu, the shortcuts window, the
+    `set_accels_for_action` table, and the new helper pair.
+  - [ ] **Effect dispatch.** Add `AppMsg::DestroyVault { path }`
+    and `AppMsg::DestroyVaultCompleted(Result<DestroyReport,
+    PaladinError>)`. `AppModel::update` for `DestroyVault`
+    serializes the effect through `effect_ownership.rs` (parallel
+    to every other mutating dialog), transitions to
+    `UnlockedBusy`, and dispatches a `gio::spawn_blocking` closure
+    that calls `paladin_core::destroy_vault(path)` and posts the
+    result back through a Relm4 sender. The `DestroyDialog` is
+    disabled (insensitive) while the effect is in flight.
+  - [ ] **Result routing.** `AppMsg::DestroyVaultCompleted` arms:
+    * `Ok(report)` — drop the held `(Vault, Store)`, call
+      `secret_fields::clear_all` to wipe every secret-bearing UI
+      buffer (passphrase fields, Add manual-secret + URI + pending
+      duplicate state, Init pending `VaultInit`, the search query,
+      HOTP reveal state + its captured `SecretString`, pending
+      clipboard auto-clear value, and any open `ExportQrDialog`'s
+      rendered PNG / SVG / `gdk::Texture` buffers), tear down any
+      open dialog, transition `AppState` to `Missing`, mount
+      `InitDialog`, and add a `gtk::Toast` to the shared
+      `adw::ToastOverlay` via `toast_queue.rs` reading
+      `Vault deleted.` or `Vault deleted (backup remained on
+      disk).` based on `report.backup_deleted`.
+    * `Err(vault_missing)` — close the dialog, drop any held
+      vault, transition to `Missing`, mount `InitDialog`, and add
+      a `Vault already gone.` toast.
+    * `Err(io_error)` for `vault_file_is_symlink` /
+      `backup_file_is_symlink` / `unlink_vault_file` /
+      `unlink_backup_file` / `fsync_vault_dir` — keep the dialog
+      open, render an inline error row (`AdwActionRow` with the
+      `error` CSS class) below the warning body that names the
+      failing path and surfaces the partial `DestroyReport`, and
+      re-enable the destructive button after a second `yes` entry
+      so the user can retry. The confirmation buffer is preserved
+      across the error re-display so the user does not have to
+      retype it; the focus returns to the action button.
+    * Any other error — keep the dialog open, render the
+      `PaladinError::Display` text inline (parallel to the rest of
+      the GUI's effect-error rendering).
+  - [ ] **Auto-lock interaction.** Auto-lock firing while the
+    dialog is open with no effect in flight zeroizes the
+    confirmation buffer, closes the dialog, and locks. Auto-lock
+    firing after the destroy effect has dispatched is queued
+    behind the result; the success branch transitions to
+    `Missing` so the auto-lock idle deadline resets to `None`
+    (no vault to lock). Pinned by
+    `tests/destroy_dialog_logic.rs`.
+  - [ ] **Pure-logic tests.** Add `tests/destroy_dialog_logic.rs`
+    covering: warning body sourcing (single helper call, no
+    drift); `backup_present` probe with `.bak` present, absent,
+    and unreadable; `yes`-confirmation gating (partial input,
+    trailing whitespace, byte-equal `yes`); `Esc` / Cancel path;
+    `Ok(DestroyReport)` projections to AppMsg routing with both
+    `backup_deleted: true` and `backup_deleted: false`; each
+    `io_error` variant projecting to the inline-error renderer;
+    `vault_missing` projection; sensitive-buffer wipe roll-call
+    (the test enumerates the `secret_fields::clear_all` call
+    sites and asserts each one fires on the success path);
+    auto-lock interaction (pre- and post-dispatch). The
+    `AdwAlertDialog` destructive-styling pin is a smoke-test
+    assertion since it crosses the widget boundary.
+  - [ ] **Smoke test.** Extend `tests/gtk_smoke.rs` to cover the
+    happy-path destroy flow: launch with a fresh plaintext vault,
+    click the primary-menu *Delete Vault…* item, type `yes`,
+    activate the destructive button, assert the toast appears,
+    `InitDialog` mounts, and the on-disk vault is gone. (The
+    `xvfb-run` runner makes this end-to-end.)
+  - [ ] **Manual test plan.** Add Milestone 10 bullets to
+    `crates/paladin-gtk/tests/manual/MANUAL_TEST_PLAN.md`:
+    * Destroy vault via primary-menu item.
+    * Destroy vault via unlock-dialog footer link.
+    * Destroy vault via startup-error footer link.
+    * Destroy vault via `Ctrl+Shift+Delete`.
+    * Cancel destroy at confirmation prompt; vault unchanged.
+    * Destroy vault with `.bak` present; both files unlinked,
+      toast reads `Vault deleted.`.
+    * Destroy vault with no `.bak`; primary unlinked, toast
+      reads `Vault deleted.`.
+    * Destroy vault while another dialog (Add, Edit, Passphrase)
+      is open; that dialog closes and its sensitive buffers
+      wipe.
 - [ ] Milestone 7 automated and manual sign-off stays tracked.
   - [x] Manual test plan documented in
     `crates/paladin-gtk/tests/manual/MANUAL_TEST_PLAN.md`, with
@@ -7653,6 +7912,21 @@ section just pins which Adwaita class fills each role.
   Save-as-PNG / Save-as-SVG through `write_secret_file_atomic`,
   `Copy image` through `gdk::ContentProvider`. Read-only — HOTP
   counters and `updated_at` are unchanged across every render path.
+- **Destroy Vault available from the primary menu and from the
+  unlock / startup-error footer** (Milestone 10). The
+  `AdwAlertDialog` renders
+  `paladin_core::format_destroy_warning(path, backup_present)`,
+  gates the destructive button behind an `yes` confirmation entry,
+  routes the effect through `paladin_core::destroy_vault` on
+  `gio::spawn_blocking`, transitions to `Missing` + `InitDialog`
+  on success, surfaces partial failures (symlink rejection,
+  backup-unlink failure, parent-`fsync` failure) inline with the
+  partial `DestroyReport`, and wipes every secret-bearing UI
+  buffer in lockstep with the vault drop. The `Ctrl+Shift+Delete`
+  accelerator and the shortcuts window entry are installed
+  through the same `format_app_menu_delete_vault_*` helpers as
+  the primary-menu item. Available in every `AppState` so the
+  forgot-passphrase escape hatch works without the CLI.
 - Auto-lock and clipboard-clear are off by default; the plaintext-vault
   no-op rule applies to auto-lock only (clipboard-clear works in both modes).
 - HOTP reveal rows show the counter used for the visible code, then return
@@ -7675,6 +7949,7 @@ section just pins which Adwaita class fills each role.
   `tests/otpauth_uri_paste_logic.rs`, `tests/import_dialog_logic.rs`,
   `tests/export_dialog_logic.rs`, `tests/export_qr_dialog_logic.rs`,
   `tests/passphrase_dialog_logic.rs`,
+  `tests/destroy_dialog_logic.rs`,
   `tests/settings_logic.rs`, `tests/effect_ownership_logic.rs`), the
   `tests/gtk_smoke.rs` smoke-test bullets, the `tests/thinness.rs`
   and `tests/no_tokio_source.rs` source guards, the
