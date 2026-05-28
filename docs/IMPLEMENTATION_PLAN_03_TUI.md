@@ -2145,7 +2145,7 @@ alongside the existing `execute_export_*` family.
 v0.2 (DESIGN §6 Milestone 9). All bullets are red until Phase M
 ships in `paladin-core` and the TUI Edit modal lands.
 
-- [ ] `Shift+E` on the focused row opens the Edit modal with all
+- [x] `Shift+E` on the focused row opens the Edit modal with all
   three controls pre-populated: label buffer = prior label, issuer
   buffer = prior issuer (`None` rendered as empty), icon-hint
   selector defaulted to *Leave unchanged* with the sibling slug
@@ -2153,25 +2153,25 @@ ships in `paladin-core` and the TUI Edit modal lands.
   string when the prior value was `None`). The reducer test
   asserts initial focus is on the **Label** row on modal open
   (asserted via the `focus` field on the `EditModal` state).
-- [ ] Render-independence-from-`AccountKind`: opening Edit on a
+- [x] Render-independence-from-`AccountKind`: opening Edit on a
   HOTP account produces the same three-control layout as a TOTP
   account, with no counter row and no kind-specific OTP fields.
   Optional companion snapshot
   (`tests/view_snapshots.rs::snapshot_edit_modal_hotp_account`)
   asserts the byte-equal layout against
   `snapshot_edit_modal_default` (the TOTP baseline).
-- [ ] Issuer pre-population from prior `None`: opening Edit on an
+- [x] Issuer pre-population from prior `None`: opening Edit on an
   account whose prior `issuer` is `None` produces an **empty**
   issuer buffer (not the literal string `"None"` and not the
   prior account's label) and the reducer asserts the buffer's
   `len() == 0` on the post-open frame.
-- [ ] `label_buffer_byte_equal_to_prior_projects_to_none`: with
+- [x] `label_buffer_byte_equal_to_prior_projects_to_none`: with
   the label buffer left untouched (byte-equal to the prior label,
   including identical trailing whitespace), submit projects to
   `AccountEdit.label = None` rather than `Some(prior.clone())`.
   Companion: typing one character then deleting it (so the buffer
   is byte-equal again) also lands on `None`.
-- [ ] `Tab` / `Shift+Tab` cycle focus across the focusable controls
+- [x] `Tab` / `Shift+Tab` cycle focus across the focusable controls
   in document order. With the icon-hint selector on *Leave
   unchanged* / *Default from issuer* / *No icon* the cycle is three
   stops (Label → Issuer → Icon hint); with the selector on *Slug:*
@@ -2191,11 +2191,11 @@ ships in `paladin-core` and the TUI Edit modal lands.
   row buffers and selector intact so the user can revise (covered
   by the empty-edit, validation-error, and duplicate-account
   reducer tests below).
-- [ ] `Shift+E` while any other modal is open is silently
+- [x] `Shift+E` while any other modal is open is silently
   rejected — the existing modal stays open, the Edit modal does
   not mount, and no effect is emitted. Mirrors the `Q` QR-Export
   test shape (`shift_q_while_other_modal_open_is_silently_rejected`).
-- [ ] Cross-modal symmetry between Rename and Edit:
+- [x] Cross-modal symmetry between Rename and Edit:
   (a) `Shift+E` pressed while the Rename modal is open is
   silently rejected — the Rename modal stays open with its label
   buffer intact, the Edit modal does not mount, and no effect
@@ -2217,11 +2217,11 @@ ships in `paladin-core` and the TUI Edit modal lands.
   error fires, and no effect is emitted. Asserted across all
   three disabled-selector positions to guard against accidental
   buffer mutation when focus state leaks.
-- [ ] Submit with at least one control diverging from its prior
+- [x] Submit with at least one control diverging from its prior
   value emits `Effect::EditAccountMetadata { path, account_id,
   edit: AccountEdit }` carrying only the changed fields populated;
   unchanged controls map to `None`.
-- [ ] Pre-submit duplicate check (reducer side): when the projected
+- [x] Pre-submit duplicate check (reducer side): when the projected
   `AccountEdit` would land the focused account on the same
   `(secret, issuer, label)` tuple as another account in the vault,
   the reducer surfaces the inline `duplicate_account` message
@@ -2236,7 +2236,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   divergence vs issuer divergence) and assert that an unchanged
   self-comparison never fires (per
   `Vault::find_duplicate_after_edit` skipping `id`).
-- [ ] No-edit-anyway regression guard: with the modal in the
+- [x] No-edit-anyway regression guard: with the modal in the
   duplicate-rejected state, the reducer is fed every plausible
   "allow"-coded key event (`A`, `Shift+A`, `Ctrl+A`,
   `Alt+Enter`, the `'y'` / `'Y'` confirm keys, and any other
@@ -2246,7 +2246,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   `duplicate_account` body message remains rendered, and the
   row buffers stay byte-identical. There is no edit-anyway
   override.
-- [ ] Pre-submit duplicate check (executor side): an executor-side
+- [x] Pre-submit duplicate check (executor side): an executor-side
   test in `tests/effect_tests.rs` exercises the live
   `Vault::find_duplicate_after_edit` wiring against a fixture vault
   that contains a colliding sibling account, asserts the Effect is
@@ -2258,7 +2258,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   invocations occurred during the rejected effect — pinning the
   short-circuit at the pre-flight boundary, not at the mutator
   re-validation boundary.
-- [ ] `EffectResult::EditAccountMetadata` Ok-arm: when the executor
+- [x] `EffectResult::EditAccountMetadata` Ok-arm: when the executor
   reports success, the reducer closes the Edit modal and publishes
   `StatusLine::Confirmation(format!("Edited {}.", summary_display_label(&summary)))`
   against the post-edit `AccountSummary` carried in the Ok payload
@@ -2270,7 +2270,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   `tests/view_snapshots.rs::snapshot_edit_modal_status_line_confirmation`
   pins the post-close list-view frame with the confirmation text
   visible in the status line.
-- [ ] Empty-edit submit (label buffer byte-equal to prior label,
+- [x] Empty-edit submit (label buffer byte-equal to prior label,
   issuer buffer projects to `None` per the WYSIWYS rules, icon-hint
   selector still on *Leave unchanged*) surfaces the inline
   `validation_error` (`field: "edit"`, `reason: "empty"`) via the
@@ -2283,7 +2283,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   required-field check fires); the test exercises both a
   pure-ASCII-space buffer (`"   "`) and a mix of Unicode
   whitespace (`"\u{00A0}\u{2003}\t"`) to lock the trim semantics.
-- [ ] Pre-check ordering: with a draft that would fail all three
+- [x] Pre-check ordering: with a draft that would fail all three
   checks (empty `AccountEdit`, invalid icon-hint slug under
   *Slug:*, and a duplicate-bearing label/issuer projection), the
   reducer surfaces **only** the first failure (`field: "edit"`,
@@ -2294,7 +2294,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   triggers surfaces only the `duplicate_account` body message.
   Pins the locked `[reject-empty, validate_account_edit,
   find_duplicate_after_edit]` order from the modal spec.
-- [ ] Label-only submit emits `Effect::EditAccountMetadata` with
+- [x] Label-only submit emits `Effect::EditAccountMetadata` with
   `AccountEdit { label: Some(trimmed), issuer: None, icon_hint:
   None }`. A companion executor-side test (rename + edit fixture
   using the same starting `Account` and identical post-edit label)
@@ -2375,14 +2375,14 @@ ships in `paladin-core` and the TUI Edit modal lands.
   **changed**) while `updated_at` bumps. Pins the symmetric
   side of the *Some-projection* contract: *Default from issuer*
   always re-derives, even when the prior slug was user-typed.
-- [ ] Pre-commit `save_not_committed` restores the pre-edit
+- [x] Pre-commit `save_not_committed` restores the pre-edit
   account byte-for-byte and keeps the modal open with the inline
   error; the draft is preserved for retry. (Mirrors the existing
   Rename rollback test shape.)
 - [ ] `save_durability_unconfirmed` leaves the new account state
   in memory and surfaces the warning. (Mirrors the existing
   Rename durability test shape.)
-- [ ] Off-`Unlocked` / mismatched-path / stale-modal
+- [x] Off-`Unlocked` / mismatched-path / stale-modal
   `EffectResult::EditAccountMetadata` deliveries are silently
   discarded, matching the rename test shape. Three separate
   reducer-test arms enumerate the branches inline:
@@ -2396,7 +2396,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   pushed on top — though the latter cannot happen given
   single-modal stack semantics, the arm still asserts
   graceful-discard for forward compat).
-- [ ] Auto-lock with the Edit modal open drops the modal and
+- [x] Auto-lock with the Edit modal open drops the modal and
   every modal-local buffer (label, issuer, icon-hint slug) and
   resets the selector to *Leave unchanged* before re-presenting
   the unlock screen. The dismissal is **silent**: no toast
@@ -2406,7 +2406,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   `auto_lock_with_edit_modal_open_drops_modal_and_buffers` in
   `tests/auto_lock_tests.rs`, matching the QR Export auto-lock
   test shape.
-- [ ] `?` from the list focus opens the help overlay including
+- [x] `?` from the list focus opens the help overlay including
   the new `Shift+E` row; the `keybindings::KEYBINDINGS` table is
   the single source so the overlay cannot drift from the
   bindings. Covered by re-locking the existing
@@ -2414,7 +2414,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   height bumped from **32 to 33 rows** (the post-`Shift+Q`
   baseline gains exactly one row for the new `Shift+E`
   binding), the same way the QR Export `Q` row was added.
-- [ ] Snapshot test for the Edit modal default layout
+- [x] Snapshot test for the Edit modal default layout
   (`tests/view_snapshots.rs::snapshot_edit_modal_default`),
   matching the Rename snapshot conventions (centered region,
   three labeled controls, footer hint line). The icon-hint
@@ -2451,7 +2451,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   so the slug input row is captured as enabled and focused,
   visually distinguishing it from the disabled state under the
   other three selector options.
-- [ ] Snapshot test for the duplicate-account variant
+- [x] Snapshot test for the duplicate-account variant
   (`tests/view_snapshots.rs::snapshot_edit_modal_duplicate_account`)
   with the pre-submit `Vault::find_duplicate_after_edit` check
   rejecting the projected edit, so the inline
@@ -4890,7 +4890,7 @@ terminal theme and survives `--no-color`.
   *Slug:* row, and the `EffectResult::EditAccountMetadata`
   Ok-arm status-line confirmation
   (`format!("Edited {}.", summary_display_label(&summary))`).
-  - [ ] Add an `EditModal` variant to the modal enum holding the
+  - [x] Add an `EditModal` variant to the modal enum holding the
     label buffer (`tui-input`), issuer buffer (`tui-input`),
     icon-hint selector (four-option segmented), sibling slug
     buffer (`tui-input`; pre-populated at open, enabled only
@@ -4898,7 +4898,7 @@ terminal theme and survives `--no-color`.
     slots, and the focus-cycle cursor; depends on the
     `crates/paladin-tui/src/view/edit.rs` view module landing
     in parallel.
-  - [ ] Wire `Shift+E` from list focus to the reducer arm that
+  - [x] Wire `Shift+E` from list focus to the reducer arm that
     opens `EditModal` against the focused `AccountSummary`;
     silently reject `Shift+E` while any other modal is open
     (mirrors the QR Export `Shift+Q` gate). Update
@@ -4907,7 +4907,7 @@ terminal theme and survives `--no-color`.
     overlay picks up the new row, bumping the `TestBackend`
     height from 32 to 33 rows to accommodate it (parity with the
     31 → 32 bump the QR-Export `Q` row added).
-  - [ ] Wire `Effect::EditAccountMetadata { path, account_id,
+  - [x] Wire `Effect::EditAccountMetadata { path, account_id,
     edit }` and its executor through
     `Vault::mutate_and_save` → `Vault::edit_account_metadata`,
     routing `Ok` / `save_not_committed` /
