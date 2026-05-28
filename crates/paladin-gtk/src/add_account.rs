@@ -4436,7 +4436,10 @@ impl SimpleComponent for AddAccountComponent {
         #[root]
         gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
-            set_spacing: 12,
+            set_spacing: 18,
+            set_margin_start: 18,
+            set_margin_end: 18,
+            set_margin_bottom: 18,
             set_hexpand: true,
             set_vexpand: true,
 
