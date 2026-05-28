@@ -151,6 +151,7 @@ fn control_gating_unlocked_busy_disables_all_mutating_controls() {
         EffectKind::AddAccount,
         EffectKind::RemoveAccount,
         EffectKind::RenameAccount,
+        EffectKind::EditAccountMetadata,
         EffectKind::Import,
         EffectKind::Export,
         EffectKind::Settings,
@@ -176,6 +177,15 @@ fn control_gating_unlocked_busy_disables_all_mutating_controls() {
         );
         assert!(gating.settings, "settings disabled for {effect:?}");
     }
+}
+
+#[test]
+fn effect_kind_user_name_edit_account_metadata_reads_edit_account() {
+    // Milestone 9 slice 4 adds the EditDialog's busy-gate effect kind.
+    // Its short human-readable name surfaces in worker-panic /
+    // deferred-quit / deferred-lock copy alongside the other mutating
+    // effects, so pin the wording here.
+    assert_eq!(EffectKind::EditAccountMetadata.user_name(), "edit account");
 }
 
 #[test]

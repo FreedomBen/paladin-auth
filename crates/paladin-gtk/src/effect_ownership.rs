@@ -56,6 +56,10 @@ pub enum EffectKind {
     /// `RenameDialog` → `Vault::rename` inside
     /// `Vault::mutate_and_save`.
     RenameAccount,
+    /// `EditDialog` → `Vault::edit_account_metadata` inside
+    /// `Vault::mutate_and_save` (Milestone 9 — the row "Edit…"
+    /// surface that supersedes `RenameAccount` in the GTK front-end).
+    EditAccountMetadata,
     /// `ImportDialog` — `import` source ingest + atomic apply.
     Import,
     /// `ExportDialog` — `export` writer (vault read; no mutation
@@ -88,6 +92,7 @@ impl EffectKind {
             Self::AddAccount => "add account",
             Self::RemoveAccount => "remove account",
             Self::RenameAccount => "rename account",
+            Self::EditAccountMetadata => "edit account",
             Self::Import => "import",
             Self::Export => "export",
             Self::Settings => "settings save",
