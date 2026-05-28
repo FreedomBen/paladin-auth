@@ -2409,7 +2409,7 @@ gesture, `gtk::ShortcutController`, and shared
 §7 and Milestone 9 treat the right-click affordance as
 core.
 
-- [ ] **Slice 1 — Menu model + action constants.** Extend
+- [x] **Slice 1 — Menu model + action constants.** Extend
    `account_row::build_kebab_menu_model` to add the
    *Copy code* entry at position 0 and rename
    `Rename…` → `Edit…` (still targeting `row.rename` for now).

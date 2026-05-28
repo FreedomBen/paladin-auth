@@ -1047,67 +1047,84 @@ fn row_copy_action_name_is_copy() {
 }
 
 #[test]
-fn build_kebab_menu_model_exposes_edit_show_qr_and_remove_in_order() {
+fn build_kebab_menu_model_exposes_copy_edit_show_qr_and_remove_in_order() {
     // The row kebab `gtk::MenuButton` carries the `gio::Menu`
     // produced by [`build_kebab_menu_model`]. Per
     // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context menu and
     // EditDialog implementation" > "Design contract" / Milestone 9
-    // slice 1, the menu must expose exactly three entries in order —
-    // "Edit…", "Show QR…", then "Remove…" — whose action targets
-    // resolve through the per-row `gio::SimpleActionGroup` named
-    // [`ROW_ACTION_GROUP_NAME`]. The destructive "Remove…" stays
-    // trailing; the read-only "Show QR…" neighbours the "Edit…"
-    // shape. Slices 1–3 are cosmetic-only: the visible "Edit…"
-    // label still targets `row.rename` (renamed in a later slice)
-    // and still mounts `RenameDialog` until slice 4 swaps in
-    // `EditDialog`. Pinning the labels and targets here catches
-    // drift between the kebab menu, the action group installed by
-    // `install_row_action_group`, and the dispatch table in
-    // `dispatch_row_action` — any of which would otherwise leave
-    // the user with a kebab item that activates into the void.
+    // slice 1, the menu must expose exactly four entries in order —
+    // "Copy code", "Edit…", "Show QR…", then "Remove…" — whose action
+    // targets resolve through the per-row `gio::SimpleActionGroup`
+    // named [`ROW_ACTION_GROUP_NAME`]. "Copy code" leads (matching the
+    // inline copy button), the read-only "Show QR…" neighbours the
+    // "Edit…" shape, and the destructive "Remove…" stays trailing.
+    // Slices 1–3 are cosmetic-only: the visible "Edit…" label still
+    // targets `row.rename` (renamed in a later slice) and still
+    // mounts `RenameDialog` until slice 4 swaps in `EditDialog`;
+    // "Copy code" targets the pre-existing `row.copy`. Pinning the
+    // labels and targets here catches drift between the kebab menu,
+    // the action group installed by `install_row_action_group`, and
+    // the dispatch table in `dispatch_row_action` — any of which would
+    // otherwise leave the user with a kebab item that activates into
+    // the void.
     let menu = build_kebab_menu_model();
-    assert_eq!(menu.n_items(), 3, "kebab menu carries exactly three items");
+    assert_eq!(menu.n_items(), 4, "kebab menu carries exactly four items");
 
-    let edit_label: String = menu
+    let copy_label: String = menu
         .item_attribute_value(0, "label", None)
         .and_then(|v| v.get())
         .expect("kebab item 0 carries a label attribute");
-    assert_eq!(edit_label, "Edit\u{2026}");
+    assert_eq!(copy_label, "Copy code");
 
-    let edit_action: String = menu
+    let copy_action: String = menu
         .item_attribute_value(0, "action", None)
         .and_then(|v| v.get())
         .expect("kebab item 0 carries an action attribute");
+    assert_eq!(
+        copy_action,
+        format!("{ROW_ACTION_GROUP_NAME}.{ROW_COPY_ACTION_NAME}"),
+    );
+
+    let edit_label: String = menu
+        .item_attribute_value(1, "label", None)
+        .and_then(|v| v.get())
+        .expect("kebab item 1 carries a label attribute");
+    assert_eq!(edit_label, "Edit\u{2026}");
+
+    let edit_action: String = menu
+        .item_attribute_value(1, "action", None)
+        .and_then(|v| v.get())
+        .expect("kebab item 1 carries an action attribute");
     assert_eq!(
         edit_action,
         format!("{ROW_ACTION_GROUP_NAME}.{ROW_RENAME_ACTION_NAME}"),
     );
 
     let show_qr_label: String = menu
-        .item_attribute_value(1, "label", None)
+        .item_attribute_value(2, "label", None)
         .and_then(|v| v.get())
-        .expect("kebab item 1 carries a label attribute");
+        .expect("kebab item 2 carries a label attribute");
     assert_eq!(show_qr_label, "Show QR\u{2026}");
 
     let show_qr_action: String = menu
-        .item_attribute_value(1, "action", None)
+        .item_attribute_value(2, "action", None)
         .and_then(|v| v.get())
-        .expect("kebab item 1 carries an action attribute");
+        .expect("kebab item 2 carries an action attribute");
     assert_eq!(
         show_qr_action,
         format!("{ROW_ACTION_GROUP_NAME}.{ROW_SHOW_QR_ACTION_NAME}"),
     );
 
     let remove_label: String = menu
-        .item_attribute_value(2, "label", None)
+        .item_attribute_value(3, "label", None)
         .and_then(|v| v.get())
-        .expect("kebab item 2 carries a label attribute");
+        .expect("kebab item 3 carries a label attribute");
     assert_eq!(remove_label, "Remove\u{2026}");
 
     let remove_action: String = menu
-        .item_attribute_value(2, "action", None)
+        .item_attribute_value(3, "action", None)
         .and_then(|v| v.get())
-        .expect("kebab item 2 carries an action attribute");
+        .expect("kebab item 3 carries an action attribute");
     assert_eq!(
         remove_action,
         format!("{ROW_ACTION_GROUP_NAME}.{ROW_REMOVE_ACTION_NAME}"),

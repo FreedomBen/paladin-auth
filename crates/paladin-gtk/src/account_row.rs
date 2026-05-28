@@ -90,7 +90,8 @@ pub fn progress_visible(kind: AccountKindSummary) -> bool {
 
 /// Whether the row exposes its kebab `MenuButton`.
 ///
-/// Every row exposes the kebab (Rename… / Remove…) unconditionally
+/// Every row exposes the kebab (Copy code / Edit… / Show QR… /
+/// Remove…) unconditionally
 /// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `AccountRowComponent`. The kind argument is taken so the helper
 /// reads symmetrically alongside [`next_button_visible`] /
@@ -600,21 +601,29 @@ pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountRowOutput
 
 /// Build the kebab `gio::Menu` shared by every row.
 ///
-/// Three entries in order — "Edit…" → `row.rename`,
-/// "Show QR…" → `row.show-qr`, "Remove…" → `row.remove` — matching
-/// the per-row [`gio::SimpleActionGroup`] installed by
-/// [`install_row_action_group`]. The destructive "Remove…" stays
-/// trailing; the read-only "Show QR…" neighbours the "Edit…"
-/// shape per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context
-/// menu and `EditDialog` implementation" > "Design contract".
+/// Four entries in order — "Copy code" → `row.copy`,
+/// "Edit…" → `row.rename`, "Show QR…" → `row.show-qr`,
+/// "Remove…" → `row.remove` — matching the per-row
+/// [`gio::SimpleActionGroup`] installed by
+/// [`install_row_action_group`]. "Copy code" leads (mirroring the
+/// inline copy button); the read-only "Show QR…" neighbours the
+/// "Edit…" shape; the destructive "Remove…" stays trailing — per
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context menu and
+/// `EditDialog` implementation" > "Design contract".
 ///
 /// Milestone 9 slice 1 (cosmetic): the visible "Edit…" label
 /// still targets `row.rename` (and routes through the existing
 /// `RenameDialog`) until later slices land the
 /// `ROW_EDIT_ACTION_NAME` rename and the `EditDialog` widget.
+/// "Copy code" targets the pre-existing `row.copy` action that the
+/// inline copy button already drives, so it activates immediately.
 #[must_use]
 pub fn build_kebab_menu_model() -> gio::Menu {
     let menu = gio::Menu::new();
+    menu.append(
+        Some("Copy code"),
+        Some(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_COPY_ACTION_NAME}")),
+    );
     menu.append(
         Some("Edit\u{2026}"),
         Some(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_RENAME_ACTION_NAME}")),
