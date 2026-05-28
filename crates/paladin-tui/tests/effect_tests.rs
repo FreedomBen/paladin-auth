@@ -4931,3 +4931,251 @@ fn execute_edit_account_metadata_with_mismatched_path_is_silently_dropped() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+/// Add a TOTP account with explicit issuer / icon-hint and a
+/// controlled, backdated creation timestamp (Nov 2023). Executor edit
+/// tests use the backdate so the edit-time `SystemTime::now()` is
+/// strictly greater than the stored `updated_at` — `updated_at` is
+/// Unix-seconds and the mutator writes `now` verbatim with no
+/// monotonic clamp, so a same-second create+edit would otherwise tie.
+fn add_backdated_totp_with_meta(
+    vault: &mut Vault,
+    store: &Store,
+    label: &str,
+    issuer: Option<&str>,
+    icon_hint: IconHintInput,
+) -> AccountId {
+    let backdated = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: issuer.map(str::to_string),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint,
+    };
+    let validated = validate_manual(input, backdated).expect("valid manual input");
+    let id = vault.add(validated.account);
+    with_save_env_lock(|| vault.save(store).expect("commit added account"));
+    id
+}
+
+/// Build an `AppState::Unlocked` whose live vault owns one backdated
+/// TOTP account with the supplied issuer / icon-hint.
+fn unlocked_with_backdated_meta(
+    path: &Path,
+    label: &str,
+    issuer: Option<&str>,
+    icon_hint: IconHintInput,
+) -> (AppState, AccountId) {
+    let (mut vault, store) = Store::create(path, VaultInit::Plaintext).expect("create vault");
+    with_save_env_lock(|| vault.save(&store).expect("commit empty vault"));
+    let id = add_backdated_totp_with_meta(&mut vault, &store, label, issuer, icon_hint);
+    let state = AppState::Unlocked {
+        path: path.to_path_buf(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    (state, id)
+}
+
+fn account_updated_at(state: &AppState, id: AccountId) -> u64 {
+    match state {
+        AppState::Unlocked { vault, .. } => vault
+            .iter()
+            .find(|a| a.id() == id)
+            .expect("account present")
+            .updated_at(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+fn account_icon_hint(state: &AppState, id: AccountId) -> Option<String> {
+    match state {
+        AppState::Unlocked { vault, .. } => vault
+            .iter()
+            .find(|a| a.id() == id)
+            .expect("account present")
+            .icon_hint()
+            .map(str::to_string),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+/// A same-as-prior (non-empty) edit still bumps `updated_at`, matching
+/// the core mutator's no-op-but-non-empty contract.
+#[test]
+fn execute_edit_account_metadata_same_as_prior_field_still_bumps_updated_at() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, id) =
+        unlocked_with_backdated_meta(&path, "github", None, IconHintInput::Default);
+    let pre_updated = account_updated_at(&state, id);
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    // Same label value — a non-empty edit that does not change the
+    // field's value but must still bump the timestamp.
+    let effect = Effect::EditAccountMetadata {
+        path: path.clone(),
+        account_id: id,
+        edit: AccountEdit {
+            label: Some("github".to_string()),
+            issuer: None,
+            icon_hint: None,
+        },
+    };
+    let outcome = with_save_env_lock(|| {
+        execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
+        )
+    });
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(matches!(
+        rx.try_recv().expect("an AppEvent should be sent"),
+        AppEvent::EffectResult(EffectResult::EditAccountMetadata { result: Ok(_), .. })
+    ));
+
+    let post_updated = account_updated_at(&state, id);
+    assert!(
+        post_updated > pre_updated,
+        "updated_at must bump even for a same-value edit: pre={pre_updated} post={post_updated}"
+    );
+    // Label value is unchanged.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().find(|a| a.id() == id).unwrap().label(),
+                "github"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+    // The on-disk primary carries the same bumped timestamp.
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    assert_eq!(
+        reopened.iter().find(|a| a.id() == id).unwrap().updated_at(),
+        post_updated,
+    );
+}
+
+/// *Default from issuer* whose re-derived slug equals the prior slug
+/// still emits a `Some(Default)` projection and bumps `updated_at`
+/// while leaving the on-disk slug unchanged.
+#[test]
+fn execute_edit_account_metadata_default_icon_hint_matching_prior_keeps_slug_and_bumps() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    // Prior slug "acme" already equals slugify("Acme").
+    let (mut state, id) = unlocked_with_backdated_meta(
+        &path,
+        "alice",
+        Some("Acme"),
+        IconHintInput::Slug("acme".to_string()),
+    );
+    let pre_updated = account_updated_at(&state, id);
+    assert_eq!(account_icon_hint(&state, id).as_deref(), Some("acme"));
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::EditAccountMetadata {
+        path: path.clone(),
+        account_id: id,
+        edit: AccountEdit {
+            label: None,
+            issuer: None,
+            icon_hint: Some(IconHintInput::Default),
+        },
+    };
+    let outcome = with_save_env_lock(|| {
+        execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
+        )
+    });
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(matches!(
+        rx.try_recv().expect("event"),
+        AppEvent::EffectResult(EffectResult::EditAccountMetadata { result: Ok(_), .. })
+    ));
+
+    assert_eq!(
+        account_icon_hint(&state, id).as_deref(),
+        Some("acme"),
+        "Default re-derive keeps the identical slug",
+    );
+    assert!(
+        account_updated_at(&state, id) > pre_updated,
+        "updated_at must still bump on a same-result icon-hint edit",
+    );
+}
+
+/// *Default from issuer* whose re-derived slug differs from a
+/// user-typed prior slug always re-derives — the on-disk slug changes
+/// to the issuer default and `updated_at` bumps.
+#[test]
+fn execute_edit_account_metadata_default_icon_hint_differing_from_prior_rederives_and_bumps() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    // Prior slug "legacy-co" does NOT match slugify("Acme") = "acme".
+    let (mut state, id) = unlocked_with_backdated_meta(
+        &path,
+        "alice",
+        Some("Acme"),
+        IconHintInput::Slug("legacy-co".to_string()),
+    );
+    let pre_updated = account_updated_at(&state, id);
+    assert_eq!(account_icon_hint(&state, id).as_deref(), Some("legacy-co"));
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::EditAccountMetadata {
+        path: path.clone(),
+        account_id: id,
+        edit: AccountEdit {
+            label: None,
+            issuer: None,
+            icon_hint: Some(IconHintInput::Default),
+        },
+    };
+    let outcome = with_save_env_lock(|| {
+        execute(
+            effect,
+            &mut state,
+            &tx,
+            &mut paladin_tui::clipboard::ClipboardSession::new(),
+        )
+    });
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(matches!(
+        rx.try_recv().expect("event"),
+        AppEvent::EffectResult(EffectResult::EditAccountMetadata { result: Ok(_), .. })
+    ));
+
+    assert_eq!(
+        account_icon_hint(&state, id).as_deref(),
+        Some("acme"),
+        "Default re-derives from issuer 'Acme' even over a user-typed prior slug",
+    );
+    assert!(
+        account_updated_at(&state, id) > pre_updated,
+        "updated_at must bump",
+    );
+}

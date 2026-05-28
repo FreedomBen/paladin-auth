@@ -2377,12 +2377,16 @@ ships in `paladin-core` and the TUI Edit modal lands.
   re-derive a slug for the "leave untouched" path. (Regression
   guard against the prior text-row design.)
   *(`edit_modal_leave_unchanged_with_prior_none_icon_hint_does_not_rederive`.)*
-- [ ] Same-as-prior submit on at least one field still bumps
+- [x] Same-as-prior submit on at least one field still bumps
   `updated_at` (matches the core mutator's no-op-but-non-empty
   contract); covered by an executor-side test that asserts the
   post-edit `Account::updated_at` strictly exceeds the pre-edit
-  value.
-- [ ] Icon-hint same-as-prior edge case: opening Edit on an
+  value. The fixture account is backdated to a fixed past
+  timestamp because `updated_at` is Unix-seconds and the mutator
+  writes `now` verbatim (no monotonic clamp), so a same-second
+  create+edit would otherwise tie.
+  *(`execute_edit_account_metadata_same_as_prior_field_still_bumps_updated_at`.)*
+- [x] Icon-hint same-as-prior edge case: opening Edit on an
   account whose prior `icon_hint` is a slug already derived from
   the current issuer (e.g. prior `Some("acme")` with issuer
   `Some("Acme")`), then picking *Default from issuer* without
@@ -2393,6 +2397,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   still bumps. Proves the *Some-projection but identical
   post-edit state* boundary holds for `icon_hint` specifically,
   parallel to the label / issuer same-as-prior cases above.
+  *(`execute_edit_account_metadata_default_icon_hint_matching_prior_keeps_slug_and_bumps`.)*
 - [ ] Icon-hint prior-differs-from-derived edge case (symmetric
   to the above): opening Edit on an account whose prior
   `icon_hint` is a slug that does **not** match the issuer's
@@ -2406,6 +2411,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   **changed**) while `updated_at` bumps. Pins the symmetric
   side of the *Some-projection* contract: *Default from issuer*
   always re-derives, even when the prior slug was user-typed.
+  *(`execute_edit_account_metadata_default_icon_hint_differing_from_prior_rederives_and_bumps`.)*
 - [x] Pre-commit `save_not_committed` restores the pre-edit
   account byte-for-byte and keeps the modal open with the inline
   error; the draft is preserved for retry. (Mirrors the existing
