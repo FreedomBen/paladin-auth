@@ -2398,7 +2398,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   post-edit state* boundary holds for `icon_hint` specifically,
   parallel to the label / issuer same-as-prior cases above.
   *(`execute_edit_account_metadata_default_icon_hint_matching_prior_keeps_slug_and_bumps`.)*
-- [ ] Icon-hint prior-differs-from-derived edge case (symmetric
+- [x] Icon-hint prior-differs-from-derived edge case (symmetric
   to the above): opening Edit on an account whose prior
   `icon_hint` is a slug that does **not** match the issuer's
   derived default (e.g. prior `Some("legacy-co")` with issuer
