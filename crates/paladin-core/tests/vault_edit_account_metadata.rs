@@ -33,7 +33,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use paladin_core::{
     parse_otpauth, validate_account_edit, validate_icon_hint_slug, Account, AccountEdit, AccountId,
-    ErrorKind, IconHintInput, PaladinError, Store, TimeRangeKind, Vault, VaultInit,
+    IconHintInput, PaladinError, Store, TimeRangeKind, Vault, VaultInit,
 };
 
 // ---------------------------------------------------------------------------
@@ -414,9 +414,9 @@ fn edit_account_metadata_account_not_found() {
             assert_eq!(operation, "edit_account_metadata");
             assert_eq!(state, "account_not_found");
         }
-        other => panic!(
-            "expected invalid_state(edit_account_metadata/account_not_found), got {other:?}"
-        ),
+        other => {
+            panic!("expected invalid_state(edit_account_metadata/account_not_found), got {other:?}")
+        }
     }
 }
 
@@ -748,8 +748,7 @@ fn edit_account_metadata_persists_through_mutate_and_save() {
 
     drop(vault);
     drop(store);
-    let (reopened, _store) =
-        Store::open(&path, paladin_core::VaultLock::Plaintext).unwrap();
+    let (reopened, _store) = Store::open(&path, paladin_core::VaultLock::Plaintext).unwrap();
     assert_eq!(reopened.get(id).unwrap().label(), "alice-prime");
     assert_eq!(reopened.get(id).unwrap().updated_at(), 1_700_001_000);
 }

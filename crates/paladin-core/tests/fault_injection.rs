@@ -32,9 +32,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use paladin_core::{
-    parse_otpauth, write_secret_file_atomic, Account, AccountEdit, Argon2Params,
-    EncryptionOptions, ErrorKind, IconHintInput, PaladinError, Store, VaultInit, VaultLock,
-    VaultMode,
+    parse_otpauth, write_secret_file_atomic, Account, AccountEdit, Argon2Params, EncryptionOptions,
+    ErrorKind, IconHintInput, PaladinError, Store, VaultInit, VaultLock, VaultMode,
 };
 use secrecy::SecretString;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
