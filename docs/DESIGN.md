@@ -1012,7 +1012,7 @@ pub struct AccountEdit {
     pub icon_hint: Option<IconHintInput>,  // Some(...) applies the IconHintInput tri-state (Default re-derives from the post-edit issuer; Clear stores None; Slug validates §4.1); None leaves the prior slug untouched.
 }
 
-pub fn validate_account_edit(edit: &AccountEdit, prior: &Account, now: SystemTime) -> Result<()>;  // pure-logic pre-flight validator routing through validate_label / validate_issuer / parse_icon_hint_token; no mutation. Returns `validation_error` with the offending field on first failure. `Vault::edit_account_metadata` calls this internally; the front ends may also call it directly to drive inline per-field error rendering before the user submits.
+pub fn validate_account_edit(edit: &AccountEdit, prior: &Account, now: SystemTime) -> Result<()>;  // pure-logic pre-flight validator routing the present fields through `validate_label`, `validate_issuer`, and the §4.1 slug-shape check (the same `[a-z0-9_-]+` rule `validate_icon_hint_slug` enforces) on the `IconHintInput::Slug(_)` arm; `IconHintInput::Default` / `Clear` carry no slug text so they need no validator. No mutation. Returns `validation_error` with the offending field on first failure. `Vault::edit_account_metadata` calls this internally; the front ends may also call it directly to drive inline per-field error rendering before the user submits.
 
 pub mod import {
     pub enum ImportFormat { Otpauth, Aegis, Paladin, Qr, Unknown }
@@ -1845,11 +1845,21 @@ Layout (single-screen MVP):
   new_label, now)` inside `Vault::mutate_and_save`; issuer is not
   editable here (parity with `paladin rename`). Edit (opened with
   `Shift+E` on the focused account row) opens an `AccountEdit`-bearing
-  modal — three `tui-input` rows for label, issuer, and icon-hint slug
-  pre-populated from the current `AccountSummary` — and routes submit
-  through `Vault::edit_account_metadata` inside `Vault::mutate_and_save`,
-  bumping `updated_at` and surfacing per-field validation errors inline
-  without closing. The Rename modal stays for muscle-memory continuity
+  modal pre-populated from the current `AccountSummary`: a `tui-input`
+  row for the label, a `tui-input` row for the issuer, and a
+  four-option segmented icon-hint selector (*Leave unchanged* /
+  *Default from issuer* / *No icon* / *Slug:*) with a sibling
+  `tui-input` slug row that activates when the selector is on *Slug:*.
+  The *Leave unchanged* default keeps the prior `icon_hint`
+  untouched; the other three options map 1:1 to the three
+  `IconHintInput` variants the Add modal collects through
+  `parse_icon_hint_token`. The *Slug:* row routes its buffer
+  through `validate_icon_hint_slug` so a user who types literal
+  `default` or `none` saves those as slugs rather than collapsing
+  them into the `Default` / `Clear` tri-state. Submit routes
+  through `Vault::edit_account_metadata` inside
+  `Vault::mutate_and_save`, bumping `updated_at` and surfacing
+  per-field validation errors inline without closing. The Rename modal stays for muscle-memory continuity
   as the label-only shorthand; the Edit modal is the full surface and
   is the one the GUI's `EditDialog` (§7) mirrors. OTP-affecting fields
   (`secret`, `algorithm`, `digits`, `kind`, `period`, `counter`) are

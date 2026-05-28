@@ -486,21 +486,30 @@ dismiss deliberately.
     `Some(trimmed)`.
   * *Issuer* — `tui-input` row, optional. Submit projects the
     buffer onto `AccountEdit.issuer` with **what-you-see-is-what-you-save**
-    semantics:
-    - empty buffer AND prior issuer was `None` → `None` (leave untouched);
-    - empty buffer AND prior issuer was `Some(_)` → `Some(None)` (implicit
-      clear — matches CLI `--no-issuer`);
-    - buffer, after §4.1 issuer normalization (trim Unicode
-      whitespace; empty becomes `None`), equals the prior issuer
-      → `None`;
-    - any other non-empty buffer → `Some(Some(normalized))` and
-      flows through `validate_issuer` for §4.1 rejection.
+    semantics, applied after §4.1 issuer normalization (trim
+    Unicode whitespace; an all-whitespace buffer is therefore
+    treated the same as an empty buffer so the user cannot pick
+    up surprising validation errors by emptying with spaces
+    instead of backspace):
+    - normalized-empty buffer AND prior issuer was `None` →
+      `None` (leave untouched);
+    - normalized-empty buffer AND prior issuer was `Some(_)` →
+      `Some(None)` (implicit clear — matches CLI `--no-issuer`);
+    - normalized buffer equals the prior issuer → `None`;
+    - any other non-empty normalized buffer →
+      `Some(Some(normalized))` and flows through `validate_issuer`
+      for §4.1 rejection.
     `Ctrl+U` is an inline convenience that empties the row buffer in
     one keystroke; it carries no separate "explicit-clear marker" —
-    the empty-buffer rule above determines the projection.
+    the normalized-empty-buffer rules above determine the
+    projection.
   * *Icon hint* — segmented selector (cycled with `←` / `→` per the
     modal-local navigation rules) with four mutually exclusive
-    options matching the Add modal's icon-hint UX:
+    options. The *Leave unchanged* default is unique to Edit; the
+    other three options map 1:1 to the three `IconHintInput`
+    variants the Add modal's `parse_icon_hint_token` produces, so
+    the resulting on-disk `icon_hint` value is reachable through
+    either surface:
     1. *Leave unchanged* (default at modal open) →
        `AccountEdit.icon_hint = None`;
     2. *Default from issuer* →
@@ -572,9 +581,12 @@ dismiss deliberately.
   empty `AccountEdit` (every control projects to `None` per the
   rules above — label byte-equal to prior, issuer either matching
   prior or empty-on-prior-`None`, and icon-hint selector still on
-  *Leave unchanged*) is rejected at the modal with the inline body
-  `validation_error` (`field: "edit"`, `reason: "empty"`) before
-  reaching core, matching the core mutator's contract. OTP-
+  *Leave unchanged*) is rejected by the reducer's
+  `validate_account_edit` pre-flight before reaching core, matching
+  the core mutator's contract. Because the `field: "edit"` error
+  carries no per-row attachment, it renders inline in the modal
+  body (the same body slot the duplicate-account message uses),
+  not beside any individual row. OTP-
   affecting fields (`secret`, `algorithm`, `digits`, `kind`,
   `period`, `counter`) are intentionally absent — the modal
   header footnote redirects users to Remove + Add for those
@@ -2024,9 +2036,13 @@ ships in `paladin-core` and the TUI Edit modal lands.
   around in each direction for both cycle lengths, plus a third
   asserts that toggling the selector off *Slug:* on the next
   traversal skips the now-disabled slug row without losing the
-  slug buffer's text. `Enter` submits and `Esc` cancels (both
-  clear every row buffer and reset the icon-hint selector to
-  *Leave unchanged*).
+  slug buffer's text. `Enter` submits; on successful submit (or on
+  `Esc` cancel), every row buffer clears and the icon-hint
+  selector resets to *Leave unchanged*. `Enter` with a failing
+  `validate_account_edit` or a `Vault::find_duplicate_after_edit`
+  hit keeps the modal open with row buffers and selector intact so
+  the user can revise (covered by the validation-error and
+  duplicate-account reducer tests below).
 - [ ] `Shift+E` while any other modal is open is silently
   rejected — the existing modal stays open, the Edit modal does
   not mount, and no effect is emitted. Mirrors the `Q` QR-Export
@@ -2083,14 +2099,17 @@ ships in `paladin-core` and the TUI Edit modal lands.
   rollback behavior on `save_not_committed` — verifying the two
   surfaces share one mutation path (`Vault::edit_account_metadata`)
   even though they emit distinct Effect variants.
-- [ ] Issuer WYSIWYS projection — covered by four reducer tests:
+- [ ] Issuer WYSIWYS projection — covered by five reducer tests:
   empty buffer with prior `None` → `None`; empty buffer with prior
-  `Some(_)` → `Some(None)`; buffer byte-equal to normalized prior
-  → `None`; non-empty divergent buffer → `Some(Some(normalized))`.
-  A fifth test asserts `Ctrl+U` on the issuer row empties the
-  buffer in one keystroke and that the projection then follows the
-  same rules (i.e. `Ctrl+U` over a prior `Some(_)` lands on
-  `Some(None)`).
+  `Some(_)` → `Some(None)`; whitespace-only buffer with prior
+  `Some(_)` → `Some(None)` (proves an all-whitespace buffer
+  collapses to the same implicit-clear outcome as the empty
+  buffer after §4.1 normalization); buffer byte-equal to
+  normalized prior → `None`; non-empty divergent buffer →
+  `Some(Some(normalized))`. A sixth test asserts `Ctrl+U` on the
+  issuer row empties the buffer in one keystroke and that the
+  projection then follows the same rules (i.e. `Ctrl+U` over a
+  prior `Some(_)` lands on `Some(None)`).
 - [ ] Icon-hint selector — four reducer tests, one per option:
   *Leave unchanged* → `AccountEdit.icon_hint = None`;
   *Default from issuer* → `Some(IconHintInput::Default)`;
@@ -4502,16 +4521,24 @@ terminal theme and survives `--no-color`.
     (mirrors the QR Export `Shift+Q` gate). Update
     `crates/paladin-tui/src/keybindings.rs::KEYBINDINGS` and
     re-lock the `snapshot_help_overlay` insta fixture so the
-    overlay picks up the new row.
+    overlay picks up the new row, bumping the `TestBackend`
+    height from 32 to 33 rows to accommodate it (parity with the
+    31 → 32 bump the QR-Export `Q` row added).
   - [ ] Wire `Effect::EditAccountMetadata { path, account_id,
     edit }` and its executor through
     `Vault::mutate_and_save` → `Vault::edit_account_metadata`,
     routing `Ok` / `save_not_committed` /
-    `save_durability_unconfirmed` / `account_not_found` arms
-    into `EffectResult::EditAccountMetadata` with the post-edit
+    `save_durability_unconfirmed` / `account_not_found` /
+    `validation_error` arms into
+    `EffectResult::EditAccountMetadata` with the post-edit
     `AccountSummary` carried on the Ok-arm (built by the
     executor via `Vault::get(id).map(Account::summary)` since
-    `edit_account_metadata` returns `Result<()>`).
+    `edit_account_metadata` returns `Result<()>`). The
+    `validation_error` arm is defensive — the reducer's
+    `validate_account_edit` pre-flight should already block any
+    invalid `AccountEdit`, but core re-runs the validator inside
+    `edit_account_metadata` and the executor must surface the
+    error inline rather than panic if the two ever diverge.
   - [ ] All `tests/reducer_tests.rs::edit_modal_*` bullets
     ticked, the executor-side bullets in
     `tests/effect_tests.rs::execute_edit_*` ticked, and the
