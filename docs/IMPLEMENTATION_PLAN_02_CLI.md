@@ -404,38 +404,46 @@ without changing the CLI's `rename.rs`). Implementation owes:
   `Vault::shortest_unique_id_prefix`).
 
 - **Duplicate-account check.** Mirrors `paladin add`'s collision
-  path. After per-field validation succeeds (either via a CLI-side
-  `paladin_core::validate_account_edit(&edit, prior, now)` call —
-  paralleling how `add` calls `paladin_core::validate_manual` — or,
-  at the implementer's discretion, by relying on the
-  `validate_account_edit` re-run that `Vault::edit_account_metadata`
-  performs internally), the CLI calls
-  `Vault::find_duplicate_after_edit(id, &edit)` and rejects a
+  path. The CLI first calls
+  `paladin_core::validate_account_edit(&edit, prior, now)`
+  explicitly — paralleling how `add` calls
+  `paladin_core::validate_manual` — and propagates any returned
+  `validation_error` (`field`: `"label"` / `"issuer"` /
+  `"icon_hint"`, `reason`: typed per the underlying validator)
+  before the duplicate check runs. On validation success, the CLI
+  calls `Vault::find_duplicate_after_edit(id, &edit)` and rejects a
   non-`None` result with `duplicate_account` (the existing
   collision's `AccountSummary` carried in the envelope's `account`
-  field) **unless** `--allow-duplicate` was supplied. The core
-  helper projects the would-be post-edit `(secret, issuer, label)`
-  triple — applying §4.1 normalization to issuer and label — and
-  skips the account at `id`, so an unchanged self-comparison never
-  reports a collision. The check fires **before**
+  field) **unless** `--allow-duplicate` was supplied. Pre-validating
+  in the CLI is required by DESIGN.md §5 ("after per-field
+  validation succeeds and before the mutator runs") and by the
+  §13 (2026-05-26) EditDialog sign-off block, so a typed
+  `validation_error` for an invalid edit wins precedence over
+  `duplicate_account` and over any save-path error. The core helper
+  projects the would-be post-edit `(secret, issuer, label)` triple
+  — applying §4.1 normalization to issuer and label — and skips the
+  account at `id`, so an unchanged self-comparison never reports a
+  collision. The check fires **before**
   `Vault::edit_account_metadata` is invoked, so a rejection leaves
   the vault byte-identical to its pre-edit state. With
   `--allow-duplicate`, the helper is not called and the mutator is
-  invoked unconditionally; the success envelope is the same
-  `{ "account": AccountSummary }` shape.
+  invoked without the collision gate; the success envelope is the
+  same `{ "account": AccountSummary }` shape.
 
-- **Dispatch.** After parse-time validation and query resolution,
-  the CLI builds an `AccountEdit` populated as above and calls
+- **Dispatch.** After parse-time validation, query resolution, the
+  explicit `validate_account_edit` call, and the
+  `find_duplicate_after_edit` collision check, the CLI calls
   `Vault::edit_account_metadata(id, edit, now)` inside
   `Vault::mutate_and_save` so pre-commit save failures restore
   the in-memory pre-edit `Account` and surface `save_not_committed`.
-  Core's `validate_account_edit` runs inside the mutator and rejects
-  per-field validation failures (`field`: `"label"` / `"issuer"` /
-  `"icon_hint"`, `reason`: typed per the underlying validator)
-  before any mutation. The core-side empty-`AccountEdit` rejection
-  is unreachable from the CLI because the parse-time
-  `no_edit_fields` rejection fires first; it stays as a
-  belt-and-braces guard for programmatic `paladin-core` callers.
+  Core's `validate_account_edit` re-runs inside the mutator as a
+  belt-and-braces guard; the CLI's pre-call has already raised any
+  typed `validation_error`, so the in-mutator re-run is
+  defense-in-depth for programmatic `paladin-core` callers (which
+  may bypass the CLI-side path) rather than a primary error
+  surface. The core-side empty-`AccountEdit` rejection is likewise
+  unreachable from the CLI because the parse-time
+  `no_edit_fields` rejection fires first.
 
 - **Read-only invariant on secrets.** `paladin edit` never calls
   `hotp_advance`, never calls `totp_code`, never decodes the stored
@@ -1178,6 +1186,15 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   `validation_error` (`field: "argv"`, `reason: "no_edit_fields"`)
   before the query is resolved (no `/dev/tty` reach, no vault
   read).
+- [ ] `no_edit_fields` precedence over `vault_missing`: set
+  `--vault` to a non-existent path and run `paladin edit some-query`
+  (no edit flags); the parse-time `no_edit_fields` rejection wins
+  over `vault_missing`. Mirrors the QR `--module-size-px`
+  precedence pin.
+- [ ] `--allow-duplicate` alone (no other edit flags) rejects at
+  parse time with `validation_error` (`field: "argv"`,
+  `reason: "no_edit_fields"`); the opt-out flag does not satisfy
+  the "at least one editable flag" requirement on its own.
 - [ ] Mutually-exclusive flag pairs (`--issuer` + `--no-issuer`,
   `--icon-hint` + `--no-icon-hint`) reject at parse time as
   `validation_error` (`field: "argv"`,
@@ -1185,6 +1202,9 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
 - [ ] Single-match cardinality: ambiguous query exits non-zero with
   the candidate list; `id:<hex>` prefix routes through the same
   `select` helper as `copy` / `remove` / `rename` / `qr`.
+- [ ] `no_match` cardinality: `paladin edit nonexistent-query
+  --label X` against a vault with no matching row exits non-zero
+  with `no_match`. Mirrors the explicit `qr nonexistent` bullet.
 - [ ] Invalid `--label` (empty / overlong) propagates a core
   `validation_error` (`field: "label"`, `reason: "empty"` /
   `"too_long"`).
@@ -1214,10 +1234,13 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   `counter = 17`, run `paladin edit <query> --label <new>` (and
   separately `--issuer <new>` and `--icon-hint <slug>`), then
   re-open the vault via `paladin_core::open` and assert the HOTP
-  account's `counter()` is still `17`. Pinned analog of the
-  `qr` read-only HOTP bullet — `paladin edit` must never advance
-  a counter or decode a secret. TOTP edits are also asserted to
-  leave the stored secret bytes untouched.
+  account's `counter()` is still `17` **and** the persisted HOTP
+  secret bytes are byte-identical to the pre-edit state (belt-and-
+  braces against a future refactor that re-encodes the secret on
+  `updated_at` bumps). Pinned analog of the `qr` read-only HOTP
+  bullet — `paladin edit` must never advance a counter or decode a
+  secret. TOTP edits are also asserted to leave the stored secret
+  bytes untouched.
 - [ ] `edit --json` envelopes match the
   `cli_json_snapshots.rs` golden shape; volatile fields
   (`updated_at`) are redacted in the snapshot.
