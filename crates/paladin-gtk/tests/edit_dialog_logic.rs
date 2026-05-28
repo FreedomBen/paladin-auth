@@ -43,11 +43,13 @@ use paladin_gtk::edit_dialog::{
     classify_submit_with_duplicate, clear_for_lock, decide_edit_target,
     duplicate_marker_from_account, format_edit_dialog_cancel_label,
     format_edit_dialog_icon_hint_title, format_edit_dialog_issuer_title,
-    format_edit_dialog_label_title, format_edit_dialog_marker, format_edit_dialog_save_label,
+    format_edit_dialog_label_title, format_edit_dialog_marker,
+    format_edit_dialog_save_button_sensitive, format_edit_dialog_save_label,
     format_edit_dialog_subtitle, format_edit_dialog_success_toast, format_edit_dialog_title,
-    is_account_edit_empty, DuplicateMarker, EditDialogInit, EditDialogMsg, EditDialogOutput,
-    EditDialogState, EditDraftProjection, EditPriorSnapshot, InlineError, InlineWarning,
-    PostEffectOutcome, SubmitDispatch, SubmitOutcome, EDIT_DIALOG_MARKER_PREFIX, ISSUER_MAX_BYTES,
+    is_account_edit_empty, run_edit_worker, DuplicateMarker, EditDialogInit, EditDialogMsg,
+    EditDialogOutput, EditDialogState, EditDraftProjection, EditPriorSnapshot, EditWorkerEffect,
+    EditWorkerInput, InlineError, InlineWarning, PostEffectOutcome, SubmitDispatch, SubmitOutcome,
+    EDIT_DIALOG_MARKER_PREFIX, ISSUER_MAX_BYTES,
 };
 
 // ---------------------------------------------------------------------------
@@ -1076,4 +1078,132 @@ fn add_account(
     let id = vault.add(validated.account);
     vault.save(store).expect("commit added account");
     id
+}
+
+// ---------------------------------------------------------------------------
+// 18. format_edit_dialog_save_button_sensitive — busy + projection gate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn save_button_disabled_while_busy_even_with_clean_edit() {
+    let mut state = open_state("work", None, None);
+    state.set_label_buf("personal".to_string());
+    assert!(format_edit_dialog_save_button_sensitive(&state));
+    state.set_busy(true);
+    assert!(
+        !format_edit_dialog_save_button_sensitive(&state),
+        "busy latch dims Save regardless of projection cleanliness"
+    );
+}
+
+#[test]
+fn save_button_disabled_on_empty_edit() {
+    let state = open_state("work", None, None);
+    assert!(!format_edit_dialog_save_button_sensitive(&state));
+}
+
+#[test]
+fn save_button_disabled_on_inline_error() {
+    let mut state = open_state("work", None, None);
+    state.set_label_buf(String::new());
+    assert!(!format_edit_dialog_save_button_sensitive(&state));
+}
+
+// ---------------------------------------------------------------------------
+// 19. run_edit_worker — end-to-end against tempfile-backed plaintext vault
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_edit_worker_success_persists_new_label_and_returns_post_summary() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (mut vault, store) = build_plaintext_vault(tmp.path());
+    let id = add_account(&mut vault, &store, "work", Some("GitHub"), None);
+
+    let edit = AccountEdit {
+        label: Some("personal".to_string()),
+        ..Default::default()
+    };
+    let input = EditWorkerInput {
+        vault,
+        store,
+        account_id: id,
+        edit,
+        now: SystemTime::UNIX_EPOCH,
+    };
+    let completion = run_edit_worker(input);
+    match completion.effect {
+        EditWorkerEffect::Success { post_summary } => {
+            let summary = post_summary.expect("post-edit summary present");
+            assert_eq!(summary.label, "personal");
+            assert_eq!(summary.issuer.as_deref(), Some("GitHub"));
+        }
+        EditWorkerEffect::Failure(other) => panic!("expected Success, got Failure({other:?})"),
+    }
+    // The vault returned by the worker reflects the new label.
+    let post = completion
+        .vault
+        .summaries()
+        .find(|s| s.id == id)
+        .expect("account still present");
+    assert_eq!(post.label, "personal");
+}
+
+#[test]
+fn run_edit_worker_success_clears_issuer_when_edit_carries_some_none() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (mut vault, store) = build_plaintext_vault(tmp.path());
+    let id = add_account(&mut vault, &store, "work", Some("GitHub"), None);
+
+    let edit = AccountEdit {
+        issuer: Some(None),
+        ..Default::default()
+    };
+    let completion = run_edit_worker(EditWorkerInput {
+        vault,
+        store,
+        account_id: id,
+        edit,
+        now: SystemTime::UNIX_EPOCH,
+    });
+    match completion.effect {
+        EditWorkerEffect::Success { post_summary } => {
+            let summary = post_summary.unwrap();
+            assert_eq!(summary.label, "work");
+            assert!(summary.issuer.is_none(), "Some(None) clears the issuer");
+        }
+        EditWorkerEffect::Failure(other) => panic!("expected Success, got Failure({other:?})"),
+    }
+}
+
+#[test]
+fn run_edit_worker_returns_vault_and_store_on_every_branch() {
+    // Even on a defensive InvalidState (the targeted account has
+    // been removed concurrently), the worker still returns the
+    // live (vault, store) pair so AppModel can reinstall it.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (mut vault, store) = build_plaintext_vault(tmp.path());
+    let id = add_account(&mut vault, &store, "work", None, None);
+    // Remove the account so the edit hits invalid_state.
+    vault.remove(id);
+    vault.save(&store).expect("commit removal");
+
+    let edit = AccountEdit {
+        label: Some("personal".to_string()),
+        ..Default::default()
+    };
+    let completion = run_edit_worker(EditWorkerInput {
+        vault,
+        store,
+        account_id: id,
+        edit,
+        now: SystemTime::UNIX_EPOCH,
+    });
+    // Vault is still usable.
+    assert_eq!(completion.vault.summaries().count(), 0);
+    match completion.effect {
+        EditWorkerEffect::Failure(PostEffectOutcome::StayOpenWithError(err)) => {
+            assert_eq!(err.kind, ErrorKind::InvalidState);
+        }
+        other => panic!("expected StayOpenWithError(InvalidState), got {other:?}"),
+    }
 }

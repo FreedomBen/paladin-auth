@@ -77,7 +77,7 @@ use relm4::prelude::*;
 
 use paladin_core::{
     parse_icon_hint_token, validate_account_edit, validate_label, Account, AccountEdit, AccountId,
-    AccountSummary, ErrorKind, IconHintInput, PaladinError, Vault,
+    AccountSummary, ErrorKind, IconHintInput, PaladinError, Store, Vault,
 };
 
 /// §4.1 issuer length cap. Mirrors the constant `paladin_core`
@@ -718,6 +718,130 @@ pub fn classify_post_effect_error(err: &PaladinError) -> PostEffectOutcome {
             PostEffectOutcome::StayOpenWithWarning(InlineWarning::from_error(err))
         }
         _ => PostEffectOutcome::StayOpenWithError(InlineError::from_error(err)),
+    }
+}
+
+/// Inputs consumed by [`run_edit_worker`] on `gio::spawn_blocking`.
+///
+/// Per the design contract / Phase M, the worker body owns the
+/// live `(Vault, Store)` pair for the duration of the
+/// `Vault::mutate_and_save(|v| v.edit_account_metadata(...))`
+/// call so the busy gate can reinstall whichever pair the
+/// worker returns — success, durability-unconfirmed, or
+/// pre-commit rollback. Mirrors
+/// [`crate::rename_dialog::RenameWorkerInput`].
+#[derive(Debug)]
+pub struct EditWorkerInput {
+    /// Live vault from the `Unlocked` `(Vault, Store)` pair.
+    pub vault: Vault,
+    /// Live store from the `Unlocked` `(Vault, Store)` pair.
+    pub store: Store,
+    /// Stable account id from
+    /// [`EditDialogOutput::Submit::account_id`]. Forwarded to
+    /// `Vault::edit_account_metadata` so the worker targets the
+    /// same account the dialog seeded.
+    pub account_id: AccountId,
+    /// Assembled `AccountEdit` from
+    /// [`classify_submit`]'s `Validated` arm. The mutator
+    /// re-runs `validate_account_edit` defensively.
+    pub edit: AccountEdit,
+    /// Wall-clock the worker hands to
+    /// `Vault::edit_account_metadata` as the new `updated_at`.
+    pub now: SystemTime,
+}
+
+/// Outcome of [`run_edit_worker`] for `AppModel::update` to
+/// apply.
+///
+/// `Success` carries the optional post-edit
+/// [`AccountSummary`] so the dispatch site renders the
+/// `Edited {summary_display_label}.` toast against fresh data;
+/// `Failure` wraps the [`PostEffectOutcome`] from
+/// [`classify_post_effect_error`] so the dialog can re-render
+/// without re-deriving the routing decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditWorkerEffect {
+    /// `Vault::mutate_and_save(|v| v.edit_account_metadata(...))`
+    /// returned `Ok(())`. The dialog dismisses; the dispatch
+    /// site renders the toast against `post_summary` (or the
+    /// bare `Edited.` form on a concurrent-remove race that
+    /// returns `None`).
+    Success {
+        /// Post-edit summary lookup (`None` on a concurrent
+        /// remove between mutate and read).
+        post_summary: Option<AccountSummary>,
+    },
+    /// `Vault::mutate_and_save(|v| v.edit_account_metadata(...))`
+    /// returned a typed failure. The carried
+    /// [`PostEffectOutcome`] tells the dialog whether to attach
+    /// the warning (`save_durability_unconfirmed`) or surface
+    /// the inline error (every other typed variant).
+    Failure(PostEffectOutcome),
+}
+
+/// Bundle returned by [`run_edit_worker`] carrying the live
+/// `(Vault, Store)` pair on every branch so `AppModel::update`
+/// can reinstall it before applying the UI outcome (parity with
+/// [`crate::rename_dialog::RenameWorkerCompletion`]).
+#[derive(Debug)]
+pub struct EditWorkerCompletion {
+    /// Routed effect for `AppModel::update` to apply to the
+    /// dialog.
+    pub effect: EditWorkerEffect,
+    /// Live vault after the `mutate_and_save` call. On
+    /// [`EditWorkerEffect::Success`] the targeted account's
+    /// fields reflect the assembled edit and `updated_at` has
+    /// bumped; on [`EditWorkerEffect::Failure`] the vault is
+    /// whatever `mutate_and_save` rolled back to (pre-commit
+    /// snapshot for `save_not_committed`; post-commit state for
+    /// `save_durability_unconfirmed`).
+    pub vault: Vault,
+    /// Live store moved through unchanged.
+    pub store: Store,
+}
+
+/// Synchronous body of the
+/// `gio::spawn_blocking Vault::mutate_and_save(|v|
+/// v.edit_account_metadata(...))` worker.
+///
+/// Consumes the [`EditWorkerInput`] by value, runs
+/// `vault.mutate_and_save(&store, |v|
+/// v.edit_account_metadata(account_id, edit.clone(), now))`,
+/// and bundles the outcome into an [`EditWorkerCompletion`]
+/// via [`classify_post_effect_error`]. On `Ok(())` it re-reads
+/// `Vault::summaries().find(|s| s.id == account_id)` and
+/// threads the result through [`EditWorkerEffect::Success`] so
+/// the dispatch site can render the toast against post-edit
+/// data.
+///
+/// Extracting the body as a pure function lets
+/// `AppModel::update`'s closure stay a thin
+/// `gio::spawn_blocking(move || run_edit_worker(input))`
+/// while the real `mutate_and_save` call stays unit-testable
+/// against tempfile-backed plaintext vaults — no GTK /
+/// libadwaita main loop required.
+#[must_use]
+pub fn run_edit_worker(input: EditWorkerInput) -> EditWorkerCompletion {
+    let EditWorkerInput {
+        mut vault,
+        store,
+        account_id,
+        edit,
+        now,
+    } = input;
+    let effect = match vault.mutate_and_save(&store, |v| {
+        v.edit_account_metadata(account_id, edit.clone(), now)
+    }) {
+        Ok(()) => {
+            let post_summary = vault.summaries().find(|s| s.id == account_id);
+            EditWorkerEffect::Success { post_summary }
+        }
+        Err(err) => EditWorkerEffect::Failure(classify_post_effect_error(&err)),
+    };
+    EditWorkerCompletion {
+        effect,
+        vault,
+        store,
     }
 }
 
