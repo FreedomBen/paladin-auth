@@ -143,7 +143,7 @@ pub enum AccountListOutput {
     /// User asked to rename the account identified by the inner
     /// [`AccountId`]. `AppModel` reaches into its live `Vault` to
     /// look up the current label and opens `RenameDialog`.
-    OpenRenameDialog(AccountId),
+    OpenEditDialog(AccountId),
     /// User asked to view the per-account `otpauth://` QR code for
     /// the account identified by the inner [`AccountId`].
     /// `AppModel` resolves the matching `AccountSummary` and mounts

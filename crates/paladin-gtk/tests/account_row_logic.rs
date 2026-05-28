@@ -831,17 +831,17 @@ fn project_row_collapses_empty_issuer_to_bare_label() {
 // `build_kebab_action_group` in `column_view.rs` consumes them.
 
 #[test]
-fn account_row_output_request_rename_carries_account_id() {
+fn account_row_output_request_edit_carries_account_id() {
     use paladin_gtk::account_row::AccountRowOutput;
 
     let id = AccountId::new();
-    let output = AccountRowOutput::RequestRename(id);
+    let output = AccountRowOutput::RequestEdit(id);
     match output {
-        AccountRowOutput::RequestRename(carried) => assert_eq!(carried, id),
+        AccountRowOutput::RequestEdit(carried) => assert_eq!(carried, id),
         AccountRowOutput::RequestExportQr(_)
         | AccountRowOutput::RequestRemove(_)
         | AccountRowOutput::RequestCopy(_)
-        | AccountRowOutput::RequestAdvance(_) => panic!("expected RequestRename({id:?})"),
+        | AccountRowOutput::RequestAdvance(_) => panic!("expected RequestEdit({id:?})"),
     }
 }
 
@@ -853,7 +853,7 @@ fn account_row_output_request_export_qr_carries_account_id() {
     let output = AccountRowOutput::RequestExportQr(id);
     match output {
         AccountRowOutput::RequestExportQr(carried) => assert_eq!(carried, id),
-        AccountRowOutput::RequestRename(_)
+        AccountRowOutput::RequestEdit(_)
         | AccountRowOutput::RequestRemove(_)
         | AccountRowOutput::RequestCopy(_)
         | AccountRowOutput::RequestAdvance(_) => panic!("expected RequestExportQr({id:?})"),
@@ -868,7 +868,7 @@ fn account_row_output_request_remove_carries_account_id() {
     let output = AccountRowOutput::RequestRemove(id);
     match output {
         AccountRowOutput::RequestRemove(carried) => assert_eq!(carried, id),
-        AccountRowOutput::RequestRename(_)
+        AccountRowOutput::RequestEdit(_)
         | AccountRowOutput::RequestExportQr(_)
         | AccountRowOutput::RequestCopy(_)
         | AccountRowOutput::RequestAdvance(_) => panic!("expected RequestRemove({id:?})"),
@@ -883,7 +883,7 @@ fn account_row_output_request_copy_carries_account_id() {
     let output = AccountRowOutput::RequestCopy(id);
     match output {
         AccountRowOutput::RequestCopy(carried) => assert_eq!(carried, id),
-        AccountRowOutput::RequestRename(_)
+        AccountRowOutput::RequestEdit(_)
         | AccountRowOutput::RequestExportQr(_)
         | AccountRowOutput::RequestRemove(_)
         | AccountRowOutput::RequestAdvance(_) => panic!("expected RequestCopy({id:?})"),
@@ -898,7 +898,7 @@ fn account_row_output_request_advance_carries_account_id() {
     let output = AccountRowOutput::RequestAdvance(id);
     match output {
         AccountRowOutput::RequestAdvance(carried) => assert_eq!(carried, id),
-        AccountRowOutput::RequestRename(_)
+        AccountRowOutput::RequestEdit(_)
         | AccountRowOutput::RequestExportQr(_)
         | AccountRowOutput::RequestRemove(_)
         | AccountRowOutput::RequestCopy(_) => panic!("expected RequestAdvance({id:?})"),

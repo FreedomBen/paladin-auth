@@ -37,7 +37,7 @@
 //! forwarded `VaultLock` and posts `AppMsg::UnlockWorkerCompleted` on
 //! completion lands in a follow-up commit.
 //!
-//! `AppMsg::AccountListAction(OpenRenameDialog(id))` mounts a
+//! `AppMsg::AccountListAction(OpenEditDialog(id))` mounts a
 //! [`RenameDialogComponent`] seeded from
 //! [`crate::rename_dialog::decide_rename_target`] so the kebab
 //! `Edit…` action is now reachable end-to-end (kebab activation →
@@ -696,7 +696,7 @@ pub enum AppMsg {
     /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree", so the
     /// per-row actions bubble the row's [`paladin_core::AccountId`]
     /// up here for the dialog mount to consume.
-    /// `OpenRenameDialog(id)` and `OpenRemoveDialog(id)` each mount
+    /// `OpenEditDialog(id)` and `OpenRemoveDialog(id)` each mount
     /// their widget-bearing controller (`RenameDialogComponent` /
     /// `RemoveDialogComponent`) seeded from the live vault via
     /// [`decide_rename_target`] / [`decide_remove_target`]; the
@@ -2093,7 +2093,7 @@ impl SimpleComponent for AppModel {
                 self.remount_for_state(&state, &sender);
                 self.state = Some(state);
             }
-            AppMsg::AccountListAction(AccountListOutput::OpenRenameDialog(id)) => {
+            AppMsg::AccountListAction(AccountListOutput::OpenEditDialog(id)) => {
                 // Look up the targeted account in the live vault and
                 // mount the rename dialog. A `None` projection means
                 // the account was removed between the kebab
@@ -3026,7 +3026,7 @@ impl SimpleComponent for AppModel {
                 // projection means the account was removed between
                 // the kebab activation and this dispatch — treat
                 // that as a benign race and drop the action,
-                // mirroring `OpenRenameDialog` / `OpenRemoveDialog`.
+                // mirroring `OpenEditDialog` / `OpenRemoveDialog`.
                 // The kebab action's sensitivity is already gated
                 // against `AppState::is_unlocked` at the column-view
                 // layer, but a stray dispatch from a future keyboard

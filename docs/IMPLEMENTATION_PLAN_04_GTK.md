@@ -2428,7 +2428,7 @@ core.
    `EditDialog`. The relabel is intentionally cosmetic-only
    in slice 1 so the slice ships behind a green test bar
    without any behavioral drift.
-- [ ] **Slice 2 — Action rename.** Rename
+- [x] **Slice 2 — Action rename.** Rename
    `ROW_RENAME_ACTION_NAME` (`"rename"`) to
    `ROW_EDIT_ACTION_NAME` (`"edit"`); rename the
    `AccountRowOutput::RequestRename` variant to

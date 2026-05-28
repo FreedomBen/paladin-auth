@@ -514,14 +514,16 @@ pub fn project_row(
 /// row container.
 ///
 /// Must match the prefix used by [`build_kebab_menu_model`] for the
-/// `row.rename` / `row.show-qr` / `row.remove` menu targets —
-/// otherwise the kebab items dispatch into the void at activation
-/// time.
+/// `row.copy` / `row.edit` / `row.show-qr` / `row.remove` menu
+/// targets — otherwise the kebab items dispatch into the void at
+/// activation time.
 pub const ROW_ACTION_GROUP_NAME: &str = "row";
 
-/// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the
-/// `RenameDialog` for the row's account.
-pub const ROW_RENAME_ACTION_NAME: &str = "rename";
+/// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the row's
+/// edit surface. Milestone 9 slice 2 renamed this from `rename` to
+/// `edit`; `AppModel` still mounts the existing `RenameDialog` on it
+/// until slice 4 swaps in `EditDialog`.
+pub const ROW_EDIT_ACTION_NAME: &str = "edit";
 
 /// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the
 /// `ExportQrDialog` for the row's account
@@ -549,17 +551,15 @@ pub const ROW_COPY_ACTION_NAME: &str = "copy";
 /// Each variant carries the row's [`AccountId`] so the cell
 /// factories in [`crate::column_view`] can route it onto the
 /// matching [`crate::account_list::AccountListOutput`] variant
-/// (`OpenRenameDialog`, `OpenExportQrDialog`, `OpenRemoveDialog`,
+/// (`OpenEditDialog`, `OpenExportQrDialog`, `OpenRemoveDialog`,
 /// `CopyCode`, `AdvanceHotp`) directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountRowOutput {
-    /// Row's kebab-menu "Edit…" entry activated. The variant still
-    /// carries the legacy `RequestRename` name through Milestone 9
-    /// slices 1–3 (the menu label is cosmetically "Edit…" but the
-    /// underlying action remains `row.rename` and still mounts
-    /// `RenameDialog`); the rename to `RequestEdit` lands in a
-    /// later slice alongside the `EditDialog` widget swap.
-    RequestRename(AccountId),
+    /// Row's kebab-menu "Edit…" entry activated, targeting `row.edit`
+    /// (Milestone 9 slice 2 renamed the action from `row.rename`).
+    /// `AppModel` mounts the row's edit surface — the existing
+    /// `RenameDialog` until slice 4 swaps in `EditDialog`.
+    RequestEdit(AccountId),
     /// Row's kebab-menu "Show QR…" entry activated. Read-only;
     /// `AppModel` opens `ExportQrDialog` for the account per
     /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"QR export dialog
@@ -580,7 +580,7 @@ pub enum AccountRowOutput {
 /// Dispatch table mapping a row-level action name onto the typed
 /// [`AccountRowOutput`] the row emits.
 ///
-/// Returns [`Some`] for [`ROW_RENAME_ACTION_NAME`],
+/// Returns [`Some`] for [`ROW_EDIT_ACTION_NAME`],
 /// [`ROW_SHOW_QR_ACTION_NAME`], [`ROW_REMOVE_ACTION_NAME`],
 /// [`ROW_NEXT_ACTION_NAME`], and [`ROW_COPY_ACTION_NAME`]; [`None`]
 /// for every other input. The row installs exactly those five
@@ -590,7 +590,7 @@ pub enum AccountRowOutput {
 #[must_use]
 pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountRowOutput> {
     match name {
-        ROW_RENAME_ACTION_NAME => Some(AccountRowOutput::RequestRename(id)),
+        ROW_EDIT_ACTION_NAME => Some(AccountRowOutput::RequestEdit(id)),
         ROW_SHOW_QR_ACTION_NAME => Some(AccountRowOutput::RequestExportQr(id)),
         ROW_REMOVE_ACTION_NAME => Some(AccountRowOutput::RequestRemove(id)),
         ROW_NEXT_ACTION_NAME => Some(AccountRowOutput::RequestAdvance(id)),
@@ -602,7 +602,7 @@ pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountRowOutput
 /// Build the kebab `gio::Menu` shared by every row.
 ///
 /// Four entries in order — "Copy code" → `row.copy`,
-/// "Edit…" → `row.rename`, "Show QR…" → `row.show-qr`,
+/// "Edit…" → `row.edit`, "Show QR…" → `row.show-qr`,
 /// "Remove…" → `row.remove` — matching the per-row
 /// [`gio::SimpleActionGroup`] installed by
 /// [`install_row_action_group`]. "Copy code" leads (mirroring the
@@ -611,12 +611,12 @@ pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountRowOutput
 /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context menu and
 /// `EditDialog` implementation" > "Design contract".
 ///
-/// Milestone 9 slice 1 (cosmetic): the visible "Edit…" label
-/// still targets `row.rename` (and routes through the existing
-/// `RenameDialog`) until later slices land the
-/// `ROW_EDIT_ACTION_NAME` rename and the `EditDialog` widget.
-/// "Copy code" targets the pre-existing `row.copy` action that the
-/// inline copy button already drives, so it activates immediately.
+/// The "Edit…" label targets `row.edit` (`ROW_EDIT_ACTION_NAME`,
+/// renamed from `row.rename` in Milestone 9 slice 2); `AppModel`
+/// routes it to the row's edit surface — the existing `RenameDialog`
+/// until slice 4 swaps in `EditDialog`. "Copy code" targets the
+/// pre-existing `row.copy` action that the inline copy button already
+/// drives, so it activates immediately.
 #[must_use]
 pub fn build_kebab_menu_model() -> gio::Menu {
     let menu = gio::Menu::new();
@@ -626,7 +626,7 @@ pub fn build_kebab_menu_model() -> gio::Menu {
     );
     menu.append(
         Some("Edit\u{2026}"),
-        Some(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_RENAME_ACTION_NAME}")),
+        Some(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_EDIT_ACTION_NAME}")),
     );
     menu.append(
         Some("Show QR\u{2026}"),

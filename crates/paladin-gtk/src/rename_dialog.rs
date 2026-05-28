@@ -539,7 +539,7 @@ pub fn format_rename_dialog_subtitle(display_label: &str) -> String {
 /// Construction parameters for [`RenameDialogComponent`].
 ///
 /// `AppModel` builds this from the live vault when a kebab
-/// `AccountListOutput::OpenRenameDialog(id)` arrives — see
+/// `AccountListOutput::OpenEditDialog(id)` arrives — see
 /// [`decide_rename_target`].
 #[derive(Debug, Clone)]
 pub struct RenameDialogInit {
@@ -992,7 +992,7 @@ pub fn apply_msg(
 }
 
 /// Widget-bearing dialog for the
-/// [`crate::account_list::AccountListOutput::OpenRenameDialog`]
+/// [`crate::account_list::AccountListOutput::OpenEditDialog`]
 /// branch.
 ///
 /// Mounts a vertical layout with a heading naming the targeted

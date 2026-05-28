@@ -35,8 +35,8 @@ use paladin_gtk::account_list::{
 };
 use paladin_gtk::account_row::{
     build_kebab_menu_model, dispatch_row_action, AccountRowOutput, CodeDisplay, CounterText,
-    ProgressDisplay, RowDisplay, ROW_ACTION_GROUP_NAME, ROW_COPY_ACTION_NAME, ROW_NEXT_ACTION_NAME,
-    ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME, ROW_SHOW_QR_ACTION_NAME,
+    ProgressDisplay, RowDisplay, ROW_ACTION_GROUP_NAME, ROW_COPY_ACTION_NAME, ROW_EDIT_ACTION_NAME,
+    ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_SHOW_QR_ACTION_NAME,
 };
 use paladin_gtk::column_view::apply_interleaved_splice_plan;
 use paladin_gtk::row_item::RowItem;
@@ -993,7 +993,7 @@ fn widget_states_marker_pipe_joins_in_order() {
 // The kebab `gio::Menu` produced by `account_list::build_kebab_menu_model`
 // targets `row.rename` / `row.remove`; the widget layer installs a per-row
 // `gio::SimpleActionGroup` named [`ROW_ACTION_GROUP_NAME`] whose actions
-// match [`ROW_RENAME_ACTION_NAME`] / [`ROW_REMOVE_ACTION_NAME`]. The
+// match [`ROW_EDIT_ACTION_NAME`] / [`ROW_REMOVE_ACTION_NAME`]. The
 // dispatch table [`dispatch_row_action`] maps a fired action name back to
 // the typed [`AccountListOutput`] forwarded to `AppModel`. Pinning the
 // names + the dispatch table here keeps the kebab-menu targets, the
@@ -1004,17 +1004,18 @@ fn widget_states_marker_pipe_joins_in_order() {
 
 #[test]
 fn row_action_group_name_is_row() {
-    // The kebab menu items target `row.rename` / `row.remove`; the
+    // The kebab menu items target `row.edit` / `row.remove`; the
     // group name installed on each row container must match the
     // prefix `row` so action lookup resolves at activation time.
     assert_eq!(ROW_ACTION_GROUP_NAME, "row");
 }
 
 #[test]
-fn row_rename_action_name_is_rename() {
-    // The `row.rename` menu target resolves to the action named
-    // `rename` inside the `row` group.
-    assert_eq!(ROW_RENAME_ACTION_NAME, "rename");
+fn row_edit_action_name_is_edit() {
+    // The `row.edit` menu target resolves to the action named
+    // `edit` inside the `row` group (Milestone 9 slice 2 renamed it
+    // from `rename`).
+    assert_eq!(ROW_EDIT_ACTION_NAME, "edit");
 }
 
 #[test]
@@ -1058,8 +1059,8 @@ fn build_kebab_menu_model_exposes_copy_edit_show_qr_and_remove_in_order() {
     // named [`ROW_ACTION_GROUP_NAME`]. "Copy code" leads (matching the
     // inline copy button), the read-only "Show QR…" neighbours the
     // "Edit…" shape, and the destructive "Remove…" stays trailing.
-    // Slices 1–3 are cosmetic-only: the visible "Edit…" label still
-    // targets `row.rename` (renamed in a later slice) and still
+    // The visible "Edit…" label targets `row.edit` (`ROW_EDIT_ACTION_NAME`,
+    // renamed from `row.rename` in Milestone 9 slice 2) and still
     // mounts `RenameDialog` until slice 4 swaps in `EditDialog`;
     // "Copy code" targets the pre-existing `row.copy`. Pinning the
     // labels and targets here catches drift between the kebab menu,
@@ -1097,7 +1098,7 @@ fn build_kebab_menu_model_exposes_copy_edit_show_qr_and_remove_in_order() {
         .expect("kebab item 1 carries an action attribute");
     assert_eq!(
         edit_action,
-        format!("{ROW_ACTION_GROUP_NAME}.{ROW_RENAME_ACTION_NAME}"),
+        format!("{ROW_ACTION_GROUP_NAME}.{ROW_EDIT_ACTION_NAME}"),
     );
 
     let show_qr_label: String = menu
@@ -1170,11 +1171,11 @@ fn account_list_output_open_export_qr_dialog_carries_account_id() {
 }
 
 #[test]
-fn dispatch_row_action_routes_rename_to_request_rename() {
+fn dispatch_row_action_routes_edit_to_request_edit() {
     let id = AccountId::new();
     assert_eq!(
-        dispatch_row_action(ROW_RENAME_ACTION_NAME, id),
-        Some(AccountRowOutput::RequestRename(id)),
+        dispatch_row_action(ROW_EDIT_ACTION_NAME, id),
+        Some(AccountRowOutput::RequestEdit(id)),
     );
 }
 
@@ -1234,7 +1235,7 @@ fn account_row_output_to_account_list_output_dispatch_table_covers_each_variant(
     // surface as a dropped kebab item or copy click.
     fn route(out: &AccountRowOutput) -> AccountListOutput {
         match *out {
-            AccountRowOutput::RequestRename(id) => AccountListOutput::OpenRenameDialog(id),
+            AccountRowOutput::RequestEdit(id) => AccountListOutput::OpenEditDialog(id),
             AccountRowOutput::RequestExportQr(id) => AccountListOutput::OpenExportQrDialog(id),
             AccountRowOutput::RequestRemove(id) => AccountListOutput::OpenRemoveDialog(id),
             AccountRowOutput::RequestCopy(id) => AccountListOutput::CopyCode(id),
@@ -1243,8 +1244,8 @@ fn account_row_output_to_account_list_output_dispatch_table_covers_each_variant(
     }
     let id = AccountId::new();
     assert_eq!(
-        route(&AccountRowOutput::RequestRename(id)),
-        AccountListOutput::OpenRenameDialog(id),
+        route(&AccountRowOutput::RequestEdit(id)),
+        AccountListOutput::OpenEditDialog(id),
     );
     assert_eq!(
         route(&AccountRowOutput::RequestExportQr(id)),
@@ -1458,11 +1459,11 @@ fn tick_dispatch_plan_drops_ids_no_longer_in_factory() {
 }
 
 #[test]
-fn account_list_output_carries_account_id_for_rename() {
+fn account_list_output_carries_account_id_for_edit() {
     let id = AccountId::new();
-    let out = AccountListOutput::OpenRenameDialog(id);
-    let AccountListOutput::OpenRenameDialog(carried) = out else {
-        panic!("OpenRenameDialog should round-trip its AccountId");
+    let out = AccountListOutput::OpenEditDialog(id);
+    let AccountListOutput::OpenEditDialog(carried) = out else {
+        panic!("OpenEditDialog should round-trip its AccountId");
     };
     assert_eq!(carried, id);
 }
@@ -1491,15 +1492,15 @@ fn account_list_output_carries_account_id_for_advance_hotp() {
 fn account_list_output_variants_are_distinct() {
     // Same id, different variants must compare unequal — the
     // dispatch table relies on the variant carrying the user's
-    // intent (rename vs. remove vs. advance-hotp), not just the row
+    // intent (edit vs. remove vs. advance-hotp), not just the row
     // identity.
     let id = AccountId::new();
     assert_ne!(
-        AccountListOutput::OpenRenameDialog(id),
+        AccountListOutput::OpenEditDialog(id),
         AccountListOutput::OpenRemoveDialog(id),
     );
     assert_ne!(
-        AccountListOutput::OpenRenameDialog(id),
+        AccountListOutput::OpenEditDialog(id),
         AccountListOutput::AdvanceHotp(id),
     );
     assert_ne!(

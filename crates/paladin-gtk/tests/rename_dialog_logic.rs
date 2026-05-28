@@ -8,7 +8,7 @@
 //! and this file once the `AppModel` cutover from `RenameDialog` to
 //! `EditDialog` lands. Until that follow-up commit, this suite stays
 //! live so the existing rename worker pipeline (the `AppModel`
-//! `OpenRenameDialog` → `RenameDialogComponent` →
+//! `OpenEditDialog` → `RenameDialogComponent` →
 //! `Vault::mutate_and_save(|v| v.rename(...))` path) keeps its
 //! regression coverage. Equivalent edit-side coverage is already
 //! pinned in `tests/edit_dialog_logic.rs` (label / issuer /
@@ -329,7 +329,7 @@ fn inline_warning_clones_freely_for_reactive_state() {
 // ---------------------------------------------------------------------------
 // `decide_rename_target` + `format_rename_dialog_marker`
 //
-// The dialog mount lives behind `AccountListOutput::OpenRenameDialog(id)`.
+// The dialog mount lives behind `AccountListOutput::OpenEditDialog(id)`.
 // `AppModel` calls `decide_rename_target` with the active `Vault` and the
 // dispatched `AccountId` to project the row into the [`RenameDialogInit`]
 // the widget binds (id + current label + heading label). The marker is
