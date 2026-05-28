@@ -372,11 +372,11 @@ Exports:
 ## 12. Per-account QR export (`ExportQrDialog`, DESIGN §4.6)
 
 - [ ] Open the kebab menu on a TOTP row → `Show QR…` is the
-  second entry between `Rename…` and `Remove…`; the dialog opens
+  second entry between `Edit…` and `Remove…`; the dialog opens
   on the warning page with the ack switch off and the QR not
   visible.
   * Expected: the kebab menu lists three rows in the pinned order
-    `Rename…` / `Show QR…` / `Remove…`. Selecting `Show QR…`
+    `Edit…` / `Show QR…` / `Remove…`. Selecting `Show QR…`
     presents an `adw::Dialog` titled `Show QR code`; the body
     starts on the `warning` page of the inner `AdwViewStack`
     carrying the verbatim
@@ -387,7 +387,7 @@ Exports:
     the window-manager close button (or Escape) leaves the
     vault untouched.
   * Tied to: `tests/account_list_logic.rs`
-    `build_kebab_menu_model_exposes_rename_show_qr_and_remove_in_order`;
+    `build_kebab_menu_model_exposes_edit_show_qr_and_remove_in_order`;
     `tests/export_qr_dialog_logic.rs`
     `compose_show_qr_button_sensitive_false_until_ack_revealed`,
     `format_export_qr_dialog_warning_body_matches_paladin_core_verbatim`.

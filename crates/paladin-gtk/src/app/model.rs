@@ -40,7 +40,7 @@
 //! `AppMsg::AccountListAction(OpenRenameDialog(id))` mounts a
 //! [`RenameDialogComponent`] seeded from
 //! [`crate::rename_dialog::decide_rename_target`] so the kebab
-//! `Rename…` action is now reachable end-to-end (kebab activation →
+//! `Edit…` action is now reachable end-to-end (kebab activation →
 //! `AccountListOutput` → `AppMsg` → live dialog widget). The
 //! dialog's Cancel button bubbles back here as
 //! `AppMsg::RenameDialogAction(RenameDialogOutput::Cancel)`, which
@@ -251,7 +251,7 @@ pub struct AppModel {
     #[allow(dead_code)]
     unlock_dialog: Option<Controller<UnlockDialogComponent>>,
     /// Live [`RenameDialogComponent`] controller when the user has
-    /// activated a row's kebab `Rename…` action. `None` between
+    /// activated a row's kebab `Edit…` action. `None` between
     /// activations. Held on `self` so the rendered widget is not
     /// dropped at the end of the [`AppMsg::AccountListAction`]
     /// handler.
@@ -690,7 +690,7 @@ pub enum AppMsg {
     /// mid-flight.
     Quit,
     /// Forwarded from [`AccountListComponent`] when the user
-    /// activates a row's kebab Rename… / Remove… action.
+    /// activates a row's kebab Edit… / Remove… action.
     ///
     /// `AppModel` is the owner of the dialog widget tree per
     /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree", so the
