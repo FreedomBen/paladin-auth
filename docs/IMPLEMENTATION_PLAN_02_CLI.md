@@ -1530,7 +1530,7 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   the edit applies, and the success envelope shape matches the
   plaintext case. Mirrors the `[PTY]` smoke tests under
   `cli_show_peek_copy.rs` / `cli_passphrase.rs`.
-- [ ] Encrypted-vault no-edit-flags pre-check: against an
+- [x] Encrypted-vault no-edit-flags pre-check: against an
   encrypted vault, `paladin edit some-query` (no edit flags)
   rejects with `validation_error` (`field: "argv"`,
   `reason: "no_edit_fields"`) **without** reading `/dev/tty`

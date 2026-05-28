@@ -10,10 +10,11 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use paladin_core::{parse_otpauth, Account, Store, VaultInit};
+use paladin_core::{parse_otpauth, Account, Argon2Params, EncryptionOptions, Store, VaultInit};
+use secrecy::SecretString;
 use serde_json::Value;
 
-use common::{fresh_vault_path, paladin};
+use common::{fresh_vault_path, paladin, paladin_command_without_tty};
 
 fn fixture_now() -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)
@@ -48,6 +49,23 @@ fn create_empty_plaintext_vault(path: &Path) {
 
 fn create_vault_with(accounts: Vec<Account>, path: &Path) {
     let (mut vault, store) = Store::create(path, VaultInit::Plaintext).expect("create");
+    for acct in accounts {
+        vault.add(acct);
+    }
+    vault.save(&store).expect("save");
+}
+
+/// Encrypted vault seeded with `accounts`. Uses the §4.4 minimum
+/// Argon2id params so the KDF run stays fast under test.
+fn create_encrypted_vault(accounts: Vec<Account>, path: &Path, passphrase: &str) {
+    let pp = SecretString::from(passphrase.to_string());
+    let params = Argon2Params {
+        m_kib: 8192,
+        t: 1,
+        p: 1,
+    };
+    let opts = EncryptionOptions::with_params(pp, params).expect("opts");
+    let (mut vault, store) = Store::create(path, VaultInit::Encrypted(opts)).expect("create");
     for acct in accounts {
         vault.add(acct);
     }
@@ -1101,6 +1119,49 @@ fn json_edit_vault_missing_surfaces_vault_missing_envelope() {
     let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
     let value: Value = serde_json::from_str(stderr.trim()).unwrap();
     assert_eq!(value["error_kind"], serde_json::json!("vault_missing"));
+}
+
+// =========================================================================
+// Encrypted-vault prompt ordering (parse-time rejection beats unlock)
+// =========================================================================
+
+#[test]
+fn json_edit_no_edit_fields_beats_encrypted_unlock_prompt() {
+    use std::process::Stdio;
+
+    // Against an encrypted vault, `paladin edit some-query` with no edit
+    // flags must reject at parse time with `no_edit_fields` BEFORE the
+    // unlock passphrase prompt fires. Run under setsid(1) so `/dev/tty`
+    // is unavailable: if the CLI tried to prompt, it would surface
+    // `io_error` (`operation: "passphrase_prompt"`) instead of the
+    // parse-time rejection.
+    let (_dir, path) = fresh_vault_path();
+    create_encrypted_vault(vec![make_totp("alice", Some("Acme"))], &path, "hunter2");
+
+    let output = paladin_command_without_tty()
+        .args(["--json", "--vault", path.to_str().unwrap(), "edit", "alice"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn paladin via setsid(1)");
+
+    assert!(
+        !output.status.success(),
+        "no-edit-flags edit must fail; stdout = {:?}, stderr = {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let value: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(value["error_kind"], serde_json::json!("validation_error"));
+    assert_eq!(value["field"], serde_json::json!("argv"));
+    assert_eq!(
+        value["reason"],
+        serde_json::json!("no_edit_fields"),
+        "parse-time rejection must beat the encrypted-vault unlock prompt",
+    );
+    assert!(output.stdout.is_empty());
 }
 
 // =========================================================================
