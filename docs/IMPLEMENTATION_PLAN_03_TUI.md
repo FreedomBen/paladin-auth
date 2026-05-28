@@ -2416,9 +2416,10 @@ ships in `paladin-core` and the TUI Edit modal lands.
   account byte-for-byte and keeps the modal open with the inline
   error; the draft is preserved for retry. (Mirrors the existing
   Rename rollback test shape.)
-- [ ] `save_durability_unconfirmed` leaves the new account state
+- [x] `save_durability_unconfirmed` leaves the new account state
   in memory and surfaces the warning. (Mirrors the existing
   Rename durability test shape.)
+  *(`effect_result_edit_save_durability_unconfirmed_keeps_new_state_in_memory`.)*
 - [x] Off-`Unlocked` / mismatched-path / stale-modal
   `EffectResult::EditAccountMetadata` deliveries are silently
   discarded, matching the rename test shape. Three separate

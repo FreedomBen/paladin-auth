@@ -23765,6 +23765,66 @@ fn effect_result_edit_save_not_committed_keeps_modal_open_with_inline_error() {
 }
 
 #[test]
+fn effect_result_edit_save_durability_unconfirmed_keeps_new_state_in_memory() {
+    // Durability-unconfirmed: the core applied the edit in memory (and
+    // on disk) but the parent fsync was uncertain. The TUI mirrors
+    // Rename / Remove — the modal stays open with the warning inline,
+    // and the new account state is **not** rolled back.
+    let (_tmp, id, path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    // Simulate the executor having applied the rename before the
+    // durability fsync came back unconfirmed.
+    if let AppState::Unlocked {
+        ref mut vault,
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = state
+    {
+        vault
+            .edit_account_metadata(
+                id,
+                paladin_core::AccountEdit {
+                    label: Some("alice-renamed".to_string()),
+                    issuer: None,
+                    icon_hint: None,
+                },
+                std::time::SystemTime::now(),
+            )
+            .expect("simulate executor-side edit for durability-unconfirmed");
+        edit.label_buffer = "alice-renamed".to_string();
+    }
+    let (state, effects) = reduce(
+        state,
+        edit_result(
+            path,
+            id,
+            Err(EditFailure::Save(PaladinError::SaveDurabilityUnconfirmed)),
+        ),
+    );
+    assert!(effects.is_empty());
+    let edit = expect_edit_modal(&state);
+    let surfaced = edit
+        .error
+        .as_deref()
+        .expect("save_durability_unconfirmed must surface inline");
+    assert!(
+        surfaced.to_lowercase().contains("durability")
+            || surfaced.contains("save_durability_unconfirmed"),
+        "inline warning must surface durability wording, got {surfaced:?}"
+    );
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().find(|a| a.id() == id).unwrap().label(),
+                "alice-renamed",
+                "durability-unconfirmed leaves the new account state in memory"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
 fn effect_result_edit_duplicate_keeps_modal_open_with_inline_duplicate_body() {
     let tmp = secure_tempdir();
     let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
