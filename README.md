@@ -98,6 +98,34 @@ get a stable surface to build against. See
 [`docs/DESIGN.md`](docs/DESIGN.md) for the full type and module
 breakdown.
 
+## Build dependencies
+
+Paladin needs a Rust toolchain plus a few system packages — `gcc`,
+`pkg-config`, `openssl-devel`, and (for `paladin-gtk`) GTK4 ≥ 4.16 and
+libadwaita ≥ 1.6 development headers. The CI gate
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) builds inside a
+`fedora:42` container, which is the reference environment.
+
+On Fedora 42+:
+
+```sh
+scripts/install-fedora-deps.sh           # all build + test + packaging deps
+scripts/install-fedora-deps.sh --no-gtk  # CLI / TUI only (skip GTK + Xvfb)
+scripts/install-fedora-deps.sh --help    # see all flags
+```
+
+The script mirrors the `dnf install` blocks in CI and bootstraps `rustup`
+if it isn't already on `PATH`. The pinned toolchain in
+[`rust-toolchain.toml`](rust-toolchain.toml) is fetched automatically on
+the first `cargo` invocation.
+
+On Debian / Ubuntu, install the equivalent packages manually — see the
+package names in
+[`docs/DESIGN.md` §11](docs/DESIGN.md) (`libgtk-4-dev (>= 4.16)`,
+`libadwaita-1-dev (>= 1.6)`, plus `gcc`, `pkg-config`, `libssl-dev`).
+Note that distributions whose stable channel ships GTK / libadwaita
+older than the 4.16 / 1.6 floor cannot build `paladin-gtk`.
+
 ## Building
 
 ```sh
@@ -108,9 +136,6 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-The toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml);
-`rustup` will install the matching toolchain on first invocation.
-
 Per-crate builds:
 
 ```sh
@@ -118,10 +143,6 @@ cargo run -p paladin-cli -- --help
 cargo run -p paladin-tui
 cargo run -p paladin-gtk     # requires GTK4 >= 4.16, libadwaita >= 1.6
 ```
-
-`paladin-gtk` additionally needs GTK4 and libadwaita development headers
-at the versions declared in
-[`docs/IMPLEMENTATION_PLAN_04_GTK.md`](docs/IMPLEMENTATION_PLAN_04_GTK.md).
 
 ## CI gate
 
