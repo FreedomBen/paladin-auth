@@ -70,6 +70,11 @@
 
 use std::time::SystemTime;
 
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::gtk;
+use relm4::prelude::*;
+
 use paladin_core::{
     parse_icon_hint_token, validate_account_edit, validate_label, Account, AccountEdit, AccountId,
     AccountSummary, ErrorKind, IconHintInput, PaladinError, Vault,
@@ -846,6 +851,27 @@ pub enum EditDialogOutput {
     },
 }
 
+/// Decide whether the Save button should be sensitive given the
+/// dialog's cached state.
+///
+/// Save is sensitive iff:
+/// 1. The dialog is not busy (no in-flight worker).
+/// 2. The pre-edit `effect_ownership` slot is populated (the
+///    dialog has the `(Vault, Store)` pair available — the
+///    caller drives this through `SetBusy`).
+/// 3. The assembled `AccountEdit` from
+///    [`classify_edit_draft`] is non-empty.
+/// 4. Every populated field validates clean (no inline
+///    [`InlineError`] in the projection).
+#[must_use]
+pub fn format_edit_dialog_save_button_sensitive(state: &EditDialogState) -> bool {
+    if state.is_busy() {
+        return false;
+    }
+    let projection = classify_edit_draft(state);
+    projection.save_sensitive()
+}
+
 /// Apply an inbound [`EditDialogMsg`] to `state` and return the
 /// optional [`EditDialogOutput`] the widget layer forwards to
 /// `AppModel`. `prior_account` is the dialog's pre-fill
@@ -895,6 +921,236 @@ pub fn apply_msg(
         EditDialogMsg::SetBusy(busy) => {
             state.set_busy(busy);
             None
+        }
+    }
+}
+
+/// Widget-bearing dialog for the upcoming
+/// `AccountListOutput::OpenEditDialog` branch.
+///
+/// Mounts a vertical layout with the `Edit account` heading, a
+/// `Editing <display>.` sub-title, three `AdwEntryRow` widgets
+/// (Label / Issuer + inline clear button / Icon-hint slug)
+/// inside an `AdwPreferencesGroup`, an inline-error label that
+/// reflects the per-row validator outputs, a duplicate banner
+/// (when set), a Cancel button, and a Save button gated by
+/// [`format_edit_dialog_save_button_sensitive`].
+///
+/// The widget binding stops here for slice 4 — slice 5 wires
+/// the `Vault::find_duplicate_after_edit` pre-flight and the
+/// `gio::spawn_blocking Vault::mutate_and_save(|v|
+/// v.edit_account_metadata(...))` worker dispatch in `AppModel`.
+pub struct EditDialogComponent {
+    /// Pre-fill snapshot retained on `self` so future message
+    /// handlers can read the targeted account id and the
+    /// display label.
+    init: EditDialogInit,
+    /// Live draft state.
+    state: EditDialogState,
+    /// Pre-edit `Account` reference required by
+    /// [`apply_msg`]'s `SubmitClicked` arm. The widget mounting
+    /// site clones the pre-fill `Account` off the live vault
+    /// when launching the controller so the state machine can
+    /// run `validate_account_edit` without holding a borrow on
+    /// the vault.
+    prior_account: Account,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for EditDialogComponent {
+    type Init = (EditDialogInit, Account);
+    type Input = EditDialogMsg;
+    type Output = EditDialogOutput;
+
+    view! {
+        #[root]
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            set_spacing: 12,
+            set_hexpand: true,
+            set_vexpand: true,
+
+            gtk::Label {
+                set_label: format_edit_dialog_title(),
+                set_xalign: 0.0,
+                add_css_class: "title-2",
+            },
+            gtk::Label {
+                set_label: &format_edit_dialog_subtitle(&model.init.prior.display_label),
+                set_xalign: 0.0,
+                set_wrap: true,
+            },
+
+            adw::PreferencesGroup {
+                #[name = "label_row"]
+                add = &adw::EntryRow {
+                    set_title: format_edit_dialog_label_title(),
+                    // `Sender::send` is used instead of
+                    // `ComponentSender::input` (which `.expect`s
+                    // on a closed channel) so a stray callback
+                    // after the controller is dropped — e.g.
+                    // `lock_on_auto_lock_expiry` taking the
+                    // dialog into `UnlockedDiscards.modal` while
+                    // the widget still lives — is a benign no-op
+                    // rather than a process abort. See
+                    // `import_dialog`'s Cancel button for the
+                    // canonical comment.
+                    connect_changed[sender] => move |entry| {
+                        let _ = sender
+                            .input_sender()
+                            .send(EditDialogMsg::LabelChanged(entry.text().to_string()));
+                    },
+                },
+
+                #[name = "issuer_row"]
+                add = &adw::EntryRow {
+                    set_title: format_edit_dialog_issuer_title(),
+                    connect_changed[sender] => move |entry| {
+                        let _ = sender
+                            .input_sender()
+                            .send(EditDialogMsg::IssuerChanged(entry.text().to_string()));
+                    },
+                    // Inline issuer-clear button (parity with the
+                    // TUI `Ctrl+U`).
+                    add_suffix = &gtk::Button {
+                        set_icon_name: "edit-clear-symbolic",
+                        set_valign: gtk::Align::Center,
+                        add_css_class: "flat",
+                        set_tooltip_text: Some("Clear issuer"),
+                        connect_clicked[sender] => move |_| {
+                            let _ = sender
+                                .input_sender()
+                                .send(EditDialogMsg::IssuerClearClicked);
+                        },
+                    },
+                },
+
+                #[name = "icon_hint_row"]
+                add = &adw::EntryRow {
+                    set_title: format_edit_dialog_icon_hint_title(),
+                    connect_changed[sender] => move |entry| {
+                        let _ = sender
+                            .input_sender()
+                            .send(EditDialogMsg::IconHintChanged(entry.text().to_string()));
+                    },
+                },
+            },
+
+            #[name = "label_error_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: model
+                    .state
+                    .label_error()
+                    .map_or("", |err| err.rendered.as_str()),
+                #[watch]
+                set_visible: model.state.label_error().is_some(),
+            },
+
+            #[name = "issuer_error_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: model
+                    .state
+                    .issuer_error()
+                    .map_or("", |err| err.rendered.as_str()),
+                #[watch]
+                set_visible: model.state.issuer_error().is_some(),
+            },
+
+            #[name = "icon_hint_error_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: model
+                    .state
+                    .icon_hint_error()
+                    .map_or("", |err| err.rendered.as_str()),
+                #[watch]
+                set_visible: model.state.icon_hint_error().is_some(),
+            },
+
+            #[name = "duplicate_banner"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: &model
+                    .state
+                    .duplicate()
+                    .map(|m| format!("duplicate_account: collides with {}.", m.display_label))
+                    .unwrap_or_default(),
+                #[watch]
+                set_visible: model.state.duplicate().is_some(),
+            },
+
+            gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 6,
+                set_halign: gtk::Align::End,
+
+                #[name = "cancel_button"]
+                gtk::Button {
+                    set_label: format_edit_dialog_cancel_label(),
+                    connect_clicked[sender] => move |_| {
+                        let _ = sender.input_sender().send(EditDialogMsg::Cancel);
+                    },
+                },
+
+                #[name = "save_button"]
+                gtk::Button {
+                    set_label: format_edit_dialog_save_label(),
+                    add_css_class: "suggested-action",
+                    #[watch]
+                    set_sensitive: format_edit_dialog_save_button_sensitive(&model.state),
+                    connect_clicked[sender] => move |_| {
+                        let _ = sender.input_sender().send(EditDialogMsg::SubmitClicked);
+                    },
+                },
+            },
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let (init, prior_account) = init;
+        let state = EditDialogState::new(&init);
+        let model = EditDialogComponent {
+            init,
+            state,
+            prior_account,
+        };
+        let widgets = view_output!();
+        // Seed the three entry rows imperatively so the initial
+        // `set_text` does not run through the `connect_changed`
+        // round-trip on every redraw — keeping the cursor where
+        // the user expects it across state changes that do not
+        // reset the buffers (parity with `RenameDialogComponent`).
+        widgets.label_row.set_text(model.state.label_buf());
+        widgets.issuer_row.set_text(model.state.issuer_buf());
+        widgets.icon_hint_row.set_text(model.state.icon_hint_buf());
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        if let Some(output) = apply_msg(&mut self.state, msg, &self.prior_account) {
+            // Ignore send failures: if `AppModel` has already
+            // dropped the controller (e.g. window closed
+            // mid-click), there's nothing left to dismiss.
+            let _ = sender.output(output);
         }
     }
 }
