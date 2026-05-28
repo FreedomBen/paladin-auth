@@ -34,9 +34,10 @@ use paladin_gtk::account_list::{
     AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, SECTION_HEADER_FALLBACK,
 };
 use paladin_gtk::account_row::{
-    build_kebab_menu_model, dispatch_row_action, AccountRowOutput, CodeDisplay, CounterText,
-    ProgressDisplay, RowDisplay, ROW_ACTION_GROUP_NAME, ROW_COPY_ACTION_NAME, ROW_EDIT_ACTION_NAME,
-    ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_SHOW_QR_ACTION_NAME,
+    build_kebab_menu_model, build_row_context_menu_model, dispatch_row_action, AccountRowOutput,
+    CodeDisplay, CounterText, ProgressDisplay, RowDisplay, ROW_ACTION_GROUP_NAME,
+    ROW_COPY_ACTION_NAME, ROW_EDIT_ACTION_NAME, ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME,
+    ROW_SHOW_QR_ACTION_NAME,
 };
 use paladin_gtk::column_view::apply_interleaved_splice_plan;
 use paladin_gtk::row_item::RowItem;
@@ -1047,89 +1048,80 @@ fn row_copy_action_name_is_copy() {
     assert_eq!(ROW_COPY_ACTION_NAME, "copy");
 }
 
+/// Assert a `gio::Menu` carries the four shared row-context entries in
+/// canonical order — "Copy code" → `row.copy`, "Edit…" → `row.edit`,
+/// "Show QR…" → `row.show-qr`, "Remove…" → `row.remove` — whose action
+/// targets resolve through the per-row `gio::SimpleActionGroup` named
+/// [`ROW_ACTION_GROUP_NAME`]. "Copy code" leads (matching the inline
+/// copy button), the read-only "Show QR…" neighbours the "Edit…"
+/// shape, and the destructive "Remove…" stays trailing. Shared by the
+/// kebab wrapper and the canonical [`build_row_context_menu_model`] so
+/// both surfaces stay pinned to one model (Milestone 9 slice 3) —
+/// catching drift between the menu, the action group installed by
+/// `install_row_action_group`, and the dispatch table in
+/// `dispatch_row_action`, any of which would otherwise leave the user
+/// with an item that activates into the void.
+fn assert_shared_row_menu_entries(menu: &relm4::gtk::gio::Menu) {
+    assert_eq!(menu.n_items(), 4, "row menu carries exactly four items");
+
+    let expected = [
+        (
+            0i32,
+            "Copy code",
+            format!("{ROW_ACTION_GROUP_NAME}.{ROW_COPY_ACTION_NAME}"),
+        ),
+        (
+            1,
+            "Edit\u{2026}",
+            format!("{ROW_ACTION_GROUP_NAME}.{ROW_EDIT_ACTION_NAME}"),
+        ),
+        (
+            2,
+            "Show QR\u{2026}",
+            format!("{ROW_ACTION_GROUP_NAME}.{ROW_SHOW_QR_ACTION_NAME}"),
+        ),
+        (
+            3,
+            "Remove\u{2026}",
+            format!("{ROW_ACTION_GROUP_NAME}.{ROW_REMOVE_ACTION_NAME}"),
+        ),
+    ];
+
+    for (index, label, action) in expected {
+        let got_label: String = menu
+            .item_attribute_value(index, "label", None)
+            .and_then(|v| v.get())
+            .unwrap_or_else(|| panic!("menu item {index} carries a label attribute"));
+        assert_eq!(got_label, label, "menu item {index} label");
+
+        let got_action: String = menu
+            .item_attribute_value(index, "action", None)
+            .and_then(|v| v.get())
+            .unwrap_or_else(|| panic!("menu item {index} carries an action attribute"));
+        assert_eq!(got_action, action, "menu item {index} action");
+    }
+}
+
 #[test]
 fn build_kebab_menu_model_exposes_copy_edit_show_qr_and_remove_in_order() {
-    // The row kebab `gtk::MenuButton` carries the `gio::Menu`
-    // produced by [`build_kebab_menu_model`]. Per
-    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context menu and
-    // EditDialog implementation" > "Design contract" / Milestone 9
-    // slice 1, the menu must expose exactly four entries in order —
-    // "Copy code", "Edit…", "Show QR…", then "Remove…" — whose action
-    // targets resolve through the per-row `gio::SimpleActionGroup`
-    // named [`ROW_ACTION_GROUP_NAME`]. "Copy code" leads (matching the
-    // inline copy button), the read-only "Show QR…" neighbours the
-    // "Edit…" shape, and the destructive "Remove…" stays trailing.
-    // The visible "Edit…" label targets `row.edit` (`ROW_EDIT_ACTION_NAME`,
-    // renamed from `row.rename` in Milestone 9 slice 2) and still
-    // mounts `RenameDialog` until slice 4 swaps in `EditDialog`;
-    // "Copy code" targets the pre-existing `row.copy`. Pinning the
-    // labels and targets here catches drift between the kebab menu,
-    // the action group installed by `install_row_action_group`, and
-    // the dispatch table in `dispatch_row_action` — any of which would
-    // otherwise leave the user with a kebab item that activates into
-    // the void.
-    let menu = build_kebab_menu_model();
-    assert_eq!(menu.n_items(), 4, "kebab menu carries exactly four items");
+    // The row kebab `gtk::MenuButton` carries the `gio::Menu` produced
+    // by [`build_kebab_menu_model`], which is a thin wrapper over the
+    // canonical [`build_row_context_menu_model`] from Milestone 9
+    // slice 3. The visible "Edit…" label targets `row.edit`
+    // (`ROW_EDIT_ACTION_NAME`, renamed from `row.rename` in slice 2)
+    // and still mounts `RenameDialog` until slice 4 swaps in
+    // `EditDialog`; "Copy code" targets the pre-existing `row.copy`.
+    assert_shared_row_menu_entries(&build_kebab_menu_model());
+}
 
-    let copy_label: String = menu
-        .item_attribute_value(0, "label", None)
-        .and_then(|v| v.get())
-        .expect("kebab item 0 carries a label attribute");
-    assert_eq!(copy_label, "Copy code");
-
-    let copy_action: String = menu
-        .item_attribute_value(0, "action", None)
-        .and_then(|v| v.get())
-        .expect("kebab item 0 carries an action attribute");
-    assert_eq!(
-        copy_action,
-        format!("{ROW_ACTION_GROUP_NAME}.{ROW_COPY_ACTION_NAME}"),
-    );
-
-    let edit_label: String = menu
-        .item_attribute_value(1, "label", None)
-        .and_then(|v| v.get())
-        .expect("kebab item 1 carries a label attribute");
-    assert_eq!(edit_label, "Edit\u{2026}");
-
-    let edit_action: String = menu
-        .item_attribute_value(1, "action", None)
-        .and_then(|v| v.get())
-        .expect("kebab item 1 carries an action attribute");
-    assert_eq!(
-        edit_action,
-        format!("{ROW_ACTION_GROUP_NAME}.{ROW_EDIT_ACTION_NAME}"),
-    );
-
-    let show_qr_label: String = menu
-        .item_attribute_value(2, "label", None)
-        .and_then(|v| v.get())
-        .expect("kebab item 2 carries a label attribute");
-    assert_eq!(show_qr_label, "Show QR\u{2026}");
-
-    let show_qr_action: String = menu
-        .item_attribute_value(2, "action", None)
-        .and_then(|v| v.get())
-        .expect("kebab item 2 carries an action attribute");
-    assert_eq!(
-        show_qr_action,
-        format!("{ROW_ACTION_GROUP_NAME}.{ROW_SHOW_QR_ACTION_NAME}"),
-    );
-
-    let remove_label: String = menu
-        .item_attribute_value(3, "label", None)
-        .and_then(|v| v.get())
-        .expect("kebab item 3 carries a label attribute");
-    assert_eq!(remove_label, "Remove\u{2026}");
-
-    let remove_action: String = menu
-        .item_attribute_value(3, "action", None)
-        .and_then(|v| v.get())
-        .expect("kebab item 3 carries an action attribute");
-    assert_eq!(
-        remove_action,
-        format!("{ROW_ACTION_GROUP_NAME}.{ROW_REMOVE_ACTION_NAME}"),
-    );
+#[test]
+fn build_row_context_menu_model_exposes_copy_edit_show_qr_and_remove_in_order() {
+    // The canonical shared builder (Milestone 9 slice 3) is the single
+    // source bound by the kebab `gtk::MenuButton`, the right-click
+    // `gtk::PopoverMenu`, and the keyboard `gtk::ShortcutController`
+    // path (slice 5). It must expose the same four entries as the
+    // kebab wrapper so every surface activates identical actions.
+    assert_shared_row_menu_entries(&build_row_context_menu_model());
 }
 
 #[test]

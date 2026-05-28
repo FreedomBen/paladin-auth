@@ -2439,7 +2439,7 @@ core.
    ships. Tests in `tests/account_row_logic.rs` are renamed
    accordingly; the dispatch table coverage stays unchanged
    modulo names.
-- [ ] **Slice 3 — Shared menu model helper.** Add
+- [x] **Slice 3 — Shared menu model helper.** Add
    `account_row::build_row_context_menu_model()` returning the
    `gio::Menu` constructed once and bound to both the kebab and
    the right-click popover. The existing

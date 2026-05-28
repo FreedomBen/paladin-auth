@@ -599,7 +599,7 @@ pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountRowOutput
     }
 }
 
-/// Build the kebab `gio::Menu` shared by every row.
+/// Build the canonical row context `gio::Menu` shared by every row.
 ///
 /// Four entries in order — "Copy code" → `row.copy`,
 /// "Edit…" → `row.edit`, "Show QR…" → `row.show-qr`,
@@ -611,14 +611,17 @@ pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountRowOutput
 /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context menu and
 /// `EditDialog` implementation" > "Design contract".
 ///
-/// The "Edit…" label targets `row.edit` (`ROW_EDIT_ACTION_NAME`,
-/// renamed from `row.rename` in Milestone 9 slice 2); `AppModel`
-/// routes it to the row's edit surface — the existing `RenameDialog`
-/// until slice 4 swaps in `EditDialog`. "Copy code" targets the
-/// pre-existing `row.copy` action that the inline copy button already
-/// drives, so it activates immediately.
+/// This single model backs every row-context surface: the kebab
+/// `gtk::MenuButton` (via [`build_kebab_menu_model`]), the right-click
+/// `gtk::PopoverMenu`, and the keyboard `gtk::ShortcutController` path
+/// (Milestone 9 slice 5). The "Edit…" label targets `row.edit`
+/// (`ROW_EDIT_ACTION_NAME`, renamed from `row.rename` in slice 2);
+/// `AppModel` routes it to the row's edit surface — the existing
+/// `RenameDialog` until slice 4 swaps in `EditDialog`. "Copy code"
+/// targets the pre-existing `row.copy` action that the inline copy
+/// button already drives, so it activates immediately.
 #[must_use]
-pub fn build_kebab_menu_model() -> gio::Menu {
+pub fn build_row_context_menu_model() -> gio::Menu {
     let menu = gio::Menu::new();
     menu.append(
         Some("Copy code"),
@@ -639,6 +642,17 @@ pub fn build_kebab_menu_model() -> gio::Menu {
         Some(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_REMOVE_ACTION_NAME}")),
     );
     menu
+}
+
+/// Build the kebab `gio::Menu`.
+///
+/// Thin wrapper over [`build_row_context_menu_model`] introduced in
+/// Milestone 9 slice 3 so the kebab and the right-click / keyboard
+/// surfaces share one model. Retired once every call site binds the
+/// canonical builder directly (slice 5).
+#[must_use]
+pub fn build_kebab_menu_model() -> gio::Menu {
+    build_row_context_menu_model()
 }
 
 // ---------------------------------------------------------------------------
