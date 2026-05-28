@@ -292,6 +292,225 @@ pub struct RenameModal {
     pub error: Option<String>,
 }
 
+/// Which control of the v0.2 Edit modal currently holds focus.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Edit"
+/// and the "Edit modal" test inventory: `Tab` / `Shift-Tab` cycle in
+/// document order across Label → Issuer → `IconHint`, joined by Slug
+/// when (and only when) the selector is on
+/// [`EditIconHintSelector::Slug`]. [`Default`] places focus on the
+/// Label row to mirror the visual top-down read order on modal open.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum EditFocus {
+    /// `label` text-input row (default focus on modal open).
+    #[default]
+    Label,
+    /// `issuer` text-input row.
+    Issuer,
+    /// Icon-hint segmented selector (Leave unchanged / Default from
+    /// issuer / No icon / Slug:).
+    IconHint,
+    /// Sibling slug input row. Only focusable when
+    /// [`EditModal::icon_hint_selector`] is on
+    /// [`EditIconHintSelector::Slug`]; otherwise the cycle skips this
+    /// stop.
+    Slug,
+}
+
+/// Position of the v0.2 Edit modal's segmented icon-hint selector.
+///
+/// Maps onto the four [`AccountEdit.icon_hint`](paladin_core::AccountEdit)
+/// projections per `docs/DESIGN.md` §4.7 and the
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md` test inventory:
+///
+/// - [`EditIconHintSelector::LeaveUnchanged`] → `None`
+///   (default on modal open).
+/// - [`EditIconHintSelector::Default`] → `Some(IconHintInput::Default)`
+///   (re-derive from the post-edit issuer).
+/// - [`EditIconHintSelector::Clear`] → `Some(IconHintInput::Clear)`.
+/// - [`EditIconHintSelector::Slug`] → `Some(IconHintInput::Slug(...))`
+///   built from the sibling [`EditModal::icon_hint_slug`] buffer,
+///   routed through [`paladin_core::validate_icon_hint_slug`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum EditIconHintSelector {
+    /// Default on modal open; projects to `AccountEdit.icon_hint = None`.
+    #[default]
+    LeaveUnchanged,
+    /// `Some(IconHintInput::Default)` — re-derive from the post-edit issuer.
+    Default,
+    /// `Some(IconHintInput::Clear)` — explicit clear.
+    Clear,
+    /// `Some(IconHintInput::Slug(...))` — use the sibling slug buffer.
+    Slug,
+}
+
+impl EditIconHintSelector {
+    /// Advance to the next selector option, wrapping after the last
+    /// option so `→` cycles indefinitely.
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            Self::LeaveUnchanged => Self::Default,
+            Self::Default => Self::Clear,
+            Self::Clear => Self::Slug,
+            Self::Slug => Self::LeaveUnchanged,
+        }
+    }
+
+    /// Retreat to the previous selector option, wrapping before the
+    /// first option so `←` cycles indefinitely.
+    #[must_use]
+    pub fn prev(self) -> Self {
+        match self {
+            Self::LeaveUnchanged => Self::Slug,
+            Self::Default => Self::LeaveUnchanged,
+            Self::Clear => Self::Default,
+            Self::Slug => Self::Clear,
+        }
+    }
+}
+
+/// Snapshot of an account's prior metadata captured when the v0.2 Edit
+/// modal opens.
+///
+/// The reducer projects buffers onto [`paladin_core::AccountEdit`] at
+/// submit time by comparing buffer bytes against this snapshot:
+/// byte-equal-to-prior projects to `None` on the corresponding
+/// `AccountEdit` field, per the WYSIWYS rules pinned in
+/// `docs/IMPLEMENTATION_PLAN_03_TUI.md`. Fields mirror the subset of
+/// [`paladin_core::Account`] the modal actually edits.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct EditPrior {
+    /// Prior label, captured byte-for-byte from the focused account.
+    pub label: String,
+    /// Prior issuer (`None` if the account had no issuer); the modal's
+    /// issuer buffer is byte-compared against the `Some(_)` arm for the
+    /// WYSIWYS projection.
+    pub issuer: Option<String>,
+    /// Prior icon-hint slug (`None` for accounts with no slug stored).
+    /// Seeds the modal's slug buffer when the modal opens so the user
+    /// sees the same text they would on a CLI `paladin list` row.
+    pub icon_hint: Option<String>,
+}
+
+/// State for the v0.2 Edit modal (Shift+E).
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Edit"
+/// and the "Edit modal" test inventory: the modal exposes three
+/// controls — label text input, issuer text input, and a four-option
+/// segmented icon-hint selector (Leave unchanged / Default from issuer
+/// / No icon / Slug:). Selecting *Slug:* exposes a sibling slug input
+/// row as a fourth focus stop; the other three selector positions
+/// skip it in the `Tab` / `Shift-Tab` cycle.
+///
+/// All buffers are seeded from the focused account at modal open and
+/// dropped together on any of the four close triggers (successful
+/// submit, `Esc` cancel, programmatic close, auto-lock). At submit
+/// time, the reducer compares each buffer to its prior value byte-
+/// for-byte: a buffer byte-equal to the prior value projects to
+/// `None` on the corresponding [`paladin_core::AccountEdit`] field
+/// rather than `Some(prior.clone())`, mirroring the §4.7 WYSIWYS
+/// contract.
+///
+/// [`Default`] yields a blank modal targeting a sentinel [`AccountId`]
+/// so existing reducer tests that match on the variant discriminant
+/// can construct a placeholder without reaching into the vault.
+/// Production code never relies on [`Default`] — the reducer's
+/// modal-open path always populates the fields from the selected
+/// account.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct EditModal {
+    /// Account being edited. Snapshotted at modal open time so a
+    /// later selection / search-filter change does not redirect the
+    /// edit mid-edit.
+    pub account_id: AccountId,
+    /// Snapshot of the focused account's prior metadata, captured at
+    /// modal open time. The reducer compares modal-local buffers
+    /// against these values at submit time to project to
+    /// [`paladin_core::AccountEdit`] fields per the WYSIWYS rules.
+    pub prior: EditPrior,
+    /// Working label buffer. Pre-populated with the prior label at
+    /// open time; byte-equal-to-prior projects to
+    /// `AccountEdit.label = None`.
+    pub label_buffer: String,
+    /// Working issuer buffer. Pre-populated with the prior issuer at
+    /// open time (`None` renders as the empty string, not the literal
+    /// `"None"`); byte-equal-to-prior projects to
+    /// `AccountEdit.issuer = None`.
+    pub issuer_buffer: String,
+    /// Segmented icon-hint selector. Defaults to
+    /// [`EditIconHintSelector::LeaveUnchanged`] on open so the modal
+    /// surfaces a no-op edit until the user explicitly picks another
+    /// option.
+    pub icon_hint_selector: EditIconHintSelector,
+    /// Sibling slug input buffer. Pre-populated with the prior
+    /// `icon_hint` slug at open time (`None` → empty string) and
+    /// preserved when the user toggles the selector off *Slug:* and
+    /// back so typed input is not lost.
+    pub icon_hint_slug: String,
+    /// Which control currently holds focus. Seeded to
+    /// [`EditFocus::Label`] at modal open time per the test
+    /// inventory's "initial focus is on the Label row" assertion.
+    pub focus: EditFocus,
+    /// Inline error from the most recent failed submit (validation
+    /// or duplicate). Rendered through
+    /// [`render_error_message`](crate::app::state::render_error_message)
+    /// for validation errors, and
+    /// [`format_duplicate_account_message`](crate::app::state::format_duplicate_account_message)
+    /// for duplicates. Cleared by any subsequent edit so the user
+    /// sees their retry; the four-trigger close contract drops the
+    /// modal (and this slot with it) on success / cancel /
+    /// programmatic close / auto-lock.
+    pub error: Option<String>,
+}
+
+impl EditModal {
+    /// Advance focus to the next control, wrapping after the final
+    /// control. Skips the [`EditFocus::Slug`] stop when the selector
+    /// is not on [`EditIconHintSelector::Slug`], so the cycle has
+    /// three stops (Label → Issuer → `IconHint`) by default and four
+    /// stops (Label → Issuer → `IconHint` → Slug) when *Slug:* is
+    /// active.
+    #[must_use]
+    pub fn next_focus(&self) -> EditFocus {
+        let with_slug = self.icon_hint_selector == EditIconHintSelector::Slug;
+        match self.focus {
+            EditFocus::Label => EditFocus::Issuer,
+            EditFocus::Issuer => EditFocus::IconHint,
+            EditFocus::IconHint => {
+                if with_slug {
+                    EditFocus::Slug
+                } else {
+                    EditFocus::Label
+                }
+            }
+            EditFocus::Slug => EditFocus::Label,
+        }
+    }
+
+    /// Retreat focus to the previous control, wrapping before the
+    /// first. Skips the [`EditFocus::Slug`] stop when the selector is
+    /// not on [`EditIconHintSelector::Slug`]; from
+    /// [`EditFocus::Label`] the cycle lands on the icon-hint
+    /// selector (three-stop) or the slug row (four-stop).
+    #[must_use]
+    pub fn prev_focus(&self) -> EditFocus {
+        let with_slug = self.icon_hint_selector == EditIconHintSelector::Slug;
+        match self.focus {
+            EditFocus::Label => {
+                if with_slug {
+                    EditFocus::Slug
+                } else {
+                    EditFocus::IconHint
+                }
+            }
+            EditFocus::Issuer => EditFocus::Label,
+            EditFocus::IconHint => EditFocus::Issuer,
+            EditFocus::Slug => EditFocus::IconHint,
+        }
+    }
+}
+
 /// Which Settings field currently holds modal-local focus.
 ///
 /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
@@ -1423,6 +1642,9 @@ pub enum Modal {
     Remove(RemoveModal),
     /// Rename the selected account.
     Rename(RenameModal),
+    /// v0.2 multi-field edit of the focused account — label / issuer /
+    /// icon-hint editor (`Shift+E`).
+    Edit(EditModal),
     /// Import an existing vault export (Paladin, Aegis, Google
     /// Authenticator).
     Import(ImportModal),

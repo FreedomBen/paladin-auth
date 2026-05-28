@@ -12,7 +12,7 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use paladin_core::{
-    AccountId, AccountKindInput, AccountSummary, Algorithm, ClipboardClearToken, Code,
+    AccountEdit, AccountId, AccountKindInput, AccountSummary, Algorithm, ClipboardClearToken, Code,
     ImportConflict, ImportFormat, ImportReport, PaladinError, SettingPatch, Store,
     ValidatedAccount, ValidationWarning, Vault,
 };
@@ -326,6 +326,51 @@ pub enum EffectResult {
         /// label lives on the `Vault::iter()` entry for `account_id`
         /// (the executor mutated the vault before posting back).
         result: Result<(), PaladinError>,
+    },
+
+    /// Outcome of an [`Effect::EditAccountMetadata`] attempt.
+    ///
+    /// On `Ok(summary)` while [`crate::app::state::AppState::Unlocked`]
+    /// with `Modal::Edit` open against `account_id`, the reducer
+    /// closes the modal and publishes a
+    /// [`crate::app::state::StatusLine::Confirmation`] derived from
+    /// the post-edit display label — looked up against the carried
+    /// [`AccountSummary`] the executor built via a post-save
+    /// `Vault::get(id).map(Account::summary)` projection.
+    ///
+    /// On `Err(...)` the modal stays open and the rendered error is
+    /// stashed in
+    /// [`crate::app::state::EditModal::error`] — per
+    /// `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
+    /// "Add / remove / rename / settings saves": pre-commit failures
+    /// (`save_not_committed`) are rolled back inside
+    /// `Vault::mutate_and_save` so memory matches disk;
+    /// durability-unconfirmed leaves the new state committed and
+    /// surfaces the warning inline. A
+    /// `Err(PaladinError::DuplicateAccount { .. })` from the
+    /// executor-side re-check is surfaced through the same slot via
+    /// [`crate::app::state::format_duplicate_account_message`] so the
+    /// modal's inline-error rendering is uniform across rejection
+    /// paths.
+    ///
+    /// Results delivered while not on `Unlocked`, while a different
+    /// modal is open, with a mismatched live vault path, or for an
+    /// `account_id` that does not match the open edit modal are
+    /// discarded so the carried payload drops without mutating state.
+    EditAccountMetadata {
+        /// The vault path the effect was emitted against. Mismatched
+        /// deliveries (e.g. unlock-then-relock-different-vault race)
+        /// are discarded.
+        path: PathBuf,
+        /// The account the edit targeted. Carried back so the
+        /// reducer can correlate the result with the modal — the
+        /// edit modal's `account_id` is the source of truth and the
+        /// result is discarded on mismatch.
+        account_id: AccountId,
+        /// The `Vault::edit_account_metadata` + `Vault::save`
+        /// outcome. On `Ok(summary)` the post-edit summary names
+        /// the account in the status-line confirmation.
+        result: Result<AccountSummary, EditFailure>,
     },
 
     /// Outcome of an [`Effect::Remove`] attempt.
@@ -678,6 +723,36 @@ pub enum AddFailure {
     Save(PaladinError),
 }
 
+/// Failure outcome of an [`Effect::EditAccountMetadata`] attempt.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Edit"
+/// pre-check ordering, the executor surfaces three distinct rejection
+/// shapes back to the reducer for inline rendering:
+///
+/// - [`EditFailure::Duplicate`] — the pre-flight
+///   [`paladin_core::Vault::find_duplicate_after_edit`] re-check
+///   matched a sibling account. Surfaced via
+///   [`crate::app::state::format_duplicate_account_message`]; no
+///   "edit anyway" override exists for the Edit modal per the locked
+///   spec.
+/// - [`EditFailure::Save`] — [`paladin_core::Vault::mutate_and_save`]
+///   returned an error (`save_not_committed` rolled back inside core,
+///   `save_durability_unconfirmed` left committed in memory, or any
+///   other `io_error`). Same inline-error surface as the rename
+///   modal's save-error path.
+#[derive(Debug)]
+pub enum EditFailure {
+    /// `Vault::find_duplicate_after_edit` (re-checked inside the
+    /// executor) matched an existing sibling account.
+    Duplicate {
+        /// Public projection of the colliding account already in the
+        /// vault, used for the rejection message.
+        existing: AccountSummary,
+    },
+    /// `Vault::mutate_and_save` returned an error.
+    Save(PaladinError),
+}
+
 /// Successful outcome of an [`Effect::AddFromClipboardQr`] attempt.
 ///
 /// Carries the [`ImportReport`] returned by `Vault::import_accounts`
@@ -989,6 +1064,36 @@ pub enum Effect {
         /// depth; the trim is idempotent so this string is the value
         /// that ends up persisted on success.
         new_label: String,
+    },
+    /// Apply a v0.2 multi-field edit (label / issuer / icon-hint)
+    /// to the focused account and persist the change.
+    ///
+    /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) >
+    /// Edit": the reducer emits this effect when the Edit modal's
+    /// submit passes its three locked pre-checks (explicit empty
+    /// guard, `validate_account_edit`, `Vault::find_duplicate_after_edit`).
+    /// The executor wires the call to
+    /// [`paladin_core::Vault::edit_account_metadata`] inside
+    /// [`paladin_core::Vault::mutate_and_save`] and posts the outcome
+    /// back through an
+    /// `AppEvent::EffectResult(EffectResult::EditAccountMetadata { … })`.
+    /// A live `Vault::find_duplicate_after_edit` is re-run pre-mutate
+    /// inside the executor so a duplicate that appeared between the
+    /// reducer pre-check and the save short-circuits without
+    /// touching the on-disk vault.
+    EditAccountMetadata {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+        /// The account whose metadata should be edited. Snapshotted
+        /// by the reducer at modal-open time so a later selection
+        /// change does not redirect the edit mid-flight.
+        account_id: AccountId,
+        /// The projected edit. Only fields the user diverged from
+        /// the prior account are populated; unchanged fields are
+        /// `None`, per the WYSIWYS rules pinned in the modal spec.
+        edit: AccountEdit,
     },
     /// Remove the selected account and persist the change.
     ///

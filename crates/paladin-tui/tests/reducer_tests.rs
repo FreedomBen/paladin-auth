@@ -26,18 +26,18 @@ use paladin_core::{
     VaultLock, VaultStatus,
 };
 use paladin_tui::app::event::{
-    AddFailure, AddSuccess, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess,
-    QrImportFailure, QrImportSuccess,
+    AddFailure, AddSuccess, AppEvent, EditFailure, Effect, EffectResult, ImportFailure,
+    ImportSuccess, QrImportFailure, QrImportSuccess,
 };
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     build_initial_state_with_resolver, compute_idle_deadline, decide_state_from_inspect,
     decide_state_from_open, format_account_display_label, format_duplicate_account_message,
     format_qr_import_failure, render_error_message, AddManualFocus, AddModal, AddMode, AppState,
-    ChordLeader, ExportFormat, ExportModal, Focus, HotpReveal, ImportFormatSelector, ImportModal,
-    Modal, PassphraseModal, PendingDuplicateAdd, QrExportFocus, QrExportPage, QrSaveFocus,
-    QrSaveFormat, QrSaveStep, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
-    NO_ACCOUNT_SELECTED,
+    ChordLeader, EditFocus, EditIconHintSelector, EditModal, EditPrior, ExportFormat, ExportModal,
+    Focus, HotpReveal, ImportFormatSelector, ImportModal, Modal, PassphraseModal,
+    PendingDuplicateAdd, QrExportFocus, QrExportPage, QrSaveFocus, QrSaveFormat, QrSaveStep,
+    RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -22365,4 +22365,999 @@ fn expect_qr_save_sub_flow(state: &AppState) -> &paladin_tui::app::state::QrSave
             .expect("active save sub-flow expected"),
         other => panic!("expected QR Export modal, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// v0.2 Edit modal (Shift+E)
+//
+// Tracks `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Edit modal" test
+// inventory under "Tests > Reducer" and the modal spec under
+// "Modals (per §6) > Edit".
+// ---------------------------------------------------------------------------
+
+/// Insert a TOTP account with the supplied label / issuer / icon-hint
+/// and return its `AccountId`. Used by the Edit-modal tests that need
+/// non-default metadata.
+fn add_totp_account_with_metadata(
+    vault: &mut Vault,
+    store: &Store,
+    label: &str,
+    issuer: Option<&str>,
+    icon_hint: IconHintInput,
+) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: issuer.map(str::to_owned),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint,
+    };
+    let validated = validate_manual(input, SystemTime::now()).expect("valid manual input");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added account");
+    id
+}
+
+/// Build an `AppState::Unlocked` with the Edit modal pre-populated
+/// from the supplied account. Returns the tempdir, account id, path,
+/// and the assembled state.
+fn fresh_unlocked_with_edit_modal_open(
+    label: &str,
+    issuer: Option<&str>,
+    icon_hint: IconHintInput,
+) -> (tempfile::TempDir, AccountId, PathBuf, AppState) {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account_with_metadata(&mut vault, &store, label, issuer, icon_hint);
+    // Mirror the reducer's modal-open path by reading the resolved
+    // account back out of the vault — the same `pending_edit_for_char`
+    // helper does this via `Vault::iter`.
+    let prior_label = vault
+        .iter()
+        .find(|a| a.id() == id)
+        .expect("just-added account")
+        .label()
+        .to_owned();
+    let prior_issuer = vault
+        .iter()
+        .find(|a| a.id() == id)
+        .and_then(|a| a.issuer().map(str::to_owned));
+    let prior_icon_hint = vault
+        .iter()
+        .find(|a| a.id() == id)
+        .and_then(|a| a.icon_hint().map(str::to_owned));
+    let slug_buffer = prior_icon_hint.clone().unwrap_or_default();
+    let modal = EditModal {
+        account_id: id,
+        prior: EditPrior {
+            label: prior_label.clone(),
+            issuer: prior_issuer.clone(),
+            icon_hint: prior_icon_hint,
+        },
+        label_buffer: prior_label,
+        issuer_buffer: prior_issuer.unwrap_or_default(),
+        icon_hint_selector: EditIconHintSelector::LeaveUnchanged,
+        icon_hint_slug: slug_buffer,
+        focus: EditFocus::Label,
+        error: None,
+    };
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Edit(modal)),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    (tmp, id, path, state)
+}
+
+fn expect_edit_modal(state: &AppState) -> &EditModal {
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Edit(edit)),
+            ..
+        } => edit,
+        AppState::Unlocked { modal, .. } => panic!("expected Modal::Edit, got {modal:?}"),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn shift_e_on_focused_row_opens_edit_modal_prepopulated() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account_with_metadata(
+        &mut vault,
+        &store,
+        "ben@example.com",
+        Some("GitHub"),
+        IconHintInput::Slug("github".to_string()),
+    );
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(
+        unlocked,
+        AppEvent::Input {
+            event: Event::Key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT)),
+            at: Instant::now(),
+        },
+    );
+    assert!(effects.is_empty(), "opening Edit must not emit effects");
+    let edit = expect_edit_modal(&state);
+    assert_eq!(edit.account_id, id);
+    assert_eq!(edit.label_buffer, "ben@example.com");
+    assert_eq!(edit.issuer_buffer, "GitHub");
+    assert_eq!(edit.icon_hint_slug, "github");
+    assert_eq!(
+        edit.icon_hint_selector,
+        EditIconHintSelector::LeaveUnchanged
+    );
+    assert_eq!(edit.focus, EditFocus::Label, "initial focus must be Label");
+    assert!(edit.error.is_none());
+}
+
+#[test]
+fn shift_e_with_no_selection_surfaces_status_line_error() {
+    let tmp = secure_tempdir();
+    let (path, (vault, store)) = open_plaintext_pair(&tmp);
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(
+        unlocked,
+        AppEvent::Input {
+            event: Event::Key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT)),
+            at: Instant::now(),
+        },
+    );
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            modal: None,
+            status_line: Some(StatusLine::Error(msg)),
+            ..
+        } => assert_eq!(msg, NO_ACCOUNT_SELECTED),
+        other => panic!("expected selection-gated status error, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_modal_open_with_prior_none_issuer_yields_empty_buffer() {
+    let (_tmp, _id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    let edit = expect_edit_modal(&state);
+    assert_eq!(
+        edit.issuer_buffer.len(),
+        0,
+        "prior None must yield empty buffer"
+    );
+    assert!(edit.prior.issuer.is_none());
+}
+
+#[test]
+fn edit_modal_open_with_prior_none_icon_hint_yields_empty_slug_buffer() {
+    let (_tmp, _id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", Some("Acme"), IconHintInput::Clear);
+    let edit = expect_edit_modal(&state);
+    assert_eq!(
+        edit.icon_hint_slug, "",
+        "prior None icon_hint must yield empty slug buffer"
+    );
+    assert_eq!(
+        edit.icon_hint_selector,
+        EditIconHintSelector::LeaveUnchanged
+    );
+}
+
+#[test]
+fn edit_modal_tab_cycles_three_stops_when_selector_not_slug() {
+    let (_tmp, _id, _path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    // Label → Issuer
+    let (s, _) = reduce(state, key(KeyCode::Tab));
+    assert_eq!(expect_edit_modal(&s).focus, EditFocus::Issuer);
+    // Issuer → IconHint
+    let (s, _) = reduce(s, key(KeyCode::Tab));
+    assert_eq!(expect_edit_modal(&s).focus, EditFocus::IconHint);
+    // IconHint → Label (skips Slug because selector is LeaveUnchanged)
+    let (s, _) = reduce(s, key(KeyCode::Tab));
+    assert_eq!(expect_edit_modal(&s).focus, EditFocus::Label);
+    state = s;
+    let _ = state; // silence unused
+}
+
+#[test]
+fn edit_modal_shift_tab_cycles_three_stops_in_reverse() {
+    let (_tmp, _id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    // Label → IconHint (wrap, skips Slug)
+    let (s, _) = reduce(state, key(KeyCode::BackTab));
+    assert_eq!(expect_edit_modal(&s).focus, EditFocus::IconHint);
+    let (s, _) = reduce(s, key(KeyCode::BackTab));
+    assert_eq!(expect_edit_modal(&s).focus, EditFocus::Issuer);
+    let (s, _) = reduce(s, key(KeyCode::BackTab));
+    assert_eq!(expect_edit_modal(&s).focus, EditFocus::Label);
+}
+
+#[test]
+fn edit_modal_tab_cycles_four_stops_when_selector_is_slug() {
+    let (_tmp, _id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    // Flip the selector to Slug via right-arrow chain so the cycle
+    // grows a fourth stop.
+    let (s, _) = reduce(state, key(KeyCode::Tab)); // Issuer
+    let (s, _) = reduce(s, key(KeyCode::Tab)); // IconHint
+    let (s, _) = reduce(s, key(KeyCode::Right)); // Default
+    let (s, _) = reduce(s, key(KeyCode::Right)); // Clear
+    let (s, _) = reduce(s, key(KeyCode::Right)); // Slug
+    let edit = expect_edit_modal(&s);
+    assert_eq!(edit.icon_hint_selector, EditIconHintSelector::Slug);
+    assert_eq!(edit.focus, EditFocus::IconHint);
+    // IconHint → Slug
+    let (s, _) = reduce(s, key(KeyCode::Tab));
+    assert_eq!(expect_edit_modal(&s).focus, EditFocus::Slug);
+    // Slug → Label (wrap)
+    let (s, _) = reduce(s, key(KeyCode::Tab));
+    assert_eq!(expect_edit_modal(&s).focus, EditFocus::Label);
+}
+
+#[test]
+fn edit_modal_label_buffer_byte_equal_to_prior_projects_to_none() {
+    let (_tmp, id, path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    // Buffer is byte-equal to prior; we need at least one diverging
+    // field so the empty-edit guard does not fire. Change the icon
+    // hint selector to Default — pre-edit Default + post-edit Default
+    // is still a valid "Some-projection" edit.
+    let mut new_state = state;
+    if let AppState::Unlocked {
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = new_state
+    {
+        // Keep label_buffer == prior.label; flip selector to Default.
+        edit.icon_hint_selector = EditIconHintSelector::Default;
+    }
+    let (state, effects) = reduce(new_state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1, "expected Effect::EditAccountMetadata");
+    match &effects[0] {
+        Effect::EditAccountMetadata {
+            path: p,
+            account_id,
+            edit: ae,
+        } => {
+            assert_eq!(p, &path);
+            assert_eq!(*account_id, id);
+            assert!(ae.label.is_none(), "byte-equal label must project to None");
+            assert!(
+                ae.issuer.is_none(),
+                "unchanged prior None issuer must project to None"
+            );
+            assert!(matches!(ae.icon_hint, Some(IconHintInput::Default)));
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+    // Modal must remain open until EffectResult clears it.
+    let _ = expect_edit_modal(&state);
+}
+
+#[test]
+fn edit_modal_empty_edit_submit_surfaces_validation_error() {
+    let (_tmp, _id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    // Buffers byte-equal-to-prior and selector on LeaveUnchanged →
+    // projection is fully None → the explicit empty-edit guard fires.
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(effects.is_empty(), "empty edit must not emit effects");
+    let edit = expect_edit_modal(&state);
+    let err = edit
+        .error
+        .as_ref()
+        .expect("expected inline validation error");
+    assert!(
+        err.contains("edit") && err.contains("empty"),
+        "expected 'edit: empty' validation error, got {err:?}"
+    );
+}
+
+#[test]
+fn edit_modal_precheck_order_empty_wins_over_invalid_slug_and_duplicate() {
+    // Set up: vault has two accounts that collide on the
+    // (secret, issuer, label) triple after a hypothetical edit. The
+    // active modal is on the first; we craft a draft that would
+    // simultaneously trigger empty (no label/issuer change, selector
+    // LeaveUnchanged with an invalid slug stored but selector not on
+    // Slug), validate (slug invalid), and duplicate. Because the
+    // selector is on LeaveUnchanged the empty-edit guard fires first.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _other = add_totp_account_with_metadata(
+        &mut vault,
+        &store,
+        "bob",
+        Some("Site"),
+        IconHintInput::Default,
+    );
+    let target = add_totp_account_with_metadata(
+        &mut vault,
+        &store,
+        "alice",
+        Some("Site"),
+        IconHintInput::Default,
+    );
+    let modal = EditModal {
+        account_id: target,
+        prior: EditPrior {
+            label: "alice".to_string(),
+            issuer: Some("Site".to_string()),
+            icon_hint: Some("site".to_string()),
+        },
+        label_buffer: "alice".to_string(),
+        issuer_buffer: "Site".to_string(),
+        icon_hint_selector: EditIconHintSelector::LeaveUnchanged,
+        icon_hint_slug: "BadSlug!".to_string(),
+        focus: EditFocus::Label,
+        error: None,
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Edit(modal)),
+        selected: Some(target),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(effects.is_empty());
+    let edit = expect_edit_modal(&state);
+    let err = edit.error.as_ref().expect("expected inline error");
+    assert!(
+        err.contains("edit") && err.contains("empty"),
+        "first failure (empty) must win, got {err:?}"
+    );
+}
+
+#[test]
+fn edit_modal_duplicate_account_keeps_modal_open_no_effect() {
+    // Two accounts share the same secret; flip target's label to
+    // collide with sibling → find_duplicate_after_edit hits.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _sibling = add_totp_account_with_metadata(
+        &mut vault,
+        &store,
+        "bob",
+        Some("Site"),
+        IconHintInput::Default,
+    );
+    let target = add_totp_account_with_metadata(
+        &mut vault,
+        &store,
+        "alice",
+        Some("Site"),
+        IconHintInput::Default,
+    );
+    let modal = EditModal {
+        account_id: target,
+        prior: EditPrior {
+            label: "alice".to_string(),
+            issuer: Some("Site".to_string()),
+            icon_hint: Some("site".to_string()),
+        },
+        label_buffer: "bob".to_string(),
+        issuer_buffer: "Site".to_string(),
+        icon_hint_selector: EditIconHintSelector::LeaveUnchanged,
+        icon_hint_slug: "site".to_string(),
+        focus: EditFocus::Label,
+        error: None,
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Edit(modal)),
+        selected: Some(target),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(effects.is_empty(), "duplicate must not emit effect");
+    let edit = expect_edit_modal(&state);
+    assert_eq!(edit.label_buffer, "bob", "buffer survives rejection");
+    let err = edit
+        .error
+        .as_ref()
+        .expect("expected duplicate inline message");
+    assert!(
+        err.contains("account already exists"),
+        "duplicate-account wording expected, got {err:?}"
+    );
+}
+
+#[test]
+fn edit_modal_allow_keys_after_duplicate_rejection_are_noops() {
+    // Stash the modal in the duplicate-rejected state and feed every
+    // plausible "allow"-coded key event. None of them should emit an
+    // effect; the inline error must remain and buffers stay
+    // byte-identical.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _sibling = add_totp_account_with_metadata(
+        &mut vault,
+        &store,
+        "bob",
+        Some("Site"),
+        IconHintInput::Default,
+    );
+    let target = add_totp_account_with_metadata(
+        &mut vault,
+        &store,
+        "alice",
+        Some("Site"),
+        IconHintInput::Default,
+    );
+    let dup_msg =
+        "account already exists with the same (secret, issuer, label): Site:bob".to_string();
+    let modal = EditModal {
+        account_id: target,
+        prior: EditPrior {
+            label: "alice".to_string(),
+            issuer: Some("Site".to_string()),
+            icon_hint: Some("site".to_string()),
+        },
+        label_buffer: "bob".to_string(),
+        issuer_buffer: "Site".to_string(),
+        icon_hint_selector: EditIconHintSelector::LeaveUnchanged,
+        icon_hint_slug: "site".to_string(),
+        focus: EditFocus::Label,
+        error: Some(dup_msg.clone()),
+    };
+    let base = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Edit(modal)),
+        selected: Some(target),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    // The allow-set: keys the Add modal's --allow-duplicate uses or
+    // similar shapes (`y`/`Y`/`A`/`Shift+A`/`Ctrl+A`/`Alt+Enter`).
+    // Typing 'y' / 'Y' / 'A' is text input on the focused Label row
+    // and clears the inline error (the contract is that typing
+    // clears errors so users see retries) — but it must NOT emit
+    // any effect. We verify the no-effect property; typing into the
+    // buffer is the correct behavior here.
+    // Each "allow"-coded key must be a no-op for emitted effects +
+    // duplicate-body preservation. We assert each manually because
+    // `AppEvent` is not `Clone` and a uniform iteration would
+    // either require a complex closure-tuple type or `Box<dyn>`.
+    for label in ["Ctrl-A", "Alt+Enter"] {
+        let evt = match label {
+            "Ctrl-A" => AppEvent::Input {
+                event: Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+                at: Instant::now(),
+            },
+            "Alt+Enter" => AppEvent::Input {
+                event: Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)),
+                at: Instant::now(),
+            },
+            _ => unreachable!(),
+        };
+        let (state, effects) = reduce(clone_app_state_for_allow_keys(&base), evt);
+        assert!(
+            effects.is_empty(),
+            "{label} must not emit an effect after duplicate rejection"
+        );
+        let edit = expect_edit_modal(&state);
+        assert_eq!(edit.label_buffer, "bob", "{label} must not mutate label");
+        assert!(
+            edit.error.as_deref() == Some(dup_msg.as_str()),
+            "{label} must preserve duplicate body message"
+        );
+    }
+}
+
+/// Helper: rebuild an `AppState::Unlocked` carrying an Edit modal
+/// from a borrowed reference. Used by the allow-keys regression
+/// guard above to feed the same state through multiple key events
+/// without consuming it.
+fn clone_app_state_for_allow_keys(state: &AppState) -> AppState {
+    match state {
+        AppState::Unlocked {
+            path,
+            modal: Some(Modal::Edit(edit)),
+            selected,
+            search_query,
+            ..
+        } => {
+            // Reopen the vault from `path` so each iteration gets a
+            // fresh `(Vault, Store)` handle without borrowing the
+            // original — the original holds a `Store` that cannot be
+            // cloned.
+            let (_p, (vault, store)) = open_plaintext_pair_for_path(path);
+            AppState::Unlocked {
+                path: path.clone(),
+                vault,
+                store,
+                search_query: search_query.clone(),
+                idle_deadline: None,
+                pending_clipboard_clear: None,
+                hotp_reveal: None,
+                modal: Some(Modal::Edit(edit.clone())),
+                selected: *selected,
+                pending_chord_leader: None,
+                viewport_height: 0,
+                viewport_offset: 0,
+                focus: Focus::List,
+                status_line: None,
+                help_open: false,
+            }
+        }
+        other => panic!("expected Unlocked with Edit modal, got {other:?}"),
+    }
+}
+
+fn open_plaintext_pair_for_path(path: &Path) -> (PathBuf, (Vault, Store)) {
+    let pair = Store::open(path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    (path.to_path_buf(), pair)
+}
+
+#[test]
+fn shift_e_while_rename_modal_open_is_silently_rejected() {
+    let (_tmp, _id, _path, unlocked) = fresh_unlocked_with_rename_modal_open("github", "github");
+    let rename_before = match &unlocked {
+        AppState::Unlocked {
+            modal: Some(Modal::Rename(r)),
+            ..
+        } => r.draft.clone(),
+        other => panic!("expected Rename modal, got {other:?}"),
+    };
+    let (state, effects) = reduce(
+        unlocked,
+        AppEvent::Input {
+            event: Event::Key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT)),
+            at: Instant::now(),
+        },
+    );
+    // Inside an open Rename modal the route falls into
+    // `route_rename_modal_input`, where `Char('E')` appends to the
+    // rename draft (typing inside the modal). It must NOT mount the
+    // Edit modal and must NOT emit any effect.
+    assert!(
+        effects.is_empty(),
+        "Shift+E in Rename modal must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Rename(r)),
+            ..
+        } => {
+            assert!(
+                r.draft.starts_with(&rename_before),
+                "rename draft must not be cleared; before={rename_before:?}, after={r:?}"
+            );
+        }
+        AppState::Unlocked { modal, .. } => {
+            panic!("Shift+E must keep Rename modal open, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn shift_r_while_edit_modal_open_is_silently_rejected() {
+    let (_tmp, _id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    // Capture the modal-local buffers before the press.
+    let (lbl, iss, slug, sel) = {
+        let edit = expect_edit_modal(&state);
+        (
+            edit.label_buffer.clone(),
+            edit.issuer_buffer.clone(),
+            edit.icon_hint_slug.clone(),
+            edit.icon_hint_selector,
+        )
+    };
+    let (state, effects) = reduce(
+        state,
+        AppEvent::Input {
+            event: Event::Key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT)),
+            at: Instant::now(),
+        },
+    );
+    assert!(effects.is_empty());
+    let edit = expect_edit_modal(&state);
+    // The character routes into the Label buffer (typing inside a
+    // modal). Selector + slug must be byte-identical; the Label
+    // buffer must extend by exactly 'R' (no Rename modal mount).
+    assert_eq!(edit.label_buffer, format!("{lbl}R"));
+    assert_eq!(edit.issuer_buffer, iss);
+    assert_eq!(edit.icon_hint_slug, slug);
+    assert_eq!(edit.icon_hint_selector, sel);
+}
+
+#[test]
+fn edit_modal_label_only_submit_emits_effect_with_only_label_populated() {
+    let (_tmp, id, path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    // Type one character — buffer diverges from prior.
+    let (state, _) = reduce(state, key(KeyCode::Char('!')));
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata {
+            path: p,
+            account_id,
+            edit: ae,
+        } => {
+            assert_eq!(p, &path);
+            assert_eq!(*account_id, id);
+            assert_eq!(ae.label.as_deref(), Some("alice!"));
+            assert!(ae.issuer.is_none());
+            assert!(ae.icon_hint.is_none());
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_modal_issuer_some_to_none_projects_clear() {
+    let (_tmp, id, path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", Some("Acme"), IconHintInput::Default);
+    // Walk to issuer, clear via repeated backspace.
+    let (s, _) = reduce(state, key(KeyCode::Tab)); // Issuer
+    let (s, _) = reduce(s, key(KeyCode::Backspace));
+    let (s, _) = reduce(s, key(KeyCode::Backspace));
+    let (s, _) = reduce(s, key(KeyCode::Backspace));
+    let (s, _) = reduce(s, key(KeyCode::Backspace));
+    // Buffer is now empty; prior was Some("Acme") → projection Some(None).
+    let (_state, effects) = reduce(s, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata {
+            path: p,
+            account_id,
+            edit: ae,
+        } => {
+            assert_eq!(p, &path);
+            assert_eq!(*account_id, id);
+            assert!(ae.label.is_none());
+            assert_eq!(ae.issuer, Some(None));
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_modal_icon_hint_selector_no_icon_projects_clear() {
+    let (_tmp, id, path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Slug("foo".to_string()));
+    // Walk to IconHint and select Clear: LeaveUnchanged → Default → Clear.
+    let (s, _) = reduce(state, key(KeyCode::Tab));
+    let (s, _) = reduce(s, key(KeyCode::Tab));
+    let (s, _) = reduce(s, key(KeyCode::Right));
+    let (s, _) = reduce(s, key(KeyCode::Right));
+    let edit = expect_edit_modal(&s);
+    assert_eq!(edit.icon_hint_selector, EditIconHintSelector::Clear);
+    let (_state, effects) = reduce(s, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata {
+            path: p,
+            account_id,
+            edit: ae,
+        } => {
+            assert_eq!(p, &path);
+            assert_eq!(*account_id, id);
+            assert!(matches!(ae.icon_hint, Some(IconHintInput::Clear)));
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_modal_typing_in_disabled_slug_row_is_noop() {
+    // The slug row is disabled when the selector is on LeaveUnchanged
+    // / Default / Clear. Focus cannot land on Slug via Tab when the
+    // selector is non-Slug (next_focus skips it), so this test
+    // constructs the modal with focus already on Slug (defensive
+    // invariant guard) and then types — the buffer must not change.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id =
+        add_totp_account_with_metadata(&mut vault, &store, "alice", None, IconHintInput::Default);
+    let modal = EditModal {
+        account_id: id,
+        prior: EditPrior {
+            label: "alice".to_string(),
+            issuer: None,
+            icon_hint: None,
+        },
+        label_buffer: "alice".to_string(),
+        issuer_buffer: String::new(),
+        icon_hint_selector: EditIconHintSelector::LeaveUnchanged,
+        icon_hint_slug: "preserved".to_string(),
+        focus: EditFocus::Slug,
+        error: None,
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Edit(modal)),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Char('z')));
+    assert!(effects.is_empty());
+    let edit = expect_edit_modal(&state);
+    assert_eq!(edit.icon_hint_slug, "preserved");
+    assert!(edit.error.is_none());
+}
+
+fn edit_result(
+    path: PathBuf,
+    account_id: AccountId,
+    result: Result<paladin_core::AccountSummary, EditFailure>,
+) -> AppEvent {
+    AppEvent::EffectResult(EffectResult::EditAccountMetadata {
+        path,
+        account_id,
+        result,
+    })
+}
+
+#[test]
+fn effect_result_edit_ok_closes_modal_with_status_line_confirmation() {
+    let (_tmp, id, path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", Some("Acme"), IconHintInput::Default);
+    // Look up the post-edit summary the executor would have built.
+    let summary = match &state {
+        AppState::Unlocked { vault, .. } => vault
+            .iter()
+            .find(|a| a.id() == id)
+            .expect("just-added account")
+            .summary(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (state, effects) = reduce(state, edit_result(path, id, Ok(summary.clone())));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            modal, status_line, ..
+        } => {
+            assert!(modal.is_none(), "Ok closes modal");
+            let line = status_line.expect("Ok must surface confirmation");
+            match line {
+                StatusLine::Confirmation(msg) => {
+                    assert!(
+                        msg.starts_with("Edited "),
+                        "confirmation must start with 'Edited ', got {msg:?}"
+                    );
+                    assert!(
+                        msg.contains("alice"),
+                        "confirmation must include account label, got {msg:?}"
+                    );
+                }
+                StatusLine::Error(e) => panic!("expected Confirmation, got Error({e:?})"),
+            }
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_edit_save_not_committed_keeps_modal_open_with_inline_error() {
+    let (_tmp, id, path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let (state, effects) = reduce(state, edit_result(path, id, Err(EditFailure::Save(err))));
+    assert!(effects.is_empty());
+    let edit = expect_edit_modal(&state);
+    let surfaced = edit.error.as_ref().expect("expected inline save error");
+    assert!(surfaced.contains("save not committed"), "got {surfaced:?}");
+}
+
+#[test]
+fn effect_result_edit_duplicate_keeps_modal_open_with_inline_duplicate_body() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let sibling = add_totp_account_with_metadata(
+        &mut vault,
+        &store,
+        "bob",
+        Some("Site"),
+        IconHintInput::Default,
+    );
+    let target = add_totp_account_with_metadata(
+        &mut vault,
+        &store,
+        "alice",
+        Some("Site"),
+        IconHintInput::Default,
+    );
+    let sibling_summary = vault
+        .iter()
+        .find(|a| a.id() == sibling)
+        .expect("sibling")
+        .summary();
+    let modal = EditModal {
+        account_id: target,
+        prior: EditPrior {
+            label: "alice".to_string(),
+            issuer: Some("Site".to_string()),
+            icon_hint: Some("site".to_string()),
+        },
+        label_buffer: "bob".to_string(),
+        issuer_buffer: "Site".to_string(),
+        icon_hint_selector: EditIconHintSelector::LeaveUnchanged,
+        icon_hint_slug: "site".to_string(),
+        focus: EditFocus::Label,
+        error: None,
+    };
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Edit(modal)),
+        selected: Some(target),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(
+        state,
+        edit_result(
+            path,
+            target,
+            Err(EditFailure::Duplicate {
+                existing: sibling_summary,
+            }),
+        ),
+    );
+    assert!(effects.is_empty());
+    let edit = expect_edit_modal(&state);
+    let msg = edit.error.as_ref().expect("expected duplicate body");
+    assert!(msg.contains("account already exists"), "got {msg:?}");
+}
+
+#[test]
+fn effect_result_edit_off_unlocked_silently_discarded() {
+    let path = PathBuf::from("/nowhere/vault.bin");
+    let id = AccountId::default();
+    let locked = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: None,
+    };
+    let (state, effects) = reduce(
+        locked,
+        edit_result(
+            path,
+            id,
+            Err(EditFailure::Save(PaladinError::SaveDurabilityUnconfirmed)),
+        ),
+    );
+    assert!(effects.is_empty());
+    assert!(matches!(state, AppState::Locked { .. }));
+}
+
+#[test]
+fn effect_result_edit_mismatched_path_silently_discarded() {
+    let (_tmp, id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    let wrong_path = PathBuf::from("/somewhere/else/vault.bin");
+    let summary = match &state {
+        AppState::Unlocked { vault, .. } => vault
+            .iter()
+            .find(|a| a.id() == id)
+            .expect("account")
+            .summary(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (state, effects) = reduce(state, edit_result(wrong_path, id, Ok(summary)));
+    assert!(effects.is_empty());
+    // Modal must still be open since the result was discarded.
+    let _ = expect_edit_modal(&state);
+}
+
+#[test]
+fn effect_result_edit_mismatched_account_id_silently_discarded() {
+    let (_tmp, _id, path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    let stale_id = AccountId::default();
+    let summary = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().next().expect("account").summary(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (state, effects) = reduce(state, edit_result(path, stale_id, Ok(summary)));
+    assert!(effects.is_empty());
+    let _ = expect_edit_modal(&state);
 }

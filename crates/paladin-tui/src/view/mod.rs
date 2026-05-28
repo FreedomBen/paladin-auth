@@ -18,6 +18,7 @@
 
 pub mod add;
 pub mod create_vault;
+pub mod edit;
 pub mod export;
 pub mod help;
 pub mod import;
@@ -141,6 +142,7 @@ fn render_modal(frame: &mut Frame<'_>, modal: &Modal, vault: &Vault, no_color: b
         Modal::Add(add_modal) => add::render(frame, add_modal, no_color),
         Modal::Remove(remove_modal) => remove::render(frame, remove_modal, vault, no_color),
         Modal::Rename(rename_modal) => rename::render(frame, rename_modal, vault, no_color),
+        Modal::Edit(edit_modal) => edit::render(frame, edit_modal, vault, no_color),
         Modal::Import(import_modal) => import::render(frame, import_modal, no_color),
         Modal::Export(export_modal) => export::render(frame, export_modal, no_color),
         Modal::Passphrase(passphrase_modal) => {

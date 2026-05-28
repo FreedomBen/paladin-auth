@@ -30,8 +30,8 @@ use paladin_core::{
 };
 
 use crate::app::event::{
-    AddFailure, AddSuccess, AppEvent, CreateVaultInit, Effect, EffectResult, ImportFailure,
-    ImportSuccess, QrImportFailure, QrImportSuccess,
+    AddFailure, AddSuccess, AppEvent, CreateVaultInit, EditFailure, Effect, EffectResult,
+    ImportFailure, ImportSuccess, QrImportFailure, QrImportSuccess,
 };
 use crate::app::state::{AppState, ExportFormat, QrSaveFormat};
 
@@ -352,6 +352,11 @@ pub fn execute(
         Effect::ApplySettings { path, patches } => {
             execute_apply_settings(&path, &patches, state, sender)
         }
+        Effect::EditAccountMetadata {
+            path,
+            account_id,
+            edit,
+        } => execute_edit_account_metadata(&path, account_id, edit, state, sender),
         Effect::Rename {
             path,
             account_id,
@@ -722,6 +727,96 @@ fn execute_apply_settings(
             let _ = sender.send(AppEvent::EffectResult(EffectResult::Settings { result }));
         }
     }
+    EffectOutcome::Continue
+}
+
+/// Execute an [`Effect::EditAccountMetadata`] for the v0.2 Edit modal
+/// submit.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Edit":
+///
+/// 1. Path-mismatch / off-`Unlocked` deliveries are silently dropped
+///    (mirrors the `Effect::Rename` precedent — a stale effect aimed
+///    at a no-longer-current path is consumed without a post-back).
+/// 2. Pre-flight: re-run
+///    [`paladin_core::Vault::find_duplicate_after_edit`] against the
+///    live vault before reaching the mutator. A duplicate at this
+///    point (one that appeared between the reducer's pre-check and
+///    the save) short-circuits **without** invoking
+///    [`paladin_core::Vault::mutate_and_save`] — the executor sends
+///    `EffectResult::EditAccountMetadata { Err(DuplicateAccount) }`
+///    and the on-disk vault stays byte-identical (locked by an
+///    `effect_tests.rs` test that asserts zero `mutate_and_save`
+///    calls during a rejected effect via the
+///    `PALADIN_FAULT_INJECT` sink the Add / Rename executor tests
+///    already use).
+/// 3. Apply via [`paladin_core::Vault::edit_account_metadata`] inside
+///    [`paladin_core::Vault::mutate_and_save`] so a pre-commit
+///    failure (`save_not_committed`) snaps the in-memory account back
+///    to its pre-edit state, while post-commit
+///    `save_durability_unconfirmed` leaves the new state in memory
+///    matching the on-disk primary. The executor projects the
+///    post-save [`paladin_core::AccountSummary`] for the carried
+///    `Ok` payload so the reducer's confirmation status line can name
+///    the account.
+fn execute_edit_account_metadata(
+    path: &std::path::Path,
+    account_id: AccountId,
+    edit: paladin_core::AccountEdit,
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+) -> EffectOutcome {
+    let AppState::Unlocked {
+        path: state_path,
+        vault,
+        store,
+        ..
+    } = state
+    else {
+        return EffectOutcome::Continue;
+    };
+    if state_path != path {
+        return EffectOutcome::Continue;
+    }
+
+    // Step 2: pre-flight duplicate check against the live vault. The
+    // reducer-side pre-check fires earlier but a duplicate may have
+    // appeared between that and the save; surface it without
+    // touching the on-disk vault.
+    if let Some(existing) = vault.find_duplicate_after_edit(account_id, &edit) {
+        let existing_summary = existing.summary();
+        let _ = sender.send(AppEvent::EffectResult(EffectResult::EditAccountMetadata {
+            path: path.to_path_buf(),
+            account_id,
+            result: Err(EditFailure::Duplicate {
+                existing: existing_summary,
+            }),
+        }));
+        return EffectOutcome::Continue;
+    }
+
+    let mutate_result = vault.mutate_and_save(store, |v| {
+        v.edit_account_metadata(account_id, edit, SystemTime::now())
+    });
+    let projected = match mutate_result {
+        Ok(()) => match vault.get(account_id) {
+            Some(account) => Ok(account.summary()),
+            // Defensive: an account vanishing immediately after a
+            // successful edit would indicate a core invariant break.
+            // Surface as `account_not_found` so the reducer treats
+            // the result as an error and leaves the modal open.
+            None => Err(EditFailure::Save(PaladinError::InvalidState {
+                operation: "edit_account_metadata",
+                state: "account_not_found",
+            })),
+        },
+        Err(err) => Err(EditFailure::Save(err)),
+    };
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::EditAccountMetadata {
+        path: path.to_path_buf(),
+        account_id,
+        result: projected,
+    }));
     EffectOutcome::Continue
 }
 

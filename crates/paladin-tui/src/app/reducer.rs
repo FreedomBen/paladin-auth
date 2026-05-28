@@ -15,24 +15,26 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use paladin_core::{
     classify_paladin_import_precheck, format_plaintext_export_warning, format_validation_warning,
-    hotp_reveal_deadline, validate_label, AccountId, AccountKindInput, Algorithm,
-    ClipboardClearPolicy, ClipboardClearToken, Code, IdlePolicy, PaladinError,
+    hotp_reveal_deadline, summary_display_label, validate_account_edit, validate_icon_hint_slug,
+    validate_label, AccountEdit, AccountId, AccountKindInput, AccountSummary, Algorithm,
+    ClipboardClearPolicy, ClipboardClearToken, Code, IconHintInput, IdlePolicy, PaladinError,
     PaladinImportPrecheck, SettingPatch, Store, Vault,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::app::event::{
-    AddFailure, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess, QrImportSuccess,
+    AddFailure, AppEvent, EditFailure, Effect, EffectResult, ImportFailure, ImportSuccess,
+    QrImportSuccess,
 };
 use crate::app::state::{
     compute_idle_deadline, format_account_display_label, format_duplicate_account_message,
     format_qr_import_failure, initial_selection, render_error_message, AddManualFocus, AddModal,
-    AddMode, AppState, ChordLeader, CountsPanel, ExportFormat, ExportModal, Focus, HotpReveal,
-    ImportModal, Modal, PassphraseModal, PassphraseSubFlow, PendingClipboardClear,
-    PendingDuplicateAdd, QrExportFocus, QrExportModal, QrExportPage, QrSaveFocus, QrSaveFormat,
-    QrSaveStep, QrSaveSubFlow, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
-    CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    AddMode, AppState, ChordLeader, CountsPanel, EditFocus, EditIconHintSelector, EditModal,
+    EditPrior, ExportFormat, ExportModal, Focus, HotpReveal, ImportModal, Modal, PassphraseModal,
+    PassphraseSubFlow, PendingClipboardClear, PendingDuplicateAdd, QrExportFocus, QrExportModal,
+    QrExportPage, QrSaveFocus, QrSaveFormat, QrSaveStep, QrSaveSubFlow, RemoveModal, RenameModal,
+    SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::prompt::PassphraseBuffer;
 use crate::search::{filtered_account_ids, select_after_search};
@@ -286,6 +288,11 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
         EffectResult::Rename { account_id, result } => {
             reduce_rename_result(state, account_id, result)
         }
+        EffectResult::EditAccountMetadata {
+            path,
+            account_id,
+            result,
+        } => reduce_edit_account_metadata_result(state, &path, account_id, result),
         EffectResult::Remove { account_id, result } => {
             reduce_remove_result(state, account_id, result)
         }
@@ -674,6 +681,75 @@ fn reduce_rename_result(
         }
         Err(err) => {
             rename.error = Some(render_error_message(&err));
+        }
+    }
+    (state, Vec::new())
+}
+
+/// Handle the outcome of an [`Effect::EditAccountMetadata`].
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Edit"
+/// `EffectResult::EditAccountMetadata` Ok-arm: when the executor
+/// reports success, the reducer closes the Edit modal and publishes
+/// `StatusLine::Confirmation(format!("Edited {}.",
+/// summary_display_label(&summary)))` against the post-edit
+/// [`paladin_core::AccountSummary`] carried in the Ok payload.
+///
+/// `Err(EditFailure::Duplicate { existing })` keeps the modal open
+/// and surfaces the inline `duplicate_account` message via
+/// [`format_duplicate_account_message`]; there is **no edit-anyway
+/// override** per the locked spec — only revising the row buffers
+/// can clear it.
+///
+/// `Err(EditFailure::Save(err))` keeps the modal open and surfaces
+/// the rendered save error inline through [`render_error_message`]
+/// — `save_not_committed` is rolled back inside
+/// `Vault::mutate_and_save` so memory matches disk, while
+/// `save_durability_unconfirmed` leaves the new state in memory and
+/// surfaces the warning inline.
+///
+/// Deliveries that arrive after the user navigated away (off-
+/// `Unlocked`), against a mismatched live vault path, with no Edit
+/// modal open, or for a mismatched `account_id` are silently
+/// discarded so the carried payload drops without mutating state.
+fn reduce_edit_account_metadata_result(
+    mut state: AppState,
+    expected_path: &std::path::Path,
+    account_id: AccountId,
+    result: Result<AccountSummary, EditFailure>,
+) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked {
+        ref path,
+        ref mut modal,
+        ref mut status_line,
+        ..
+    } = state
+    else {
+        return (state, Vec::new());
+    };
+    if path != expected_path {
+        return (state, Vec::new());
+    }
+    let Some(Modal::Edit(edit)) = modal.as_mut() else {
+        return (state, Vec::new());
+    };
+    if edit.account_id != account_id {
+        return (state, Vec::new());
+    }
+
+    match result {
+        Ok(summary) => {
+            *modal = None;
+            *status_line = Some(StatusLine::Confirmation(format!(
+                "Edited {}.",
+                summary_display_label(&summary),
+            )));
+        }
+        Err(EditFailure::Duplicate { existing }) => {
+            edit.error = Some(format_duplicate_account_message(&existing));
+        }
+        Err(EditFailure::Save(err)) => {
+            edit.error = Some(render_error_message(&err));
         }
     }
     (state, Vec::new())
@@ -1747,6 +1823,7 @@ fn route_unlocked_char_kbd(mut state: AppState, c: char) -> (AppState, Vec<Effec
     }
     let n_effects = n_effects_for_char(c, path, vault, *selected);
     let rename_modal = pending_rename_for_char(c, vault, *selected);
+    let edit_modal = pending_edit_for_char(c, vault, *selected);
     let remove_modal = pending_remove_for_char(c, *selected);
     let settings_modal = pending_settings_for_char(c, vault);
     let qr_export_modal = pending_qr_export_for_char(c, vault, *selected);
@@ -1760,6 +1837,7 @@ fn route_unlocked_char_kbd(mut state: AppState, c: char) -> (AppState, Vec<Effec
         c,
         n_effects,
         rename_modal,
+        edit_modal,
         remove_modal,
         settings_modal,
         qr_export_modal,
@@ -1842,6 +1920,43 @@ fn pending_rename_for_char(
     Some(RenameModal {
         account_id: id,
         draft: account.label().to_owned(),
+        error: None,
+    })
+}
+
+/// Construct the [`EditModal`] payload for `Shift+E` from the still-
+/// borrowed vault + selection, or `None` when the binding is not
+/// `'E'` or when the selection cannot be resolved to a vault account.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Edit"
+/// and the "Edit modal" test inventory: opens with all three controls
+/// pre-populated — label buffer = prior label, issuer buffer = prior
+/// issuer (`None` rendered as empty), icon-hint selector defaulted to
+/// *Leave unchanged* with the sibling slug buffer pre-populated from
+/// the prior `icon_hint` slug (empty string when the prior was
+/// `None`). Initial focus lands on the Label row.
+fn pending_edit_for_char(c: char, vault: &Vault, selected: Option<AccountId>) -> Option<EditModal> {
+    if c != 'E' {
+        return None;
+    }
+    let id = selected?;
+    let account = vault.iter().find(|a| a.id() == id)?;
+    let prior_label = account.label().to_owned();
+    let prior_issuer = account.issuer().map(str::to_owned);
+    let prior_icon_hint = account.icon_hint().map(str::to_owned);
+    let slug_buffer = prior_icon_hint.clone().unwrap_or_default();
+    Some(EditModal {
+        account_id: id,
+        prior: EditPrior {
+            label: prior_label.clone(),
+            issuer: prior_issuer.clone(),
+            icon_hint: prior_icon_hint,
+        },
+        label_buffer: prior_label,
+        issuer_buffer: prior_issuer.unwrap_or_default(),
+        icon_hint_selector: EditIconHintSelector::LeaveUnchanged,
+        icon_hint_slug: slug_buffer,
+        focus: EditFocus::Label,
         error: None,
     })
 }
@@ -1942,6 +2057,7 @@ fn route_modal_input(
     match modal.as_mut() {
         Some(Modal::Add(add)) => route_add_modal_input(path, add, key),
         Some(Modal::Rename(rename)) => route_rename_modal_input(path, rename, key),
+        Some(Modal::Edit(edit)) => route_edit_modal_input(path, edit, vault, key),
         Some(Modal::Remove(remove)) => route_remove_modal_input(path, remove, key),
         Some(Modal::Import(import)) => route_import_modal_input(path, import, key),
         Some(Modal::Export(export)) => route_export_modal_input(path, export, key),
@@ -2523,6 +2639,255 @@ fn route_rename_modal_input(
             }
         },
         _ => Vec::new(),
+    }
+}
+
+/// v0.2 Edit modal's input path (`Shift+E`).
+///
+/// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Edit"
+/// and the "Edit modal" test inventory:
+///
+/// - `Tab` / `Shift-Tab` (and `Ctrl-N` / `Ctrl-P`) cycle focus across
+///   the focusable controls in document order. The cycle length is
+///   three stops (Label → Issuer → Icon hint) by default and four
+///   stops (Label → Issuer → Icon hint → Slug) when the icon-hint
+///   selector is on *Slug:*. The pure-logic cycle lives on
+///   [`EditModal::next_focus`] / [`EditModal::prev_focus`].
+/// - Printable `KeyCode::Char` keystrokes route to the focused text
+///   row: Label / Issuer / Slug (when *Slug:* is active and the slug
+///   row is focused). Typing while the slug row is disabled is a
+///   silent no-op so accidental focus state cannot mutate the
+///   buffer.
+/// - `Backspace` pops the trailing byte from the focused buffer
+///   (Label / Issuer / Slug); no-op on the icon-hint selector row.
+/// - `←` / `→` on the icon-hint selector cycles its four options;
+///   `←` / `→` on text-input rows are silent no-ops.
+/// - Typing into any row clears the modal's inline error so the user
+///   sees their retry.
+/// - `Enter` runs the three-step locked pre-check ordering: explicit
+///   empty-edit guard → [`validate_account_edit`] → [`Vault::find_duplicate_after_edit`].
+///   The first failure wins; subsequent checks are skipped. On a
+///   passing draft the reducer emits [`Effect::EditAccountMetadata`].
+fn route_edit_modal_input(
+    path: &std::path::Path,
+    edit: &mut EditModal,
+    vault: &Vault,
+    key: &KeyEvent,
+) -> Vec<Effect> {
+    // Focus-cycle triggers go first so Tab / Ctrl-N never reach the
+    // per-row text handler.
+    if is_modal_focus_next(key) {
+        edit.focus = edit.next_focus();
+        return Vec::new();
+    }
+    if is_modal_focus_prev(key) {
+        edit.focus = edit.prev_focus();
+        return Vec::new();
+    }
+
+    match key.code {
+        KeyCode::Char(c) => {
+            // The shared `route_modal_input` Ctrl/Alt guard filters
+            // modifier-bearing Chars before this routing runs, so a
+            // bare `c` is safe to append.
+            match edit.focus {
+                EditFocus::Label => {
+                    edit.label_buffer.push(c);
+                    edit.error = None;
+                }
+                EditFocus::Issuer => {
+                    edit.issuer_buffer.push(c);
+                    edit.error = None;
+                }
+                EditFocus::IconHint => {
+                    // No text input on the selector row.
+                }
+                EditFocus::Slug => {
+                    // Defensive: only mutate the slug buffer when the
+                    // slug row is actually enabled (selector on
+                    // *Slug:*). Focus state can only land on Slug
+                    // when the selector is on *Slug:* per
+                    // `next_focus` / `prev_focus`, so this is a
+                    // belt-and-braces guard for future refactors.
+                    if edit.icon_hint_selector == EditIconHintSelector::Slug {
+                        edit.icon_hint_slug.push(c);
+                        edit.error = None;
+                    }
+                }
+            }
+            Vec::new()
+        }
+        KeyCode::Backspace => {
+            match edit.focus {
+                EditFocus::Label => {
+                    edit.label_buffer.pop();
+                    edit.error = None;
+                }
+                EditFocus::Issuer => {
+                    edit.issuer_buffer.pop();
+                    edit.error = None;
+                }
+                EditFocus::IconHint => {}
+                EditFocus::Slug => {
+                    if edit.icon_hint_selector == EditIconHintSelector::Slug {
+                        edit.icon_hint_slug.pop();
+                        edit.error = None;
+                    }
+                }
+            }
+            Vec::new()
+        }
+        KeyCode::Left if edit.focus == EditFocus::IconHint => {
+            edit.icon_hint_selector = edit.icon_hint_selector.prev();
+            edit.error = None;
+            Vec::new()
+        }
+        KeyCode::Right if edit.focus == EditFocus::IconHint => {
+            edit.icon_hint_selector = edit.icon_hint_selector.next();
+            edit.error = None;
+            Vec::new()
+        }
+        KeyCode::Enter => classify_edit_submit(path, edit, vault),
+        _ => Vec::new(),
+    }
+}
+
+/// Run the three-step locked pre-check ordering (empty → validate →
+/// `find_duplicate_after_edit`) on a submit and either emit
+/// [`Effect::EditAccountMetadata`] or stash the inline error.
+///
+/// Pure-logic helper so reducer tests can exercise the ordering
+/// without driving through the `KeyCode::Enter` arm.
+fn classify_edit_submit(
+    path: &std::path::Path,
+    edit: &mut EditModal,
+    vault: &Vault,
+) -> Vec<Effect> {
+    let projection = project_edit(edit);
+
+    // Step 1: explicit reducer-side empty-edit guard. Mirrors the
+    // mutator-side guard in `Vault::edit_account_metadata` so the
+    // modal surfaces an inline error without ever reaching the
+    // executor.
+    if projection.label.is_none() && projection.issuer.is_none() && projection.icon_hint.is_none() {
+        edit.error = Some(render_error_message(&PaladinError::ValidationError {
+            field: "edit",
+            reason: "empty".to_string(),
+            source_index: None,
+            decoded_len: None,
+            recommended_min: None,
+            entry_type: None,
+        }));
+        return Vec::new();
+    }
+
+    // Step 2: per-field validation. First failure wins per the
+    // locked order in `validate_account_edit`. The `prior` lookup is
+    // best-effort; if the account has been removed out from under
+    // the modal we surface the same `invalid_state` the executor
+    // would.
+    let Some(prior_account) = vault.iter().find(|a| a.id() == edit.account_id) else {
+        edit.error = Some(render_error_message(&PaladinError::InvalidState {
+            operation: "edit_account_metadata",
+            state: "account_not_found",
+        }));
+        return Vec::new();
+    };
+    if let Err(err) =
+        validate_account_edit(&projection, prior_account, std::time::SystemTime::now())
+    {
+        edit.error = Some(render_error_message(&err));
+        return Vec::new();
+    }
+
+    // Step 3: pre-submit duplicate check against the live vault.
+    if let Some(existing) = vault.find_duplicate_after_edit(edit.account_id, &projection) {
+        let existing_summary = existing.summary();
+        edit.error = Some(format_duplicate_account_message(&existing_summary));
+        return Vec::new();
+    }
+
+    // All pre-checks passed; clear any stale inline error and emit
+    // the effect.
+    edit.error = None;
+    vec![Effect::EditAccountMetadata {
+        path: path.to_path_buf(),
+        account_id: edit.account_id,
+        edit: projection,
+    }]
+}
+
+/// Project the in-flight modal buffers onto a
+/// [`paladin_core::AccountEdit`].
+///
+/// WYSIWYS rules per `docs/IMPLEMENTATION_PLAN_03_TUI.md`:
+/// - Label buffer byte-equal to the prior label → `label: None`.
+/// - Issuer buffer byte-equal to the prior issuer's `Some(_)` arm
+///   → `issuer: None` (leave untouched). An empty buffer when prior
+///   was `Some(_)` → `Some(None)` (clear). An empty buffer when
+///   prior was `None` → `None` (already cleared). A divergent non-
+///   empty buffer → `Some(Some(buffer))`. Whitespace-only buffers
+///   collapse to the same projection an empty buffer would produce
+///   for the corresponding prior, mirroring the validator's
+///   §4.1-trim contract.
+/// - Icon-hint selector → tri-state per [`EditIconHintSelector`].
+fn project_edit(edit: &EditModal) -> AccountEdit {
+    let label = if edit.label_buffer == edit.prior.label {
+        None
+    } else {
+        Some(edit.label_buffer.clone())
+    };
+
+    let trimmed_issuer = edit.issuer_buffer.trim();
+    let issuer = match edit.prior.issuer.as_deref() {
+        None => {
+            // Prior was None.
+            if trimmed_issuer.is_empty() {
+                // Buffer is empty / whitespace-only and prior was
+                // already None — projection is a no-op.
+                None
+            } else if edit.issuer_buffer == *edit.prior.issuer.as_deref().unwrap_or("") {
+                // Defensive: byte-equal to prior empty is unreachable
+                // here because we already checked `trimmed_issuer.is_empty`.
+                None
+            } else {
+                Some(Some(edit.issuer_buffer.clone()))
+            }
+        }
+        Some(prior_issuer) => {
+            if edit.issuer_buffer == prior_issuer {
+                // Buffer byte-equal to prior → leave untouched.
+                None
+            } else if trimmed_issuer.is_empty() {
+                // Buffer empty / whitespace-only against a `Some(_)`
+                // prior → clear.
+                Some(None)
+            } else {
+                Some(Some(edit.issuer_buffer.clone()))
+            }
+        }
+    };
+
+    let icon_hint = match edit.icon_hint_selector {
+        EditIconHintSelector::LeaveUnchanged => None,
+        EditIconHintSelector::Default => Some(IconHintInput::Default),
+        EditIconHintSelector::Clear => Some(IconHintInput::Clear),
+        EditIconHintSelector::Slug => match validate_icon_hint_slug(&edit.icon_hint_slug) {
+            Ok(input) => Some(input),
+            // Defer the surfacing to the validator step; we still
+            // emit a `Some(IconHintInput::Slug(...))` carrying the
+            // raw buffer so `validate_account_edit` produces the
+            // canonical `invalid_slug` / `invalid_chars` /
+            // `too_long` error consistent with the rest of the
+            // stack.
+            Err(_) => Some(IconHintInput::Slug(edit.icon_hint_slug.clone())),
+        },
+    };
+
+    AccountEdit {
+        label,
+        issuer,
+        icon_hint,
     }
 }
 
@@ -3222,7 +3587,7 @@ fn route_passphrase_modal_input(
 /// `Enter` is not bound on Unlocked at this slice — once it gains a
 /// show / copy action it joins this gate.
 fn selection_gated_status_error(c: char, selected: Option<AccountId>) -> Option<StatusLine> {
-    if matches!(c, 'n' | 'r' | 'R' | 'C') && selected.is_none() {
+    if matches!(c, 'n' | 'r' | 'R' | 'E' | 'C') && selected.is_none() {
         Some(StatusLine::Error(NO_ACCOUNT_SELECTED.to_string()))
     } else {
         None
@@ -3257,6 +3622,7 @@ fn dispatch_unlocked_char(
     c: char,
     n_effects: Vec<Effect>,
     rename_modal: Option<RenameModal>,
+    edit_modal: Option<EditModal>,
     remove_modal: Option<RemoveModal>,
     settings_modal: Option<SettingsModal>,
     qr_export_modal: Option<QrExportModal>,
@@ -3323,6 +3689,20 @@ fn dispatch_unlocked_char(
         if let Some(rename) = rename_modal {
             if let AppState::Unlocked { modal, .. } = &mut state {
                 *modal = Some(Modal::Rename(rename));
+            }
+        }
+        return (state, Vec::new());
+    }
+    if c == 'E' {
+        // v0.2 Edit (`Shift+E`) is selection-gated (filtered
+        // upstream) and carries a pre-populated payload built by
+        // [`pending_edit_for_char`]. A `None` here means the gate
+        // was passed but the selection could not be resolved to a
+        // vault account — leave the modal slot untouched so the
+        // binding observes as a silent no-op.
+        if let Some(edit) = edit_modal {
+            if let AppState::Unlocked { modal, .. } = &mut state {
+                *modal = Some(Modal::Edit(edit));
             }
         }
         return (state, Vec::new());
