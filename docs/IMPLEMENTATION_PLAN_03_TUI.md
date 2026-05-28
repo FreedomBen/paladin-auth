@@ -2465,7 +2465,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   intentional — the selector's active option is conveyed by
   glyph, never by color alone, satisfying the §13 contrast/
   color-independence rule for the TUI surface.
-- [ ] **No save-in-flight snapshot needed:** TUI save is
+- [x] **No save-in-flight snapshot needed:** TUI save is
   reducer-synchronous (the `Effect::EditAccountMetadata` round-
   trip completes within the executor's single
   `Vault::mutate_and_save` call before the next reducer arm
@@ -2474,21 +2474,30 @@ ships in `paladin-core` and the TUI Edit modal lands.
   `snapshot_edit_modal_save_in_flight` fixture; if a future
   refactor introduces an async save path, this bullet flips to
   a real snapshot.
-- [ ] Snapshot test for the validation-error variant
+- [x] Snapshot test for the validation-error variant
   (`tests/view_snapshots.rs::snapshot_edit_modal_validation_error`)
   with an invalid icon-hint slug entered under *Slug:* so the
   inline `validation_error` (`field: "icon_hint"`,
-  `reason: "invalid_slug"`) text renders beside the selector.
-- [ ] Snapshot test for the durability-warning variant
+  `reason: "invalid_chars"` — the locked core's concrete reason)
+  text renders beside the selector. The fixture drives a real
+  `Enter` submit so the error is populated through
+  `validate_account_edit` rather than hand-built.
+- [x] Snapshot test for the durability-warning variant
   (`tests/view_snapshots.rs::snapshot_edit_modal_durability_warning`)
   with `EffectResult::EditAccountMetadata`
   `Err(SaveDurabilityUnconfirmed)` injected so the inline warning
   text renders, mirroring the Rename durability snapshot.
-- [ ] Snapshot test for the *Slug:* mode active
+- [x] Snapshot test for the *Slug:* mode active
   (`tests/view_snapshots.rs::snapshot_edit_modal_icon_hint_slug_mode`)
   so the slug input row is captured as enabled and focused,
   visually distinguishing it from the disabled state under the
-  other three selector options.
+  other three selector options. **Layout note:** the symbol-only
+  `render_to_text` grid drops the bold/dim styling, so the
+  enabled/focused distinction is conveyed by the selector row
+  rather than the slug row's emphasis; and because the four
+  options overflow the 64-col modal, the active `▶ Slug: ◀`
+  marker (rightmost option) is truncated off the right edge —
+  a pre-existing layout limitation now pinned by this snapshot.
 - [x] Snapshot test for the duplicate-account variant
   (`tests/view_snapshots.rs::snapshot_edit_modal_duplicate_account`)
   with the pre-submit `Vault::find_duplicate_after_edit` check

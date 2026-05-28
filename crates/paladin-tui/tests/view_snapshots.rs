@@ -2643,6 +2643,82 @@ fn snapshot_edit_modal_duplicate_account() {
 }
 
 #[test]
+fn snapshot_edit_modal_validation_error() {
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Edit modal > snapshot
+    // bullet: validation-error variant with an invalid icon-hint slug
+    // entered under *Slug:* so the inline `validation_error`
+    // (`field: "icon_hint"`, `reason: "invalid_chars"`) renders beside
+    // the selector. Drive the reducer's submit so the error is
+    // populated through the real `validate_account_edit` path rather
+    // than hand-built.
+    let state = fresh_edit_modal_state(
+        "ben@example.com",
+        Some("GitHub"),
+        EditIconHintSelector::Slug,
+        "Bad Slug!",
+        None,
+        EditFocus::Slug,
+        false,
+    );
+    let enter = AppEvent::Input {
+        event: Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        at: Instant::now(),
+    };
+    let (state, _) = reduce(state, enter);
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("icon_hint") && rendered.contains("invalid_chars"),
+        "expected icon_hint invalid_chars wording, got:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_edit_modal_durability_warning() {
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Edit modal > snapshot
+    // bullet: durability-warning variant with
+    // `EffectResult::EditAccountMetadata` `Err(SaveDurabilityUnconfirmed)`
+    // surfaced as the inline warning, mirroring the Rename durability
+    // snapshot. Both surfaces render the warning through
+    // `render_error_message`.
+    let state = fresh_edit_modal_state(
+        "ben@example.com",
+        Some("GitHub"),
+        EditIconHintSelector::LeaveUnchanged,
+        "github",
+        Some(render_error_message(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        EditFocus::Label,
+        false,
+    );
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.to_lowercase().contains("durability"),
+        "expected durability warning wording, got:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_edit_modal_icon_hint_slug_mode() {
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Edit modal > snapshot
+    // bullet: *Slug:* mode active so the slug input row is captured as
+    // enabled and focused, visually distinguishing it from the
+    // disabled state under the other three selector options.
+    let state = fresh_edit_modal_state(
+        "ben@example.com",
+        Some("GitHub"),
+        EditIconHintSelector::Slug,
+        "github",
+        None,
+        EditFocus::Slug,
+        false,
+    );
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 20));
+}
+
+#[test]
 fn snapshot_import_modal_default() {
     // Plan L1886: "Import modal." Drive `view::render` against an
     // `Unlocked` state with `Modal::Import(ImportModal::default())`
