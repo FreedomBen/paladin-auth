@@ -703,6 +703,23 @@ impl core::marker::Unpin for paladin_core::Account
 impl core::marker::UnsafeUnpin for paladin_core::Account
 impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::Account
 impl core::panic::unwind_safe::UnwindSafe for paladin_core::Account
+pub struct paladin_core::AccountEdit
+pub paladin_core::AccountEdit::icon_hint: core::option::Option<paladin_core::IconHintInput>
+pub paladin_core::AccountEdit::issuer: core::option::Option<core::option::Option<alloc::string::String>>
+pub paladin_core::AccountEdit::label: core::option::Option<alloc::string::String>
+impl core::clone::Clone for paladin_core::AccountEdit
+pub fn paladin_core::AccountEdit::clone(&self) -> paladin_core::AccountEdit
+impl core::default::Default for paladin_core::AccountEdit
+pub fn paladin_core::AccountEdit::default() -> paladin_core::AccountEdit
+impl core::fmt::Debug for paladin_core::AccountEdit
+pub fn paladin_core::AccountEdit::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::AccountEdit
+impl core::marker::Send for paladin_core::AccountEdit
+impl core::marker::Sync for paladin_core::AccountEdit
+impl core::marker::Unpin for paladin_core::AccountEdit
+impl core::marker::UnsafeUnpin for paladin_core::AccountEdit
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::AccountEdit
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::AccountEdit
 pub struct paladin_core::AccountId(_)
 impl paladin_core::AccountId
 pub fn paladin_core::AccountId::as_bytes(&self) -> &[u8; 16]
@@ -1022,10 +1039,12 @@ pub fn paladin_core::Vault::accounts(&self) -> &[paladin_core::Account]
 pub fn paladin_core::Vault::add(&mut self, account: paladin_core::Account) -> paladin_core::AccountId
 pub fn paladin_core::Vault::apply_setting_patch(&mut self, patch: paladin_core::SettingPatch) -> paladin_core::Result<()>
 pub fn paladin_core::Vault::change_passphrase(&mut self, store: &paladin_core::Store, options: paladin_core::EncryptionOptions) -> paladin_core::Result<()>
+pub fn paladin_core::Vault::edit_account_metadata(&mut self, id: paladin_core::AccountId, edit: paladin_core::AccountEdit, now: std::time::SystemTime) -> paladin_core::Result<()>
 pub fn paladin_core::Vault::export_qr_ansi(&self, id: paladin_core::AccountId) -> paladin_core::Result<zeroize::Zeroizing<alloc::string::String>>
 pub fn paladin_core::Vault::export_qr_png(&self, id: paladin_core::AccountId, opts: &paladin_core::QrRenderOptions) -> paladin_core::Result<zeroize::Zeroizing<alloc::vec::Vec<u8>>>
 pub fn paladin_core::Vault::export_qr_svg(&self, id: paladin_core::AccountId, opts: &paladin_core::QrRenderOptions) -> paladin_core::Result<zeroize::Zeroizing<alloc::string::String>>
 pub fn paladin_core::Vault::find_duplicate(&self, account: &paladin_core::ValidatedAccount) -> core::option::Option<&paladin_core::Account>
+pub fn paladin_core::Vault::find_duplicate_after_edit(&self, id: paladin_core::AccountId, edit: &paladin_core::AccountEdit) -> core::option::Option<&paladin_core::Account>
 pub fn paladin_core::Vault::get(&self, id: paladin_core::AccountId) -> core::option::Option<&paladin_core::Account>
 pub fn paladin_core::Vault::hotp_advance(&mut self, store: &paladin_core::Store, id: paladin_core::AccountId, now: std::time::SystemTime) -> paladin_core::Result<paladin_core::Code>
 pub fn paladin_core::Vault::hotp_peek(&self, id: paladin_core::AccountId) -> paladin_core::Result<paladin_core::Code>
@@ -1125,6 +1144,8 @@ pub fn paladin_core::parse_setting_key(key: &str) -> paladin_core::Result<paladi
 pub fn paladin_core::parse_setting_patch(key: &str, value: &str) -> paladin_core::Result<paladin_core::SettingPatch>
 pub fn paladin_core::select_after_filter(prev: core::option::Option<paladin_core::AccountId>, filtered: &[paladin_core::AccountId]) -> core::option::Option<paladin_core::AccountId>
 pub fn paladin_core::summary_display_label(summary: &paladin_core::AccountSummary) -> alloc::string::String
+pub fn paladin_core::validate_account_edit(edit: &paladin_core::AccountEdit, prior: &paladin_core::Account, now: std::time::SystemTime) -> core::result::Result<(), paladin_core::PaladinError>
+pub fn paladin_core::validate_icon_hint_slug(slug: &str) -> core::result::Result<paladin_core::IconHintInput, paladin_core::PaladinError>
 pub fn paladin_core::validate_label(raw: &str) -> core::result::Result<alloc::string::String, paladin_core::PaladinError>
 pub fn paladin_core::validate_manual(input: paladin_core::AccountInput, now: std::time::SystemTime) -> core::result::Result<paladin_core::ValidatedAccount, paladin_core::PaladinError>
 pub fn paladin_core::write_secret_file_atomic(path: &std::path::Path, content: &[u8]) -> paladin_core::Result<()>

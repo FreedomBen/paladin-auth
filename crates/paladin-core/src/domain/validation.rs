@@ -331,7 +331,8 @@ pub struct AccountEdit {
 
     /// `Some(Some(new_issuer))` sets; `Some(None)` clears;
     /// `None` leaves the prior issuer untouched. A set value runs
-    /// through the same trim / 128-byte cap as [`validate_issuer`].
+    /// through the same trim / 128-byte cap as the per-field
+    /// issuer validator [`validate_manual`] uses.
     ///
     /// The nested `Option` shape is locked by docs/DESIGN.md §4.7;
     /// the outer `Option` carries leave-untouched and the inner
@@ -351,14 +352,14 @@ pub struct AccountEdit {
 /// (docs/DESIGN.md §4.7 / Phase M).
 ///
 /// Routes the `label` field through [`validate_label`], the inner
-/// `Some(issuer)` arm of the `issuer` tri-state through
-/// [`validate_issuer`], and the `IconHintInput::Slug(_)` arm of the
-/// `icon_hint` tri-state through the §4.1 slug grammar
-/// (`crate::domain::slug::validate_slug`). `IconHintInput::Default`
-/// and `IconHintInput::Clear` carry no slug text so they need no
-/// validation here; the post-edit slug for `Default` is re-derived
-/// by [`crate::Vault::edit_account_metadata`] via
-/// `crate::domain::slug::derive_default_from_issuer`.
+/// `Some(issuer)` arm of the `issuer` tri-state through the same
+/// `validate_issuer` rule [`validate_manual`] uses, and the
+/// `IconHintInput::Slug(_)` arm of the `icon_hint` tri-state through
+/// the §4.1 slug grammar (the same `[a-z0-9_-]+` check that
+/// [`crate::validate_icon_hint_slug`] enforces).
+/// `IconHintInput::Default` and `IconHintInput::Clear` carry no
+/// slug text so they need no validation here; the post-edit slug
+/// for `Default` is re-derived by [`crate::Vault::edit_account_metadata`].
 ///
 /// Returns the first per-field `validation_error` on rejection
 /// (consistent with [`validate_manual`]'s first-failure-wins shape).
@@ -378,9 +379,10 @@ pub struct AccountEdit {
 /// calling.
 pub fn validate_account_edit(
     edit: &AccountEdit,
-    _prior: &Account,
-    _now: SystemTime,
+    prior: &Account,
+    now: SystemTime,
 ) -> Result<(), PaladinError> {
+    let _ = (prior, now); // reserved for forward-compat cross-field rules.
     validate_and_normalize_account_edit(edit).map(|_| ())
 }
 

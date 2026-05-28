@@ -30,17 +30,16 @@ pub fn validate_slug(slug: &str) -> Result<String, PaladinError> {
     Ok(slug.to_owned())
 }
 
-/// Slug-only public wrapper around [`validate_slug`] for UI surfaces
+/// Slug-only public wrapper around `validate_slug` for UI surfaces
 /// that have already committed to the [`IconHintInput::Slug`] arm
 /// (docs/DESIGN.md §4.7 / Phase M).
 ///
 /// Runs the §4.1 `[a-z0-9_-]+` check verbatim and returns
 /// `IconHintInput::Slug(slug.to_string())` on success. Failures are
-/// the same typed `validation_error` ([`field`][`PaladinError::ValidationError::field`] =
-/// `"icon_hint"`, reasons `"empty"` / `"too_long"` / `"invalid_chars"`)
-/// that [`validate_slug`] emits and that
-/// [`super::prompt_input::parse_icon_hint_token`] re-exports for its
-/// slug-shape arm.
+/// the same typed `validation_error` (`field: "icon_hint"`, reasons
+/// `"empty"` / `"too_long"` / `"invalid_chars"`) that `validate_slug`
+/// emits and that
+/// [`crate::parse_icon_hint_token`] re-exports for its slug-shape arm.
 ///
 /// **No trim**: any whitespace in the input is rejected as
 /// `invalid_chars`. Callers (TUI *Slug:* row, GTK slug input) are
@@ -54,7 +53,7 @@ pub fn validate_slug(slug: &str) -> Result<String, PaladinError> {
 /// dedicated affordances, so the textual `default` / `none` tokens
 /// must not silently reroute. The free-form CLI `--icon-hint <token>`
 /// flag and the CLI / GTK Add prompts continue to route through
-/// [`super::prompt_input::parse_icon_hint_token`] unchanged.
+/// [`crate::parse_icon_hint_token`] unchanged.
 pub fn validate_icon_hint_slug(slug: &str) -> Result<IconHintInput, PaladinError> {
     let validated = validate_slug(slug)?;
     Ok(IconHintInput::Slug(validated))

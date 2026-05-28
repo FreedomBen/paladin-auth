@@ -1770,7 +1770,7 @@ Per CLAUDE.md's TDD mandate, all API bullets below land green only
 after the corresponding test bullets land red — same failing-tests-first
 convention used in Phase B / Phase J.
 
-- [ ] **`AccountEdit` struct.** Public type added to the §4.7 surface
+- [x] **`AccountEdit` struct.** Public type added to the §4.7 surface
   per DESIGN.md. Three fields: `label: Option<String>`,
   `issuer: Option<Option<String>>`, `icon_hint: Option<IconHintInput>`.
   `Option` carries "leave untouched"; the inner `Option<String>` on
@@ -1799,7 +1799,7 @@ convention used in Phase B / Phase J.
   slug literally or clears it regardless of whether the issuer was
   also edited.
 
-- [ ] **`validate_account_edit(edit: &AccountEdit, prior: &Account, now: SystemTime)` free function.**
+- [x] **`validate_account_edit(edit: &AccountEdit, prior: &Account, now: SystemTime)` free function.**
   Pure-logic pre-flight validator. Routes the `label` field through
   `validate_label`, the `issuer` field through `validate_issuer`,
   and the `icon_hint` field's `IconHintInput::Slug(s)` variant
@@ -1859,7 +1859,7 @@ convention used in Phase B / Phase J.
   `"invalid_chars"`, etc., per `validate_slug` for the icon-hint
   case).
 
-- [ ] **`validate_icon_hint_slug(slug: &str) -> Result<IconHintInput>` free function.**
+- [x] **`validate_icon_hint_slug(slug: &str) -> Result<IconHintInput>` free function.**
   Slug-only public wrapper around `domain::slug::validate_slug`
   for UI surfaces that have already committed to the
   `IconHintInput::Slug` arm (the TUI Edit modal's *Slug:* row per
@@ -1901,7 +1901,7 @@ convention used in Phase B / Phase J.
   already reach for, so there is exactly one slug grammar in
   the crate.
 
-- [ ] **`Vault::edit_account_metadata(id, edit, now)` mutator.**
+- [x] **`Vault::edit_account_metadata(id, edit, now)` mutator.**
   Single public mutator. Routes through a private inner helper
   `fn edit_metadata_with_operation(&mut self, id: AccountId,
   edit: AccountEdit, now: SystemTime, operation: &'static str) ->
@@ -1962,7 +1962,7 @@ convention used in Phase B / Phase J.
   `Vault::mutate_and_save` for atomic persistence + rollback —
   same pattern as `rename` / `add` / `remove`.
 
-- [ ] **`Vault::find_duplicate_after_edit(&self, id: AccountId, edit: &AccountEdit) -> Option<&Account>`.**
+- [x] **`Vault::find_duplicate_after_edit(&self, id: AccountId, edit: &AccountEdit) -> Option<&Account>`.**
   Companion to the existing `find_duplicate(&ValidatedAccount)` so
   GTK `EditDialog`, TUI Edit modal, and CLI `paladin edit` flows
   can detect `(secret, issuer, label)` collisions before
@@ -2021,7 +2021,7 @@ convention used in Phase B / Phase J.
   consulted is exactly the snapshot the next call will see.
   DESIGN.md §4.7 lists this method alongside `find_duplicate`.
 
-- [ ] **`Vault::rename` reimplementation on top of
+- [x] **`Vault::rename` reimplementation on top of
   `edit_account_metadata`.** Internal refactor: the existing
   `Vault::rename(id, label, now)` body is replaced with a call to
   `self.edit_metadata_with_operation(id,
@@ -2045,7 +2045,7 @@ convention used in Phase B / Phase J.
   semantic test asserts the rename path's full error surface
   is unchanged before and after the refactor.
 
-- [ ] **Tests — `AccountEdit` validation.** Land in
+- [x] **Tests — `AccountEdit` validation.** Land in
   `tests/vault_edit_account_metadata.rs`. Cover each editable
   field independently: label empty / overlong / valid; issuer set /
   clear / invalid; icon-hint slug invalid / `none` clears /
@@ -2054,7 +2054,7 @@ convention used in Phase B / Phase J.
   per-field validator-error fixtures from Phase B so the wire shapes
   stay aligned.
 
-- [ ] **Tests — `Vault::edit_account_metadata` mutator.** Land in
+- [x] **Tests — `Vault::edit_account_metadata` mutator.** Land in
   `tests/vault_edit_account_metadata.rs`. Cover
   account-not-found (`invalid_state`), empty-edit
   (`validation_error` (`field: "edit"`, `reason: "empty"`)), each
@@ -2087,14 +2087,14 @@ convention used in Phase B / Phase J.
   tempfile-backed plaintext vault so the persistence + rollback
   contract is exercised end-to-end.
 
-- [ ] **Tests — `mutate_and_save` rollback.** Use the
+- [x] **Tests — `mutate_and_save` rollback.** Use the
   `test-fault-injection` feature to inject a pre-commit save failure
   on a successful edit and assert the `Account` is restored to its
   pre-edit byte representation (`label`, `issuer`, `icon_hint`, and
   `updated_at` all roll back). Mirror Phase G's rename-rollback test
   shape so the two mutators share one rollback-correctness contract.
 
-- [ ] **Tests — `Vault::find_duplicate_after_edit`.** Land in
+- [x] **Tests — `Vault::find_duplicate_after_edit`.** Land in
   `tests/vault_edit_account_metadata.rs`. Cover: no-edit
   self-comparison returns `None` (the account at `id` is skipped);
   unknown `id` returns `None`; label-only edit producing a
@@ -2147,7 +2147,7 @@ convention used in Phase B / Phase J.
   refactor accidentally reorders id-resolution ahead of label or
   time validation.
 
-- [ ] **Tests — Send / Sync assertions.** Extend
+- [x] **Tests — Send / Sync assertions.** Extend
   `tests/send_assertions.rs` with `assert_send::<AccountEdit>()`
   and `assert_sync::<AccountEdit>()` calls — the same
   function-helper style the file already uses for every other
@@ -2160,7 +2160,7 @@ convention used in Phase B / Phase J.
   pending-save effect) needs the explicit assertion. A future
   field change that breaks either trait fails the build.
 
-- [ ] **Tests — `tests/error_matrix.rs` extension.** Add two new
+- [x] **Tests — `tests/error_matrix.rs` extension.** Add two new
   rows to the Phase J matrix: (1) the
   `invalid_state` pair `edit_account_metadata /
   account_not_found`, and (2) the
@@ -2170,7 +2170,7 @@ convention used in Phase B / Phase J.
   `issuer` / `icon_hint` are already covered by Phase B's manual-add
   matrix and do not need duplicate rows.
 
-- [ ] **Tests — `validate_icon_hint_slug` proptest.** Extend the
+- [x] **Tests — `validate_icon_hint_slug` proptest.** Extend the
   inline `proptests` module of `crates/paladin-core/src/domain/slug.rs`
   (or add a sibling block in `tests/proptest_uri_base32.rs`,
   matching that file's `proptest!` style) with a `proptest`
@@ -2183,7 +2183,7 @@ convention used in Phase B / Phase J.
   `"invalid_chars"`. Mirrors the property-coverage convention
   Phase B applies to `validate_label` / `validate_issuer`.
 
-- [ ] **Tests — public-api snapshot diff.** Run
+- [x] **Tests — public-api snapshot diff.** Run
   `cargo public-api --diff` against the prior snapshot and commit
   the regenerated `crates/paladin-core/public-api.txt`. The new
   surface entries (`AccountEdit`, `validate_account_edit`,
@@ -2514,7 +2514,7 @@ is a separate `#[test]` or table-driven case family.
   determinism, `parse_setting_patch` malformed-value rejection
   matrix, proptest case-count bump plus TOTP idempotency property,
   and 10,000-account plaintext round-trip stress.
-- [ ] Phase M per-account metadata edit tests — each enumerated as
+- [x] Phase M per-account metadata edit tests — each enumerated as
   its own Phase M checklist entry above: `AccountEdit` validation
   matrix (label / issuer / icon_hint independent and combined,
   first-failure-wins ordering); `Vault::edit_account_metadata`
