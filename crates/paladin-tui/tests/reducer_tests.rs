@@ -23500,6 +23500,46 @@ fn edit_modal_icon_hint_slug_out_of_grammar_rejected_without_mutation() {
 }
 
 #[test]
+fn edit_modal_leave_unchanged_with_prior_none_icon_hint_does_not_rederive() {
+    // Prior `icon_hint` is None even though the issuer is non-empty
+    // (the account was created with `IconHintInput::Clear`). Editing
+    // the label while the selector stays on *Leave unchanged* must
+    // emit an effect whose `icon_hint` is None — the modal must not
+    // silently re-derive a slug from the issuer for the untouched
+    // path. Regression guard against the prior text-row design.
+    let (_tmp, _id, _path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", Some("Acme"), IconHintInput::Clear);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = state
+    {
+        assert!(
+            edit.prior.icon_hint.is_none(),
+            "prior icon_hint must be None"
+        );
+        assert_eq!(
+            edit.icon_hint_selector,
+            EditIconHintSelector::LeaveUnchanged
+        );
+        edit.label_buffer = "alice-renamed".to_string();
+    }
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata { edit: ae, .. } => {
+            assert!(ae.label.is_some(), "label diverged so the effect emits");
+            assert!(
+                ae.icon_hint.is_none(),
+                "LeaveUnchanged must not re-derive a slug, got {:?}",
+                ae.icon_hint
+            );
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
 fn edit_modal_typing_in_disabled_slug_row_is_noop() {
     // The slug row is disabled when the selector is on LeaveUnchanged
     // / Default / Clear. Focus cannot land on Slug via Tab when the

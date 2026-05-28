@@ -2369,12 +2369,14 @@ ships in `paladin-core` and the TUI Edit modal lands.
   `edit_modal_icon_hint_toggle_away_and_back_preserves_slug_buffer`,
   `edit_modal_icon_hint_slug_reserved_tokens_stay_literal_slugs`,
   `edit_modal_icon_hint_slug_out_of_grammar_rejected_without_mutation`.)*
-- [ ] Opening Edit on an account whose prior `icon_hint` is `None`
+- [x] Opening Edit on an account whose prior `icon_hint` is `None`
   with a non-empty issuer, then pressing `Enter` without touching
-  the selector, emits an effect whose `AccountEdit.icon_hint`
+  the selector (a label edit supplies the divergence so the effect
+  emits), emits an effect whose `AccountEdit.icon_hint`
   equals `None` — proving the modal does **not** silently
   re-derive a slug for the "leave untouched" path. (Regression
   guard against the prior text-row design.)
+  *(`edit_modal_leave_unchanged_with_prior_none_icon_hint_does_not_rederive`.)*
 - [ ] Same-as-prior submit on at least one field still bumps
   `updated_at` (matches the core mutator's no-op-but-non-empty
   contract); covered by an executor-side test that asserts the
