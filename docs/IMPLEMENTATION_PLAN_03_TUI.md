@@ -2313,7 +2313,7 @@ ships in `paladin-core` and the TUI Edit modal lands.
   rollback behavior on `save_not_committed` — verifying the two
   surfaces share one mutation path (`Vault::edit_account_metadata`)
   even though they emit distinct Effect variants.
-- [ ] Issuer WYSIWYS projection — covered by five reducer tests:
+- [x] Issuer WYSIWYS projection — covered by five reducer tests:
   empty buffer with prior `None` → `None`; empty buffer with prior
   `Some(_)` → `Some(None)`; whitespace-only buffer with prior
   `Some(_)` → `Some(None)` (proves an all-whitespace buffer
@@ -2324,6 +2324,15 @@ ships in `paladin-core` and the TUI Edit modal lands.
   issuer row empties the buffer in one keystroke and that the
   projection then follows the same rules (i.e. `Ctrl+U` over a
   prior `Some(_)` lands on `Some(None)`).
+  *(`edit_modal_issuer_empty_buffer_prior_none_projects_none`,
+  `edit_modal_issuer_some_to_none_projects_clear`,
+  `edit_modal_issuer_whitespace_buffer_prior_some_projects_clear`,
+  `edit_modal_issuer_byte_equal_prior_projects_none`,
+  `edit_modal_issuer_divergent_buffer_projects_some_some`,
+  `edit_modal_ctrl_u_on_issuer_row_clears_buffer_and_projects_clear`.
+  `Ctrl-U` is routed to the Edit modal via the new
+  `is_modal_clear_line` dispatch gate and applied by
+  `apply_modal_text_edit`.)*
 - [ ] Icon-hint selector — four reducer tests, one per option:
   *Leave unchanged* → `AccountEdit.icon_hint = None`;
   *Default from issuer* → `Some(IconHintInput::Default)`;

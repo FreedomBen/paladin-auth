@@ -1704,6 +1704,13 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
             let effects = route_modal_input(path, modal, vault, key);
             return (state, effects);
         }
+        // The Edit modal supports `Ctrl-U` clear-line on its text
+        // rows; route it only there so other modals' `Char` handlers
+        // never see a Ctrl chord (they would append a literal `'u'`).
+        if is_modal_clear_line(key) && matches!(modal, Some(Modal::Edit(_))) {
+            let effects = route_modal_input(path, modal, vault, key);
+            return (state, effects);
+        }
         return (state, Vec::new());
     }
 
@@ -2574,6 +2581,17 @@ fn is_modal_focus_prev(key: &KeyEvent) -> bool {
         || (key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('p')))
 }
 
+/// `Ctrl-U` clears the focused modal text row to empty in one
+/// keystroke (readline kill-to-start). Strict equality on
+/// `KeyModifiers::CONTROL` keeps `Ctrl-Shift-U` / `Ctrl-Alt-U` out,
+/// mirroring the [`is_modal_focus_next`] / [`is_modal_focus_prev`]
+/// convention. Only the Edit modal routes this chord (see the
+/// dispatch site); other modals' `Char` handlers predate it and would
+/// mis-append a literal `'u'`.
+fn is_modal_clear_line(key: &KeyEvent) -> bool {
+    key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('u'))
+}
+
 /// Remove modal's input path.
 ///
 /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Remove:
@@ -2647,16 +2665,27 @@ fn route_rename_modal_input(
 /// This is the shared per-field text-edit routine the v0.2 Edit modal
 /// rows (Label / Issuer / Slug) route through so the three rows cannot
 /// drift in their editing semantics. It handles the printable-`Char`
-/// append and `Backspace` pop. Returns `true` when the keystroke was a
-/// recognized text-editing key (so the caller can clear any inline
-/// error to surface the user's retry), `false` otherwise.
+/// append, `Backspace` pop, and `Ctrl-U` clear-to-empty (readline
+/// kill-to-start). Returns `true` when the keystroke was a recognized
+/// text-editing key (so the caller can clear any inline error to
+/// surface the user's retry), `false` otherwise.
 ///
 /// The shared `route_modal_input` Ctrl/Alt guard filters
-/// modifier-bearing `Char`s before this routing runs, so a bare `Char`
-/// is safe to append.
+/// modifier-bearing `Char`s before this routing runs, except the
+/// `Ctrl-U` clear-line chord which the Edit-modal dispatch routes in
+/// explicitly; the modifier guards below keep a stray Ctrl/Alt `Char`
+/// from being appended.
 fn apply_modal_text_edit(buffer: &mut String, key: &KeyEvent) -> bool {
     match key.code {
-        KeyCode::Char(c) => {
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            buffer.clear();
+            true
+        }
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
             buffer.push(c);
             true
         }
@@ -2686,6 +2715,8 @@ fn apply_modal_text_edit(buffer: &mut String, key: &KeyEvent) -> bool {
 ///   buffer.
 /// - `Backspace` pops the trailing byte from the focused buffer
 ///   (Label / Issuer / Slug); no-op on the icon-hint selector row.
+/// - `Ctrl-U` clears the focused text buffer (Label / Issuer / Slug)
+///   to empty in one keystroke; no-op on the icon-hint selector row.
 /// - `←` / `→` on the icon-hint selector cycles its four options;
 ///   `←` / `→` on text-input rows are silent no-ops.
 /// - Typing into any row clears the modal's inline error so the user

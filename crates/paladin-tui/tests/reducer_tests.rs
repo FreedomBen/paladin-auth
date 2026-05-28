@@ -23130,6 +23130,144 @@ fn edit_modal_issuer_some_to_none_projects_clear() {
 }
 
 #[test]
+fn edit_modal_issuer_empty_buffer_prior_none_projects_none() {
+    // WYSIWYS case 1: empty issuer buffer with a prior `None` issuer
+    // projects to `None`. A diverging icon-hint keeps the empty-edit
+    // guard from firing so the effect still emits.
+    let (_tmp, _id, _path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Default);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = state
+    {
+        edit.icon_hint_selector = EditIconHintSelector::Default;
+    }
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata { edit: ae, .. } => {
+            assert!(ae.issuer.is_none(), "empty buffer + prior None → None");
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_modal_issuer_whitespace_buffer_prior_some_projects_clear() {
+    // WYSIWYS case 3: an all-whitespace buffer over a prior `Some(_)`
+    // collapses to the same implicit-clear outcome as an empty buffer.
+    let (_tmp, _id, _path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", Some("Acme"), IconHintInput::Default);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = state
+    {
+        edit.issuer_buffer = "   ".to_string();
+    }
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata { edit: ae, .. } => {
+            assert_eq!(
+                ae.issuer,
+                Some(None),
+                "whitespace buffer + prior Some → clear"
+            );
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_modal_issuer_byte_equal_prior_projects_none() {
+    // WYSIWYS case 4: an untouched issuer buffer (byte-equal to the
+    // normalized prior) projects to `None`. Diverge the icon hint so
+    // the effect still emits.
+    let (_tmp, _id, _path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", Some("Acme"), IconHintInput::Default);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = state
+    {
+        assert_eq!(edit.issuer_buffer, "Acme", "buffer starts byte-equal");
+        edit.icon_hint_selector = EditIconHintSelector::Default;
+    }
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata { edit: ae, .. } => {
+            assert!(ae.issuer.is_none(), "byte-equal issuer → None");
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_modal_issuer_divergent_buffer_projects_some_some() {
+    // WYSIWYS case 5: a non-empty divergent buffer projects to
+    // `Some(Some(_))`. The raw buffer is carried; the core mutator
+    // applies §4.1 normalization downstream.
+    let (_tmp, _id, _path, mut state) =
+        fresh_unlocked_with_edit_modal_open("alice", Some("Acme"), IconHintInput::Default);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Edit(ref mut edit)),
+        ..
+    } = state
+    {
+        edit.issuer_buffer = "NewCorp".to_string();
+    }
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata { edit: ae, .. } => {
+            assert_eq!(
+                ae.issuer,
+                Some(Some("NewCorp".to_string())),
+                "divergent buffer → Some(Some)"
+            );
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_modal_ctrl_u_on_issuer_row_clears_buffer_and_projects_clear() {
+    // WYSIWYS sixth test: `Ctrl+U` empties the focused row in one
+    // keystroke; against a prior `Some(_)` issuer the projection then
+    // follows the same clear rule → `Some(None)`.
+    let (_tmp, _id, _path, state) =
+        fresh_unlocked_with_edit_modal_open("alice", Some("Acme"), IconHintInput::Default);
+    let (state, _) = reduce(state, key(KeyCode::Tab)); // focus Issuer
+    assert_eq!(expect_edit_modal(&state).focus, EditFocus::Issuer);
+    let ctrl_u = AppEvent::Input {
+        event: Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)),
+        at: Instant::now(),
+    };
+    let (state, effects) = reduce(state, ctrl_u);
+    assert!(effects.is_empty(), "Ctrl+U emits no effect");
+    assert_eq!(
+        expect_edit_modal(&state).issuer_buffer,
+        "",
+        "Ctrl+U clears the issuer buffer in one keystroke"
+    );
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::EditAccountMetadata { edit: ae, .. } => {
+            assert_eq!(
+                ae.issuer,
+                Some(None),
+                "Ctrl+U-cleared issuer over prior Some → Some(None)"
+            );
+        }
+        other => panic!("expected EditAccountMetadata, got {other:?}"),
+    }
+}
+
+#[test]
 fn edit_modal_icon_hint_selector_no_icon_projects_clear() {
     let (_tmp, id, path, state) =
         fresh_unlocked_with_edit_modal_open("alice", None, IconHintInput::Slug("foo".to_string()));
