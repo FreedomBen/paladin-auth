@@ -209,6 +209,47 @@ pub fn write_rename_success(account: &AccountSummary, mut out: impl Write) -> st
     Ok(())
 }
 
+/// `paladin edit` success envelope per the §5 JSON shape table:
+/// `{ "account": AccountSummary }`. Mirrors the `rename` envelope so
+/// JSON consumers see the post-edit account state in one shape
+/// regardless of which CLI surface (`rename` or `edit`) produced the
+/// mutation.
+#[derive(Debug, Serialize)]
+struct EditSuccess<'a> {
+    account: &'a AccountSummary,
+}
+
+/// Render the `paladin edit` success envelope (committed mutation).
+pub fn write_edit_success(account: &AccountSummary, mut out: impl Write) -> std::io::Result<()> {
+    let env = EditSuccess { account };
+    serde_json::to_writer(&mut out, &env).map_err(std::io::Error::other)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+/// `paladin edit --dry-run` success envelope per the §5 JSON shape
+/// table: `{ "account": AccountSummary, "committed": false }`. The
+/// `account` is the projected post-edit summary (label / issuer /
+/// `icon_hint` after normalization, `updated_at` set to the sampled
+/// `now`); the `committed: false` field disambiguates it from a real
+/// save.
+#[derive(Debug, Serialize)]
+struct EditDryRun<'a> {
+    account: &'a AccountSummary,
+    committed: bool,
+}
+
+/// Render the `paladin edit --dry-run` envelope.
+pub fn write_edit_dry_run(account: &AccountSummary, mut out: impl Write) -> std::io::Result<()> {
+    let env = EditDryRun {
+        account,
+        committed: false,
+    };
+    serde_json::to_writer(&mut out, &env).map_err(std::io::Error::other)?;
+    writeln!(out)?;
+    Ok(())
+}
+
 /// Render the `paladin add --qr` / `paladin import` success envelope.
 pub fn write_qr_import_success(
     report: &ImportReport,

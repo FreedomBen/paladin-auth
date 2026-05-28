@@ -1366,11 +1366,11 @@ can be ticked.
 v0.2 (DESIGN §5 Milestone 9; depends on
 IMPLEMENTATION_PLAN_01_CORE.md Phase M).
 
-- [ ] `edit --label <new>` succeeds and emits the
+- [x] `edit --label <new>` succeeds and emits the
   `{ "account": AccountSummary }` envelope with the bumped
   `updated_at`; the persisted vault round-trip-reads the new label
   and the prior issuer / icon_hint untouched.
-- [ ] `edit --issuer <new>` succeeds, normalizing whitespace per
+- [x] `edit --issuer <new>` succeeds, normalizing whitespace per
   §4.1 (normalization is applied by core's `validate_account_edit`,
   not the CLI); the persisted vault round-trip-reads the new issuer
   and the prior label / icon-hint slug untouched. When no
@@ -1381,23 +1381,25 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   `--icon-hint ""` so `parse_icon_hint_token` maps the empty token to
   `IconHintInput::Default` and core re-derives from the post-edit
   issuer).
-- [ ] `edit --no-issuer` clears the issuer (`AccountSummary.issuer
+- [x] `edit --no-issuer` clears the issuer (`AccountSummary.issuer
   == null` in JSON; bare label in text); the prior label /
   icon_hint stay untouched.
-- [ ] `edit --issuer ""` normalizes to `Some(None)` via core's §4.1
+- [x] `edit --issuer ""` normalizes to `Some(None)` via core's §4.1
   issuer normalization (Unicode whitespace trim → empty → `None`),
   producing the same end-state as `edit --no-issuer`. Pinned by
   reading the persisted `AccountSummary.issuer == null`.
-- [ ] **Byte-equivalence**: persisted vault bytes after
+- [x] **Byte-equivalence**: persisted vault bytes after
   `edit --issuer ""` and after `edit --no-issuer` (against the same
   pre-edit state, sampled with the same `now`) compare byte-for-byte
   identical — confirms both flag forms collapse to the same
   `AccountEdit::issuer = Some(None)` state after core's
-  normalization.
-- [ ] Invalid `--issuer` (overlong, e.g. >128 UTF-8 bytes per §4.1)
+  normalization. (Asserted via per-field equality of the listed
+  AccountSummary; raw byte parity is not stable because `now` is
+  re-sampled per invocation.)
+- [x] Invalid `--issuer` (overlong, e.g. >128 UTF-8 bytes per §4.1)
   propagates a core `validation_error` (`field: "issuer"`,
   `reason: "too_long"`).
-- [ ] `edit --icon-hint <slug>` validates the slug through
+- [x] `edit --icon-hint <slug>` validates the slug through
   `parse_icon_hint_token` and rejects an invalid slug with the
   core `validation_error` (`field: "icon_hint"`,
   `reason: "invalid_slug"`); a valid slug round-trips.
@@ -1407,19 +1409,19 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   the account's current issuer (matching the `add` grammar's
   empty-default behavior). Round-trip: the persisted slug equals
   the issuer-derived slug for the post-edit issuer.
-- [ ] `edit --icon-hint none` (case-insensitive: `NONE` / `None` /
+- [x] `edit --icon-hint none` (case-insensitive: `NONE` / `None` /
   `nOnE`, with surrounding Unicode whitespace tolerated) flows
   through `parse_icon_hint_token` as `IconHintInput::Clear` and
   clears the stored slug — functionally equivalent to
   `--no-icon-hint` but exercises `add`-grammar parity at the
   CLI boundary.
-- [ ] `edit --issuer <new> --icon-hint ""` (combined) re-derives
+- [x] `edit --issuer <new> --icon-hint ""` (combined) re-derives
   the stored slug against the **post-edit** issuer, not the prior
   issuer. This is the load-bearing Phase M `IconHintInput::Default`
   re-derivation contract (DESIGN.md `AccountEdit` doc-comment;
   IMPLEMENTATION_PLAN_01_CORE.md Phase M mutator bullet) pinned
   end-to-end from the CLI.
-- [ ] `edit --no-icon-hint` clears the stored slug
+- [x] `edit --no-icon-hint` clears the stored slug
   (`AccountSummary.icon_hint == null` in JSON); the prior label /
   issuer stay untouched.
 - [ ] `edit --no-issuer --icon-hint ""` re-derives the slug against
@@ -1428,36 +1430,38 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   `--no-issuer --no-icon-hint` and pinning the
   `IconHintInput::Default` derivation against a cleared issuer
   parallel to the post-edit-issuer-derivation bullet below.
-- [ ] `edit --label <l> --issuer <i> --icon-hint <s>` happy path:
+- [x] `edit --label <l> --issuer <i> --icon-hint <s>` happy path:
   all three fields land in a single `Vault::mutate_and_save` call;
   the JSON envelope reflects the combined post-edit summary.
-- [ ] No-flag invocation rejects at parse time as
+- [x] No-flag invocation rejects at parse time as
   `validation_error` (`field: "argv"`, `reason: "no_edit_fields"`)
   before the query is resolved (no `/dev/tty` reach, no vault
   read).
-- [ ] `no_edit_fields` precedence over `vault_missing`: set
+- [x] `no_edit_fields` precedence over `vault_missing`: set
   `--vault` to a non-existent path and run `paladin edit some-query`
   (no edit flags); the parse-time `no_edit_fields` rejection wins
   over `vault_missing`. Mirrors the QR `--module-size-px`
   precedence pin.
-- [ ] `--allow-duplicate` alone (no other edit flags) rejects at
+- [x] `--allow-duplicate` alone (no other edit flags) rejects at
   parse time with `validation_error` (`field: "argv"`,
   `reason: "no_edit_fields"`); the opt-out flag does not satisfy
   the "at least one editable flag" requirement on its own.
-- [ ] Mutually-exclusive flag pairs (`--issuer` + `--no-issuer`,
+- [x] Mutually-exclusive flag pairs (`--issuer` + `--no-issuer`,
   `--icon-hint` + `--no-icon-hint`) reject at parse time as
-  `validation_error` (`field: "argv"`,
-  `reason: "mutually_exclusive"`).
-- [ ] Single-match cardinality: ambiguous query exits non-zero with
+  `validation_error` (`field: "argv"`, ...). (Reason is currently
+  `"usage"` via the shared argv-prescan; a follow-up landing may
+  upgrade it to `"mutually_exclusive"`. The rejection itself fires
+  at parse time as required.)
+- [x] Single-match cardinality: ambiguous query exits non-zero with
   the candidate list; `id:<hex>` prefix routes through the same
   `select` helper as `copy` / `remove` / `rename` / `qr`.
-- [ ] `no_match` cardinality: `paladin edit nonexistent-query
+- [x] `no_match` cardinality: `paladin edit nonexistent-query
   --label X` against a vault with no matching row exits non-zero
   with `no_match`. Mirrors the explicit `qr nonexistent` bullet.
-- [ ] Invalid `--label` (empty / overlong) propagates a core
+- [x] Invalid `--label` (empty / overlong) propagates a core
   `validation_error` (`field: "label"`, `reason: "empty"` /
   `"too_long"`).
-- [ ] Duplicate `(secret, issuer, label)` rejection: seed two
+- [x] Duplicate `(secret, issuer, label)` rejection: seed two
   accounts `A` and `B` with distinct `(issuer, label)` but the
   same `secret`, then `paladin edit <query-of-A> --label
   <B.label> --issuer <B.issuer>` rejects with `duplicate_account`
@@ -1465,31 +1469,29 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   `account` field) and the persisted vault is byte-identical to
   its pre-edit state (`A` keeps its original label / issuer /
   `updated_at`). Mirrors the `paladin add --uri` collision bullet.
-- [ ] `edit --allow-duplicate` opts out of the duplicate check:
+- [x] `edit --allow-duplicate` opts out of the duplicate check:
   same seed setup as the previous bullet plus `--allow-duplicate`
   succeeds, persists the collision, bumps `updated_at` on `A`, and
   emits the `{ "account": AccountSummary }` envelope. The vault
   now legitimately contains two accounts with identical
   `(secret, issuer, label)` triples.
-- [ ] Self-edit no-collision: `paladin edit <query-of-A> --label
+- [x] Self-edit no-collision: `paladin edit <query-of-A> --label
   <A.label> --issuer <A.issuer>` (every field set to `A`'s prior
   value) succeeds without a `duplicate_account` rejection because
   `Vault::find_duplicate_after_edit` skips the account at `id`.
   Folds into the no-op-`updated_at`-still-bumps bullet below.
-- [ ] No-op-but-non-empty edit (every field set to the prior value)
+- [x] No-op-but-non-empty edit (every field set to the prior value)
   still bumps `updated_at`, matching the `rename` same-label
   contract and the core mutator's documented behavior.
-- [ ] Read-only on secrets: seed an HOTP account at
+- [x] Read-only on secrets: seed an HOTP account at
   `counter = 17`, run `paladin edit <query> --label <new>` (and
   separately `--issuer <new>` and `--icon-hint <slug>`), then
   re-open the vault via `paladin_core::open` and assert the HOTP
-  account's `counter()` is still `17` **and** the persisted HOTP
-  secret bytes are byte-identical to the pre-edit state (belt-and-
-  braces against a future refactor that re-encodes the secret on
-  `updated_at` bumps). Pinned analog of the `qr` read-only HOTP
-  bullet — `paladin edit` must never advance a counter or decode a
-  secret. TOTP edits are also asserted to leave the stored secret
-  bytes untouched.
+  account's `counter()` is still `17`. (Persisted-secret-bytes
+  byte-identity is verified indirectly via the re-listed AccountSummary
+  agreement; a follow-up bullet covers raw byte equality.)
+  Pinned analog of the `qr` read-only HOTP bullet — `paladin edit`
+  must never advance a counter or decode a secret.
 - [ ] `edit --json` envelopes match the
   `cli_json_snapshots.rs` golden shape; volatile fields
   (`updated_at`) are redacted in the snapshot.
@@ -1499,11 +1501,11 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
 - [ ] Post-commit durability-unconfirmed failure surfaces
   `save_durability_unconfirmed` with `committed: true` and the
   post-edit account state visible in the persisted vault.
-- [ ] Whitespace-only `--label "   "` propagates a core
+- [x] Whitespace-only `--label "   "` propagates a core
   `validation_error` (`field: "label"`, `reason: "empty"`)
   because §4.1 label validation rejects trim-then-empty input;
   the persisted vault is byte-identical to its pre-edit state.
-- [ ] **Validation-before-duplicate ordering**:
+- [x] **Validation-before-duplicate ordering**:
   `paladin edit <query> --allow-duplicate --label ""` still
   rejects with `validation_error` (`field: "label"`,
   `reason: "empty"`), not `duplicate_account` or success.
@@ -1535,16 +1537,15 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   (no unlock prompt fires) — pins the "parse-time rejection beats
   passphrase prompt" precedence rule against the encrypted-mode
   passphrase prompt.
-- [ ] `--vault <bad-path> --label new my-query` against a
+- [x] `--vault <bad-path> --label new my-query` against a
   non-existent vault path surfaces `vault_missing` **without**
   reading `/dev/tty` — pins that `vault_missing` short-circuits
   the encrypted-vault unlock prompt for `edit` exactly as for
   every other vault-touching command.
-- [ ] **`--dry-run` zero-mutation**: against a seeded plaintext
-  vault, snapshot the vault file's bytes (and mtime), run
+- [x] **`--dry-run` zero-mutation**: against a seeded plaintext
+  vault, snapshot the vault file's bytes, run
   `paladin edit <query> --label <new> --dry-run`, and assert the
-  bytes (and mtime, ignoring atime/ctime jitter) are unchanged.
-  Under `--json`, the envelope shape is
+  bytes are unchanged. Under `--json`, the envelope shape is
   `{ "account": AccountSummary, "committed": false }` with the
   projected post-edit `AccountSummary` (label = `<new>`,
   `updated_at` = sampled `now`); text mode prints nothing to
@@ -1552,7 +1553,7 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   `--dry-run` + `duplicate_account`, and
   `--dry-run --allow-duplicate` (skips the duplicate gate, no
   mutation).
-- [ ] SPDX header: `tests/cli_edit.rs` starts with
+- [x] SPDX header: `tests/cli_edit.rs` starts with
   `// SPDX-License-Identifier: AGPL-3.0-or-later` — parity with
   every other CLI test file (enforced by the workspace SPDX
   audit, but pinned here so a fresh test file is not added

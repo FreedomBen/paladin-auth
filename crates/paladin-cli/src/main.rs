@@ -65,6 +65,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Copy(args) => commands::copy::run(global, args),
         Command::Remove(args) => commands::remove::run(global, args),
         Command::Rename(args) => commands::rename::run(global, args),
+        Command::Edit(args) => commands::edit::run(global, args),
         Command::Passphrase { action } => match action {
             PassphraseCommand::Set { kdf } => commands::passphrase::set(global, kdf),
             PassphraseCommand::Change { kdf } => commands::passphrase::change(global, kdf),

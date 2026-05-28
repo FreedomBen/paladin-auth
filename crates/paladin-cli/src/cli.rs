@@ -90,6 +90,8 @@ pub enum Command {
     Remove(RemoveArgs),
     /// Rename an account.
     Rename(RenameArgs),
+    /// Edit an account's non-cryptographic metadata (label, issuer, icon-hint).
+    Edit(EditArgs),
     /// Manage the vault passphrase.
     Passphrase {
         #[command(subcommand)]
@@ -223,6 +225,67 @@ pub struct RemoveArgs {
 pub struct RenameArgs {
     pub query: String,
     pub new_label: String,
+}
+
+/// `paladin edit <query>` argv shape per
+/// `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Edit command (v0.2)".
+///
+/// Mutual-exclusion pairs (`--issuer` / `--no-issuer`,
+/// `--icon-hint` / `--no-icon-hint`) are enforced by clap via
+/// `conflicts_with`; the "at least one editable flag" requirement is
+/// enforced in `commands::edit::run` before any vault I/O so the
+/// no-flag rejection wins over `vault_missing` and the encrypted-mode
+/// passphrase prompt.
+//
+// `struct_excessive_bools` is suppressed here because the bool fields
+// are independent argv toggles (clap-driven mutual-exclusion pairs +
+// `--allow-duplicate` + `--dry-run`); a state-machine refactor would
+// fight clap's derive ergonomics without buying anything.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Args)]
+pub struct EditArgs {
+    /// Account query (label, issuer:label substring, or `id:<hex>` prefix).
+    pub query: String,
+
+    /// Replace the account's label. Raw value routes through
+    /// `paladin_core::validate_account_edit`; §4.1 label validation
+    /// (trim, empty rejection, 128-byte cap) lives in core.
+    #[arg(long)]
+    pub label: Option<String>,
+
+    /// Replace the account's issuer. `--issuer ""` normalizes to
+    /// `Some(None)` inside the validator and is equivalent to
+    /// `--no-issuer`.
+    #[arg(long, conflicts_with = "no_issuer")]
+    pub issuer: Option<String>,
+
+    /// Clear the account's issuer.
+    #[arg(long, conflicts_with = "issuer")]
+    pub no_issuer: bool,
+
+    /// Set the icon-hint. Token is taken verbatim from argv and
+    /// routed through `paladin_core::parse_icon_hint_token`: empty →
+    /// `IconHintInput::Default`; case-insensitive `none` →
+    /// `IconHintInput::Clear`; otherwise validated as a §4.1 slug.
+    #[arg(long, value_name = "SLUG", conflicts_with = "no_icon_hint")]
+    pub icon_hint: Option<String>,
+
+    /// Clear the stored icon-hint slug.
+    #[arg(long, conflicts_with = "icon_hint")]
+    pub no_icon_hint: bool,
+
+    /// Submit the edit even if the post-edit `(secret, issuer, label)`
+    /// triple collides with another account. Off by default; does
+    /// **not** satisfy the "at least one editable flag" requirement.
+    #[arg(long)]
+    pub allow_duplicate: bool,
+
+    /// Run the full pre-flight (validation + duplicate check) and
+    /// report the projected post-edit account without invoking
+    /// `Vault::edit_account_metadata`. The vault file is never
+    /// written.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Subcommand)]

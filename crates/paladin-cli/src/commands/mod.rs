@@ -7,6 +7,7 @@
 
 pub mod add;
 pub mod copy;
+pub mod edit;
 pub mod export;
 pub mod import;
 pub mod init;
