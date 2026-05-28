@@ -1525,7 +1525,7 @@ IMPLEMENTATION_PLAN_01_CORE.md Phase M).
   redacted in the snapshot to leave room for clap's auto-generated
   prose. Captures the help routing pinned in the §"Edit command
   (v0.2)" — `--help` checklist bullet.
-- [ ] `[PTY]` end-to-end `edit --label new` against an encrypted
+- [x] `[PTY]` end-to-end `edit --label new` against an encrypted
   vault: the unlock passphrase prompt fires once on `/dev/tty`,
   the edit applies, and the success envelope shape matches the
   plaintext case. Mirrors the `[PTY]` smoke tests under

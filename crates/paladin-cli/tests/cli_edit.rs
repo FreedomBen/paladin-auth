@@ -10,7 +10,9 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use paladin_core::{parse_otpauth, Account, Argon2Params, EncryptionOptions, Store, VaultInit};
+use paladin_core::{
+    parse_otpauth, Account, Argon2Params, EncryptionOptions, Store, VaultInit, VaultLock,
+};
 use secrecy::SecretString;
 use serde_json::Value;
 
@@ -1162,6 +1164,76 @@ fn json_edit_no_edit_fields_beats_encrypted_unlock_prompt() {
         "parse-time rejection must beat the encrypted-vault unlock prompt",
     );
     assert!(output.stdout.is_empty());
+}
+
+/// Stable §5 prompt label fired by `vault_open::open` for any
+/// encrypted-vault unlock — the same string `cli_passphrase.rs`,
+/// `cli_export.rs`, and `cli_qr.rs` expect.
+const PROMPT_UNLOCK: &str = "Vault passphrase: ";
+
+#[test]
+fn pty_edit_label_against_encrypted_vault_unlocks_once_and_applies() {
+    let (_dir, path) = fresh_vault_path();
+    let passphrase = "encrypted-edit-secret";
+    create_encrypted_vault(vec![make_totp("alice", Some("Acme"))], &path, passphrase);
+
+    // Drive `paladin edit --label alice2` through the PTY harness.
+    // `--json` keeps the success envelope on stdout; the unlock prompt
+    // fires once on `/dev/tty`.
+    let mut pty = common::Pty::spawn(
+        [
+            "--json",
+            "--vault",
+            path.to_str().unwrap(),
+            "edit",
+            "alice",
+            "--label",
+            "alice2",
+        ],
+        &[],
+    );
+    pty.expect(PROMPT_UNLOCK);
+    pty.send_line(passphrase);
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+
+    // The unlock prompt fired exactly once.
+    assert_eq!(
+        exit.transcript.matches(PROMPT_UNLOCK).count(),
+        1,
+        "unlock prompt must fire exactly once; transcript:\n{}",
+        exit.transcript,
+    );
+
+    // The success envelope (muxed into the transcript) matches the
+    // plaintext `{ "account": AccountSummary }` shape: the post-edit
+    // label / issuer are present and there is no `committed` key (that
+    // field belongs only to the `--dry-run` envelope).
+    let json_start = exit
+        .transcript
+        .find('{')
+        .expect("JSON envelope must appear in the transcript");
+    let value: Value =
+        serde_json::from_str(exit.transcript[json_start..].trim()).unwrap_or_else(|e| {
+            panic!(
+                "non-JSON envelope: {:?} ({e})",
+                &exit.transcript[json_start..]
+            )
+        });
+    assert_eq!(value["account"]["label"], serde_json::json!("alice2"));
+    assert_eq!(value["account"]["issuer"], serde_json::json!("Acme"));
+    assert!(
+        value.get("committed").is_none(),
+        "non-dry-run success envelope must not carry `committed`",
+    );
+
+    // The edit persisted: re-open the encrypted vault in-process and
+    // confirm the new label landed.
+    let pp = SecretString::from(passphrase.to_string());
+    let (vault, _store) =
+        Store::open(&path, VaultLock::Encrypted(pp)).expect("open encrypted vault");
+    let labels: Vec<String> = vault.summaries().map(|s| s.label).collect();
+    assert_eq!(labels, vec!["alice2".to_string()]);
 }
 
 // =========================================================================
