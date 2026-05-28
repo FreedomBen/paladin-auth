@@ -2,6 +2,23 @@
 
 //! Pure-logic rename-dialog tests for `paladin-gtk`.
 //!
+//! # Retirement schedule
+//!
+//! Milestone 9's slice 6 deletes both `crates/paladin-gtk/src/rename_dialog.rs`
+//! and this file once the `AppModel` cutover from `RenameDialog` to
+//! `EditDialog` lands. Until that follow-up commit, this suite stays
+//! live so the existing rename worker pipeline (the `AppModel`
+//! `OpenRenameDialog` → `RenameDialogComponent` →
+//! `Vault::mutate_and_save(|v| v.rename(...))` path) keeps its
+//! regression coverage. Equivalent edit-side coverage is already
+//! pinned in `tests/edit_dialog_logic.rs` (label / issuer /
+//! icon-hint WYSIWYS projection, validation-before-duplicate
+//! ordering, post-effect routing variants, worker dispatch
+//! against tempfile vaults, save-button sensitivity) so no test
+//! migration is needed at retirement time.
+//!
+//! # Original test coverage
+//!
 //! Tracks the §"Tests > Pure-logic unit tests > `tests/rename_dialog_logic.rs`"
 //! checklist in `docs/IMPLEMENTATION_PLAN_04_GTK.md`:
 //!

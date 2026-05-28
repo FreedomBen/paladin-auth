@@ -2,6 +2,23 @@
 
 //! Rename-dialog pure-logic state machine for `paladin-gtk`.
 //!
+//! # Retirement schedule
+//!
+//! Milestone 9 supersedes this module with [`crate::edit_dialog`],
+//! which edits label / issuer / icon-hint together via
+//! [`paladin_core::Vault::edit_account_metadata`]. The kebab
+//! menu entry is already relabeled `Edit…` (slice 1) and the
+//! `EditDialogComponent` widget (slice 4) + `run_edit_worker`
+//! dispatch (slice 5) are in place. The `AppModel` route swap
+//! and the eventual deletion of this file + its tests
+//! (`tests/rename_dialog_logic.rs`) land in a follow-up cutover
+//! commit per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context
+//! menu and `EditDialog` implementation" slice 6. Equivalent
+//! coverage is already pinned in `tests/edit_dialog_logic.rs`
+//! so no test migration is required at retirement time.
+//!
+//! # Original module description
+//!
 //! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" > Rename
 //! dialog and §"Effect errors" > "Add / remove / rename / settings
 //! saves", `RenameDialog` edits the label of an existing account
