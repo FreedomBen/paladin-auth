@@ -469,7 +469,12 @@ dismiss deliberately.
   renames still call `Vault::rename`, save, and bump `updated_at`, matching
   the CLI. Issuer is **not** editable here — parity with the CLI's
   `rename` taking only `<new-label>`; deeper edits use the Edit modal
-  below (or Remove + Add for OTP-affecting changes).
+  below (or Remove + Add for OTP-affecting changes). The Rename and
+  Edit modals coexist as separate dialogs sharing `Vault::mutate_and_save`
+  through distinct mutators (`Vault::rename` for Rename, `Vault::edit_account_metadata`
+  for Edit) — the two are independently invokable and the cross-modal
+  rejection tests below pin that opening one while the other is open
+  is silently rejected.
   Pre-commit save failures (`save_not_committed`) restore the prior label so
   memory matches disk and the modal stays open with the inline error;
   durability-unconfirmed saves leave the new label in memory and
@@ -477,13 +482,23 @@ dismiss deliberately.
   the label buffer is cleared on submit, cancel, modal close, and
   auto-lock alongside the other modal-local state.
 - **Edit** *(v0.2 / DESIGN §6 Milestone 9)* — opened with `Shift+E`
-  on the focused account row. Three focusable controls pre-populated
-  from the selected account's `AccountSummary`:
+  on the focused account row. Render is independent of `AccountKind`:
+  HOTP and TOTP accounts open the same three controls; no counter row
+  (or any other OTP-affecting field) is rendered here, and HOTP read-only
+  fields are *omitted from the form* (not display-disabled). On modal
+  open, focus is pinned to the **Label** row; `Tab` / `Shift+Tab`
+  cycle from there. Three focusable controls pre-populated from the
+  selected account's `AccountSummary`:
   * *Label* — `tui-input` row, required, trimmed and §4.1
-    length-validated. Buffer byte-equal to the prior label maps to
-    `AccountEdit.label = None` ("leave untouched"); any divergence
-    (including same-text-after-retrim) maps to
-    `Some(trimmed)`.
+    length-validated *post-submit* (no client-side length clamp; an
+    over-long buffer surfaces `validation_error { field: "label",
+    reason: "too_long" }` only on submit). Buffer byte-equal to the
+    prior label maps to `AccountEdit.label = None` ("leave
+    untouched"); any divergence (including same-text-after-retrim)
+    maps to `Some(trimmed)`. An all-whitespace label buffer is
+    treated identically to an empty buffer after §4.1 trim — the
+    projection surfaces `validation_error { field: "label",
+    reason: "empty" }` inline beside the row, never `Some("")`.
   * *Issuer* — `tui-input` row, optional. Submit projects the
     buffer onto `AccountEdit.issuer` with **what-you-see-is-what-you-save**
     semantics, applied after §4.1 issuer normalization (trim
@@ -499,10 +514,12 @@ dismiss deliberately.
     - any other non-empty normalized buffer →
       `Some(Some(normalized))` and flows through `validate_issuer`
       for §4.1 rejection.
-    `Ctrl+U` is an inline convenience that empties the row buffer in
-    one keystroke; it carries no separate "explicit-clear marker" —
-    the normalized-empty-buffer rules above determine the
-    projection.
+    `Ctrl+U` is an inline convenience that **wholesale clears** the
+    issuer row buffer in one keystroke regardless of the current
+    cursor position (it is not a kill-to-beginning-of-line — the
+    entire buffer is replaced with the empty string); it carries
+    no separate "explicit-clear marker" — the normalized-empty-
+    buffer rules above determine the projection.
   * *Icon hint* — segmented selector (cycled with `←` / `→` per the
     modal-local navigation rules) with four mutually exclusive
     options. The *Leave unchanged* default is unique to Edit; the
@@ -530,14 +547,24 @@ dismiss deliberately.
        `Clear` (those tri-state outcomes are reachable only via
        the dedicated selector options above). Invalid slugs
        surface inline as `validation_error` (`field: "icon_hint"`,
-       `reason: "invalid_slug"`); a successfully saved slug round-
-       trips losslessly into the buffer the next time the user
-       opens the modal (invalid input that never reached core is
-       discarded on modal close along with the other row buffers).
+       `reason: "invalid_slug"`); uppercase or out-of-grammar
+       input (e.g. `"Acme"`, `"foo bar"`, `"foo.bar"`) surfaces
+       `validation_error { field: "icon_hint", reason:
+       "invalid_chars" }` — the buffer is **never** auto-lowercased
+       or otherwise mutated on the user's behalf, matching the
+       §4.7 no-trim/no-mutation contract. A successfully saved
+       slug round-trips losslessly into the buffer the next time
+       the user opens the modal (invalid input that never reached
+       core is discarded on modal close along with the other row
+       buffers).
     The selector always defaults to *Leave unchanged* on open so the
     user must affirmatively pick a different mode to mutate
     `icon_hint`; this prevents the pre-fill from silently re-deriving
-    a slug for accounts whose prior `icon_hint` was `None`.
+    a slug for accounts whose prior `icon_hint` was `None`. Toggling
+    the selector **to** *Slug:* moves focus into the now-enabled slug
+    row in the same reducer step; toggling **away** from *Slug:*
+    returns focus to the selector itself, so the user is never left
+    focused on a disabled control.
 
   `Tab` / `Shift+Tab` traverse the focusable controls in document
   order. When the icon-hint selector is on *Leave unchanged* /
@@ -572,7 +599,13 @@ dismiss deliberately.
   contract as the Rename modal), and posts
   `StatusLine::Confirmation(format!("Edited {}.", summary_display_label(&summary)))`
   on `Ok`, where `summary` is the post-edit `AccountSummary` carried
-  by the `EffectResult::EditAccountMetadata` Ok-arm. Because
+  by the `EffectResult::EditAccountMetadata` Ok-arm.
+  **Status-line lifecycle:** opening the Edit modal does not clear
+  the status line; the only close-paths that touch the status line
+  are the successful-submit Ok arm (replaces with the confirmation
+  above) and the durability-warning arm. `Esc` cancel and
+  auto-lock-driven dismissal both leave the status line untouched.
+  Because
   `Vault::edit_account_metadata` returns `Result<()>`, the executor
   builds the summary itself with a post-save
   `Vault::get(id).map(Account::summary)` projection and ships it on
@@ -581,13 +614,26 @@ dismiss deliberately.
   empty `AccountEdit` (every control projects to `None` per the
   rules above — label byte-equal to prior, issuer either matching
   prior or empty-on-prior-`None`, and icon-hint selector still on
-  *Leave unchanged*) is rejected by the reducer's
-  `validate_account_edit` pre-flight before reaching core, matching
-  the core mutator's contract. Because the `field: "edit"` error
-  carries no per-row attachment, it renders inline in the modal
-  body (the same body slot the duplicate-account message uses),
-  not beside any individual row. OTP-
-  affecting fields (`secret`, `algorithm`, `digits`, `kind`,
+  *Leave unchanged*) is rejected by an **explicit reducer-side**
+  empty check (the validator does not reject emptiness; it
+  deliberately leaves that to the mutator), matching the core
+  mutator's contract. Because the `field: "edit"` error carries
+  no per-row attachment, it renders inline in the modal body
+  (the same body slot the duplicate-account message uses), not
+  beside any individual row.
+
+  **Pre-check order (mirrors the mutator):** the reducer runs
+  `[reject-empty, validate_account_edit, find_duplicate_after_edit]`
+  in that exact order; the first failure short-circuits and no
+  later check runs. **Error-routing map:**
+
+  | Error                                                       | Render slot                                  |
+  | ----------------------------------------------------------- | -------------------------------------------- |
+  | `validation_error { field: "label" \| "issuer" \| "icon_hint" }` | Inline beside the matching row               |
+  | `validation_error { field: "edit", reason: "empty" }`       | Body slot (no per-row attachment)            |
+  | `duplicate_account`                                         | Body slot (parity with the Add modal)        |
+
+  OTP-affecting fields (`secret`, `algorithm`, `digits`, `kind`,
   `period`, `counter`) are intentionally absent — the modal
   header footnote redirects users to Remove + Add for those
   changes. Pre-commit save failures restore the pre-edit
@@ -911,7 +957,7 @@ v0.2-only rows are marked inline.
 | `a`                                | Open Add modal                                                                                        |
 | `r`                                | Open Remove confirmation                                                                              |
 | `R`                                | Open Rename modal (Shift+R; `r` stays bound to Remove)                                                |
-| `E` (Shift-e)                      | Open Edit modal for the focused row (v0.2; multi-field label / issuer / icon-hint editor); rejected silently while any other modal is open |
+| `E`                                | Open Edit modal for the focused row (Shift+E; `e` stays bound to Export); v0.2; multi-field label / issuer / icon-hint editor; always enabled on both HOTP and TOTP rows; rejected silently while any other modal is open |
 | `i`                                | Open Import modal                                                                                     |
 | `e`                                | Open Export modal                                                                                     |
 | `Q` (Shift-q)                      | Open QR Export modal for the focused row (v0.2; warning-ack gate, ANSI body, Save-as-PNG / Save-as-SVG); rejected silently while any other modal is open |
@@ -2026,7 +2072,27 @@ ships in `paladin-core` and the TUI Edit modal lands.
   buffer = prior issuer (`None` rendered as empty), icon-hint
   selector defaulted to *Leave unchanged* with the sibling slug
   buffer pre-populated from the prior `icon_hint` slug (empty
-  string when the prior value was `None`).
+  string when the prior value was `None`). The reducer test
+  asserts initial focus is on the **Label** row on modal open
+  (asserted via the `focus` field on the `EditModal` state).
+- [ ] Render-independence-from-`AccountKind`: opening Edit on a
+  HOTP account produces the same three-control layout as a TOTP
+  account, with no counter row and no kind-specific OTP fields.
+  Optional companion snapshot
+  (`tests/view_snapshots.rs::snapshot_edit_modal_hotp_account`)
+  asserts the byte-equal layout against
+  `snapshot_edit_modal_default` (the TOTP baseline).
+- [ ] Issuer pre-population from prior `None`: opening Edit on an
+  account whose prior `issuer` is `None` produces an **empty**
+  issuer buffer (not the literal string `"None"` and not the
+  prior account's label) and the reducer asserts the buffer's
+  `len() == 0` on the post-open frame.
+- [ ] `label_buffer_byte_equal_to_prior_projects_to_none`: with
+  the label buffer left untouched (byte-equal to the prior label,
+  including identical trailing whitespace), submit projects to
+  `AccountEdit.label = None` rather than `Some(prior.clone())`.
+  Companion: typing one character then deleting it (so the buffer
+  is byte-equal again) also lands on `None`.
 - [ ] `Tab` / `Shift+Tab` cycle focus across the focusable controls
   in document order. With the icon-hint selector on *Leave
   unchanged* / *Default from issuer* / *No icon* the cycle is three
@@ -2036,21 +2102,43 @@ ships in `paladin-core` and the TUI Edit modal lands.
   around in each direction for both cycle lengths, plus a third
   asserts that toggling the selector off *Slug:* on the next
   traversal skips the now-disabled slug row without losing the
-  slug buffer's text. `Enter` submits; on successful submit (or on
-  `Esc` cancel), every row buffer clears and the icon-hint
-  selector resets to *Leave unchanged*. `Enter` with a failing
-  `validate_account_edit` or a `Vault::find_duplicate_after_edit`
-  hit keeps the modal open with row buffers and selector intact so
-  the user can revise (covered by the validation-error and
-  duplicate-account reducer tests below).
+  slug buffer's text. `Enter` submits; on any of the four
+  modal-close triggers (successful submit, `Esc` cancel, programmatic
+  modal close, auto-lock) every modal-local buffer (label, issuer,
+  icon-hint slug) and the icon-hint selector are dropped together,
+  matching the four-trigger contract pinned in the modal-spec
+  section above. `Enter` with a failing pre-check (any of the
+  three: explicit reducer-side empty check, `validate_account_edit`,
+  or `Vault::find_duplicate_after_edit`) keeps the modal open with
+  row buffers and selector intact so the user can revise (covered
+  by the empty-edit, validation-error, and duplicate-account
+  reducer tests below).
 - [ ] `Shift+E` while any other modal is open is silently
   rejected — the existing modal stays open, the Edit modal does
   not mount, and no effect is emitted. Mirrors the `Q` QR-Export
   test shape (`shift_q_while_other_modal_open_is_silently_rejected`).
+- [ ] Cross-modal symmetry between Rename and Edit:
+  (a) `Shift+E` pressed while the Rename modal is open is
+  silently rejected — the Rename modal stays open with its label
+  buffer intact, the Edit modal does not mount, and no effect
+  is emitted;
+  (b) `Shift+R` pressed while the Edit modal is open is
+  silently rejected — the Edit modal stays open with all three
+  row buffers and the icon-hint selector intact, the Rename
+  modal does not mount, and no effect is emitted. Asserted as
+  `shift_e_while_rename_modal_open_is_silently_rejected` and
+  `shift_r_while_edit_modal_open_is_silently_rejected`.
 - [ ] Per-field text editing routes through the shared
   `tui-input` walker; typing into a row clears that row's inline
   error. `←` / `→` on the icon-hint selector cycles its four
   options without affecting the sibling slug buffer.
+- [ ] Typing in the slug row while the selector is on *Leave
+  unchanged* / *Default from issuer* / *No icon* (i.e. the row
+  is disabled and not focusable) is a **no-op**: the slug buffer
+  remains byte-identical to its pre-keystroke value, no inline
+  error fires, and no effect is emitted. Asserted across all
+  three disabled-selector positions to guard against accidental
+  buffer mutation when focus state leaks.
 - [ ] Submit with at least one control diverging from its prior
   value emits `Effect::EditAccountMetadata { path, account_id,
   edit: AccountEdit }` carrying only the changed fields populated;
@@ -2061,18 +2149,37 @@ ships in `paladin-core` and the TUI Edit modal lands.
   the reducer surfaces the inline `duplicate_account` message
   rendered through `format_duplicate_account_message(&existing_summary)`
   and emits no effect; the modal stays open with row buffers and
-  the icon-hint selector intact so the user can revise.
+  the icon-hint selector intact so the user can revise. The
+  reducer test snapshots all three row buffers (label, issuer,
+  icon-hint slug) and the selector option **byte-identically**
+  pre- and post-duplicate rejection — any divergence is a
+  regression.
   Companion reducer tests cover both projection sources (label
   divergence vs issuer divergence) and assert that an unchanged
   self-comparison never fires (per
   `Vault::find_duplicate_after_edit` skipping `id`).
+- [ ] No-edit-anyway regression guard: with the modal in the
+  duplicate-rejected state, the reducer is fed every plausible
+  "allow"-coded key event (`A`, `Shift+A`, `Ctrl+A`,
+  `Alt+Enter`, the `'y'` / `'Y'` confirm keys, and any other
+  key the Add modal's `--allow-duplicate` toast surfaces under
+  CLI) and the test asserts each one is a **no-op** — no
+  `Effect::EditAccountMetadata` is emitted, the
+  `duplicate_account` body message remains rendered, and the
+  row buffers stay byte-identical. There is no edit-anyway
+  override.
 - [ ] Pre-submit duplicate check (executor side): an executor-side
   test in `tests/effect_tests.rs` exercises the live
   `Vault::find_duplicate_after_edit` wiring against a fixture vault
   that contains a colliding sibling account, asserts the Effect is
   short-circuited before `Vault::mutate_and_save`, and asserts the
   on-disk vault is byte-identical before and after the rejected
-  edit.
+  edit. The test also asserts via the `PALADIN_FAULT_INJECT`
+  sink (the same call-counting hook the Add / Rename executor
+  tests already use) that **zero** `Vault::mutate_and_save`
+  invocations occurred during the rejected effect — pinning the
+  short-circuit at the pre-flight boundary, not at the mutator
+  re-validation boundary.
 - [ ] `EffectResult::EditAccountMetadata` Ok-arm: when the executor
   reports success, the reducer closes the Edit modal and publishes
   `StatusLine::Confirmation(format!("Edited {}.", summary_display_label(&summary)))`
@@ -2088,8 +2195,27 @@ ships in `paladin-core` and the TUI Edit modal lands.
 - [ ] Empty-edit submit (label buffer byte-equal to prior label,
   issuer buffer projects to `None` per the WYSIWYS rules, icon-hint
   selector still on *Leave unchanged*) surfaces the inline
-  `validation_error` (`field: "edit"`, `reason: "empty"`)
-  without emitting an effect.
+  `validation_error` (`field: "edit"`, `reason: "empty"`) via the
+  reducer's **explicit empty check** (the validator does not
+  reject emptiness; the reducer mirrors the mutator-side guard),
+  rendered in the modal body slot, without emitting an effect.
+- [ ] Whitespace-only label buffer surfaces the inline
+  `validation_error { field: "label", reason: "empty" }` beside
+  the label row (post-§4.1-trim the buffer is empty, so the
+  required-field check fires); the test exercises both a
+  pure-ASCII-space buffer (`"   "`) and a mix of Unicode
+  whitespace (`"\u{00A0}\u{2003}\t"`) to lock the trim semantics.
+- [ ] Pre-check ordering: with a draft that would fail all three
+  checks (empty `AccountEdit`, invalid icon-hint slug under
+  *Slug:*, and a duplicate-bearing label/issuer projection), the
+  reducer surfaces **only** the first failure (`field: "edit"`,
+  `reason: "empty"`) and never invokes
+  `Vault::find_duplicate_after_edit`. Two follow-up tests reuse
+  the same fixture: dropping the empty trigger surfaces only the
+  icon-hint `validation_error`; dropping both empty and slug
+  triggers surfaces only the `duplicate_account` body message.
+  Pins the locked `[reject-empty, validate_account_edit,
+  find_duplicate_after_edit]` order from the modal spec.
 - [ ] Label-only submit emits `Effect::EditAccountMetadata` with
   `AccountEdit { label: Some(trimmed), issuer: None, icon_hint:
   None }`. A companion executor-side test (rename + edit fixture
@@ -2127,7 +2253,15 @@ ships in `paladin-core` and the TUI Edit modal lands.
   emits `Some(IconHintInput::Slug("default"))` /
   `Some(IconHintInput::Slug("none"))` rather than collapsing to
   `Default` / `Clear` — proving the reserved-token grammar of
-  `parse_icon_hint_token` does not leak into this row.
+  `parse_icon_hint_token` does not leak into this row. An eighth
+  test pins the uppercase / out-of-grammar policy: with the
+  selector on *Slug:* and the buffer containing `"Acme"`,
+  `"foo bar"`, or `"foo.bar"`, submit surfaces
+  `validation_error { field: "icon_hint", reason:
+  "invalid_chars" }` inline and emits no effect — the buffer is
+  byte-identical before and after the rejected submit (no
+  auto-lowercasing, no character stripping), pinning the §4.7
+  no-mutation contract.
 - [ ] Opening Edit on an account whose prior `icon_hint` is `None`
   with a non-empty issuer, then pressing `Enter` without touching
   the selector, emits an effect whose `AccountEdit.icon_hint`
@@ -2150,6 +2284,19 @@ ships in `paladin-core` and the TUI Edit modal lands.
   still bumps. Proves the *Some-projection but identical
   post-edit state* boundary holds for `icon_hint` specifically,
   parallel to the label / issuer same-as-prior cases above.
+- [ ] Icon-hint prior-differs-from-derived edge case (symmetric
+  to the above): opening Edit on an account whose prior
+  `icon_hint` is a slug that does **not** match the issuer's
+  derived default (e.g. prior `Some("legacy-co")` with issuer
+  `Some("Acme")` whose derived default is `"acme"`), then
+  picking *Default from issuer* without touching any other
+  control, emits an effect carrying
+  `AccountEdit.icon_hint = Some(IconHintInput::Default)` and the
+  executor-side companion asserts the post-edit
+  `Account.icon_hint` is now `Some("acme")` (the on-disk slug
+  **changed**) while `updated_at` bumps. Pins the symmetric
+  side of the *Some-projection* contract: *Default from issuer*
+  always re-derives, even when the prior slug was user-typed.
 - [ ] Pre-commit `save_not_committed` restores the pre-edit
   account byte-for-byte and keeps the modal open with the inline
   error; the draft is preserved for retry. (Mirrors the existing
@@ -2159,11 +2306,25 @@ ships in `paladin-core` and the TUI Edit modal lands.
   Rename durability test shape.)
 - [ ] Off-`Unlocked` / mismatched-path / stale-modal
   `EffectResult::EditAccountMetadata` deliveries are silently
-  discarded, matching the rename test shape.
+  discarded, matching the rename test shape. Three separate
+  reducer-test arms enumerate the branches inline:
+  (a) the app is currently in `AppState::Locked` or
+  `AppState::StartupError` (off-`Unlocked`);
+  (b) the result's `path` does not match the live vault's path
+  (mismatched-path, e.g. unlock-then-relock-different-vault
+  race);
+  (c) the modal stack no longer carries `Modal::Edit` (the user
+  closed it before the executor finished, or another modal
+  pushed on top — though the latter cannot happen given
+  single-modal stack semantics, the arm still asserts
+  graceful-discard for forward compat).
 - [ ] Auto-lock with the Edit modal open drops the modal and
   every modal-local buffer (label, issuer, icon-hint slug) and
   resets the selector to *Leave unchanged* before re-presenting
-  the unlock screen. Pinned by
+  the unlock screen. The dismissal is **silent**: no toast
+  fires, no status-line message is posted, and no other user-
+  visible feedback surfaces — matching Add and Rename auto-lock
+  behavior. Pinned by
   `auto_lock_with_edit_modal_open_drops_modal_and_buffers` in
   `tests/auto_lock_tests.rs`, matching the QR Export auto-lock
   test shape.
@@ -2171,15 +2332,32 @@ ships in `paladin-core` and the TUI Edit modal lands.
   the new `Shift+E` row; the `keybindings::KEYBINDINGS` table is
   the single source so the overlay cannot drift from the
   bindings. Covered by re-locking the existing
-  `snapshot_help_overlay` insta fixture (with the `TestBackend`
-  height bumped one row if needed, the same way the QR Export
-  `Q` row was added).
+  `snapshot_help_overlay` insta fixture with the `TestBackend`
+  height bumped from **32 to 33 rows** (the post-`Shift+Q`
+  baseline gains exactly one row for the new `Shift+E`
+  binding), the same way the QR Export `Q` row was added.
 - [ ] Snapshot test for the Edit modal default layout
   (`tests/view_snapshots.rs::snapshot_edit_modal_default`),
   matching the Rename snapshot conventions (centered region,
   three labeled controls, footer hint line). The icon-hint
   selector renders with `▶ Leave unchanged ◀` active markers
   parallel to other segmented selectors in this plan.
+  **Accessibility note:** the `▶` / `◀` active markers are
+  character-only (no color or style differentiation) so the
+  modal renders identically under `NO_COLOR`, monochrome
+  terminals, and high-contrast color schemes. This is
+  intentional — the selector's active option is conveyed by
+  glyph, never by color alone, satisfying the §13 contrast/
+  color-independence rule for the TUI surface.
+- [ ] **No save-in-flight snapshot needed:** TUI save is
+  reducer-synchronous (the `Effect::EditAccountMetadata` round-
+  trip completes within the executor's single
+  `Vault::mutate_and_save` call before the next reducer arm
+  runs, with no intermediate "saving…" frame rendered). This
+  is documented here in lieu of a
+  `snapshot_edit_modal_save_in_flight` fixture; if a future
+  refactor introduces an async save path, this bullet flips to
+  a real snapshot.
 - [ ] Snapshot test for the validation-error variant
   (`tests/view_snapshots.rs::snapshot_edit_modal_validation_error`)
   with an invalid icon-hint slug entered under *Slug:* so the
@@ -4535,10 +4713,16 @@ terminal theme and survives `--no-color`.
     executor via `Vault::get(id).map(Account::summary)` since
     `edit_account_metadata` returns `Result<()>`). The
     `validation_error` arm is defensive — the reducer's
-    `validate_account_edit` pre-flight should already block any
-    invalid `AccountEdit`, but core re-runs the validator inside
-    `edit_account_metadata` and the executor must surface the
-    error inline rather than panic if the two ever diverge.
+    pre-flight (`[reject-empty, validate_account_edit,
+    find_duplicate_after_edit]` in that order) should already
+    block any invalid `AccountEdit`, but core re-runs the
+    validator and the empty-check inside `edit_account_metadata`
+    and the executor must surface the error inline rather than
+    panic if the two ever diverge. Note: `validate_account_edit`
+    itself does **not** reject the empty `AccountEdit`; the
+    empty-rejection is the mutator's responsibility on the
+    core side and the reducer's explicit pre-check on the TUI
+    side.
   - [ ] All `tests/reducer_tests.rs::edit_modal_*` bullets
     ticked, the executor-side bullets in
     `tests/effect_tests.rs::execute_edit_*` ticked, and the
@@ -4572,19 +4756,37 @@ terminal theme and survives `--no-color`.
   rendered buffers alongside the in-memory vault.
 - **v0.2 — Edit modal:** `Shift+E` from list focus opens the modal
   with Label / Issuer / Icon-hint controls pre-populated from the
-  selected `AccountSummary`; submit routes the assembled
-  `AccountEdit` through `validate_account_edit` and (on a clean
-  pre-flight) the reducer's `Vault::find_duplicate_after_edit`
-  gate, then dispatches `Effect::EditAccountMetadata` which wraps
+  selected `AccountSummary`; submit runs the pre-check sequence
+  `[reject-empty, validate_account_edit,
+  find_duplicate_after_edit]` (in that exact order, first failure
+  short-circuits) and (on a clean pre-flight) dispatches
+  `Effect::EditAccountMetadata` which wraps
   `Vault::edit_account_metadata` inside `Vault::mutate_and_save`.
   Empty edits and duplicate collisions reject inline without
   mutating the vault; successful saves close the modal and post
   `StatusLine::Confirmation(format!("Edited {}.",
-  summary_display_label(&summary)))`. HOTP counters and the
+  summary_display_label(&summary)))`. The acceptance criteria
+  for this milestone are the five outcomes:
+  (1) the four-case issuer WYSIWYS projection from §6
+  round-trips cleanly across the reducer;
+  (2) the five-case icon-hint projection (incl. literal
+  `default` / `none` slug under *Slug:*) round-trips cleanly;
+  (3) the locked pre-check ordering above is asserted by a
+  `tests/reducer_tests.rs` arm that pins all-three-failing →
+  empty fires first;
+  (4) the explicit reducer-side empty rejection is asserted
+  with the body-slot `validation_error { field: "edit",
+  reason: "empty" }`;
+  (5) the modal closes only on the Ok-arm of
+  `EffectResult::EditAccountMetadata` — every failing arm
+  (`save_not_committed`, `save_durability_unconfirmed`,
+  `validation_error`, `duplicate_account`) keeps the modal
+  open with row buffers intact. HOTP counters and the
   account's secret bytes are unchanged across modal open / close
-  / save (the modal exposes no OTP-affecting fields), and
-  auto-lock drops the modal and its row buffers alongside the
-  in-memory vault.
+  / save (the modal exposes no OTP-affecting fields, render is
+  independent of `AccountKind`, HOTP read-only fields are
+  *omitted* not display-disabled), and auto-lock silently drops
+  the modal and its row buffers alongside the in-memory vault.
 - Auto-lock + clipboard-clear are off by default and behave per §6 when
   enabled, including the plaintext-vault no-op.
 - HOTP reveal rows show the counter used for the visible code, then return
