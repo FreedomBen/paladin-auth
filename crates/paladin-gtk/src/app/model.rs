@@ -387,6 +387,32 @@ pub struct AppModel {
     /// `GObject`. Mirrors the pattern used for
     /// [`Self::busy_spinner`].
     search_button: gtk::ToggleButton,
+    /// Header-bar `+` button cloned out of `widgets.add_button` at
+    /// init so [`AppModel::sync_app_add_button_visibility`] can flip
+    /// its visibility from each dispatch tick without going through
+    /// `update_view`. The `view!` macro's `set_visible` binding only
+    /// fires once at construction, so without this imperative mirror
+    /// the button would stay hidden after the `Missing → Unlocked`
+    /// transition that follows a successful vault create. The clone
+    /// is a refcount bump on the underlying `GObject`. Mirrors the
+    /// pattern used for [`Self::busy_spinner`] /
+    /// [`Self::search_button`].
+    add_button: gtk::Button,
+    /// Bundled `app` action group hosting the header-bar `+` button's
+    /// `"add"` action and every primary menu entry
+    /// (`"import"` / `"export"` / `"passphrase"` / `"preferences"` /
+    /// `"about"` / `"quit"` / `"copy_next_code"`) cloned at init so
+    /// [`AppModel::sync_app_window_action_group_sensitivities`] can
+    /// flip each `SimpleAction::set_enabled` from each dispatch tick
+    /// without going through `update_view`. The group is owned by the
+    /// root window via `insert_action_group("app", _)`; this clone
+    /// just bumps the `GObject` refcount so the lookup table stays
+    /// reachable from `update`. Without this mirror, the
+    /// `Missing → Unlocked` transition that follows a successful
+    /// vault create would leave the `+` button and Import / Export /
+    /// Passphrase / Preferences menu entries permanently disabled
+    /// because their action sensitivities were only set once at init.
+    action_group: gtk::gio::SimpleActionGroup,
     /// Toplevel `adw::ApplicationWindow` cloned at init so
     /// [`Self::remount_for_state`] can hand the same widget back to
     /// freshly-mounted `AccountListComponent` controllers as their
@@ -641,6 +667,8 @@ impl std::fmt::Debug for AppModel {
             .field("last_settings_busy", &self.last_settings_busy)
             .field("busy_spinner", &"<gtk::Spinner>")
             .field("search_button", &"<gtk::ToggleButton>")
+            .field("add_button", &"<gtk::Button>")
+            .field("action_group", &"<gtk::gio::SimpleActionGroup>")
             .field("window", &"<adw::ApplicationWindow>")
             .field("idle_source", &self.idle_source)
             .field(
@@ -1846,6 +1874,8 @@ impl SimpleComponent for AppModel {
             current_toast: None,
             busy_spinner: widgets.busy_spinner.clone(),
             search_button: widgets.search_button.clone(),
+            add_button: widgets.add_button.clone(),
+            action_group: action_group.clone(),
             window: root.clone(),
             pending_clipboard: None,
             pending_copy_after_advance: None,
@@ -4600,6 +4630,8 @@ impl SimpleComponent for AppModel {
         self.sync_passphrase_dialog_busy();
         self.sync_settings_busy();
         self.sync_app_busy_spinner();
+        self.sync_app_add_button_visibility();
+        self.sync_app_window_action_group_sensitivities();
     }
 }
 
@@ -4793,6 +4825,56 @@ impl AppModel {
     /// and the header-bar visual in one pass.
     fn sync_app_busy_spinner(&mut self) {
         apply_app_busy_spinner(&self.busy_spinner, self.state.as_ref());
+    }
+
+    /// Drive the header-bar `+` button's visibility from the current
+    /// [`AppState::is_unlocked`] reading via
+    /// [`apply_app_add_button_visibility`].
+    ///
+    /// The `view!` macro's `set_visible` binding only fires once at
+    /// construction, so without this imperative mirror the `+` button
+    /// stays hidden after the `Missing → Unlocked` transition that
+    /// follows a successful vault create (the
+    /// [`crate::init_dialog::InitDialogComponent`] is dropped by
+    /// [`Self::remount_for_state`] but the header bar is shared
+    /// across every state). Idempotent — `set_visible` no-ops on a
+    /// same-value flip, so running this from every per-dispatch sync
+    /// tick keeps the button in lockstep with `is_unlocked` without
+    /// branching. Sibling of [`Self::sync_app_busy_spinner`] /
+    /// [`Self::sync_app_window_action_group_sensitivities`] on the
+    /// header-bar reconcile side.
+    fn sync_app_add_button_visibility(&mut self) {
+        if let Some(state) = self.state.as_ref() {
+            apply_app_add_button_visibility(&self.add_button, state);
+        }
+    }
+
+    /// Drive the bundled `app` action group's per-action sensitivities
+    /// from the current [`AppState`] via
+    /// [`apply_app_window_action_group_sensitivities`].
+    ///
+    /// Walks every `SimpleAction` on the group (`"add"`, `"import"`,
+    /// `"export"`, `"passphrase"`, `"preferences"`, `"about"`,
+    /// `"quit"`, `"copy_next_code"`) and flips
+    /// `SimpleAction::set_enabled` to match the per-state rule pinned
+    /// by [`format_app_add_button_sensitive`] /
+    /// [`format_app_primary_menu_action_sensitivities`]. Idempotent —
+    /// `set_enabled` no-ops on a same-value flip, so running this
+    /// from every per-dispatch sync tick keeps the menu entries and
+    /// the `+` button's action surface in lockstep with the state
+    /// machine without branching. Without this reconcile, the
+    /// `Missing → Unlocked` transition that follows a successful
+    /// vault create would leave Import / Export / Passphrase /
+    /// Preferences (and the `+` action) permanently disabled because
+    /// their sensitivities were only set once at init when the
+    /// resolved state was `Missing`. Sibling of
+    /// [`Self::sync_app_add_button_visibility`] /
+    /// [`Self::sync_app_busy_spinner`] on the header-bar reconcile
+    /// side.
+    fn sync_app_window_action_group_sensitivities(&mut self) {
+        if let Some(state) = self.state.as_ref() {
+            apply_app_window_action_group_sensitivities(&self.action_group, state);
+        }
     }
 
     /// Tear down the per-session GTK / `GLib` resources that must not
