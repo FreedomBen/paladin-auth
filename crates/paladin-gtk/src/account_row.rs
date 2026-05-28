@@ -552,7 +552,12 @@ pub const ROW_COPY_ACTION_NAME: &str = "copy";
 /// `CopyCode`, `AdvanceHotp`) directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountRowOutput {
-    /// Row's kebab-menu "Rename…" entry activated.
+    /// Row's kebab-menu "Edit…" entry activated. The variant still
+    /// carries the legacy `RequestRename` name through Milestone 9
+    /// slices 1–3 (the menu label is cosmetically "Edit…" but the
+    /// underlying action remains `row.rename` and still mounts
+    /// `RenameDialog`); the rename to `RequestEdit` lands in a
+    /// later slice alongside the `EditDialog` widget swap.
     RequestRename(AccountId),
     /// Row's kebab-menu "Show QR…" entry activated. Read-only;
     /// `AppModel` opens `ExportQrDialog` for the account per
@@ -595,18 +600,23 @@ pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountRowOutput
 
 /// Build the kebab `gio::Menu` shared by every row.
 ///
-/// Three entries in order — "Rename…" → `row.rename`,
+/// Three entries in order — "Edit…" → `row.rename`,
 /// "Show QR…" → `row.show-qr`, "Remove…" → `row.remove` — matching
 /// the per-row [`gio::SimpleActionGroup`] installed by
 /// [`install_row_action_group`]. The destructive "Remove…" stays
-/// trailing; the read-only "Show QR…" neighbours the read-only
-/// "Rename…" shape per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
-/// §"QR export dialog implementation" > "Design contract".
+/// trailing; the read-only "Show QR…" neighbours the "Edit…"
+/// shape per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context
+/// menu and `EditDialog` implementation" > "Design contract".
+///
+/// Milestone 9 slice 1 (cosmetic): the visible "Edit…" label
+/// still targets `row.rename` (and routes through the existing
+/// `RenameDialog`) until later slices land the
+/// `ROW_EDIT_ACTION_NAME` rename and the `EditDialog` widget.
 #[must_use]
 pub fn build_kebab_menu_model() -> gio::Menu {
     let menu = gio::Menu::new();
     menu.append(
-        Some("Rename\u{2026}"),
+        Some("Edit\u{2026}"),
         Some(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_RENAME_ACTION_NAME}")),
     );
     menu.append(

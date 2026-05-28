@@ -1047,36 +1047,39 @@ fn row_copy_action_name_is_copy() {
 }
 
 #[test]
-fn build_kebab_menu_model_exposes_rename_show_qr_and_remove_in_order() {
+fn build_kebab_menu_model_exposes_edit_show_qr_and_remove_in_order() {
     // The row kebab `gtk::MenuButton` carries the `gio::Menu`
     // produced by [`build_kebab_menu_model`]. Per
-    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"QR export dialog
-    // implementation" > "Design contract", the menu must expose
-    // exactly three entries in order — "Rename…", "Show QR…", then
-    // "Remove…" — whose action targets resolve through the per-row
-    // `gio::SimpleActionGroup` named [`ROW_ACTION_GROUP_NAME`].
-    // The destructive "Remove…" stays trailing; the read-only
-    // "Show QR…" neighbours the read-only "Rename…" shape.
-    // Pinning the labels and targets here catches drift between
-    // the kebab menu, the action group installed by
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Row context menu and
+    // EditDialog implementation" > "Design contract" / Milestone 9
+    // slice 1, the menu must expose exactly three entries in order —
+    // "Edit…", "Show QR…", then "Remove…" — whose action targets
+    // resolve through the per-row `gio::SimpleActionGroup` named
+    // [`ROW_ACTION_GROUP_NAME`]. The destructive "Remove…" stays
+    // trailing; the read-only "Show QR…" neighbours the "Edit…"
+    // shape. Slices 1–3 are cosmetic-only: the visible "Edit…"
+    // label still targets `row.rename` (renamed in a later slice)
+    // and still mounts `RenameDialog` until slice 4 swaps in
+    // `EditDialog`. Pinning the labels and targets here catches
+    // drift between the kebab menu, the action group installed by
     // `install_row_action_group`, and the dispatch table in
     // `dispatch_row_action` — any of which would otherwise leave
     // the user with a kebab item that activates into the void.
     let menu = build_kebab_menu_model();
     assert_eq!(menu.n_items(), 3, "kebab menu carries exactly three items");
 
-    let rename_label: String = menu
+    let edit_label: String = menu
         .item_attribute_value(0, "label", None)
         .and_then(|v| v.get())
         .expect("kebab item 0 carries a label attribute");
-    assert_eq!(rename_label, "Rename\u{2026}");
+    assert_eq!(edit_label, "Edit\u{2026}");
 
-    let rename_action: String = menu
+    let edit_action: String = menu
         .item_attribute_value(0, "action", None)
         .and_then(|v| v.get())
         .expect("kebab item 0 carries an action attribute");
     assert_eq!(
-        rename_action,
+        edit_action,
         format!("{ROW_ACTION_GROUP_NAME}.{ROW_RENAME_ACTION_NAME}"),
     );
 
