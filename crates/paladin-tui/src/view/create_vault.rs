@@ -24,7 +24,7 @@ use ratatui::Frame;
 
 use paladin_core::format_plaintext_storage_warning;
 
-use crate::app::state::{CreateVaultMode, CreateVaultStep, PassphraseFieldFocus};
+use crate::app::state::{AppState, CreateVaultMode, CreateVaultStep, PassphraseFieldFocus};
 use crate::prompt::PassphraseBuffer;
 use crate::view::theme;
 
@@ -70,12 +70,28 @@ pub fn render(
     }
 
     if let Some(msg) = error {
+        // The Destroy modal's success / `vault_missing` paths land here
+        // carrying a neutral post-destroy confirmation (Milestone 10),
+        // which renders in the confirmation palette rather than the
+        // red error palette; every other message is a genuine error.
+        let style = if AppState::is_destroy_notice(msg) {
+            theme::fg(theme::SUCCESS, no_color)
+        } else {
+            theme::fg(theme::ERROR, no_color)
+        };
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            msg.to_string(),
-            theme::fg(theme::ERROR, no_color),
-        )));
+        lines.push(Line::from(Span::styled(msg.to_string(), style)));
     }
+
+    // Forgot-passphrase escape hatch (DESIGN §6 / Milestone 10): the
+    // destroy chord is advertised on the create-vault screen too so a
+    // user who landed here wanting to wipe + recreate a vault discovers
+    // the binding. Sourced from the shared keybindings table.
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        crate::keybindings::destroy_footer_hint(),
+        theme::fg(theme::WARN, no_color),
+    )));
 
     let paragraph = Paragraph::new(lines)
         .alignment(Alignment::Left)

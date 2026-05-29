@@ -42,6 +42,39 @@ pub struct Keybinding {
     pub action: &'static str,
 }
 
+/// Key presentation for the universal Destroy chord. Hyphen-joined to
+/// match the rest of the table (`Ctrl-C`, `Ctrl-B`, …); the footer hint
+/// re-renders it with `+` separators via [`destroy_footer_hint`] so the
+/// two surfaces share one source of truth.
+pub const DESTROY_KEYS: &str = "Ctrl-Shift-D";
+
+/// Action description for the Destroy chord row. The trailing `delete
+/// vault` phrase is reused verbatim by the footer hint
+/// ([`destroy_footer_hint`]) so the binding and the hint cannot drift.
+pub const DESTROY_ACTION: &str = "Destroy vault — delete vault";
+
+/// The footer hint advertised on the unlock, startup-error, and
+/// create-vault screens so the forgot-passphrase user discovers the
+/// destroy escape hatch without dropping to a shell (DESIGN §6 /
+/// Milestone 10).
+///
+/// Built from [`DESTROY_KEYS`] (re-rendered with `+` separators, the
+/// chord convention) plus the `delete vault` tail of [`DESTROY_ACTION`]
+/// so the hint and the Help-overlay row stay in lockstep. Yields
+/// `Ctrl+Shift+D delete vault`.
+#[must_use]
+pub fn destroy_footer_hint() -> String {
+    let chord = DESTROY_KEYS.replace('-', "+");
+    // The action reads "Destroy vault — delete vault"; the hint uses
+    // the post-em-dash tail so it stays short.
+    let tail = DESTROY_ACTION
+        .rsplit('—')
+        .next()
+        .unwrap_or(DESTROY_ACTION)
+        .trim();
+    format!("{chord} {tail}")
+}
+
 /// Documented `paladin-tui` keybindings in row order.
 ///
 /// Mirrors the "Keybindings (initial v0.1)" table in
@@ -127,6 +160,10 @@ pub const KEYBINDINGS: &[Keybinding] = &[
     Keybinding {
         keys: "s",
         action: "Open Settings modal",
+    },
+    Keybinding {
+        keys: DESTROY_KEYS,
+        action: DESTROY_ACTION,
     },
     Keybinding {
         keys: "?",

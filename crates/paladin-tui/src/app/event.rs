@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 
 use paladin_core::{
     AccountEdit, AccountId, AccountKindInput, AccountSummary, Algorithm, ClipboardClearToken, Code,
-    ImportConflict, ImportFormat, ImportReport, PaladinError, SettingPatch, Store,
+    DestroyReport, ImportConflict, ImportFormat, ImportReport, PaladinError, SettingPatch, Store,
     ValidatedAccount, ValidationWarning, Vault,
 };
 
@@ -661,6 +661,38 @@ pub enum EffectResult {
         /// `save_durability_unconfirmed`.
         result: Result<(), PaladinError>,
     },
+
+    /// Outcome of an [`Effect::DestroyVault`] attempt (Milestone 10;
+    /// DESIGN §4.3 / §6).
+    ///
+    /// On `Ok(report)` the reducer treats the destroy as committed:
+    /// it drops the boxed prior state (wiping any held `(Vault, Store)`
+    /// and secret buffers), transitions to a fresh
+    /// [`crate::app::state::AppState::CreateVault`] for the same path,
+    /// and publishes a [`crate::app::state::StatusLine::Confirmation`]
+    /// of [`crate::app::state::VAULT_DELETED`] (when
+    /// `report.backup_deleted`) or
+    /// [`crate::app::state::VAULT_DELETED_BACKUP_REMAINED`] (when not).
+    ///
+    /// On `Err(PaladinError::VaultMissing)` the on-disk vault
+    /// disappeared between modal open and submit: the reducer closes
+    /// the modal, drops the prior state, transitions to create-vault,
+    /// and publishes [`crate::app::state::VAULT_ALREADY_GONE`].
+    ///
+    /// On any other `Err(...)` (`DestroyIoError` for `unlink_backup_file`
+    /// / `fsync_vault_dir`, or a pre-primary `IoError` for
+    /// `vault_file_is_symlink` / `backup_file_is_symlink` /
+    /// `unlink_vault_file`) the modal stays open with an inline error
+    /// rendered via [`crate::app::state::render_destroy_error`], which
+    /// names the failing path and reflects the partial
+    /// [`paladin_core::DestroyReport`] so the user can decide whether to
+    /// retry or drop to a shell.
+    ///
+    /// Results delivered while not on
+    /// [`crate::app::state::AppState::Destroy`] (e.g. the modal was
+    /// cancelled or auto-lock fired before the worker posted back) are
+    /// discarded so the carried payload drops without mutating state.
+    DestroyVault(Result<DestroyReport, PaladinError>),
 }
 
 /// Successful outcome of an [`Effect::Add`] attempt.
@@ -1517,6 +1549,31 @@ pub enum Effect {
         /// The current vault path; the executor uses it for error
         /// reporting and to verify the path the effect was emitted
         /// against in case the user has navigated away.
+        path: PathBuf,
+    },
+    /// Permanently delete the vault file (and its sibling `.bak`) at
+    /// `path` (Milestone 10; DESIGN §4.3 / §6).
+    ///
+    /// Emitted by the reducer when the user confirms the Destroy modal
+    /// (`Enter` on *Delete vault* with the confirmation field reading
+    /// `yes`). This is the **only** `paladin-tui` effect that does not
+    /// route through [`paladin_core::Vault::mutate_and_save`] — destroy
+    /// operates on the path directly without opening, decrypting, or
+    /// loading the vault, so there is no save to roll back: the
+    /// `destroy_vault` call *is* the commit.
+    ///
+    /// The executor calls [`paladin_core::destroy_vault`] on its worker
+    /// and posts the outcome back through an
+    /// `AppEvent::EffectResult(EffectResult::DestroyVault(...))`. Unlike
+    /// the save-bearing effects, the executor does not gate on the live
+    /// state being `Unlocked` against the same path — destroy fires
+    /// from `Missing` / `Locked` / `StartupError` too, none of which
+    /// hold a `(Vault, Store)`. The reducer correlates the result by
+    /// the modal being open, not by an `account_id`.
+    DestroyVault {
+        /// The resolved vault path to wipe. Passed straight to
+        /// [`paladin_core::destroy_vault`]; the sibling `.bak` is
+        /// derived and unlinked by core, not named here.
         path: PathBuf,
     },
 }

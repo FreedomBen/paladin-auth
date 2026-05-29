@@ -1,14 +1,14 @@
 ---
-source: crates/paladin-tui/tests/view_snapshots.rs
-expression: "render_to_text(&state, snapshot_now(), 80, 12)"
+source: crates/paladin-tui/tests/destroy_snapshots.rs
+expression: "render_to_text(&state, 80, 12)"
 ---
-┌ Paladin — unlock ────────────────────────────────────────────────────────────┐
+┌ Paladin — startup error ─────────────────────────────────────────────────────┐
 │                                                                              │
-│  Vault: /var/lib/paladin/vault.bin                                           │
+│  Vault path: /home/u/.local/share/paladin/vault.bin                          │
 │                                                                              │
-│  Passphrase:                                                                 │
+│  vault header is corrupt                                                     │
 │                                                                              │
-│  Press Enter to unlock; Esc or Ctrl-C to quit.                               │
+│  Press Esc, q, or Ctrl-C to quit.                                            │
 │  Ctrl+Shift+D delete vault                                                   │
 │                                                                              │
 │                                                                              │

@@ -71,6 +71,15 @@ pub fn render(
 
     lines.push(Line::from(""));
     lines.push(Line::from("Press Enter to unlock; Esc or Ctrl-C to quit."));
+    // Forgot-passphrase escape hatch (DESIGN §6 / Milestone 10): the
+    // destroy chord is advertised here so a locked-out user can wipe
+    // the vault without dropping to a shell. Sourced from the shared
+    // keybindings table so the hint and the Help-overlay row cannot
+    // drift.
+    lines.push(Line::from(Span::styled(
+        crate::keybindings::destroy_footer_hint(),
+        theme::fg(theme::WARN, no_color),
+    )));
 
     let paragraph = Paragraph::new(lines)
         .alignment(Alignment::Left)

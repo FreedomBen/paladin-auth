@@ -29,12 +29,14 @@ use crate::app::event::{
 };
 use crate::app::state::{
     compute_idle_deadline, format_account_display_label, format_duplicate_account_message,
-    format_qr_import_failure, initial_selection, render_error_message, AddManualFocus, AddModal,
-    AddMode, AppState, ChordLeader, CountsPanel, EditFocus, EditIconHintSelector, EditModal,
-    EditPrior, ExportFormat, ExportModal, Focus, HotpReveal, ImportModal, Modal, PassphraseModal,
-    PassphraseSubFlow, PendingClipboardClear, PendingDuplicateAdd, QrExportFocus, QrExportModal,
-    QrExportPage, QrSaveFocus, QrSaveFormat, QrSaveStep, QrSaveSubFlow, RemoveModal, RenameModal,
-    SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    format_qr_import_failure, initial_selection, render_destroy_error, render_error_message,
+    AddManualFocus, AddModal, AddMode, AppState, ChordLeader, CountsPanel, DestroyAction,
+    EditFocus, EditIconHintSelector, EditModal, EditPrior, ExportFormat, ExportModal, Focus,
+    HotpReveal, ImportModal, Modal, PassphraseModal, PassphraseSubFlow, PendingClipboardClear,
+    PendingDuplicateAdd, QrExportFocus, QrExportModal, QrExportPage, QrSaveFocus, QrSaveFormat,
+    QrSaveStep, QrSaveSubFlow, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
+    CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED, VAULT_ALREADY_GONE, VAULT_DELETED,
+    VAULT_DELETED_BACKUP_REMAINED,
 };
 use crate::prompt::PassphraseBuffer;
 use crate::search::{filtered_account_ids, select_after_search};
@@ -129,6 +131,36 @@ pub fn reduce(state: AppState, event: AppEvent) -> (AppState, Vec<Effect>) {
 /// vault path…"* and *"A clipboard auto-clear timer scheduled before
 /// lock survives lock and still fires only-if-unchanged."*
 fn maybe_auto_lock(state: AppState, now: Instant) -> AppState {
+    // The Destroy modal can be open over an `Unlocked` caller whose
+    // idle deadline lives on the boxed `prior` state. An idle expiry
+    // while the modal is open (and the destroy effect has not yet
+    // committed) closes the modal — zeroizing its confirmation buffer
+    // as the `DestroyModal` drops — and locks, exactly as if the modal
+    // were not open. The `Vault` / `Store` on the boxed prior drop here
+    // too. If the destroy effect has already dispatched, its
+    // `EffectResult::DestroyVault` is processed before/after this tick
+    // and the result-routing branch wins; an expiry that races in
+    // before the result simply locks, and the late result is discarded
+    // by `reduce_destroy_vault_result`'s non-`Destroy` guard.
+    if let AppState::Destroy { prior, .. } = &state {
+        if let AppState::Unlocked {
+            idle_deadline: Some(deadline),
+            ..
+        } = prior.as_ref()
+        {
+            if IdlePolicy::is_expired(*deadline, now) {
+                let AppState::Destroy { prior, .. } = state else {
+                    unreachable!("variant checked immediately above");
+                };
+                // Recurse on the unboxed prior so the `Unlocked` arm
+                // below performs the lock teardown; the `DestroyModal`
+                // drops with the outer `Destroy` value.
+                return maybe_auto_lock(*prior, now);
+            }
+        }
+        return state;
+    }
+
     let AppState::Unlocked {
         idle_deadline: Some(deadline),
         ..
@@ -303,6 +335,7 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
         EffectResult::Export { result } => reduce_export_result(state, result),
         EffectResult::QrExport { result } => reduce_qr_export_result(state, result),
         EffectResult::Passphrase { result } => reduce_passphrase_result(state, result),
+        EffectResult::DestroyVault(result) => reduce_destroy_vault_result(state, result),
     }
 }
 
@@ -928,6 +961,86 @@ fn reduce_passphrase_result(
     (state, Vec::new())
 }
 
+/// Handle the outcome of an [`Effect::DestroyVault`] (Milestone 10;
+/// DESIGN §4.3 / §6).
+///
+/// `destroy_vault` is the commit point — there is no
+/// `Vault::mutate_and_save` to roll back — so the routing is purely
+/// about visible state:
+///
+/// * `Ok(report)` → the vault is gone. Drop the boxed `prior` state
+///   (zeroizing any held passphrase buffers first, then letting `Drop`
+///   wipe the `Vault` / `Store` / closed-modal buffers as the box is
+///   dropped), and transition to a fresh
+///   [`AppState::CreateVault`] for the same path carrying the
+///   confirmation note ([`VAULT_DELETED`] when `report.backup_deleted`,
+///   else [`VAULT_DELETED_BACKUP_REMAINED`]).
+/// * `Err(VaultMissing)` → the on-disk vault disappeared between modal
+///   open and submit. Same teardown + transition, note
+///   [`VAULT_ALREADY_GONE`].
+/// * any other `Err(...)` → keep the modal open and stash an inline
+///   error via [`render_destroy_error`] naming the failing path and the
+///   partial [`paladin_core::DestroyReport`].
+///
+/// A result delivered while not on [`AppState::Destroy`] (the modal was
+/// cancelled, or auto-lock fired before the worker posted back) is
+/// discarded so the carried payload drops without mutating state.
+fn reduce_destroy_vault_result(
+    mut state: AppState,
+    result: Result<paladin_core::DestroyReport, PaladinError>,
+) -> (AppState, Vec<Effect>) {
+    let AppState::Destroy { path, prior, modal } = &mut state else {
+        return (state, Vec::new());
+    };
+
+    match result {
+        Ok(report) => {
+            let note = if report.backup_deleted {
+                VAULT_DELETED
+            } else {
+                VAULT_DELETED_BACKUP_REMAINED
+            };
+            destroy_committed(
+                path.clone(),
+                std::mem::replace(prior.as_mut(), placeholder_state()),
+                note,
+            )
+        }
+        Err(PaladinError::VaultMissing) => destroy_committed(
+            path.clone(),
+            std::mem::replace(prior.as_mut(), placeholder_state()),
+            VAULT_ALREADY_GONE,
+        ),
+        Err(err) => {
+            // Partial failure / symlink rejection: keep the modal open
+            // with a path-named inline error so the user can decide
+            // whether to retry or drop to a shell. The prior state stays
+            // boxed; nothing is torn down.
+            modal.error = Some(render_destroy_error(&err, path));
+            (state, Vec::new())
+        }
+    }
+}
+
+/// Tear down the boxed `prior` state after a committed destroy and
+/// build the post-destroy [`AppState::CreateVault`] for `path` carrying
+/// the confirmation `note`.
+///
+/// The `prior` state's passphrase buffers (if it was `Unlock` /
+/// `CreateVault`) are zeroized explicitly, then `prior` is dropped here
+/// — dropping a `Box<AppState::Unlocked>` runs `Drop` on the held
+/// `Vault` / `Store` and any (already-closed) modal's
+/// `PassphraseBuffer`s, matching the auto-lock teardown contract. No
+/// effect is emitted.
+fn destroy_committed(
+    path: std::path::PathBuf,
+    prior: AppState,
+    note: &str,
+) -> (AppState, Vec<Effect>) {
+    drop(zeroize_passphrase_buffers(prior));
+    (AppState::create_vault_with_notice(path, note), Vec::new())
+}
+
 /// Handle the outcome of an [`Effect::Add`] / [`Effect::AddFromUri`] /
 /// [`Effect::AddAnyway`].
 ///
@@ -1289,6 +1402,20 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
 
     if is_ctrl_c(key) {
         return (zeroize_passphrase_buffers(state), vec![Effect::Quit]);
+    }
+
+    // `Ctrl+Shift+D` — universal Destroy chord (Milestone 10; DESIGN
+    // §6). Like `Ctrl-C`, it is handled before any state-specific
+    // routing so it fires from every screen, including over an open
+    // modal. Pressing it while the Destroy modal is already open is a
+    // silent no-op (parity with `?` on the Help overlay).
+    if is_destroy_chord(key) {
+        return open_destroy_modal(state);
+    }
+
+    // Route input for the Destroy modal itself (any state below it).
+    if matches!(state, AppState::Destroy { .. }) {
+        return reduce_destroy_input(state, key);
     }
 
     if matches!(key.code, KeyCode::Esc) && quits_on_esc(&state) {
@@ -4346,6 +4473,175 @@ fn apply_esc_dismiss(
 /// `Ctrl-C` — quits on any screen.
 fn is_ctrl_c(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('c')) && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+/// `Ctrl+Shift+D` — the universal Destroy chord (Milestone 10; DESIGN
+/// §6). A deliberate chord (not a bare letter) so the loudest action
+/// in the app cannot be triggered by a stray keystroke.
+///
+/// Terminals disagree on how a Ctrl-Shift-letter arrives: some send
+/// `KeyCode::Char('d')` with `CONTROL | SHIFT`, others fold the Shift
+/// into an upper-case `KeyCode::Char('D')` (with or without an explicit
+/// `SHIFT` bit). Both are accepted as long as `CONTROL` is held; a bare
+/// `Ctrl-D` (half-page-down on the list) is intentionally **not** the
+/// chord — it must carry Shift either as a modifier bit or as the
+/// upper-case code.
+fn is_destroy_chord(key: &KeyEvent) -> bool {
+    if !key.modifiers.contains(KeyModifiers::CONTROL) {
+        return false;
+    }
+    match key.code {
+        KeyCode::Char('D') => true,
+        KeyCode::Char('d') => key.modifiers.contains(KeyModifiers::SHIFT),
+        _ => false,
+    }
+}
+
+/// Open the Destroy modal from the current `state` (Milestone 10).
+///
+/// * If the Destroy modal is already open, this is a silent no-op
+///   (parity with `?` on the Help overlay) — no effect, no state churn.
+/// * If `state` is `Unlocked` with an open modal, that modal is closed
+///   first so its in-flight secret-bearing buffers
+///   (`PassphraseBuffer`s in Add / Passphrase, etc.) zeroize on drop
+///   before the state is boxed as the Destroy modal's `prior`.
+/// * If the state has no resolvable vault path (only a `StartupError`
+///   from a failed `default_vault_path`), the chord is a no-op — there
+///   is nothing to destroy.
+///
+/// On success the state becomes [`AppState::Destroy`] boxing the prior
+/// state; no effect is emitted until the user confirms.
+fn open_destroy_modal(state: AppState) -> (AppState, Vec<Effect>) {
+    // Already open → silent no-op.
+    if matches!(state, AppState::Destroy { .. }) {
+        return (state, Vec::new());
+    }
+
+    // Close any open modal on the prior `Unlocked` state first so its
+    // secret buffers zeroize on drop before we box the state. The
+    // `Vault` / `Store` / search / HOTP reveal are retained so a cancel
+    // restores the unlocked session intact (matching DESIGN §6: "cancel
+    // returns the user to the same … view").
+    let state = close_active_modal(state);
+
+    match AppState::open_destroy(state) {
+        Ok(destroy) => (destroy, Vec::new()),
+        // No resolvable path (StartupError with `path: None`): nothing
+        // to destroy, so leave the caller state untouched.
+        Err(unchanged) => (unchanged, Vec::new()),
+    }
+}
+
+/// Drop any open modal on an `Unlocked` state so its secret-bearing
+/// buffers zeroize on drop, returning the state with `modal = None`.
+/// All other states (and `Unlocked` with no modal) pass through
+/// unchanged.
+fn close_active_modal(mut state: AppState) -> AppState {
+    if let AppState::Unlocked { modal, .. } = &mut state {
+        // Setting to `None` drops the `Modal`, whose `PassphraseBuffer`
+        // fields (Add `manual_secret` / `uri_text`, Passphrase entry,
+        // and any pending duplicate / add-anyway state nested inside)
+        // zeroize on drop.
+        *modal = None;
+    }
+    state
+}
+
+/// Per-state input handling for the Destroy modal
+/// ([`AppState::Destroy`]; Milestone 10; DESIGN §4.3 / §6).
+///
+/// The modal exposes one editable field (the `yes`-literal confirmation
+/// `tui-input`) and two actions, *Cancel* (default focus; `Esc`) and
+/// *Delete vault* (`Enter`, enabled only while the confirmation reads
+/// exactly `yes` after Unicode-whitespace trim). Key handling:
+///
+/// * `Esc` → cancel: restore the boxed `prior` state verbatim
+///   (the confirmation buffer drops with the modal).
+/// * `Tab` / `Left` / `Right` / `↑` / `↓` → toggle focus between
+///   *Cancel* and *Delete vault*.
+/// * `Enter` → on *Delete vault* with a confirmed buffer, emit
+///   [`Effect::DestroyVault`]; on *Delete vault* without confirmation,
+///   or on *Cancel*, behave as the focused action dictates (Cancel
+///   restores `prior`; an unconfirmed Delete is a no-op so the user
+///   sees the gate). The state is otherwise unchanged until the
+///   executor result returns.
+/// * Printable chars / `Backspace` → edit the confirmation buffer
+///   (clearing any stale inline error so a retry reads cleanly).
+fn reduce_destroy_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<Effect>) {
+    let AppState::Destroy { path, prior, modal } = &mut state else {
+        unreachable!("reduce_destroy_input called with non-Destroy state");
+    };
+
+    // Ctrl / Alt-modified Char keys are not confirmation text (mirrors
+    // the Unlock-screen rule) — the `KeyCode::Char(c)` arm below guards
+    // on the absence of those modifiers, so e.g. Ctrl-U falls through to
+    // the catch-all no-op rather than appending to the buffer.
+    match key.code {
+        KeyCode::Esc => {
+            // Cancel: restore the prior state verbatim. The
+            // `DestroyModal` (and its confirmation buffer) drops here.
+            let prior = std::mem::replace(prior.as_mut(), placeholder_state());
+            (prior, Vec::new())
+        }
+        KeyCode::Tab
+        | KeyCode::BackTab
+        | KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Up
+        | KeyCode::Down => {
+            modal.focus = match modal.focus {
+                DestroyAction::Cancel => DestroyAction::Delete,
+                DestroyAction::Delete => DestroyAction::Cancel,
+            };
+            (state, Vec::new())
+        }
+        KeyCode::Enter => match modal.focus {
+            DestroyAction::Cancel => {
+                let prior = std::mem::replace(prior.as_mut(), placeholder_state());
+                (prior, Vec::new())
+            }
+            DestroyAction::Delete => {
+                if modal.confirmed() {
+                    // Commit: emit the destroy effect. No state mutates
+                    // until the executor's `EffectResult::DestroyVault`
+                    // returns (per the plan: "No other state mutates
+                    // until the executor result returns").
+                    let effect = Effect::DestroyVault { path: path.clone() };
+                    (state, vec![effect])
+                } else {
+                    // Unconfirmed Delete is a no-op so the gate is
+                    // visible; the user must type `yes` first.
+                    (state, Vec::new())
+                }
+            }
+        },
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            modal.confirmation.push(c);
+            modal.error = None;
+            (state, Vec::new())
+        }
+        KeyCode::Backspace => {
+            modal.confirmation.pop();
+            modal.error = None;
+            (state, Vec::new())
+        }
+        _ => (state, Vec::new()),
+    }
+}
+
+/// A cheap throwaway [`AppState`] used only as the `std::mem::replace`
+/// stand-in when extracting the boxed `prior` out of an
+/// [`AppState::Destroy`]. Never rendered or routed — it is dropped
+/// immediately as the extracted prior state replaces it.
+fn placeholder_state() -> AppState {
+    AppState::StartupError {
+        path: None,
+        message: String::new(),
+    }
 }
 
 /// `Esc` quits on `Unlock`, `StartupError`, and the `ChooseMode`

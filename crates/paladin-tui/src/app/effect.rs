@@ -22,8 +22,8 @@ use std::sync::mpsc::Sender;
 use std::time::{Instant, SystemTime};
 
 use paladin_core::{
-    export as core_export, import as core_import, parse_icon_hint_token, parse_otpauth,
-    validate_manual, write_secret_file_atomic, Account, AccountId, AccountInput,
+    destroy_vault, export as core_export, import as core_import, parse_icon_hint_token,
+    parse_otpauth, validate_manual, write_secret_file_atomic, Account, AccountId, AccountInput,
     ClipboardClearPolicy, EncryptionOptions, ImportConflict, ImportFormat, ImportOptions,
     PaladinError, QrRenderOptions, SettingPatch, Store, ValidatedAccount, Vault, VaultInit,
     VaultLock,
@@ -464,6 +464,24 @@ pub fn execute(
             new_passphrase,
         } => execute_passphrase_change(&path, new_passphrase, state, sender),
         Effect::PassphraseRemove { path } => execute_passphrase_remove(&path, state, sender),
+        Effect::DestroyVault { path } => {
+            // Milestone 10 / DESIGN §4.3 / §6. The only effect arm that
+            // does **not** go through `Vault::mutate_and_save`: destroy
+            // operates on the path directly without opening or
+            // decrypting the vault, so there is no save to roll back —
+            // `destroy_vault` *is* the commit. Unlike the save-bearing
+            // arms there is no `AppState::Unlocked` / path gate either,
+            // because the Destroy modal fires from `Missing` / `Locked`
+            // / `StartupError` too, none of which hold a `(Vault,
+            // Store)`. `state` is therefore untouched here; the reducer
+            // routes the posted `EffectResult::DestroyVault` against
+            // whatever state is live when it arrives (discarding it if
+            // the modal was cancelled or auto-lock intervened).
+            let _ = state;
+            let result = destroy_vault(&path);
+            let _ = sender.send(AppEvent::EffectResult(EffectResult::DestroyVault(result)));
+            EffectOutcome::Continue
+        }
     }
 }
 

@@ -4998,39 +4998,46 @@ terminal theme and survives `--no-color`.
   `EffectResult::DestroyVault` arm that drops the held `(Vault,
   Store)` and transitions to `AppState::Missing` /
   create-vault flow with the secret-buffer wipe.
-  - [ ] Add a `DestroyModal` variant to the modal enum holding
-    the resolved vault path, the resolved `.bak` probe
-    (`backup_present: bool`), the warning body string
-    (sourced once via `format_destroy_warning` at open time),
-    the confirmation `tui-input` buffer, the focused-action
-    cursor (defaults to *Cancel*), and the per-modal inline-error
-    slot for the partial-failure / symlink paths. The variant
-    is reachable from every `AppState` so the modal renders
-    over `Missing`, `Locked`, `Unlocked`, and `StartupError`
-    alike — depends on the `crates/paladin-tui/src/view/destroy.rs`
-    view module landing in parallel.
-  - [ ] Wire the `Ctrl-Shift-D` chord into the reducer as a
+  - [x] Add the Destroy modal state holding the resolved vault
+    path, the resolved `.bak` probe (`backup_present: bool`), the
+    warning body string (sourced once via `format_destroy_warning`
+    at open time), the confirmation buffer, the focused-action
+    cursor (`DestroyAction`, defaults to *Cancel*), and the inline-
+    error slot for the partial-failure / symlink paths. **Shape
+    note:** because the per-screen `Modal` slot only exists on
+    `AppState::Unlocked`, the Destroy modal is hosted by a new
+    top-level `AppState::Destroy { path, prior: Box<AppState>,
+    modal: DestroyModal }` variant (rather than a `Modal` enum
+    arm) so it is reachable from *every* state; `prior` boxes the
+    caller state so cancel restores it verbatim. The modal renders
+    over `Missing`, `Locked`, `Unlocked`, and `StartupError` alike
+    via `crates/paladin-tui/src/view/destroy.rs`, which paints the
+    boxed caller state underneath and overlays the modal.
+  - [x] Wire the `Ctrl-Shift-D` chord into the reducer as a
     universal opener: from `Unlocked` with no modal open, from
     `Locked`, from `StartupError`, from `Missing` /
     create-vault `ChooseMode` / `EnterPassphrase` /
     `ConfirmPlaintext`, and from any other open modal. When
     fired with another modal open, the reducer zeroizes the
-    active modal's in-flight secret-bearing buffers (passphrase
-    fields, Add URI / secret fields, edit / rename buffers,
-    QR ack state, pending duplicate / add-anyway state),
-    closes the active modal, and then opens the Destroy modal.
-    A second `Ctrl-Shift-D` while the Destroy modal is already
-    open is a silent no-op. Update
-    `crates/paladin-tui/src/keybindings.rs::KEYBINDINGS` with
-    the new row (universal scope) and re-lock the
-    `snapshot_help_overlay` insta fixture so the overlay picks
-    up the new entry.
-  - [ ] Render the unlock, startup-error, and create-vault
+    active modal's in-flight secret-bearing buffers (closing the
+    `Unlocked` modal drops its `PassphraseBuffer`s — Add URI /
+    secret, Passphrase entry, and any nested pending-duplicate /
+    add-anyway state — which zeroize on drop) before boxing the
+    prior state, then opens the Destroy modal. A second
+    `Ctrl-Shift-D` while the Destroy modal is already open is a
+    silent no-op. `keybindings::KEYBINDINGS` gains the
+    `Ctrl-Shift-D` row (universal scope) and the
+    `snapshot_help_overlay` insta fixture is re-locked (its test
+    terminal grew one row so the new entry — and the trailing
+    `Ctrl-C` row — stay visible).
+  - [x] Render the unlock, startup-error, and create-vault
     screens' footer hint (`Ctrl+Shift+D delete vault`) sourced
-    from the shared `keybindings::KEYBINDINGS` row's label so
-    the binding and the hint cannot drift; the list / modal
+    from the shared `keybindings::destroy_footer_hint()` (built
+    from the `KEYBINDINGS` `Ctrl-Shift-D` row's keys + label) so
+    the binding and the hint cannot drift; the startup-error hint
+    is suppressed when no vault path resolved; the list / modal
     screens do not render the footer hint.
-  - [ ] Wire `Effect::DestroyVault { path }` and its executor
+  - [x] Wire `Effect::DestroyVault { path }` and its executor
     through `paladin_core::destroy_vault(path)` directly (the
     executor is the only `paladin-tui` effect arm that does
     **not** go through `Vault::mutate_and_save` — destroy is
@@ -5038,43 +5045,48 @@ terminal theme and survives `--no-color`.
     `EffectResult::DestroyVault(Result<DestroyReport,
     PaladinError>)` back through the mpsc channel; the reducer
     routes:
-    * `Ok(report)` → drop held `(Vault, Store)`, zeroize every
-      secret-bearing UI buffer (passphrase, URI, manual secret,
-      pending duplicate state, search query, HOTP reveal +
-      in-memory code, pending clipboard auto-clear value, QR
-      render bytes), transition to `AppState::Missing` +
-      create-vault, and emit a status-line note of
-      `Vault deleted.` or
+    * `Ok(report)` → drop the boxed `prior` state (its held
+      `(Vault, Store)` and any already-closed modal buffers
+      zeroize on drop; `Unlock` / `CreateVault` passphrase
+      buffers are zeroized explicitly first), transition to a
+      fresh `AppState::CreateVault` for the same path, and surface
+      the note `Vault deleted.` or
       `Vault deleted (backup remained on disk).` based on
-      `report.backup_deleted`.
-    * `Err(vault_missing)` → close the modal, status-line
-      `Vault already gone.`, transition to `Missing` +
-      create-vault.
-    * `Err(io_error)` for `vault_file_is_symlink` /
-      `backup_file_is_symlink` / `unlink_vault_file` /
-      `unlink_backup_file` / `fsync_vault_dir` → keep the modal
-      open with an inline error label naming the failing path
-      and the partial `DestroyReport`
+      `report.backup_deleted`. **Shape note:** the create-vault
+      screen has no `status_line` slot (that lives only on
+      `Unlocked`), so the post-destroy note rides on the
+      create-vault `error` field and the create-vault renderer
+      styles the three `VAULT_*` constants neutrally (green) via
+      `AppState::is_destroy_notice`.
+    * `Err(vault_missing)` → drop `prior`, transition to
+      create-vault with the `Vault already gone.` note.
+    * `Err(DestroyIoError)` (`unlink_backup_file` /
+      `fsync_vault_dir`) and pre-primary `Err(IoError)`
+      (`vault_file_is_symlink` / `backup_file_is_symlink` /
+      `unlink_vault_file`) → keep the modal open with an inline
+      error label (via `render_destroy_error`) naming the failing
+      path and reflecting the partial `DestroyReport`
       (`primary_deleted` / `backup_deleted`) so the user can
       decide whether to retry or quit.
     * Any other error → keep the modal open with the inline
-      error and the `format_unsafe_permissions`-style rendering
-      already used elsewhere.
-  - [ ] Wire auto-lock interaction: if the auto-lock idle
-    deadline fires while the Destroy modal is open and the
-    destroy effect has **not** dispatched, the reducer
-    zeroizes the partial confirmation buffer, closes the
-    modal, and transitions to `Locked` (or `Missing` if the
-    vault is plaintext). If the destroy effect has already
-    dispatched, the auto-lock fires after the
-    `EffectResult::DestroyVault` is processed (the executor
-    posts the result before the channel is dropped); the
-    reducer state on receipt is whichever the result-routing
-    branch dictates.
-  - [ ] All `tests/destroy_tests.rs` bullets ticked (see the
-    Destroy-modal test section), the executor-side bullets in
-    `tests/effect_tests.rs::execute_destroy_vault_*` ticked, and
-    the Destroy-modal insta snapshots
+      error via `render_destroy_error`'s `render_error_message`
+      fallback. A result delivered while not on
+      `AppState::Destroy` (cancelled / auto-locked) is discarded.
+  - [x] Wire auto-lock interaction: if the auto-lock idle
+    deadline fires while the Destroy modal is open over an
+    `Unlocked` caller whose deadline has expired, the reducer
+    closes the modal (its confirmation buffer drops with the
+    `DestroyModal`) and transitions to `Locked` — the held
+    `(Vault, Store)` on the boxed prior drops in place. If the
+    destroy effect has already dispatched, the auto-lock fires
+    after the `EffectResult::DestroyVault` is processed; a late
+    result on a now-`Locked` state is discarded by the
+    result-routing guard.
+  - [x] All `tests/destroy_tests.rs` bullets ticked (see the
+    Destroy-modal test section), the executor-side coverage
+    (`execute_destroy_vault_*`, driving the real
+    `paladin_core::destroy_vault` against on-disk fixtures) ticked,
+    and the Destroy-modal insta snapshots
     (`snapshot_destroy_modal_default`,
     `snapshot_destroy_modal_confirmation_filled`,
     `snapshot_destroy_modal_no_backup`,
@@ -5084,8 +5096,13 @@ terminal theme and survives `--no-color`.
     `snapshot_unlock_footer_hint`,
     `snapshot_startup_error_footer_hint`,
     `snapshot_status_line_vault_deleted`,
-    `snapshot_status_line_vault_deleted_backup_remained`) locked
-    in `crates/paladin-tui/tests/view_snapshots.rs`.
+    `snapshot_status_line_vault_deleted_backup_remained`) locked.
+    **Shape note:** the executor + reducer unit tests live in a
+    dedicated `crates/paladin-tui/tests/destroy_tests.rs`, and the
+    Destroy snapshots in
+    `crates/paladin-tui/tests/destroy_snapshots.rs` (their own
+    `destroy_snapshots__*` namespace), rather than folding into
+    `view_snapshots.rs` — keeps the new fixtures self-contained.
 
 ## Definition of done
 

@@ -179,6 +179,7 @@ fn run_event_loop_renders_initial_state_before_processing_events() {
                 AppState::Locked { .. } => "Locked",
                 AppState::Unlocked { .. } => "Unlocked",
                 AppState::StartupError { .. } => "StartupError",
+                AppState::Destroy { .. } => "Destroy",
             });
         },
         one_shot_ctrl_c,

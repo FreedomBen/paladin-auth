@@ -18,6 +18,7 @@
 
 pub mod add;
 pub mod create_vault;
+pub mod destroy;
 pub mod edit;
 pub mod export;
 pub mod help;
@@ -121,6 +122,16 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color
             // passphrase on the next unlock attempt, and the
             // in-state-machine `Locked → Unlock` handoff on the first
             // keystroke is reducer territory.
+        }
+        AppState::Destroy { prior, modal, .. } => {
+            // Paint the caller state underneath so a cancel visibly
+            // returns to it (the unlocked list, the unlock / startup-
+            // error screen, etc.), then overlay the Destroy modal.
+            // Re-using the top-level dispatcher keeps the underlay
+            // pixel-identical to the bare caller state — including its
+            // own footer hint — without duplicating per-state layout.
+            render(frame, prior, now, no_color);
+            destroy::render(frame, modal, no_color);
         }
     }
 }

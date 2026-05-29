@@ -65,6 +65,7 @@ fn tag(state: &AppState) -> &'static str {
         AppState::Locked { .. } => "Locked",
         AppState::Unlocked { .. } => "Unlocked",
         AppState::StartupError { .. } => "StartupError",
+        AppState::Destroy { .. } => "Destroy",
     }
 }
 

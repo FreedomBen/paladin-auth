@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use paladin_core::{
-    format_create_vault_dir_error, format_unsafe_permissions, AccountId, AccountKindInput,
-    AccountSummary, Algorithm, ClipboardClearToken, IdlePolicy, ImportConflict, ImportFormat,
-    PaladinError, Store, ValidatedAccount, Vault, VaultLock, VaultStatus, DIGITS_DEFAULT,
-    TOTP_PERIOD_DEFAULT,
+    format_create_vault_dir_error, format_destroy_warning, format_unsafe_permissions, AccountId,
+    AccountKindInput, AccountSummary, Algorithm, ClipboardClearToken, IdlePolicy, ImportConflict,
+    ImportFormat, PaladinError, Store, ValidatedAccount, Vault, VaultLock, VaultStatus,
+    DIGITS_DEFAULT, TOTP_PERIOD_DEFAULT,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -152,6 +152,27 @@ pub const CLIPBOARD_WRITE_FAILED: &str = "clipboard write failed";
 /// executor never sees the wrong-kind dispatch.
 pub const NO_NEXT_CODE_FOR_HOTP: &str = "no next code for HOTP accounts";
 
+/// Status-line confirmation surfaced after a successful
+/// [`crate::app::event::Effect::DestroyVault`] when the sibling
+/// `vault.bin.bak` was unlinked too (`DestroyReport.backup_deleted ==
+/// true`) — the all-clear case. Per DESIGN §6 / Milestone 10.
+pub const VAULT_DELETED: &str = "Vault deleted.";
+
+/// Status-line confirmation surfaced after a successful
+/// [`crate::app::event::Effect::DestroyVault`] when no `.bak` was
+/// unlinked (`DestroyReport.backup_deleted == false`) — either there
+/// was no backup at probe time, or an `unlink_backup_file` partial
+/// failure left it behind. Both map to the same line, mirroring the
+/// CLI's `Deleted vault (backup remained on disk).`
+pub const VAULT_DELETED_BACKUP_REMAINED: &str = "Vault deleted (backup remained on disk).";
+
+/// Status-line confirmation surfaced when a
+/// [`crate::app::event::Effect::DestroyVault`] returns
+/// [`paladin_core::PaladinError::VaultMissing`] — the on-disk vault
+/// disappeared between modal open and submit. Per DESIGN §6 /
+/// Milestone 10.
+pub const VAULT_ALREADY_GONE: &str = "Vault already gone.";
+
 /// Formatter for the status-line confirmation surfaced when an
 /// [`crate::app::event::Effect::CopyNextCode`] copy succeeds. Per
 /// DESIGN §6: *"emits a status-line confirmation of the form
@@ -253,6 +274,83 @@ pub struct RemoveModal {
     /// surface. The success / save-error rollback wiring lands
     /// alongside the `EffectResult::Remove` slice.
     pub error: Option<String>,
+}
+
+/// Which action of the Destroy modal currently holds focus.
+///
+/// Per `docs/DESIGN.md` §6 / `docs/IMPLEMENTATION_PLAN_03_TUI.md`
+/// "Modals (per §6) > Destroy": the loud *Delete vault* action is
+/// never the default focus on open — the modal opens focused on
+/// *Cancel* so the destructive commit always takes a deliberate
+/// focus move plus an `Enter`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DestroyAction {
+    /// Dismiss the modal and return to the caller state. Default
+    /// focus on open; also bound to `Esc`.
+    #[default]
+    Cancel,
+    /// Commit the destroy. Sensitive only while the confirmation
+    /// buffer reads exactly `yes` after Unicode-whitespace trim.
+    Delete,
+}
+
+/// State for the Destroy modal (Milestone 10; DESIGN §4.3 / §6).
+///
+/// The Destroy modal is the one TUI surface that opens from *any*
+/// [`AppState`] — `Missing`, `Locked`, `StartupError`, `Unlocked`, or
+/// over any other open modal — via the universal `Ctrl+Shift+D` chord.
+/// Because the per-screen [`Modal`] slot only exists on
+/// [`AppState::Unlocked`], the modal is hosted by its own top-level
+/// [`AppState::Destroy`] variant that boxes the caller state so a
+/// cancel can restore it verbatim (e.g. returning to the same
+/// startup-error view). This struct carries only the modal-local
+/// fields; the boxed caller state and the resolved vault `path` live
+/// on [`AppState::Destroy`].
+///
+/// The `warning` body is sourced once at open time from
+/// [`paladin_core::format_destroy_warning`] so the wording matches the
+/// CLI text mode and the GTK `DestroyDialog` byte-for-byte; the TUI
+/// never re-implements it. `confirmation` is a plain (non-secret)
+/// [`String`] — the literal `yes` gate carries no secret bytes, unlike
+/// passphrase buffers — and is the only field the user edits. `focus`
+/// defaults to [`DestroyAction::Cancel`]. `error` holds the inline
+/// label for a `DestroyIoError` partial failure or a symlink rejection
+/// so the modal can stay open and name the on-disk state.
+#[derive(Debug, Default)]
+pub struct DestroyModal {
+    /// Whether a sibling `vault.bin.bak` existed when the modal was
+    /// opened (probed via `symlink_metadata` on the appended-suffix
+    /// path). Threaded into [`paladin_core::format_destroy_warning`]
+    /// at open time and retained so the rendered warning stays stable
+    /// for the modal's lifetime.
+    pub backup_present: bool,
+    /// The §4.3 destroy warning text, sourced once at open time from
+    /// [`paladin_core::format_destroy_warning`]. Rendered verbatim as
+    /// the modal body.
+    pub warning: String,
+    /// Confirmation buffer. The *Delete vault* action is enabled only
+    /// when this reads exactly `yes` after Unicode-whitespace trim.
+    /// Non-secret — the literal `yes` carries no key material.
+    pub confirmation: String,
+    /// Which action currently holds focus. Opens on
+    /// [`DestroyAction::Cancel`].
+    pub focus: DestroyAction,
+    /// Inline error from a `DestroyIoError` partial failure
+    /// (`unlink_backup_file` / `fsync_vault_dir`) or a pre-primary
+    /// symlink / unlink rejection. Rendered red in the modal body so
+    /// the user can decide whether to retry or drop to a shell.
+    pub error: Option<String>,
+}
+
+impl DestroyModal {
+    /// `true` when the confirmation buffer reads exactly `yes` after
+    /// trimming Unicode whitespace — the gate that enables the
+    /// *Delete vault* action. Mirrors the CLI's destructive-confirmation
+    /// grammar (`paladin destroy` prompts for `yes`).
+    #[must_use]
+    pub fn confirmed(&self) -> bool {
+        self.confirmation.trim() == "yes"
+    }
 }
 
 /// State for the Rename modal.
@@ -1763,11 +1861,17 @@ pub enum AppState {
         path: PathBuf,
         /// Current wizard step.
         step: CreateVaultStep,
-        /// Inline error from a prior `Store::create` /
-        /// `Vault::save` / `EncryptionOptions::new` failure, or a
-        /// reducer-side rejection ("passphrase required" /
-        /// "passphrases do not match"). Cleared on every step
-        /// advance and on cancel.
+        /// Inline message rendered beneath the wizard body. Usually a
+        /// prior `Store::create` / `Vault::save` /
+        /// `EncryptionOptions::new` failure or a reducer-side rejection
+        /// ("passphrase required" / "passphrases do not match"),
+        /// rendered red. The Destroy modal's success / `vault_missing`
+        /// paths also land here carrying one of the neutral
+        /// post-destroy confirmations
+        /// ([`VAULT_DELETED`] / [`VAULT_DELETED_BACKUP_REMAINED`] /
+        /// [`VAULT_ALREADY_GONE`]), which the create-vault renderer
+        /// styles as a non-error notice (Milestone 10; DESIGN §6).
+        /// Cleared on every step advance and on cancel.
         error: Option<String>,
     },
 
@@ -1972,6 +2076,38 @@ pub enum AppState {
         /// all front ends share identical wording.
         message: String,
     },
+
+    /// Path-targeted vault-destroy modal (Milestone 10; DESIGN
+    /// §4.3 / §6). Opened by the universal `Ctrl+Shift+D` chord from
+    /// *any* other state — including over an open [`Modal`] — because
+    /// the per-screen modal slot only exists on [`AppState::Unlocked`]
+    /// while destroy must be reachable everywhere (the forgot-passphrase
+    /// escape hatch).
+    ///
+    /// `prior` boxes the state the chord fired from so `Cancel` / `Esc`
+    /// restores it verbatim — e.g. returning the user to the same
+    /// startup-error screen, or to the unlocked list with its `Vault` /
+    /// `Store` intact (any in-flight modal on the prior `Unlocked`
+    /// state is closed and its secret buffers zeroized before the
+    /// transition, so the restored `Unlocked` carries `modal: None`).
+    /// On a successful destroy the reducer drops `prior` (wiping any
+    /// held `Vault` / `Store` and secret buffers) and builds a fresh
+    /// [`AppState::CreateVault`] for `path`. The boxed prior state keeps
+    /// the variant from inflating every other `AppState` with an
+    /// always-`None` modal slot.
+    Destroy {
+        /// The resolved vault path the destroy targets. Threaded
+        /// straight into [`crate::app::event::Effect::DestroyVault`]
+        /// on submit and into
+        /// [`paladin_core::format_destroy_warning`] at open time.
+        path: PathBuf,
+        /// The state the `Ctrl+Shift+D` chord fired from, restored on
+        /// cancel. Boxed to keep `AppState`'s stack size bounded.
+        prior: Box<AppState>,
+        /// Modal-local fields (warning body, confirmation buffer,
+        /// focused action, inline error).
+        modal: DestroyModal,
+    },
 }
 
 impl AppState {
@@ -1992,6 +2128,105 @@ impl AppState {
             error: None,
         }
     }
+
+    /// Like [`create_vault_initial`](Self::create_vault_initial) but
+    /// seeds the post-destroy confirmation line — used by the Destroy
+    /// modal's success / `vault_missing` paths to land on the
+    /// create-vault screen with the `Vault deleted.` (etc.)
+    /// confirmation showing (Milestone 10). The note rides on the
+    /// `error` slot, which the create-vault renderer styles neutrally
+    /// when it matches one of the post-destroy confirmation constants.
+    #[must_use]
+    pub fn create_vault_with_notice(path: PathBuf, notice: impl Into<String>) -> Self {
+        AppState::CreateVault {
+            path,
+            step: CreateVaultStep::ChooseMode {
+                selection: CreateVaultMode::Encrypted,
+            },
+            error: Some(notice.into()),
+        }
+    }
+
+    /// `true` when `message` is one of the neutral post-destroy
+    /// confirmations the create-vault renderer should style as a
+    /// notice rather than an error (Milestone 10). Centralized so the
+    /// renderer and any future surface share one source of truth.
+    #[must_use]
+    pub fn is_destroy_notice(message: &str) -> bool {
+        matches!(
+            message,
+            VAULT_DELETED | VAULT_DELETED_BACKUP_REMAINED | VAULT_ALREADY_GONE
+        )
+    }
+
+    /// The resolved vault path this state operates against, if known.
+    ///
+    /// Every state carries a path except [`AppState::StartupError`]
+    /// when `default_vault_path` itself failed (the only `None` case),
+    /// in which case the Destroy chord has no path to target and the
+    /// reducer treats the chord as a no-op.
+    #[must_use]
+    pub fn vault_path(&self) -> Option<&Path> {
+        match self {
+            AppState::CreateVault { path, .. }
+            | AppState::Unlock { path, .. }
+            | AppState::Locked { path, .. }
+            | AppState::Unlocked { path, .. }
+            | AppState::Destroy { path, .. } => Some(path),
+            AppState::StartupError { path, .. } => path.as_deref(),
+        }
+    }
+
+    /// Build an [`AppState::Destroy`] for `prior`, probing the on-disk
+    /// `.bak` and sourcing the warning body from
+    /// [`paladin_core::format_destroy_warning`] at open time.
+    ///
+    /// Returns the `prior` state unchanged (wrapped in `Err`) when it
+    /// has no resolvable vault path — the only such case is a
+    /// `StartupError` from a failed `default_vault_path`, where there
+    /// is nothing to destroy. Callers (the reducer's chord handler)
+    /// treat that as a silent no-op.
+    ///
+    /// The caller is responsible for closing / zeroizing any modal on
+    /// the `prior` `Unlocked` state *before* boxing it here so a
+    /// secret-bearing modal buffer never survives into the boxed
+    /// caller state.
+    pub fn open_destroy(prior: AppState) -> Result<AppState, AppState> {
+        let Some(path) = prior.vault_path().map(Path::to_path_buf) else {
+            return Err(prior);
+        };
+        let backup_present = backup_file_present(&path);
+        let warning = format_destroy_warning(&path, backup_present);
+        Ok(AppState::Destroy {
+            path,
+            prior: Box::new(prior),
+            modal: DestroyModal {
+                backup_present,
+                warning,
+                confirmation: String::new(),
+                focus: DestroyAction::Cancel,
+                error: None,
+            },
+        })
+    }
+}
+
+/// Probe whether a sibling `vault.bin.bak` exists next to `path`.
+///
+/// Mirrors `paladin_core`'s `destroy_vault` backup probe: the suffix
+/// is *appended* (`vault.bin` → `vault.bin.bak`), not substituted via
+/// `Path::with_extension` (which would yield `vault.bak`). Uses
+/// `symlink_metadata` so a symlinked `.bak` still counts as present —
+/// the eventual `destroy_vault` call rejects it explicitly, and the
+/// warning should name the path the user will be asked to wipe. Any
+/// stat error other than success is treated as "absent" for the
+/// purpose of the warning body; the authoritative symlink / I/O
+/// handling happens in `destroy_vault` when the user confirms.
+#[must_use]
+pub fn backup_file_present(path: &Path) -> bool {
+    let mut bak = path.as_os_str().to_os_string();
+    bak.push(".bak");
+    std::fs::symlink_metadata(PathBuf::from(bak)).is_ok()
 }
 
 /// Map a `paladin_core::inspect` result onto the corresponding initial
@@ -2098,6 +2333,85 @@ pub fn compute_idle_deadline(now: Instant, vault: &Vault) -> Option<Instant> {
 #[must_use]
 pub fn render_error_message(error: &PaladinError) -> String {
     format_unsafe_permissions(error).unwrap_or_else(|| error.to_string())
+}
+
+/// Render the inline error label the Destroy modal shows when
+/// [`paladin_core::destroy_vault`] returns a non-`vault_missing`
+/// failure (DESIGN §4.3 / §6, Milestone 10).
+///
+/// The modal stays open on these paths so the user can see exactly
+/// what is — and is not — on disk before deciding whether to retry or
+/// drop to a shell. The wording names the failing path and, for the
+/// post-primary [`paladin_core::PaladinError::DestroyIoError`] cases,
+/// reflects the partial [`paladin_core::DestroyReport`] so it is
+/// unambiguous which file survived:
+///
+/// * `unlink_backup_file` → `Primary deleted; backup unlink failed: <bak>`
+///   — the primary is gone, the `.bak` remains.
+/// * `fsync_vault_dir` → `Vault unlinked but durability unconfirmed: <dir>`
+///   — the unlinks happened but the parent-directory `fsync` failed,
+///   so the deletion may not survive a crash.
+/// * pre-primary `io_error` (`vault_file_is_symlink` /
+///   `backup_file_is_symlink` / `unlink_vault_file`) → a path-named
+///   line; nothing was unlinked.
+///
+/// `vault_path` is the resolved primary path the modal targeted;
+/// `core` does not carry the path on these errors, so the modal
+/// threads it in. The `.bak` / parent-dir paths are derived from it
+/// the same way `destroy_vault` derives them.
+#[must_use]
+pub fn render_destroy_error(error: &PaladinError, vault_path: &Path) -> String {
+    let bak_path = {
+        let mut bak = vault_path.as_os_str().to_os_string();
+        bak.push(".bak");
+        PathBuf::from(bak)
+    };
+    match error {
+        PaladinError::DestroyIoError { operation, .. } => match *operation {
+            "unlink_backup_file" => {
+                format!(
+                    "Primary deleted; backup unlink failed: {}",
+                    bak_path.display()
+                )
+            }
+            "fsync_vault_dir" => {
+                let dir = vault_path.parent().unwrap_or(vault_path);
+                format!(
+                    "Vault unlinked but durability unconfirmed: {}",
+                    dir.display()
+                )
+            }
+            // Defensive: any future `DestroyIoError` operation falls
+            // back to naming the primary path so the modal never shows
+            // an empty error.
+            other => format!("Destroy failed ({other}): {}", vault_path.display()),
+        },
+        PaladinError::IoError { operation, .. } => match *operation {
+            "vault_file_is_symlink" => {
+                format!(
+                    "Vault file is a symlink, refusing to follow: {}",
+                    vault_path.display()
+                )
+            }
+            "backup_file_is_symlink" => {
+                format!(
+                    "Backup file is a symlink, refusing to follow: {}",
+                    bak_path.display()
+                )
+            }
+            "unlink_vault_file" => {
+                format!("Could not delete vault file: {}", vault_path.display())
+            }
+            // Any other pre-primary I/O error (e.g. a stat failure)
+            // names the primary path and falls back to the core
+            // wording so the cause is still visible.
+            _ => format!("{}: {}", error, vault_path.display()),
+        },
+        // Non-I/O errors (should not occur for `destroy_vault`, which
+        // never opens / decrypts) fall back to the shared renderer so
+        // the modal still surfaces something actionable.
+        _ => render_error_message(error),
+    }
 }
 
 /// Path-aware error renderer for the in-app create-vault wizard.

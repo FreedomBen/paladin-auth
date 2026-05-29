@@ -4385,7 +4385,7 @@ fn snapshot_help_overlay() {
     // Bumped to 33 rows (was 32) for the v0.2 `Shift+E` Edit
     // keybind row that the Help overlay enumerates from
     // `keybindings::KEYBINDINGS`.
-    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 33));
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 34));
 }
 
 #[test]

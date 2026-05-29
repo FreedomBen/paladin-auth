@@ -60,6 +60,18 @@ pub fn render(frame: &mut Frame<'_>, path: Option<&Path>, message: &str, no_colo
     }
     lines.push(Line::from(""));
     lines.push(Line::from("Press Esc, q, or Ctrl-C to quit."));
+    // Forgot-passphrase escape hatch (DESIGN §6 / Milestone 10): a
+    // startup error often means a vault the user can no longer open
+    // (corrupt header, unsafe perms). The destroy chord lets them wipe
+    // it without a shell. Only shown when a path was resolved — a
+    // `default_vault_path` failure (`path: None`) has nothing to
+    // destroy. Sourced from the shared keybindings table.
+    if path.is_some() {
+        lines.push(Line::from(Span::styled(
+            crate::keybindings::destroy_footer_hint(),
+            theme::fg(theme::WARN, no_color),
+        )));
+    }
 
     // Wrap long lines so verbatim `format_unsafe_permissions` text and
     // long vault paths stay visible at narrow terminal widths instead of

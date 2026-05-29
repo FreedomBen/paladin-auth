@@ -30,6 +30,7 @@ pub use run::{
 };
 pub use state::{
     build_initial_state, build_initial_state_with_resolver, decide_state_from_inspect,
-    decide_state_from_open, render_create_vault_error_message, render_error_message, AppState,
-    StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    decide_state_from_open, render_create_vault_error_message, render_destroy_error,
+    render_error_message, AppState, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    VAULT_ALREADY_GONE, VAULT_DELETED, VAULT_DELETED_BACKUP_REMAINED,
 };
