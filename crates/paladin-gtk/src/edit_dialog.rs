@@ -151,8 +151,7 @@ pub struct EditDialogInit {
 /// Returns `None` if no account with the given id exists in
 /// `vault` — the caller (`AppModel`) treats that as a benign race
 /// (the account was removed between the kebab activation and the
-/// dispatch) and does not mount the dialog (parity with
-/// `decide_rename_target`).
+/// dispatch) and does not mount the dialog.
 #[must_use]
 pub fn decide_edit_target(vault: &Vault, id: AccountId) -> Option<EditDialogInit> {
     vault
@@ -319,7 +318,7 @@ impl EditDialogState {
     }
 
     /// Parent-driven setter for the worker-in-flight latch (same
-    /// idempotency contract as `RenameDialogState::set_busy`).
+    /// idempotency contract as `RemoveDialogState::set_busy`).
     pub fn set_busy(&mut self, busy: bool) {
         self.busy = busy;
     }
@@ -729,7 +728,7 @@ pub fn classify_post_effect_error(err: &PaladinError) -> PostEffectOutcome {
 /// call so the busy gate can reinstall whichever pair the
 /// worker returns — success, durability-unconfirmed, or
 /// pre-commit rollback. Mirrors
-/// [`crate::rename_dialog::RenameWorkerInput`].
+/// [`crate::remove_dialog::RemoveWorkerInput`].
 #[derive(Debug)]
 pub struct EditWorkerInput {
     /// Live vault from the `Unlocked` `(Vault, Store)` pair.
@@ -782,7 +781,7 @@ pub enum EditWorkerEffect {
 /// Bundle returned by [`run_edit_worker`] carrying the live
 /// `(Vault, Store)` pair on every branch so `AppModel::update`
 /// can reinstall it before applying the UI outcome (parity with
-/// [`crate::rename_dialog::RenameWorkerCompletion`]).
+/// [`crate::remove_dialog::RemoveWorkerCompletion`]).
 #[derive(Debug)]
 pub struct EditWorkerCompletion {
     /// Routed effect for `AppModel::update` to apply to the
@@ -1279,7 +1278,7 @@ impl SimpleComponent for EditDialogComponent {
         // `set_text` does not run through the `connect_changed`
         // round-trip on every redraw — keeping the cursor where
         // the user expects it across state changes that do not
-        // reset the buffers (parity with `RenameDialogComponent`).
+        // reset the buffers (parity with `RemoveDialogComponent`).
         widgets.label_row.set_text(model.state.label_buf());
         widgets.issuer_row.set_text(model.state.issuer_buf());
         widgets.icon_hint_row.set_text(model.state.icon_hint_buf());

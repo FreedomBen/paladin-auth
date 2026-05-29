@@ -144,9 +144,9 @@ pub const ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX: &str =
 /// reaches for the live `Vault`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountListOutput {
-    /// User asked to rename the account identified by the inner
+    /// User asked to edit the account identified by the inner
     /// [`AccountId`]. `AppModel` reaches into its live `Vault` to
-    /// look up the current label and opens `RenameDialog`.
+    /// look up the current metadata and opens `EditDialog`.
     OpenEditDialog(AccountId),
     /// User asked to view the per-account `otpauth://` QR code for
     /// the account identified by the inner [`AccountId`].

@@ -151,7 +151,7 @@ pub enum ExportQrSaveOutcome {
         /// Absolute path the worker committed to.
         path: PathBuf,
     },
-    /// `save_durability_unconfirmed` — primary rename succeeded (the
+    /// `save_durability_unconfirmed` — primary save succeeded (the
     /// file exists on disk) but the parent-directory `fsync` failed.
     /// The dialog surfaces the warning inline so the user can decide
     /// whether to retry; the file is not removed.
@@ -682,7 +682,7 @@ pub fn compose_visible_child_name(state: &ExportQrDialogState) -> &'static str {
 ///
 /// Routes through [`paladin_core::summary_display_label`] so the
 /// CLI status text, the TUI QR / rename / remove modals, and the
-/// GTK Export-QR / Rename / Remove dialogs share one wording
+/// GTK Export-QR / Edit / Remove dialogs share one wording
 /// helper — a future tweak to the issuer:label rendering lands in
 /// `paladin-core` once and every front-end picks it up.
 ///
@@ -1366,7 +1366,7 @@ fn build_save_request_when_armed(state: &ExportQrDialogState) -> Option<ExportQr
 /// Returns `None` when the account is no longer present (the user
 /// removed it between the kebab activation and this dispatch — a
 /// benign race that the caller drops silently, mirroring
-/// [`crate::rename_dialog::decide_rename_target`] /
+/// [`crate::edit_dialog::decide_edit_target`] /
 /// [`crate::remove_dialog::decide_remove_target`]).
 #[must_use]
 pub fn decide_export_qr_target(vault: &Vault, id: AccountId) -> Option<ExportQrDialogInit> {

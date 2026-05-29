@@ -277,10 +277,10 @@ Exports:
 - [ ] Rename an account via the row kebab menu: label persists on
   reopen.
   * Expected: opening the row's kebab menu surfaces "Edit…", the
-    dialog edits the label only (issuer is not editable per CLI
-    parity until the EditDialog widget lands), and the new label
-    persists after closing and re-opening the vault.
-  * Tied to: `tests/rename_dialog_logic.rs`.
+    EditDialog edits the account metadata (label, issuer, icon
+    hint), and the new label persists after closing and re-opening
+    the vault.
+  * Tied to: `tests/edit_dialog_logic.rs`.
 - [ ] Rename an account via the row kebab menu: renaming to the
   same label still saves and bumps `updated_at`.
   * Expected: even a no-op label edit calls `Vault::rename` inside

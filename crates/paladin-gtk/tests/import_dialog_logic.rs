@@ -728,7 +728,7 @@ fn passphrase_needs_reset_distinguishes_relative_paths() {
 // `ImportDialogComponent` joins the eight already-mounted controllers
 // (`AccountListComponent`, `StartupErrorComponent`,
 // `InitDialogComponent`, `UnlockDialogComponent`,
-// `RenameDialogComponent`, `RemoveDialogComponent`,
+// `EditDialogComponent`, `RemoveDialogComponent`,
 // `AddAccountComponent`, `SettingsComponent`) with the same scaffold
 // shape: `<Name>Init` / `<Name>Msg` / `<Name>Output` plus a
 // `relm4::SimpleComponent` impl. The widget body (file picker +

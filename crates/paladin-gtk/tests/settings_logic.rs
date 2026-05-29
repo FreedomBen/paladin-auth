@@ -1244,7 +1244,7 @@ fn format_settings_dialog_title_returns_preferences() {
     // GTK-specific. Sibling of
     // `paladin_gtk::unlock_dialog::format_unlock_dialog_title`,
     // `paladin_gtk::init_dialog::format_init_dialog_title`,
-    // `paladin_gtk::rename_dialog::format_rename_dialog_title`,
+    // `paladin_gtk::edit_dialog::format_edit_dialog_title`,
     // `paladin_gtk::remove_dialog::format_remove_dialog_title`,
     // `paladin_gtk::add_account::format_add_dialog_title`, and
     // `paladin_gtk::startup_error::format_startup_error_title`
@@ -1265,7 +1265,7 @@ fn compose_settings_dialog_inline_subtitle_for_field_returns_none_without_outcom
     // `SaveOutcome` to render — the per-row inline subtitle slot
     // (a sibling `gtk::Label` beneath each `AdwSwitchRow` /
     // `AdwSpinRow` carrying the `error` CSS class, mirroring the
-    // `crate::rename_dialog::RenameDialogComponent` pattern) stays
+    // `crate::edit_dialog::EditDialogComponent` pattern) stays
     // hidden in that idle state. Pinning the `None` reply through
     // the same helper that handles the populated cases lets the
     // widget bind a single `#[watch] set_label:` /
@@ -1408,7 +1408,7 @@ fn compose_settings_dialog_inline_subtitle_for_field_returns_inline_error_text_f
 fn compose_settings_dialog_inline_subtitle_for_field_returns_durability_warning_text_for_matching_field(
 ) {
     // `SaveOutcome::DurabilityWarning` is the
-    // `save_durability_unconfirmed` branch: the primary rename
+    // `save_durability_unconfirmed` branch: the primary save
     // succeeded so the visible value sticks, but the parent
     // directory `fsync` failed so the rendered warning attaches
     // to the changed row. Same per-field routing as the error arms,
@@ -1520,7 +1520,7 @@ fn compose_settings_dialog_inline_subtitle_css_class_for_field_routes_error_and_
     // The inline-subtitle `gtk::Label` styles itself by CSS class:
     // "error" for `SaveOutcome::Inline` / `SaveOutcome::Rollback`
     // (red foreground, matching the
-    // `crate::rename_dialog::RenameDialogComponent` error label
+    // `crate::edit_dialog::EditDialogComponent` error label
     // styling), "warning" for `SaveOutcome::DurabilityWarning`
     // (amber, distinguishing the post-commit-but-fsync-failed case
     // from the pre-commit rollback path), and `None` for both the
@@ -2393,11 +2393,11 @@ fn format_settings_dialog_saved_toast_timeout_returns_five_seconds() {
 //
 // Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
 // "Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
-// Rename / Import / Export / Passphrase / Settings / StartupError)",
+// Edit / Import / Export / Passphrase / Settings / StartupError)",
 // `SettingsComponent` joins the seven already-mounted controllers
 // (`AccountListComponent`, `StartupErrorComponent`,
 // `InitDialogComponent`, `UnlockDialogComponent`,
-// `RenameDialogComponent`, `RemoveDialogComponent`,
+// `EditDialogComponent`, `RemoveDialogComponent`,
 // `AddAccountComponent`) with the same scaffold shape:
 // `<Name>Init` / `<Name>Msg` / `<Name>Output` plus a
 // `relm4::SimpleComponent` impl. The widget body of the

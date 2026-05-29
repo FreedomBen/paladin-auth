@@ -557,7 +557,7 @@ fn format_init_dialog_marker_starts_with_prefix() {
 // run_init_worker — synchronous body of the spawn_blocking Store::create
 // worker fired by `AppModel::update` from the InitDialog submit dispatch.
 //
-// Mirrors the `rename_dialog::run_rename_worker` pattern: the
+// Mirrors the `edit_dialog::run_edit_worker` pattern: the
 // `InitWorkerInput` is consumed once and routed through the matching
 // `Store::create` / `Store::create_force` call. The worker returns a
 // `(Vault, Store)` pair on success; on failure it routes the typed
@@ -869,7 +869,7 @@ fn format_init_dialog_title_returns_create_a_new_vault() {
     // creation dialog (its `init` command is CLI-shaped only), so
     // the wording is GTK-specific. Sibling of
     // `paladin_gtk::unlock_dialog::format_unlock_dialog_title`,
-    // `paladin_gtk::rename_dialog::format_rename_dialog_title`,
+    // `paladin_gtk::edit_dialog::format_edit_dialog_title`,
     // and `paladin_gtk::add_account::format_add_dialog_title` on
     // the dialog-header-title side; together they pin every
     // dialog's titled surface against a single source of truth.
@@ -1061,9 +1061,9 @@ fn format_init_dialog_force_cancel_label_matches_other_dialog_cancel_labels() {
     // user reaches the same cancel action from two different
     // dialogs.
     use paladin_gtk::add_account::format_add_dialog_cancel_label;
+    use paladin_gtk::edit_dialog::format_edit_dialog_cancel_label;
     use paladin_gtk::init_dialog::format_init_dialog_force_cancel_label;
     use paladin_gtk::remove_dialog::format_remove_dialog_cancel_label;
-    use paladin_gtk::rename_dialog::format_rename_dialog_cancel_label;
 
     let cancel = format_init_dialog_force_cancel_label();
     assert_eq!(
@@ -1073,8 +1073,8 @@ fn format_init_dialog_force_cancel_label_matches_other_dialog_cancel_labels() {
     );
     assert_eq!(
         cancel,
-        format_rename_dialog_cancel_label(),
-        "InitDialog destructive cancel label must match the rename dialog cancel label so the cancel-action vocabulary stays uniform",
+        format_edit_dialog_cancel_label(),
+        "InitDialog destructive cancel label must match the edit dialog cancel label so the cancel-action vocabulary stays uniform",
     );
     assert_eq!(
         cancel,

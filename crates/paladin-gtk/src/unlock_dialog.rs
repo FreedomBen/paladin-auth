@@ -183,7 +183,7 @@ pub fn format_unlock_dialog_marker(path: &Path) -> String {
 ///
 /// Pure — returns a `'static str` without allocating. Sibling of
 /// [`crate::add_account::format_add_dialog_title`] and
-/// [`crate::rename_dialog::format_rename_dialog_title`] on the
+/// [`crate::edit_dialog::format_edit_dialog_title`] on the
 /// dialog-header-title side; together they pin every dialog's
 /// titled surface against a single source of truth.
 #[must_use]

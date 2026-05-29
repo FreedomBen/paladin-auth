@@ -192,7 +192,7 @@ fn classify_remove_error_save_not_committed_with_backup_restores_prior() {
 
 #[test]
 fn classify_remove_error_save_durability_unconfirmed_keeps_removed_with_warning() {
-    // `save_durability_unconfirmed` means the primary rename
+    // `save_durability_unconfirmed` means the primary save
     // (rotating the staged file into place) succeeded but the
     // parent-directory fsync failed. The account is gone from disk
     // and from in-memory state; the warning attaches to the dialog
@@ -458,7 +458,7 @@ fn apply_msg_cancel_emits_cancel_output() {
     // Cancel button must bubble back to `AppModel` as
     // `RemoveDialogOutput::Cancel` so the controller can be dropped
     // and the dialog widget removed from the content tree. Mirrors
-    // the `RenameDialogComponent` Cancel staging.
+    // the `EditDialogComponent` Cancel staging.
     let init = dummy_init();
     let mut state = RemoveDialogState::new(&init);
     let out = apply_msg(&mut state, RemoveDialogMsg::Cancel);
@@ -785,7 +785,7 @@ fn format_remove_dialog_remove_label_returns_remove() {
     // `format_remove_dialog_cancel_label` on the footer side and
     // of
     // `paladin_gtk::unlock_dialog::format_unlock_button_label`,
-    // `paladin_gtk::rename_dialog` /
+    // `paladin_gtk::edit_dialog` /
     // `paladin_gtk::add_account` primary-action labels on the
     // imperative-verb side; together they pin every dialog
     // footer's action affordances against a single source of
@@ -804,7 +804,7 @@ fn format_remove_dialog_cancel_label_returns_cancel() {
     // The RemoveDialog's footer Cancel `gtk::Button`'s
     // `set_label` attribute is populated from this helper. The
     // wording (`"Cancel"`) is the action-specific GNOME-HIG verb
-    // for the surface — matching the rename / add dialog cancel
+    // for the surface — matching the edit / add dialog cancel
     // affordance so the dialog footer wording stays uniform
     // across every per-account surface. Pinning the wording
     // through a helper keeps the string in one place shared by
@@ -813,7 +813,7 @@ fn format_remove_dialog_cancel_label_returns_cancel() {
     // No TUI parity: the TUI's `remove` command is CLI-shaped
     // and prompts on stdin rather than rendering a dialog
     // footer, so the wording is GTK-specific. Sibling of
-    // `paladin_gtk::rename_dialog::format_rename_dialog_cancel_label`
+    // `paladin_gtk::edit_dialog::format_edit_dialog_cancel_label`
     // and
     // `paladin_gtk::add_account::format_add_dialog_cancel_label`
     // on the dialog-footer-cancel side; together they pin every
@@ -840,9 +840,9 @@ fn format_remove_dialog_subtitle_renders_display_label() {
     // and the pure-logic tests in `tests/remove_dialog_logic.rs`.
     //
     // Sibling of
-    // `paladin_gtk::rename_dialog::format_rename_dialog_subtitle`
+    // `paladin_gtk::edit_dialog::format_edit_dialog_subtitle`
     // on the dialog-sub-title side: the two surfaces use the same
-    // single-line "Verb-ing {display}." form so the rename and
+    // single-line "Verb-ing {display}." form so the edit and
     // remove dialogs read in parallel against the same display
     // label format. No TUI parity: the TUI's `remove` command is
     // CLI-shaped and prompts on stdin rather than rendering a
@@ -875,7 +875,7 @@ fn format_remove_dialog_subtitle_starts_with_removing_prefix() {
 fn format_remove_dialog_subtitle_renders_empty_display_label() {
     // Defense-in-depth against an empty display label: the helper
     // should not panic or drop the trailing period, matching the
-    // `format_rename_dialog_subtitle` contract. `AppModel` should
+    // `format_edit_dialog_subtitle` contract. `AppModel` should
     // never hand an empty label in practice, but pinning the
     // edge case keeps the formatter total.
     use paladin_gtk::remove_dialog::format_remove_dialog_subtitle;
@@ -948,7 +948,7 @@ fn format_remove_dialog_title_returns_remove_account() {
     // GTK-specific. Sibling of
     // `paladin_gtk::unlock_dialog::format_unlock_dialog_title`,
     // `paladin_gtk::init_dialog::format_init_dialog_title`,
-    // `paladin_gtk::rename_dialog::format_rename_dialog_title`,
+    // `paladin_gtk::edit_dialog::format_edit_dialog_title`,
     // `paladin_gtk::add_account::format_add_dialog_title`, and
     // `paladin_gtk::startup_error::format_startup_error_title`
     // on the dialog-header-title side; together they pin every
@@ -1277,8 +1277,8 @@ fn format_remove_dialog_inline_error_and_warning_are_mutually_exclusive() {
 // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" > `RemoveDialog`
 // confirmation flow ("On success, refresh `AccountListComponent` from the
 // returned vault, close the dialog, and surface a status / toast
-// confirmation."). Mirrors the rename equivalent
-// `format_rename_dialog_success_toast` so wording stays single-sourced and
+// confirmation."). Mirrors the edit equivalent
+// `format_edit_dialog_success_toast` so wording stays single-sourced and
 // the dispatch projection `remove_success_toast_after` can rely on the
 // helper for the bundled toast body.
 // ---------------------------------------------------------------------------
@@ -1302,7 +1302,7 @@ fn format_remove_dialog_success_toast_is_non_empty_single_sentence() {
     assert!(!body.is_empty(), "toast body must not be empty");
     assert!(
         body.ends_with('.'),
-        "toast body should read as a complete sentence so it matches the rename success toast wording style",
+        "toast body should read as a complete sentence so it matches the edit success toast wording style",
     );
     assert!(
         !body.contains('\n'),
@@ -1314,7 +1314,7 @@ fn format_remove_dialog_success_toast_is_non_empty_single_sentence() {
 // Busy gating — `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership":
 // the dialog's destructive Remove response dims while the
 // `Vault::mutate_and_save` worker owns the live `(Vault, Store)` pair,
-// matching the rename / add submit dimming pattern.
+// matching the edit / add submit dimming pattern.
 // ---------------------------------------------------------------------------
 
 #[test]

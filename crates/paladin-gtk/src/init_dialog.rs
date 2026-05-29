@@ -414,11 +414,11 @@ pub enum InitWorkerEffect {
 /// Bundle returned by [`run_init_worker`].
 ///
 /// Currently a transparent wrapper around the [`InitWorkerEffect`]
-/// — unlike [`crate::rename_dialog::RenameWorkerCompletion`], the
+/// — unlike [`crate::edit_dialog::EditWorkerCompletion`], the
 /// init worker has no live `(Vault, Store)` pair to reinstall on
 /// the failure paths (the pair only exists once `Store::create`
 /// succeeds). The struct shape is kept so the type evolves
-/// uniformly with the rename worker if a future failure path grows
+/// uniformly with the edit worker if a future failure path grows
 /// a live-pair return.
 #[derive(Debug)]
 pub struct InitWorkerCompletion {
@@ -690,7 +690,7 @@ pub fn format_init_dialog_icon_name() -> &'static str {
 ///
 /// Pure — returns a `'static str` without allocating. Sibling of
 /// [`crate::unlock_dialog::format_unlock_dialog_title`],
-/// [`crate::rename_dialog::format_rename_dialog_title`], and
+/// [`crate::edit_dialog::format_edit_dialog_title`], and
 /// [`crate::add_account::format_add_dialog_title`] on the
 /// dialog-header-title side; together they pin every dialog's
 /// titled surface against a single source of truth.
@@ -895,7 +895,7 @@ pub fn format_init_dialog_force_confirm_label() -> &'static str {
 /// from [`format_init_dialog_force_confirm_label`] so the two
 /// affordances read as different actions. Companion of
 /// [`crate::remove_dialog::format_remove_dialog_cancel_label`],
-/// [`crate::rename_dialog::format_rename_dialog_cancel_label`],
+/// [`crate::edit_dialog::format_edit_dialog_cancel_label`],
 /// and [`crate::add_account::format_add_dialog_cancel_label`]
 /// on the dialog-footer-cancel side; the cross-check test in
 /// `tests/init_dialog_logic.rs` asserts every cancel helper

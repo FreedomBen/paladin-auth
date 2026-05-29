@@ -2513,7 +2513,7 @@ core.
    `Shift+E` activates `row.edit` / `Shift+E` silently
    rejected while another modal is open / popover dropped
    on refresh and on lock).
-- [ ] **Slice 6 — RenameDialog retirement.** Drop
+- [x] **Slice 6 — RenameDialog retirement.** Drop
    `rename_dialog.rs` and `tests/rename_dialog_logic.rs`.
    The validation / save-rollback / durability-warning
    contracts are already pinned in

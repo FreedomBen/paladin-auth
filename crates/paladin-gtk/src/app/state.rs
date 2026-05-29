@@ -77,7 +77,6 @@ use crate::passphrase_dialog::{
     PassphraseWorkerInput, SubmitPayload as PassphraseSubmitPayload,
 };
 use crate::remove_dialog::{RemoveDialogMsg, RemoveWorkerEffect, RemoveWorkerInput};
-use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
 use crate::settings::{
     AcceptedChange, SaveOutcome, SettingsDialogMsg, SettingsWorkerEffect, SettingsWorkerInput,
 };
@@ -963,48 +962,15 @@ pub fn submit_unlock_app_state(current: &AppState) -> Option<AppState> {
 }
 
 /// Decide the [`AppState`] transition when `AppModel::update`
-/// receives [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`].
-///
-/// Symmetric partner of [`submit_unlock_app_state`] for the rename
-/// path: where [`submit_unlock_app_state`] owns the
-/// `Locked → UnlockedBusy` handoff for the open worker (which is
-/// about to compute the `(Vault, Store)` pair), this composer owns
-/// the `Unlocked → UnlockedBusy` handoff for the rename worker
-/// (which takes the already-decrypted pair through
-/// `Vault::mutate_and_save`). Together they bracket every typed
-/// dispatch with a documented source-state contract at the
-/// `AppModel::update` call site per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
-/// §"Vault interaction".
-///
-/// The helper is a name-the-entry-point wrapper over
-/// [`AppState::enter_busy`]: it returns
-/// `Some(UnlockedBusy { path })` iff `current` is
-/// `Unlocked { path }`, and `None` for every other source state
-/// (`Missing`, `Locked`, `UnlockedBusy`, `StartupError`). The
-/// `None` arm is the defensive case for a stray dispatch — a
-/// `SubmitLabel` that arrives from any other source state leaves
-/// `AppModel` in place rather than installing a phantom
-/// `UnlockedBusy` that would clobber the idle state.
-///
-/// The composer stays shape-only — it delegates the transition to
-/// [`AppState::enter_busy`] — so the side-effect decision in
-/// `AppModel::update` stays unit-testable in
-/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
-#[must_use]
-pub fn submit_rename_app_state(current: &AppState) -> Option<AppState> {
-    current.clone().enter_busy()
-}
-
-/// Decide the [`AppState`] transition when `AppModel::update`
 /// receives the validated `AddAccountOutput::Submit{Manual,Uri}`
 /// dispatch from `AddAccountComponent`.
 ///
-/// Symmetric partner of [`submit_rename_app_state`] for the add
+/// Symmetric partner of [`submit_edit_app_state`] for the add
 /// path: both helpers cover the `Unlocked → UnlockedBusy` handoff
 /// for a `gio::spawn_blocking Vault::mutate_and_save(...)` worker
 /// that consumes the already-decrypted `(Vault, Store)` pair. The
-/// rename composer fires from
-/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`]; this
+/// edit composer fires from
+/// [`crate::edit_dialog::EditDialogOutput::Submit`]; this
 /// one fires from the add dialog's manual / URI submit branch so
 /// `AppModel::update` can serialize through one vault-touching
 /// worker at a time per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
@@ -1029,74 +995,15 @@ pub fn submit_add_app_state(current: &AppState) -> Option<AppState> {
     current.clone().enter_busy()
 }
 
-/// Bundle the live `(Vault, Store)` pair and the
-/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`] payload
-/// into a [`RenameWorkerInput`] for the `gio::spawn_blocking
-/// Vault::mutate_and_save(|v| v.rename(...))` worker.
-///
-/// Symmetric partner of [`compose_unlock_worker_input`] on the rename
-/// path: where the unlock composer captures the resolved path plus
-/// the typed [`VaultLock`] for the `gio::spawn_blocking
-/// paladin_core::open` worker, this composer captures the live
-/// `(Vault, Store)` pair plus the account id, trimmed label, and
-/// dispatch-site wall-clock for the rename worker. Both composers
-/// inspect `current` before the busy-gate transition so the source
-/// state is verified before [`submit_rename_app_state`] consumes the
-/// variant. Together they bracket every typed dispatch with a
-/// documented source-state contract per
-/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
-///
-/// Returns `Ok(RenameWorkerInput)` iff `current` is
-/// [`AppState::Unlocked`]. The `Err((vault, store))` branch is the
-/// defensive case for a stray dispatch from any other source state
-/// (`Missing` / `Locked` / `UnlockedBusy` / `StartupError`): the
-/// non-`Clone` live `(Vault, Store)` pair would be lost if the
-/// composer dropped it, so it is handed back so the caller can
-/// reinstall it into `AppModel.vault` rather than leaking the
-/// unlocked state. The contract mirrors the `Some` / `None`
-/// agreement with [`submit_rename_app_state`] — both helpers return
-/// success iff the source is `Unlocked`.
-///
-/// The composer stays shape-only — it inspects only the variant
-/// discriminant on `current` — so the side-effect decision in
-/// `AppModel::update` stays unit-testable in
-/// `tests/app_state_logic.rs` against real `(Vault, Store)` pairs
-/// constructed via `paladin_core::Store::create` over a tempfile
-/// vault.
-pub fn compose_rename_worker_input(
-    current: &AppState,
-    pair: (Vault, Store),
-    account_id: AccountId,
-    label: String,
-    now: SystemTime,
-) -> Result<RenameWorkerInput, (Vault, Store)> {
-    match current {
-        AppState::Unlocked { .. } => {
-            let (vault, store) = pair;
-            Ok(RenameWorkerInput {
-                vault,
-                store,
-                account_id,
-                label,
-                now,
-            })
-        }
-        AppState::Missing { .. }
-        | AppState::Locked { .. }
-        | AppState::UnlockedBusy { .. }
-        | AppState::StartupError { .. } => Err(pair),
-    }
-}
-
 /// Decide the [`AppState`] transition when `AppModel::update`
 /// receives the validated [`crate::edit_dialog::EditDialogOutput::Submit`]
 /// dispatch from [`crate::edit_dialog::EditDialogComponent`].
 ///
-/// Symmetric partner of [`submit_rename_app_state`] for the edit
+/// Symmetric partner of [`submit_add_app_state`] for the edit
 /// path: both cover `Unlocked → UnlockedBusy` (the worker takes the
 /// already-decrypted `(Vault, Store)` pair through
 /// `Vault::mutate_and_save`), differing only in the dispatch origin
-/// (`EditDialogOutput::Submit` vs `RenameDialogOutput::SubmitLabel`).
+/// (`EditDialogOutput::Submit` vs `AddAccountOutput::Submit{Manual,Uri}`).
 ///
 /// The helper is a name-the-entry-point wrapper over
 /// [`AppState::enter_busy`]: it returns `Some(UnlockedBusy { path })`
@@ -1121,10 +1028,10 @@ pub fn submit_edit_app_state(current: &AppState) -> Option<AppState> {
 /// [`EditWorkerInput`] for the `gio::spawn_blocking
 /// Vault::mutate_and_save(|v| v.edit_account_metadata(...))` worker.
 ///
-/// Symmetric partner of [`compose_rename_worker_input`] on the edit
-/// path: where the rename composer captures the live
-/// `(Vault, Store)` pair plus the account id, trimmed label, and
-/// dispatch-site wall-clock, this composer captures the live
+/// Symmetric partner of [`compose_add_worker_input`] on the edit
+/// path: where the add composer captures the live
+/// `(Vault, Store)` pair plus the validated [`Account`], this
+/// composer captures the live
 /// `(Vault, Store)` pair plus the account id, the assembled
 /// [`AccountEdit`], and the dispatch-site wall-clock. Both composers
 /// inspect `current` before the busy-gate transition so the source
@@ -1181,12 +1088,12 @@ pub fn compose_edit_worker_input(
 /// [`AddWorkerInput`] for the `gio::spawn_blocking
 /// Vault::mutate_and_save(|v| v.add(account))` worker.
 ///
-/// Symmetric partner of [`compose_rename_worker_input`] on the add
-/// path: where the rename composer captures the live
+/// Symmetric partner of [`compose_edit_worker_input`] on the add
+/// path: where the edit composer captures the live
 /// `(Vault, Store)` pair plus the
-/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`] payload
-/// (account id, trimmed label, dispatch-site wall-clock) for the
-/// rename worker, this composer captures the live `(Vault, Store)`
+/// [`crate::edit_dialog::EditDialogOutput::Submit`] payload
+/// (account id, assembled [`AccountEdit`], dispatch-site wall-clock)
+/// for the edit worker, this composer captures the live `(Vault, Store)`
 /// pair plus the validated `Account` extracted from the
 /// `AddAccountOutput::Submit{Manual,Uri}` dispatch for the add
 /// worker. Both composers inspect `current` before the busy-gate
@@ -1206,7 +1113,7 @@ pub fn compose_edit_worker_input(
 /// `Err` branch — it carries no filesystem state and the dialog
 /// still owns the reactive copy for re-rendering if the dispatch
 /// was unexpected. The contract mirrors the `Ok` / `Err` agreement
-/// with [`compose_rename_worker_input`] and the `Some` / `None`
+/// with [`compose_edit_worker_input`] and the `Some` / `None`
 /// agreement with [`submit_add_app_state`] — all three helpers
 /// return success iff the source is `Unlocked`.
 ///
@@ -1527,7 +1434,7 @@ pub struct QrDispatch {
     /// applying [`Self::app_state`]. Always `false` for the QR sub-
     /// path because the dialog stays mounted on every effect; the
     /// field is kept for shape parity with [`AddDispatch`] /
-    /// [`RemoveDispatch`] / [`RenameDispatch`] and so a future
+    /// [`RemoveDispatch`] / [`AddDispatch`] and so a future
     /// routing refinement can flip it without changing the
     /// dispatch shape at the call site.
     pub drop_dialog: bool,
@@ -1626,53 +1533,15 @@ pub fn apply_submit_unlock_inplace(state: &mut AppState) -> bool {
     }
 }
 
-/// Apply [`submit_rename_app_state`] in-place to `state`, leaving
-/// it unchanged when the composer returns `None`.
-///
-/// Symmetric partner of [`apply_submit_unlock_inplace`] for the
-/// rename path: where `apply_submit_unlock_inplace` covers
-/// `Locked → UnlockedBusy` (the open worker is about to compute the
-/// `(Vault, Store)` pair), this wrapper covers
-/// `Unlocked → UnlockedBusy` (the rename worker takes the already-
-/// decrypted pair through `Vault::mutate_and_save`). Both bridge
-/// the owned-`self` [`AppState::enter_busy`] /
-/// [`AppState::enter_unlocking_busy`] contracts to the mut-reference
-/// call site so `AppModel::update`'s
-/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`] handler
-/// does not have to manage a take-and-restore dance around
-/// `submit_rename_app_state`'s `Option<AppState>` return.
-///
-/// Returns `true` when the state actually transitioned (source was
-/// `Unlocked` → destination is `UnlockedBusy`), `false` otherwise.
-/// `AppModel::update` uses the `true` return to gate the
-/// `gio::spawn_blocking Vault::mutate_and_save(|v| v.rename(...))`
-/// worker spawn — a `false` return is the defensive no-op for a
-/// stray `SubmitLabel` from any non-`Unlocked` source state
-/// (`Missing`, `Locked`, `UnlockedBusy`, `StartupError`).
-///
-/// The wrapper stays shape-only — it delegates to
-/// `submit_rename_app_state` without re-deriving the transition —
-/// so the side-effect decision in `AppModel::update` stays unit-
-/// testable in `tests/app_state_logic.rs` without spinning up GTK /
-/// libadwaita.
-pub fn apply_submit_rename_inplace(state: &mut AppState) -> bool {
-    if let Some(new_state) = submit_rename_app_state(state) {
-        *state = new_state;
-        true
-    } else {
-        false
-    }
-}
-
 /// Apply [`submit_edit_app_state`] in-place to `state`, leaving it
 /// unchanged when the composer returns `None`.
 ///
-/// Symmetric partner of [`apply_submit_rename_inplace`] for the edit
+/// Symmetric partner of [`apply_submit_add_inplace`] for the edit
 /// path: both cover `Unlocked → UnlockedBusy` (the worker takes the
 /// already-decrypted `(Vault, Store)` pair through
 /// `Vault::mutate_and_save`), but they bridge different dispatch
-/// origins. `apply_submit_rename_inplace` fires from
-/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`]; this
+/// origins. `apply_submit_add_inplace` fires from
+/// [`crate::add_account::AddAccountOutput::Submit{Manual,Uri}`]; this
 /// wrapper fires from [`crate::edit_dialog::EditDialogOutput::Submit`].
 /// Both bridge the owned-`self` [`AppState::enter_busy`] contract to
 /// the mut-reference call site so `AppModel::update`'s
@@ -1705,12 +1574,12 @@ pub fn apply_submit_edit_inplace(state: &mut AppState) -> bool {
 /// Apply [`submit_add_app_state`] in-place to `state`, leaving it
 /// unchanged when the composer returns `None`.
 ///
-/// Symmetric partner of [`apply_submit_rename_inplace`] for the add
+/// Symmetric partner of [`apply_submit_edit_inplace`] for the add
 /// path: both cover `Unlocked → UnlockedBusy` (the worker takes the
 /// already-decrypted `(Vault, Store)` pair through
 /// `Vault::mutate_and_save`), but they bridge different dispatch
-/// origins. `apply_submit_rename_inplace` fires from
-/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`]; this
+/// origins. `apply_submit_edit_inplace` fires from
+/// [`crate::edit_dialog::EditDialogOutput::Submit`]; this
 /// wrapper fires from
 /// [`crate::add_account::AddAccountOutput::Submit{Manual,Uri}`]. Both
 /// bridge the owned-`self` [`AppState::enter_busy`] contract to the
@@ -1789,53 +1658,9 @@ pub fn unlock_final_app_state(current: &AppState, effect: &UnlockWorkerEffect) -
     }
 }
 
-/// Unified state-transition composer for the rename worker outcome.
-///
-/// Symmetric partner of [`unlock_final_app_state`] for the rename
-/// path. Where the unlock composer has to fan three effect branches
-/// into two state transitions (success → [`AppState::Unlocked`],
-/// startup-routed failure → [`AppState::StartupError`], inline
-/// failure → [`AppState::Locked`] rollback), every
-/// [`RenameWorkerEffect`] variant — `Success` and every
-/// `Failure(RenameErrorOutcome)` projection — lands on the same
-/// `UnlockedBusy → Unlocked` rollback via [`AppState::leave_busy`].
-/// The dialog-drop / inline-message decisions split off the typed
-/// effect in sibling composers; this composer owns only the state-
-/// machine rollback.
-///
-/// `effect` is accepted for signature symmetry with
-/// [`unlock_final_app_state`] (and so a future routing refinement
-/// can branch on it without changing call sites) but is not
-/// inspected: the rename worker's three failure projections all
-/// reinstall the live `(Vault, Store)` pair through
-/// [`apply_rename_vault_install_inplace`] regardless of effect, so
-/// the state machine returns to `Unlocked` uniformly. The dialog
-/// drop / inline-message routing handled elsewhere is what differs
-/// across effects.
-///
-/// Returns `Some(Unlocked { path })` iff `current` is
-/// [`AppState::UnlockedBusy`], and `None` from every other state.
-/// The `None` arm is the defensive case for a stray completion: a
-/// rename completion arriving while `current` is not `UnlockedBusy`
-/// must not silently install a phantom `Unlocked` over another
-/// idle state.
-///
-/// The composer is shape-only — it delegates to
-/// [`AppState::leave_busy`] without re-deriving the transition —
-/// so the side-effect decision in `AppModel::update` stays unit-
-/// testable in `tests/app_state_logic.rs` without spinning up GTK /
-/// libadwaita.
-#[must_use]
-pub fn rename_final_app_state(
-    current: &AppState,
-    _effect: &RenameWorkerEffect,
-) -> Option<AppState> {
-    current.clone().leave_busy()
-}
-
 /// Unified state-transition composer for the edit worker outcome.
 ///
-/// Symmetric partner of [`rename_final_app_state`] for the edit
+/// Symmetric partner of [`add_final_app_state`] for the edit
 /// path. Every [`EditWorkerEffect`] variant — `Success` and the
 /// `Failure(PostEffectOutcome)` projection — lands on the same
 /// `UnlockedBusy → Unlocked` rollback via [`AppState::leave_busy`]
@@ -1847,7 +1672,7 @@ pub fn rename_final_app_state(
 /// is what differs across effects.
 ///
 /// `effect` is accepted for signature symmetry with
-/// [`rename_final_app_state`] (and so a future routing refinement can
+/// [`add_final_app_state`] (and so a future routing refinement can
 /// branch on it without changing call sites) but is not inspected.
 ///
 /// Returns `Some(Unlocked { path })` iff `current` is
@@ -1863,323 +1688,6 @@ pub fn rename_final_app_state(
 #[must_use]
 pub fn edit_final_app_state(current: &AppState, _effect: &EditWorkerEffect) -> Option<AppState> {
     current.clone().leave_busy()
-}
-
-/// Drop-decision projection for the [`crate::rename_dialog::RenameDialogComponent`]
-/// after a rename worker outcome.
-///
-/// Symmetric partner of [`should_drop_unlock_dialog_after`] for the
-/// rename path. `AppMsg::RenameWorkerCompleted` consults this to
-/// decide whether to detach the live `RenameDialogComponent` from
-/// the content tree after applying the worker outcome:
-///
-/// * [`RenameWorkerEffect::Success`] → `true`. The dialog dismisses
-///   itself and the visible row label updates to the new value, in
-///   lockstep with the `AppState::UnlockedBusy → Unlocked` rollback
-///   that [`rename_final_app_state`] returns.
-/// * [`RenameWorkerEffect::Failure`] (every
-///   [`crate::rename_dialog::RenameErrorOutcome`] variant —
-///   `RestorePrior`, `KeepNewWithWarning`, defensive `InlineError`)
-///   → `false`. The dialog stays mounted so the inline error / body
-///   warning is visible and the user can retry, mirroring how the
-///   unlock dialog stays mounted on the inline-passphrase failure
-///   branch.
-///
-/// The projection inspects only the typed [`RenameWorkerEffect`]
-/// variant — it does not consult [`AppState`], the live
-/// `(Vault, Store)` pair, or the [`crate::rename_dialog::RenameDialogState`] —
-/// so the side-effect decision in `AppModel::update` stays unit-
-/// testable in `tests/app_state_logic.rs` without spinning up GTK /
-/// libadwaita.
-#[must_use]
-pub fn should_drop_rename_dialog_after(effect: &RenameWorkerEffect) -> bool {
-    match effect {
-        RenameWorkerEffect::Success => true,
-        RenameWorkerEffect::Failure(_) => false,
-    }
-}
-
-/// List-refresh projection after a rename worker outcome.
-///
-/// `AppMsg::RenameWorkerCompleted` consults this to decide whether
-/// to re-project rows off the freshly reinstalled `(Vault, Store)`
-/// pair and emit [`crate::account_list::AccountListMsg::Refresh`]
-/// so the visible row label matches the post-mutation vault state
-/// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-/// `AccountListComponent` ("Refresh the store after every vault
-/// mutation … without reordering surviving rows"):
-///
-/// * [`RenameWorkerEffect::Success`] → `true`. The rename
-///   committed and the new label must surface in the list.
-/// * [`RenameWorkerEffect::Failure`] with
-///   [`crate::rename_dialog::RenameErrorOutcome::RestorePrior`] →
-///   `false`. `Vault::mutate_and_save` rolled back to the
-///   pre-attempt snapshot; the visible rows already match the
-///   post-rollback state.
-/// * [`RenameWorkerEffect::Failure`] with
-///   [`crate::rename_dialog::RenameErrorOutcome::KeepNewWithWarning`]
-///   → `true`. Primary save succeeded so the new label is durable
-///   in memory; the list must surface it even though the parent
-///   fsync was uncertain.
-/// * [`RenameWorkerEffect::Failure`] with
-///   [`crate::rename_dialog::RenameErrorOutcome::InlineError`] →
-///   `false`. Defensive branch where `Vault::rename` rejected the
-///   call before any mutation occurred.
-///
-/// The projection inspects only the typed [`RenameWorkerEffect`]
-/// variant — it does not consult [`AppState`] or the live
-/// `(Vault, Store)` pair — so the side-effect decision in
-/// `AppModel::update` stays unit-testable in
-/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
-#[must_use]
-pub fn should_refresh_list_after_rename(effect: &RenameWorkerEffect) -> bool {
-    match effect {
-        RenameWorkerEffect::Success => true,
-        RenameWorkerEffect::Failure(outcome) => match outcome {
-            crate::rename_dialog::RenameErrorOutcome::KeepNewWithWarning(_) => true,
-            crate::rename_dialog::RenameErrorOutcome::RestorePrior(_)
-            | crate::rename_dialog::RenameErrorOutcome::InlineError(_) => false,
-        },
-    }
-}
-
-/// Inline-message projection for the live
-/// [`crate::rename_dialog::RenameDialogComponent`] after a rename
-/// worker outcome.
-///
-/// Symmetric partner of [`unlock_dialog_msg_after`] for the rename
-/// path. `AppMsg::RenameWorkerCompleted` consults this to decide
-/// what message (if any) to forward into the live dialog after
-/// applying the worker outcome:
-///
-/// * [`RenameWorkerEffect::Success`] → `None`. The dialog is being
-///   dropped (see [`should_drop_rename_dialog_after`]), so there
-///   is no live controller to forward to.
-/// * [`RenameWorkerEffect::Failure`] → `Some(RenameDialogMsg::
-///   WorkerFailed(outcome.clone()))`. The dialog stays mounted;
-///   the message carries the typed
-///   [`crate::rename_dialog::RenameErrorOutcome`] so the dialog
-///   can route `RestorePrior` (roll the visible label back and
-///   render the inline error), `KeepNewWithWarning` (keep the new
-///   label and attach the warning to the body), or the defensive
-///   `InlineError` (render the typed error without touching the
-///   label) without re-deriving the routing off the
-///   [`paladin_core::PaladinError`].
-///
-/// The projection returns an *owned* [`Option<RenameDialogMsg>`]
-/// rather than a borrow into the effect because
-/// [`RenameWorkerEffect`] carries the typed
-/// [`crate::rename_dialog::RenameErrorOutcome`] rather than a
-/// pre-built dialog message (the unlock effect carries its dialog
-/// message directly via `UnlockFailureEffect::SendUnlockDialogMsg`,
-/// so the unlock variant can borrow). The clone is cheap — the
-/// outcome only holds an [`crate::rename_dialog::InlineError`] /
-/// [`crate::rename_dialog::InlineWarning`] of a stable
-/// [`paladin_core::ErrorKind`] and a `String` body.
-///
-/// The projection inspects only the typed [`RenameWorkerEffect`]
-/// variant — it does not consult [`AppState`], the live
-/// `(Vault, Store)` pair, or the
-/// [`crate::rename_dialog::RenameDialogState`] — so the side-
-/// effect decision in `AppModel::update` stays unit-testable in
-/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
-///
-/// The `Some` / `None` partition matches
-/// [`should_drop_rename_dialog_after`] exactly (a dropped dialog
-/// receives no message; a mounted dialog receives a message) and
-/// this contract is pinned in `tests/app_state_logic.rs` so the
-/// two projections cannot drift apart silently.
-#[must_use]
-pub fn rename_dialog_msg_after(effect: &RenameWorkerEffect) -> Option<RenameDialogMsg> {
-    match effect {
-        RenameWorkerEffect::Success => None,
-        RenameWorkerEffect::Failure(outcome) => {
-            Some(RenameDialogMsg::WorkerFailed(outcome.clone()))
-        }
-    }
-}
-
-/// Toast-body projection after a rename worker outcome.
-///
-/// `AppMsg::RenameWorkerCompleted` consults this to decide whether
-/// to raise an `AdwToast` on the `adw::ToastOverlay` per
-/// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
-/// "In-app account rename" ("On success, refresh
-/// `AccountListComponent` from the returned vault, close the
-/// dialog, and surface a status / toast confirmation."):
-///
-/// * [`RenameWorkerEffect::Success`] → `Some(body)`. The dialog
-///   dismisses and the row label updates; the toast confirms the
-///   save committed.
-/// * [`RenameWorkerEffect::Failure`] → `None`. The dialog stays
-///   mounted with the inline error / body warning, which is the
-///   surface that conveys the typed outcome — no toast layered on
-///   top.
-///
-/// The body comes from [`crate::rename_dialog::format_rename_dialog_success_toast`]
-/// so the wording stays in one place shared by the widget binding
-/// and the pure-logic tests. Sibling of [`rename_dialog_msg_after`]
-/// on the dispatch-side projection set.
-///
-/// The projection inspects only the typed [`RenameWorkerEffect`]
-/// variant so the side-effect decision in `AppModel::update` stays
-/// unit-testable in `tests/app_state_logic.rs` without spinning up
-/// GTK / libadwaita.
-#[must_use]
-pub fn rename_success_toast_after(effect: &RenameWorkerEffect) -> Option<String> {
-    match effect {
-        RenameWorkerEffect::Success => {
-            Some(crate::rename_dialog::format_rename_dialog_success_toast().to_string())
-        }
-        RenameWorkerEffect::Failure(_) => None,
-    }
-}
-
-/// Bundled `AppModel::update` instructions for a rename-worker
-/// completion. Carries the three decisions the existing trio
-/// projects ([`should_drop_rename_dialog_after`],
-/// [`rename_dialog_msg_after`], and [`rename_final_app_state`]) so
-/// the dispatch site can apply the worker outcome in a single shot
-/// without re-routing the [`RenameWorkerEffect`].
-///
-/// Symmetric partner of [`UnlockDispatch`] for the rename path. The
-/// shape mirrors the unlock variant: an optional state replacement,
-/// an optional inline message, and a drop-dialog flag. `dialog_msg`
-/// is owned rather than borrowed because
-/// [`rename_dialog_msg_after`] returns an owned
-/// [`Option<RenameDialogMsg>`] — the unlock effect carries its dialog
-/// message inside `UnlockFailureEffect::SendUnlockDialogMsg` so the
-/// unlock variant can borrow, whereas the rename effect carries the
-/// typed [`crate::rename_dialog::RenameErrorOutcome`] and the message
-/// is constructed at projection time.
-#[derive(Debug, Clone)]
-pub struct RenameDispatch {
-    /// New [`AppState`] to install on `AppModel.state`. `Some` for
-    /// the `UnlockedBusy → Unlocked` rollback that
-    /// [`rename_final_app_state`] returns regardless of typed effect
-    /// (the rename worker always rolls the busy gate back because
-    /// `Vault::mutate_and_save` is authoritative for the rollback /
-    /// durability-unconfirmed semantics per docs/DESIGN.md §4.3). `None`
-    /// is the defensive case where the worker outcome arrives but
-    /// `current` is not [`AppState::UnlockedBusy`] — `AppModel::update`
-    /// leaves the state untouched rather than installing a phantom
-    /// `Unlocked` over another idle state.
-    pub app_state: Option<AppState>,
-    /// Inline message to forward to the live
-    /// [`crate::rename_dialog::RenameDialogComponent`] controller.
-    /// `Some(RenameDialogMsg::WorkerFailed(outcome))` for the
-    /// failure branches (the dialog stays mounted and re-renders the
-    /// typed outcome — `RestorePrior`, `KeepNewWithWarning`, or
-    /// defensive `InlineError`); `None` for the success branch that
-    /// drops the dialog.
-    pub dialog_msg: Option<RenameDialogMsg>,
-    /// Whether `AppModel::update` should drop the live
-    /// [`crate::rename_dialog::RenameDialogComponent`] controller
-    /// after applying [`Self::app_state`]. Drops on the success
-    /// branch; stays mounted on every failure branch so the inline
-    /// error / body warning is visible and the user can retry.
-    pub drop_dialog: bool,
-    /// Whether `AppModel::update` should re-project rows off the
-    /// freshly reinstalled `(Vault, Store)` pair and emit
-    /// [`crate::account_list::AccountListMsg::Refresh`] so the
-    /// visible row label matches the post-mutation vault state.
-    /// Mirrors [`should_refresh_list_after_rename`] — `true` on
-    /// `Success` and `KeepNewWithWarning` (both leave the new label
-    /// in memory), `false` on `RestorePrior` and defensive
-    /// `InlineError` (both leave the vault unchanged so the visible
-    /// rows already match disk).
-    pub refresh_list: bool,
-    /// Optional `AdwToast` body to raise on the `adw::ToastOverlay`
-    /// after applying the rename worker outcome. Mirrors
-    /// [`rename_success_toast_after`] — `Some(body)` on
-    /// [`RenameWorkerEffect::Success`] and `None` on every
-    /// `Failure` variant so the dialog's inline error / body
-    /// warning stays the only surface that conveys the typed
-    /// outcome.
-    pub success_toast: Option<String>,
-}
-
-/// Bundle the trio of rename-dispatch decisions into a single
-/// [`RenameDispatch`] result so `AppModel::update` can apply the
-/// worker outcome in one shot.
-///
-/// The composer is a pure aggregator over the existing trio — it
-/// never re-derives the routing:
-///
-/// * `drop_dialog` mirrors [`should_drop_rename_dialog_after`].
-/// * `dialog_msg` mirrors [`rename_dialog_msg_after`], which returns
-///   an owned [`Option<RenameDialogMsg>`] so the bundled message
-///   outlives the borrow on `effect`.
-/// * `app_state` mirrors [`rename_final_app_state`], which is the
-///   `UnlockedBusy → Unlocked` rollback for every typed effect (the
-///   rename worker always rolls the busy gate back, regardless of
-///   typed outcome).
-///
-/// The same invariants pinned at the trio level carry through:
-///
-/// * `drop_dialog == true` iff the worker outcome is
-///   [`RenameWorkerEffect::Success`] — the dialog drops on success
-///   and stays mounted on every `Failure(RenameErrorOutcome)`
-///   variant.
-/// * `dialog_msg.is_some() == !drop_dialog`: a dropped dialog gets no
-///   inline message; a mounted dialog gets a `WorkerFailed(outcome)`.
-/// * For the failure branches from a non-[`AppState::UnlockedBusy`]
-///   source state (a stray dispatch), `app_state` is `None` while
-///   `dialog_msg` and `drop_dialog` still mirror the trio.
-///   `AppModel::update` leaves the source state in place rather than
-///   installing a phantom rollback.
-///
-/// The composer stays shape-only — it delegates to the trio without
-/// inspecting the typed [`RenameWorkerEffect`] variant itself — so
-/// `tests/app_state_logic.rs` exercises the dispatch contract
-/// without spinning up GTK / libadwaita.
-#[must_use]
-pub fn compose_rename_dispatch(current: &AppState, effect: &RenameWorkerEffect) -> RenameDispatch {
-    RenameDispatch {
-        app_state: rename_final_app_state(current, effect),
-        dialog_msg: rename_dialog_msg_after(effect),
-        drop_dialog: should_drop_rename_dialog_after(effect),
-        refresh_list: should_refresh_list_after_rename(effect),
-        success_toast: rename_success_toast_after(effect),
-    }
-}
-
-/// Apply [`compose_rename_dispatch`]'s state field in-place to
-/// `state`, leaving it unchanged when the dispatch carries
-/// `app_state = None`.
-///
-/// Symmetric partner of [`apply_unlock_dispatch_inplace`] for the
-/// rename path. `AppModel::update`'s `AppMsg::RenameWorkerCompleted`
-/// handler holds the cached [`AppState`] behind `&mut AppState`; this
-/// wrapper bridges the `Option<AppState>` field of [`RenameDispatch`]
-/// to that mut-reference call site so the handler does not have to
-/// manage a take-and-restore dance around `dispatch.app_state`. The
-/// remaining [`RenameDispatch::dialog_msg`] and
-/// [`RenameDispatch::drop_dialog`] projections drive widget-side work
-/// in the handler (forwarding the inline message to the live
-/// [`crate::rename_dialog::RenameDialogComponent`] controller and
-/// dropping the controller on the success branch) and are not the
-/// wrapper's concern.
-///
-/// Returns `true` when the state actually transitioned
-/// (`dispatch.app_state` was `Some(_)` and `*state` now mirrors the
-/// composer's projection), `false` otherwise. `AppModel::update` can
-/// use the `true` return to gate any state-installation-only follow-
-/// up work — a `false` return is the defensive no-op for the case
-/// where the worker outcome arrived but the cached state was not
-/// [`AppState::UnlockedBusy`] (a stray dispatch).
-///
-/// The wrapper stays shape-only — it inspects only the
-/// `dispatch.app_state` field and clones the replacement out — so the
-/// side-effect decision in `AppModel::update` stays unit-testable in
-/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
-pub fn apply_rename_dispatch_inplace(state: &mut AppState, dispatch: &RenameDispatch) -> bool {
-    if let Some(new_state) = dispatch.app_state.as_ref() {
-        *state = new_state.clone();
-        true
-    } else {
-        false
-    }
 }
 
 /// Bundled `AppModel::update` instructions for an unlock-worker
@@ -2325,7 +1833,7 @@ pub fn apply_unlock_dispatch_inplace(state: &mut AppState, dispatch: &UnlockDisp
 /// non-`Clone`; an incoming `Some(_)` always overwrites the slot so
 /// the wrapper is idempotent against a stray double-fire and so the
 /// same shape can be reused by other vault-touching workers (HOTP
-/// `next`, add / remove / rename, settings saves, import / export,
+/// `next`, add / remove / edit, settings saves, import / export,
 /// passphrase transitions) when they reinstall the pair after a
 /// worker return.
 ///
@@ -2347,49 +1855,10 @@ pub fn apply_unlock_vault_install_inplace(
 }
 
 /// Install the worker's `(Vault, Store)` pair from
-/// [`crate::rename_dialog::RenameWorkerCompletion`] into
-/// `AppModel::vault` in-place.
-///
-/// Symmetric partner of [`apply_unlock_vault_install_inplace`] for
-/// the rename path. The shape differs because the rename worker
-/// returns the pair on *every* effect branch — `Success`,
-/// `save_durability_unconfirmed`, `save_not_committed`, and the
-/// defensive `validation_error` / `invalid_state` projections all
-/// come back with the same `(Vault, Store)`, because
-/// `Vault::mutate_and_save` is the authoritative rollback /
-/// durability source per docs/DESIGN.md §4.3. There is no `None` case to
-/// dispatch on, so the helper takes the pair by value and always
-/// installs.
-///
-/// `AppModel::update`'s `AppMsg::RenameWorkerCompleted` handler holds
-/// the live vault slot behind `&mut Option<(Vault, Store)>` next to
-/// the state machine; this wrapper unconditionally writes through
-/// `Some(pair)`. That keeps it idempotent against a stray double-fire
-/// — the same call against a filled slot replaces the contents — and
-/// safe against a stray completion arriving while the slot is empty
-/// (which would happen only if a non-`Unlocked` dispatch slipped past
-/// the [`compose_rename_worker_input`] gate; reinstalling the worker's
-/// pair is still the right behavior because it owns the authoritative
-/// post-`mutate_and_save` state).
-///
-/// `pair` is consumed by value because [`Vault`] and [`Store`] are
-/// non-`Clone`. The wrapper stays shape-only — it does not inspect
-/// the pair — so the side-effect decision in `AppModel::update`
-/// stays unit-testable in `tests/app_state_logic.rs` against real
-/// `(Vault, Store)` pairs constructed via `paladin_core::Store::create`
-/// over a tempfile vault.
-pub fn apply_rename_vault_install_inplace(
-    vault_slot: &mut Option<(Vault, Store)>,
-    pair: (Vault, Store),
-) {
-    *vault_slot = Some(pair);
-}
-
-/// Install the worker's `(Vault, Store)` pair from
 /// [`crate::edit_dialog::EditWorkerCompletion`] into
 /// `AppModel::vault` in-place.
 ///
-/// Symmetric partner of [`apply_rename_vault_install_inplace`] for
+/// Symmetric partner of [`apply_add_vault_install_inplace`] for
 /// the edit path. The shape is identical because the edit worker
 /// also returns the pair on *every* effect branch — `Success`,
 /// `save_durability_unconfirmed`, `save_not_committed`, and the
@@ -2425,7 +1894,7 @@ pub fn apply_edit_vault_install_inplace(
 /// [`crate::add_account::AddWorkerCompletion`] into `AppModel::vault`
 /// in-place.
 ///
-/// Symmetric partner of [`apply_rename_vault_install_inplace`] for
+/// Symmetric partner of [`apply_edit_vault_install_inplace`] for
 /// the add path. The shape is identical because the add worker also
 /// returns the pair on *every* effect branch — `Success`,
 /// `save_durability_unconfirmed`, `save_not_committed`, and the
@@ -2462,7 +1931,7 @@ pub fn apply_add_vault_install_inplace(
 
 /// Unified state-transition composer for the add worker outcome.
 ///
-/// Symmetric partner of [`rename_final_app_state`] for the add path.
+/// Symmetric partner of [`edit_final_app_state`] for the add path.
 /// Every [`AddWorkerEffect`] variant — `Success { account_id }` and
 /// every `Failure(AddPostEffectOutcome)` projection
 /// (`Inline(InlineError)` for `save_not_committed` / `io_error` /
@@ -2476,7 +1945,7 @@ pub fn apply_add_vault_install_inplace(
 /// owns only the state-machine rollback.
 ///
 /// `effect` is accepted for signature symmetry with
-/// [`rename_final_app_state`] (and so a future routing refinement
+/// [`edit_final_app_state`] (and so a future routing refinement
 /// can branch on it without changing call sites) but is not
 /// inspected: the add worker's two failure projections both
 /// reinstall the live `(Vault, Store)` pair through
@@ -2505,7 +1974,7 @@ pub fn add_final_app_state(current: &AppState, _effect: &AddWorkerEffect) -> Opt
 /// Drop-decision projection for the [`crate::add_account::AddAccountComponent`]
 /// after an add worker outcome.
 ///
-/// Symmetric partner of [`should_drop_rename_dialog_after`] for the
+/// Symmetric partner of [`should_drop_remove_dialog_after`] for the
 /// add path. `AppMsg::AddWorkerCompleted` consults this to decide
 /// whether to detach the live `AddAccountComponent` from the
 /// content tree after applying the worker outcome:
@@ -2521,7 +1990,7 @@ pub fn add_final_app_state(current: &AppState, _effect: &AddWorkerEffect) -> Opt
 ///   for `save_durability_unconfirmed`) → `false`. The dialog
 ///   stays mounted so the inline error / durability warning is
 ///   visible and the user can retry or acknowledge, mirroring how
-///   the rename dialog stays mounted on every failure branch.
+///   the edit dialog stays mounted on every failure branch.
 ///
 /// The projection inspects only the typed [`AddWorkerEffect`]
 /// variant — it does not consult [`AppState`], the live
@@ -2540,7 +2009,7 @@ pub fn should_drop_add_dialog_after(effect: &AddWorkerEffect) -> bool {
 
 /// List-refresh projection after an add worker outcome.
 ///
-/// Symmetric partner of [`should_refresh_list_after_rename`] for the
+/// Symmetric partner of [`should_refresh_list_after_remove`] for the
 /// add path. `AppMsg::AddWorkerCompleted` consults this to decide
 /// whether to re-project rows off the freshly reinstalled
 /// `(Vault, Store)` pair and emit
@@ -2593,7 +2062,7 @@ pub fn should_refresh_list_after_add(effect: &AddWorkerEffect) -> bool {
 /// The body comes from
 /// [`crate::add_account::format_add_dialog_success_toast`] so the
 /// wording stays in one place shared by the widget binding and the
-/// pure-logic tests. Sibling of [`rename_success_toast_after`] /
+/// pure-logic tests. Sibling of [`remove_success_toast_after`] /
 /// [`remove_success_toast_after`].
 ///
 /// The projection inspects only the typed [`AddWorkerEffect`] variant
@@ -2614,7 +2083,7 @@ pub fn add_success_toast_after(effect: &AddWorkerEffect) -> Option<String> {
 /// [`crate::add_account::AddAccountComponent`] after an add worker
 /// outcome.
 ///
-/// Symmetric partner of [`rename_dialog_msg_after`] for the add
+/// Symmetric partner of [`remove_dialog_msg_after`] for the add
 /// path. `AppMsg::AddWorkerCompleted` consults this to decide what
 /// message (if any) to forward into the live dialog after applying
 /// the worker outcome:
@@ -2635,7 +2104,7 @@ pub fn add_success_toast_after(effect: &AddWorkerEffect) -> Option<String> {
 /// rather than a borrow into the effect because
 /// [`AddWorkerEffect`] carries the typed
 /// [`crate::add_account::AddPostEffectOutcome`] rather than a
-/// pre-built dialog message (parity with the rename path; the
+/// pre-built dialog message (parity with the edit path; the
 /// unlock effect carries its dialog message directly via
 /// `UnlockFailureEffect::SendUnlockDialogMsg` so the unlock
 /// variant can borrow). The clone is cheap — the outcome only
@@ -2671,15 +2140,14 @@ pub fn add_dialog_msg_after(effect: &AddWorkerEffect) -> Option<AddAccountMsg> {
 /// dispatch site can apply the worker outcome in a single shot
 /// without re-routing the [`AddWorkerEffect`].
 ///
-/// Symmetric partner of [`RenameDispatch`] for the add path. The
-/// shape mirrors the rename variant: an optional state replacement,
+/// Symmetric partner of [`RemoveDispatch`] for the add path. The
+/// shape mirrors the remove variant: an optional state replacement,
 /// an optional inline message, and a drop-dialog flag. `dialog_msg`
 /// is owned rather than borrowed because [`add_dialog_msg_after`]
-/// returns an owned [`Option<AddAccountMsg>`] — the rename effect
-/// carries the typed [`crate::rename_dialog::RenameErrorOutcome`]
-/// and the add effect carries the typed
-/// [`crate::add_account::AddPostEffectOutcome`]; the message is
-/// constructed at projection time in both cases.
+/// returns an owned [`Option<AddAccountMsg>`] — the add effect
+/// carries the typed
+/// [`crate::add_account::AddPostEffectOutcome`] and the message is
+/// constructed at projection time.
 #[derive(Debug, Clone)]
 pub struct AddDispatch {
     /// New [`AppState`] to install on `AppModel.state`. `Some` for
@@ -2730,7 +2198,7 @@ pub struct AddDispatch {
 /// [`AddDispatch`] result so `AppModel::update` can apply the worker
 /// outcome in one shot.
 ///
-/// Symmetric partner of [`compose_rename_dispatch`] for the add
+/// Symmetric partner of [`compose_remove_dispatch`] for the add
 /// path. The composer is a pure aggregator over the existing trio —
 /// it never re-derives the routing:
 ///
@@ -2774,7 +2242,7 @@ pub fn compose_add_dispatch(current: &AppState, effect: &AddWorkerEffect) -> Add
 /// Apply [`compose_add_dispatch`]'s state field in-place to `state`,
 /// leaving it unchanged when the dispatch carries `app_state = None`.
 ///
-/// Symmetric partner of [`apply_rename_dispatch_inplace`] for the
+/// Symmetric partner of [`apply_remove_dispatch_inplace`] for the
 /// add path. `AppModel::update`'s `AppMsg::AddWorkerCompleted`
 /// handler holds the cached [`AppState`] behind `&mut AppState`;
 /// this wrapper bridges the `Option<AppState>` field of
@@ -2852,7 +2320,7 @@ pub fn apply_qr_dispatch_inplace(state: &mut AppState, dispatch: &QrDispatch) ->
 /// Compose the [`AppState`] transition for the
 /// [`crate::remove_dialog::RemoveDialogOutput::SubmitConfirm`] dispatch.
 ///
-/// Symmetric partner of [`submit_rename_app_state`] for the remove
+/// Symmetric partner of [`submit_edit_app_state`] for the remove
 /// path: both delegate to [`AppState::enter_busy`] so an `Unlocked →
 /// UnlockedBusy` transition gates the `gio::spawn_blocking
 /// Vault::mutate_and_save(|v| v.remove(...))` worker.
@@ -2877,9 +2345,9 @@ pub fn submit_remove_app_state(current: &AppState) -> Option<AppState> {
 /// into a [`RemoveWorkerInput`] for the `gio::spawn_blocking
 /// Vault::mutate_and_save(|v| v.remove(...))` worker.
 ///
-/// Symmetric partner of [`compose_rename_worker_input`] on the remove
-/// path: where the rename composer captures the account id plus the
-/// trimmed label and dispatch-site wall-clock, this composer only
+/// Symmetric partner of [`compose_edit_worker_input`] on the remove
+/// path: where the edit composer captures the account id plus the
+/// assembled [`AccountEdit`] and dispatch-site wall-clock, this composer only
 /// needs the account id — `Vault::remove` has no wall-clock dependency
 /// and no editable payload. The `(Vault, Store)` pair is otherwise
 /// captured the same way so the worker thread can run
@@ -2926,7 +2394,7 @@ pub fn compose_remove_worker_input(
 /// Apply [`submit_remove_app_state`] in-place to `state`, leaving it
 /// unchanged when the composer returns `None`.
 ///
-/// Symmetric partner of [`apply_submit_rename_inplace`] for the
+/// Symmetric partner of [`apply_submit_edit_inplace`] for the
 /// remove path. Both bridge the owned-`self` [`AppState::enter_busy`]
 /// contract to the mut-reference call site so `AppModel::update`'s
 /// [`crate::remove_dialog::RemoveDialogOutput::SubmitConfirm`] handler
@@ -2957,7 +2425,7 @@ pub fn apply_submit_remove_inplace(state: &mut AppState) -> bool {
 
 /// Unified state-transition composer for the remove worker outcome.
 ///
-/// Symmetric partner of [`rename_final_app_state`] for the remove
+/// Symmetric partner of [`edit_final_app_state`] for the remove
 /// path: both delegate to [`AppState::leave_busy`] so every
 /// [`RemoveWorkerEffect`] variant — `Success` and every
 /// `Failure(RemoveErrorOutcome)` projection — lands on the same
@@ -2966,7 +2434,7 @@ pub fn apply_submit_remove_inplace(state: &mut AppState) -> bool {
 /// this composer owns only the state-machine rollback.
 ///
 /// `effect` is accepted for signature symmetry with
-/// [`rename_final_app_state`] (and so a future routing refinement
+/// [`edit_final_app_state`] (and so a future routing refinement
 /// can branch on it without changing call sites) but is not
 /// inspected: the remove worker's three failure projections all
 /// reinstall the live `(Vault, Store)` pair through
@@ -2999,7 +2467,7 @@ pub fn remove_final_app_state(
 /// [`crate::remove_dialog::RemoveDialogComponent`] after a remove
 /// worker outcome.
 ///
-/// Symmetric partner of [`should_drop_rename_dialog_after`] for the
+/// Symmetric partner of [`should_drop_add_dialog_after`] for the
 /// remove path. `AppMsg::RemoveWorkerCompleted` consults this to
 /// decide whether to detach the live `RemoveDialogComponent` from
 /// the content tree after applying the worker outcome:
@@ -3013,7 +2481,7 @@ pub fn remove_final_app_state(
 ///   `RestorePrior`, `KeepRemovedWithWarning`, defensive `InlineError`)
 ///   → `false`. The dialog stays mounted so the inline error / body
 ///   warning is visible and the user can retry, mirroring how the
-///   rename dialog stays mounted on every failure branch.
+///   edit dialog stays mounted on every failure branch.
 ///
 /// The projection inspects only the typed [`RemoveWorkerEffect`]
 /// variant — it does not consult [`AppState`], the live
@@ -3031,7 +2499,7 @@ pub fn should_drop_remove_dialog_after(effect: &RemoveWorkerEffect) -> bool {
 
 /// List-refresh projection after a remove worker outcome.
 ///
-/// Symmetric partner of [`should_refresh_list_after_rename`] for the
+/// Symmetric partner of [`should_refresh_list_after_add`] for the
 /// remove path. `AppMsg::RemoveWorkerCompleted` consults this to
 /// decide whether to re-project rows off the freshly reinstalled
 /// `(Vault, Store)` pair and emit
@@ -3073,7 +2541,7 @@ pub fn should_refresh_list_after_remove(effect: &RemoveWorkerEffect) -> bool {
 /// [`crate::remove_dialog::RemoveDialogComponent`] after a remove
 /// worker outcome.
 ///
-/// Symmetric partner of [`rename_dialog_msg_after`] for the remove
+/// Symmetric partner of [`add_dialog_msg_after`] for the remove
 /// path. `AppMsg::RemoveWorkerCompleted` consults this to decide
 /// what message (if any) to forward into the live dialog after
 /// applying the worker outcome:
@@ -3122,8 +2590,8 @@ pub fn remove_dialog_msg_after(effect: &RemoveWorkerEffect) -> Option<RemoveDial
 /// the dispatch site can apply the worker outcome in a single shot
 /// without re-routing the [`RemoveWorkerEffect`].
 ///
-/// Symmetric partner of [`RenameDispatch`] for the remove path. The
-/// shape mirrors the rename variant: an optional state replacement,
+/// Symmetric partner of [`AddDispatch`] for the remove path. The
+/// shape mirrors the edit variant: an optional state replacement,
 /// an optional inline message, and a drop-dialog flag.
 #[derive(Debug, Clone)]
 pub struct RemoveDispatch {
@@ -3235,7 +2703,7 @@ pub fn compose_remove_dispatch(current: &AppState, effect: &RemoveWorkerEffect) 
 /// The body comes from
 /// [`crate::remove_dialog::format_remove_dialog_success_toast`] so
 /// the wording stays in one place shared by the widget binding and
-/// the pure-logic tests. Sibling of [`rename_success_toast_after`]
+/// the pure-logic tests. Sibling of [`add_success_toast_after`]
 /// on the dispatch-side projection set.
 ///
 /// The projection inspects only the typed [`RemoveWorkerEffect`]
@@ -3256,7 +2724,7 @@ pub fn remove_success_toast_after(effect: &RemoveWorkerEffect) -> Option<String>
 /// `state`, leaving it unchanged when the dispatch carries
 /// `app_state = None`.
 ///
-/// Symmetric partner of [`apply_rename_dispatch_inplace`] for the
+/// Symmetric partner of [`apply_add_dispatch_inplace`] for the
 /// remove path. `AppModel::update`'s `AppMsg::RemoveWorkerCompleted`
 /// handler holds the cached [`AppState`] behind `&mut AppState`; this
 /// wrapper bridges the `Option<AppState>` field of [`RemoveDispatch`]
@@ -3294,8 +2762,8 @@ pub fn apply_remove_dispatch_inplace(state: &mut AppState, dispatch: &RemoveDisp
 /// [`crate::remove_dialog::RemoveWorkerCompletion`] into
 /// `AppModel::vault` in-place.
 ///
-/// Symmetric partner of [`apply_rename_vault_install_inplace`] for
-/// the remove path. The remove worker, like the rename worker,
+/// Symmetric partner of [`apply_edit_vault_install_inplace`] for
+/// the remove path. The remove worker, like the edit worker,
 /// returns the pair on *every* effect branch — `Success`,
 /// `save_durability_unconfirmed`, `save_not_committed`, and the
 /// defensive `account_not_found` / `io_error` / `validation_error`
@@ -3437,7 +2905,7 @@ pub fn run_unlock_worker(input: UnlockWorkerInput) -> UnlockWorkerCompletion {
 // ---------------------------------------------------------------------------
 // Import dispatch helpers
 //
-// Symmetric partners of the rename / remove / add dispatch trios:
+// Symmetric partners of the edit / remove / add dispatch trios:
 // `submit_import_app_state` + `apply_submit_import_inplace` for the
 // entry side, `compose_import_worker_input` for the worker-input
 // capture, `import_final_app_state` + `should_drop_import_dialog_after`
@@ -3460,7 +2928,7 @@ pub fn run_unlock_worker(input: UnlockWorkerInput) -> UnlockWorkerCompletion {
 /// import worker.
 ///
 /// Symmetric partner of [`submit_remove_app_state`] /
-/// [`submit_rename_app_state`] / [`submit_add_app_state`] for the
+/// [`submit_edit_app_state`] / [`submit_add_app_state`] for the
 /// import path. The composer stays shape-only — it delegates to
 /// [`AppState::enter_busy`] without re-deriving the transition — so
 /// `tests/app_state_logic.rs` exercises the entry-side handoff
@@ -3479,7 +2947,7 @@ pub fn submit_import_app_state(current: &AppState) -> Option<AppState> {
 /// unchanged when the composer returns `None`.
 ///
 /// Symmetric partner of [`apply_submit_remove_inplace`] /
-/// [`apply_submit_rename_inplace`] / [`apply_submit_add_inplace`].
+/// [`apply_submit_edit_inplace`] / [`apply_submit_add_inplace`].
 /// Returns `true` iff the state transitioned (source was `Unlocked`
 /// → destination is `UnlockedBusy`); `AppModel::update` uses the
 /// `true` return to gate the `gio::spawn_blocking` worker spawn so
@@ -3561,7 +3029,7 @@ pub fn compose_import_worker_input(
 /// split off the typed outcome in sibling composers; this composer
 /// owns only the state-machine rollback.
 ///
-/// `outcome` is accepted for signature symmetry with the rename /
+/// `outcome` is accepted for signature symmetry with the edit /
 /// remove / add composers but is not inspected: every variant rolls
 /// the busy gate back.
 ///
@@ -3583,7 +3051,7 @@ pub fn import_final_app_state(current: &AppState, _outcome: &MergeOutcome) -> Op
 /// the dialog open on the post-merge counts panel until the user
 /// clicks Dismiss, and every failure / warning keeps it open with
 /// the inline error / warning visible so the user can retry. This
-/// diverges from the rename / remove / add path where success drops
+/// diverges from the edit / remove / add path where success drops
 /// the dialog — matching the `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Component tree" > `ImportDialog` rule "keep the dialog on a
 /// post-success counts panel until the user dismisses it".
@@ -3657,7 +3125,7 @@ pub fn should_refresh_list_after_import(outcome: &MergeOutcome) -> bool {
 /// shot without re-routing the [`MergeOutcome`].
 ///
 /// Symmetric partner of [`RemoveDispatch`] / [`AddDispatch`] /
-/// [`RenameDispatch`] for the import path. The shape mirrors the
+/// [`AddDispatch`] for the import path. The shape mirrors the
 /// remove variant: an optional state replacement, an optional inline
 /// message, a drop-dialog flag, and a refresh-list flag. No
 /// `success_toast` field because the import dialog renders the post-
@@ -3736,7 +3204,7 @@ pub fn compose_import_dispatch(current: &AppState, outcome: &MergeOutcome) -> Im
 /// `app_state = None`.
 ///
 /// Symmetric partner of [`apply_remove_dispatch_inplace`] /
-/// [`apply_rename_dispatch_inplace`] / [`apply_add_dispatch_inplace`]
+/// [`apply_add_dispatch_inplace`] / [`apply_add_dispatch_inplace`]
 /// for the import path. Returns `true` when the state actually
 /// transitioned (`dispatch.app_state` was `Some(_)` and `*state` now
 /// mirrors the composer's projection), `false` otherwise.
@@ -3754,7 +3222,7 @@ pub fn apply_import_dispatch_inplace(state: &mut AppState, dispatch: &ImportDisp
 /// `AppModel::vault` in-place.
 ///
 /// Symmetric partner of [`apply_remove_vault_install_inplace`] /
-/// [`apply_rename_vault_install_inplace`] /
+/// [`apply_edit_vault_install_inplace`] /
 /// [`apply_add_vault_install_inplace`] for the import path. The
 /// import worker always returns the pair on every branch (`Success`,
 /// `DurabilityWarning`, `NotCommitted`, `Inline`) because
@@ -3784,7 +3252,7 @@ pub fn apply_import_vault_install_inplace(
 /// Bundled export-dispatch result returned by [`compose_export_dispatch`].
 ///
 /// Bundles the worker-outcome → (state, dialog, drop, toast) projections
-/// the import / rename / remove dispatchers expose individually. Export's
+/// the import / edit / remove dispatchers expose individually. Export's
 /// success path adds the [`Self::success_toast`] field because the
 /// `ExportDialog` closes on success and surfaces the written path through
 /// an [`AdwToast`](adw::Toast) on the main overlay rather than an inline
@@ -3923,7 +3391,7 @@ pub fn compose_export_worker_input(
 /// export does not mutate the vault; the busy gate releases on every
 /// branch.
 ///
-/// `outcome` is accepted for signature symmetry with the rename /
+/// `outcome` is accepted for signature symmetry with the edit /
 /// remove / add composers but is not inspected: every variant rolls
 /// the busy gate back.
 ///
@@ -4067,7 +3535,7 @@ pub fn apply_export_dispatch_inplace(state: &mut AppState, dispatch: &ExportDisp
 /// the export path. Export does not mutate the vault, so the
 /// returned pair is the same one we moved into the worker — but
 /// the round-trip keeps the ownership model identical to the import
-/// / rename / remove / add paths so `AppModel::vault` is never
+/// / edit / remove / add paths so `AppModel::vault` is never
 /// orphaned across the `gio::spawn_blocking` boundary.
 ///
 /// `pair` is consumed by value because [`Vault`] and [`Store`] are
@@ -4408,7 +3876,7 @@ pub fn apply_passphrase_dispatch_inplace(
 // ---------------------------------------------------------------------------
 // SettingsComponent — pre-worker / post-worker composers
 //
-// Mirrors the `RemoveDialog` / `RenameDialog` shape: a typed
+// Mirrors the `RemoveDialog` / `EditDialog` shape: a typed
 // [`SettingsWorkerEffect`] (carrying the [`AcceptedChange`] and the
 // classified [`SaveOutcome`]) routes through `compose_settings_dispatch`
 // into `(app_state, dialog_msg, success_toast, reask_idle)`. The
@@ -4434,7 +3902,7 @@ pub fn apply_passphrase_dispatch_inplace(
 /// `gio::spawn_blocking` settings save worker dispatched by
 /// `AppMsg::SettingsDialogAction(SettingsDialogOutput::Submit)`.
 ///
-/// Mirrors [`submit_remove_app_state`] / [`submit_rename_app_state`]:
+/// Mirrors [`submit_remove_app_state`] / [`submit_edit_app_state`]:
 /// returns `Some(UnlockedBusy { path })` iff `current` is
 /// [`AppState::Unlocked`], and `None` from every other state
 /// (`Missing`, `Locked`, `UnlockedBusy`, `StartupError`). The `None`
@@ -4511,7 +3979,7 @@ pub fn compose_settings_worker_input(
 /// [`crate::settings::SettingsWorkerCompletion`] into
 /// `AppModel::vault` in-place.
 ///
-/// Symmetric partner of [`apply_rename_vault_install_inplace`] for
+/// Symmetric partner of [`apply_edit_vault_install_inplace`] for
 /// the settings path. The pair is always reinstalled —
 /// `Vault::mutate_and_save` is authoritative for the rollback /
 /// durability-unconfirmed semantics per docs/DESIGN.md §4.3, so the
@@ -4527,7 +3995,7 @@ pub fn apply_settings_vault_install_inplace(
 /// `UnlockedBusy → Unlocked` rollback projection for the settings
 /// worker outcome.
 ///
-/// Mirrors [`rename_final_app_state`]: every [`SettingsWorkerEffect`]
+/// Mirrors [`edit_final_app_state`]: every [`SettingsWorkerEffect`]
 /// branch lands on the same `UnlockedBusy → Unlocked` rollback via
 /// [`AppState::leave_busy`]. `Vault::mutate_and_save` is
 /// authoritative for the §4.3 rollback / durability-unconfirmed
@@ -4621,7 +4089,7 @@ pub fn settings_reask_idle_after(effect: &SettingsWorkerEffect) -> bool {
 
 /// Bundle of dispatch decisions for the settings worker outcome.
 ///
-/// Mirrors [`RenameDispatch`] for the settings path, sans
+/// Mirrors [`AddDispatch`] for the settings path, sans
 /// `drop_dialog` because live-apply keeps the `AdwPreferencesDialog`
 /// mounted across every save. The dispatch site applies the four
 /// decisions in one shot:

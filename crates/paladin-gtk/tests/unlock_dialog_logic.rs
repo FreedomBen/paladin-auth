@@ -1458,7 +1458,7 @@ fn format_unlock_dialog_title_returns_unlock_vault() {
     // by the widget binding and the pure-logic tests.
     //
     // Sibling of `paladin_gtk::add_account::format_add_dialog_title`
-    // and `paladin_gtk::rename_dialog::format_rename_dialog_title`
+    // and `paladin_gtk::edit_dialog::format_edit_dialog_title`
     // on the dialog-header-title side; together they pin every
     // dialog's titled surface against a single source of truth.
     use paladin_gtk::unlock_dialog::format_unlock_dialog_title;

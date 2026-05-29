@@ -270,7 +270,7 @@ pub fn format_startup_error_icon_name() -> &'static str {
 /// Pure — returns a `'static str` without allocating. Sibling of
 /// [`crate::unlock_dialog::format_unlock_dialog_title`],
 /// [`crate::init_dialog::format_init_dialog_title`],
-/// [`crate::rename_dialog::format_rename_dialog_title`], and
+/// [`crate::edit_dialog::format_edit_dialog_title`], and
 /// [`crate::add_account::format_add_dialog_title`] on the
 /// dialog-header-title side; together they pin every dialog's
 /// titled surface against a single source of truth.

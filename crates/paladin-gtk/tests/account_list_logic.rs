@@ -391,7 +391,7 @@ fn row_models_after_sequence_of_add_rename_remove_preserves_surviving_order() {
     // `AppModel::refresh_account_list` re-projects through
     // `filtered_row_models_from_vault` after every mutating worker
     // outcome that sets `dispatch.refresh_list = true`
-    // (`should_refresh_list_after_{add,remove,rename}` in
+    // (`should_refresh_list_after_{add,remove,qr}` in
     // `paladin_gtk::app::state`). The single-mutation tests above pin
     // the projection's ordering guarantee per mutation kind; this test
     // pins the same guarantee across a multi-mutation session
@@ -1109,8 +1109,7 @@ fn build_kebab_menu_model_exposes_copy_edit_show_qr_and_remove_in_order() {
     // canonical [`build_row_context_menu_model`] from Milestone 9
     // slice 3. The visible "Edit…" label targets `row.edit`
     // (`ROW_EDIT_ACTION_NAME`, renamed from `row.rename` in slice 2)
-    // and still mounts `RenameDialog` until slice 4 swaps in
-    // `EditDialog`; "Copy code" targets the pre-existing `row.copy`.
+    // and mounts `EditDialog`; "Copy code" targets the pre-existing `row.copy`.
     assert_shared_row_menu_entries(&build_kebab_menu_model());
 }
 

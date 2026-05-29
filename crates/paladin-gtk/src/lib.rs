@@ -41,7 +41,6 @@ pub mod otpauth_uri_paste;
 pub mod passphrase_dialog;
 pub mod qr_clipboard;
 pub mod remove_dialog;
-pub mod rename_dialog;
 pub mod row_context_menu;
 pub mod row_item;
 pub mod search;

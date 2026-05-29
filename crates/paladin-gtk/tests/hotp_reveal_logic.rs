@@ -421,7 +421,7 @@ fn dropping_prior_reveal_window_zeros_its_code_bytes() {
 // runs `hotp_advance` and bundles the typed outcome alongside the returned
 // pair. `AppModel::update` reinstalls the pair regardless of outcome so the
 // `UnlockedBusy → Unlocked` rollback always sees a live vault. Mirrors the
-// `rename_dialog::run_rename_worker` test pattern: exercises the worker
+// `edit_dialog::run_edit_worker` test pattern: exercises the worker
 // against tempfile-backed plaintext vaults without spinning up GTK.
 // ---------------------------------------------------------------------------
 

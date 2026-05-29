@@ -53,8 +53,10 @@ pub enum EffectKind {
     /// `RemoveDialog` → `Vault::remove` inside
     /// `Vault::mutate_and_save`.
     RemoveAccount,
-    /// `RenameDialog` → `Vault::rename` inside
-    /// `Vault::mutate_and_save`.
+    /// Legacy rename effect → `Vault::rename` inside
+    /// `Vault::mutate_and_save`. Superseded in the GTK front-end by
+    /// [`Self::EditAccountMetadata`]; retained for the shared effect
+    /// taxonomy.
     RenameAccount,
     /// `EditDialog` → `Vault::edit_account_metadata` inside
     /// `Vault::mutate_and_save` (Milestone 9 — the row "Edit…"
@@ -145,7 +147,7 @@ pub struct ControlGating {
     pub row_next: bool,
     /// `AdwDialog::submit_button.sensitive = !dialog_submit`
     /// across `AddAccountComponent`, `RemoveDialog`,
-    /// `RenameDialog`, `ImportDialog`, `ExportDialog`.
+    /// `EditDialog`, `ImportDialog`, `ExportDialog`.
     pub dialog_submit: bool,
     /// `PassphraseDialog::set/change/remove_button.sensitive =
     /// !passphrase_actions`.

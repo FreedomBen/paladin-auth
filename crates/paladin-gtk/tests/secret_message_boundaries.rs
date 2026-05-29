@@ -59,7 +59,7 @@ const DIALOG_OUTPUT_ENUMS: &[(&str, &str)] = &[
     ("src/init_dialog.rs", "InitDialogOutput"),
     ("src/unlock_dialog.rs", "UnlockDialogOutput"),
     ("src/add_account.rs", "AddAccountOutput"),
-    ("src/rename_dialog.rs", "RenameDialogOutput"),
+    ("src/edit_dialog.rs", "EditDialogOutput"),
     ("src/remove_dialog.rs", "RemoveDialogOutput"),
     ("src/import_dialog.rs", "ImportDialogOutput"),
     ("src/export_dialog.rs", "ExportDialogOutput"),
@@ -121,7 +121,7 @@ const KNOWN_NON_SECRET_LINES: &[(&str, &[&str])] = &[
 ///
 /// Plain plaintext labels (account label, issuer, file path) are
 /// *not* on the §8 list and are deliberately omitted so legitimate
-/// variants like `RenameDialogOutput::SubmitLabel { label: String }`
+/// variants like `AddAccountOutput::SubmitManual { label: String, .. }`
 /// continue to pass.
 const SECRET_NAME_MARKERS: &[&str] = &[
     "passphrase",

@@ -337,7 +337,7 @@ fn passphrase_state_clear_for_auto_lock_wipes_all_state() {
 // `PassphraseDialogComponent` joins the ten already-mounted
 // controllers (`AccountListComponent`, `StartupErrorComponent`,
 // `InitDialogComponent`, `UnlockDialogComponent`,
-// `RenameDialogComponent`, `RemoveDialogComponent`,
+// `EditDialogComponent`, `RemoveDialogComponent`,
 // `AddAccountComponent`, `SettingsComponent`,
 // `ImportDialogComponent`, `ExportDialogComponent`) with the same
 // scaffold shape: `<Name>Init` / `<Name>Msg` / `<Name>Output` plus a

@@ -521,8 +521,7 @@ pub const ROW_ACTION_GROUP_NAME: &str = "row";
 
 /// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the row's
 /// edit surface. Milestone 9 slice 2 renamed this from `rename` to
-/// `edit`; `AppModel` still mounts the existing `RenameDialog` on it
-/// until slice 4 swaps in `EditDialog`.
+/// `edit`; `AppModel` mounts `EditDialog` on it.
 pub const ROW_EDIT_ACTION_NAME: &str = "edit";
 
 /// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the
@@ -557,8 +556,7 @@ pub const ROW_COPY_ACTION_NAME: &str = "copy";
 pub enum AccountRowOutput {
     /// Row's kebab-menu "Edit…" entry activated, targeting `row.edit`
     /// (Milestone 9 slice 2 renamed the action from `row.rename`).
-    /// `AppModel` mounts the row's edit surface — the existing
-    /// `RenameDialog` until slice 4 swaps in `EditDialog`.
+    /// `AppModel` mounts the row's edit surface — `EditDialog`.
     RequestEdit(AccountId),
     /// Row's kebab-menu "Show QR…" entry activated. Read-only;
     /// `AppModel` opens `ExportQrDialog` for the account per
@@ -616,8 +614,8 @@ pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountRowOutput
 /// `gtk::PopoverMenu`, and the keyboard `gtk::ShortcutController` path
 /// (Milestone 9 slice 5). The "Edit…" label targets `row.edit`
 /// (`ROW_EDIT_ACTION_NAME`, renamed from `row.rename` in slice 2);
-/// `AppModel` routes it to the row's edit surface — the existing
-/// `RenameDialog` until slice 4 swaps in `EditDialog`. "Copy code"
+/// `AppModel` routes it to the row's edit surface — `EditDialog`.
+/// "Copy code"
 /// targets the pre-existing `row.copy` action that the inline copy
 /// button already drives, so it activates immediately.
 #[must_use]

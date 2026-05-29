@@ -317,7 +317,7 @@ pub struct AppModel {
     /// reference count rather than duplicating the widget. The clone
     /// lets [`AppMsg::AccountListAction`] reach the content tree from
     /// `update` so kebab-driven dialog mounts
-    /// (`RenameDialogComponent` / `RemoveDialogComponent`) can append
+    /// (`EditDialogComponent` / `RemoveDialogComponent`) can append
     /// themselves to the active view.
     #[allow(dead_code)]
     content: gtk::Box,
@@ -703,10 +703,10 @@ pub enum AppMsg {
     /// per-row actions bubble the row's [`paladin_core::AccountId`]
     /// up here for the dialog mount to consume.
     /// `OpenEditDialog(id)` and `OpenRemoveDialog(id)` each mount
-    /// their widget-bearing controller (`RenameDialogComponent` /
+    /// their widget-bearing controller (`EditDialogComponent` /
     /// `RemoveDialogComponent`) seeded from the live vault via
-    /// [`decide_rename_target`] / [`decide_remove_target`]; the
-    /// editable / destructive chrome and the `Vault::mutate_and_save`
+    /// [`crate::edit_dialog::decide_edit_target`] / [`decide_remove_target`];
+    /// the editable / destructive chrome and the `Vault::mutate_and_save`
     /// workers land in follow-up commits.
     AccountListAction(AccountListOutput),
     /// Posted by the header-bar search-toggle `gtk::ToggleButton`'s
@@ -2736,7 +2736,7 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::SettingsWorkerCompleted(completion) => {
                 // Worker-outcome dispatch. Mirrors the
-                // `RenameWorkerCompleted` shape but the dialog stays
+                // `EditWorkerCompleted` shape but the dialog stays
                 // mounted across every save (live-apply):
                 //
                 // * `app_state` — `UnlockedBusy → Unlocked` rollback
@@ -2944,7 +2944,7 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::ImportWorkerCompleted(completion) => {
                 // Worker-outcome dispatch. Mirrors `RemoveWorkerCompleted`
-                // / `RenameWorkerCompleted` / `AddWorkerCompleted` with
+                // / `EditWorkerCompleted` / `AddWorkerCompleted` with
                 // one divergence pinned by `compose_import_dispatch`:
                 // `drop_dialog` is always `false` because the import
                 // dialog keeps the post-merge counts panel mounted
@@ -3490,7 +3490,7 @@ impl SimpleComponent for AppModel {
                 // Vault::set_passphrase` / `change_passphrase` /
                 // `remove_passphrase` worker. Mirrors the
                 // `RemoveDialogOutput::SubmitConfirm` and
-                // `RenameDialogOutput::SubmitLabel` handlers
+                // `EditDialogOutput::Submit` handlers
                 // step-for-step:
                 //
                 // 1. Take the live `(Vault, Store)` pair from
@@ -3590,7 +3590,7 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::PassphraseWorkerCompleted(completion) => {
                 // Worker-outcome dispatch. Mirrors
-                // `RemoveWorkerCompleted` / `RenameWorkerCompleted`:
+                // `RemoveWorkerCompleted` / `EditWorkerCompleted`:
                 // `compose_passphrase_dispatch` bundles the typed
                 // `PassphraseWorkerEffect` over the cached `AppState`
                 // into a `PassphraseDispatch`:
@@ -3745,7 +3745,7 @@ impl SimpleComponent for AppModel {
             AppMsg::AddAccountAction(AddAccountOutput::Submit { account }) => {
                 // Save-button entry side of the `gio::spawn_blocking
                 // Vault::mutate_and_save(|v| v.add(account))` worker.
-                // Mirrors the `RenameDialogOutput::SubmitLabel` and
+                // Mirrors the `EditDialogOutput::Submit` and
                 // `RemoveDialogOutput::SubmitConfirm` handlers step-
                 // for-step:
                 //
@@ -3777,7 +3777,7 @@ impl SimpleComponent for AppModel {
                 //    `AppMsg::AddWorkerCompleted`, consumed by the
                 //    dispatch branch wired above.
                 //
-                // Unlike `RenameDialogOutput::SubmitLabel`, the add
+                // Unlike `EditDialogOutput::Submit`, the add
                 // path does not need to capture `SystemTime::now()`
                 // at the dispatch site — the validated `Account`
                 // already carries the `created_at` / `updated_at`
@@ -4290,7 +4290,7 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::RemoveWorkerCompleted(completion) => {
                 // Worker-outcome dispatch. Mirrors
-                // `RenameWorkerCompleted` exactly: `compose_remove_dispatch`
+                // `EditWorkerCompleted` exactly: `compose_remove_dispatch`
                 // bundles the typed `RemoveWorkerEffect` over the
                 // cached `AppState` into a `RemoveDispatch`:
                 //
@@ -4491,7 +4491,7 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::AddWorkerCompleted(completion) => {
                 // Worker-outcome dispatch. Mirrors
-                // `RenameWorkerCompleted` / `RemoveWorkerCompleted`
+                // `EditWorkerCompleted` / `RemoveWorkerCompleted`
                 // exactly: `compose_add_dispatch` bundles the typed
                 // `AddWorkerEffect` over the cached `AppState` into
                 // an `AddDispatch`:
@@ -5848,7 +5848,7 @@ pub fn format_app_add_button_tooltip() -> &'static str {
 /// from the in-window dialog titles
 /// ([`crate::unlock_dialog::format_unlock_dialog_title`],
 /// [`crate::init_dialog::format_init_dialog_title`],
-/// [`crate::rename_dialog::format_rename_dialog_title`],
+/// [`crate::edit_dialog::format_edit_dialog_title`],
 /// [`crate::add_account::format_add_dialog_title`],
 /// [`crate::startup_error::format_startup_error_title`],
 /// [`crate::remove_dialog::format_remove_dialog_title`]), which

@@ -308,7 +308,7 @@ pub struct HotpAdvanceWorkerInput {
 /// to drive the reveal-window state machine; `vault` / `store`
 /// reinstall the `(Vault, Store)` pair on `AppModel::vault`
 /// regardless of typed outcome (mirroring the
-/// `rename_dialog::RenameWorkerCompletion` shape — the busy gate
+/// `edit_dialog::EditWorkerCompletion` shape — the busy gate
 /// always releases because `mutate_and_save` is authoritative for
 /// the rollback / durability-unconfirmed semantics).
 pub struct HotpAdvanceWorkerCompletion {

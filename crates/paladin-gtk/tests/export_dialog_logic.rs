@@ -432,7 +432,7 @@ fn gates_treat_paths_by_raw_equality_no_canonicalize() {
 // `ExportDialogComponent` joins the nine already-mounted controllers
 // (`AccountListComponent`, `StartupErrorComponent`,
 // `InitDialogComponent`, `UnlockDialogComponent`,
-// `RenameDialogComponent`, `RemoveDialogComponent`,
+// `EditDialogComponent`, `RemoveDialogComponent`,
 // `AddAccountComponent`, `SettingsComponent`, `ImportDialogComponent`)
 // with the same scaffold shape: `<Name>Init` / `<Name>Msg` /
 // `<Name>Output` plus a `relm4::SimpleComponent` impl. The widget

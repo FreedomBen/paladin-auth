@@ -869,8 +869,8 @@ fn run_add_worker_save_failure_routes_inline_and_returns_pair() {
 // AddAccountComponent skeleton — marker + Cancel routing
 // ---------------------------------------------------------------------------
 //
-// Symmetric partner of `rename_dialog::format_rename_dialog_marker`
-// / `RENAME_DIALOG_MARKER_PREFIX`. The smoke test in
+// Symmetric partner of `edit_dialog::format_edit_dialog_marker`
+// / `EDIT_DIALOG_MARKER_PREFIX`. The smoke test in
 // `tests/gtk_smoke.rs` will grep for the prefix to prove the dialog
 // mounted; locking the literal here keeps the pure-logic projection
 // and the smoke marker aligned.
@@ -978,7 +978,7 @@ fn apply_msg_worker_failed_emits_no_output_and_stores_outcome() {
     // is stored on `AddDialogState::worker_outcome` so the widget
     // view can route `Inline` / `KeepWithWarning` into the dialog
     // body without re-deriving the routing decision (mirror of the
-    // `RenameDialogState::worker_outcome` contract).
+    // `RemoveDialogState::worker_outcome` contract).
     use paladin_gtk::add_account::{
         apply_msg, classify_add_post_effect_error, AddAccountMsg, AddDialogState,
         AddPostEffectOutcome,
@@ -1033,7 +1033,7 @@ fn apply_msg_worker_failed_keep_with_warning_stores_outcome() {
 fn add_dialog_state_new_initializes_worker_outcome_to_none() {
     // No worker has run yet on a freshly-opened dialog, so the
     // body should not render any prior outcome. Mirror of
-    // `RenameDialogState::new` — both dialogs share the no-prior-
+    // `RemoveDialogState::new` — both dialogs share the no-prior-
     // outcome invariant at construction time.
     use paladin_gtk::add_account::AddDialogState;
 
@@ -8908,7 +8908,7 @@ fn compose_uri_text_value_returns_empty_after_switch_path_away_from_uri() {
 // shared shell ("Keep successful manual and URI additions consistent with §7:
 // refresh the list from the returned vault, close the dialog, and surface a
 // status / toast confirmation."). Sibling of
-// `format_rename_dialog_success_toast` /
+// `format_edit_dialog_success_toast` /
 // `format_remove_dialog_success_toast` so wording stays single-sourced and
 // the dispatch projection `add_success_toast_after` can rely on the helper
 // for the bundled toast body.

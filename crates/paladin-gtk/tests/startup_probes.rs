@@ -419,7 +419,7 @@ fn format_app_window_title_returns_paladin() {
     // No TUI parity: the TUI is a single-process terminal app and
     // has no window-list entry to mirror. Distinct from the in-
     // window dialog titles (`format_unlock_dialog_title`,
-    // `format_init_dialog_title`, `format_rename_dialog_title`,
+    // `format_init_dialog_title`, `format_edit_dialog_title`,
     // `format_add_dialog_title`, `format_startup_error_title`,
     // `format_remove_dialog_title`), which name surfaces inside
     // the window rather than the window itself.

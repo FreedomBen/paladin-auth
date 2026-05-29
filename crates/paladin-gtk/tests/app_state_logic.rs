@@ -46,21 +46,19 @@ use paladin_core::{
 use paladin_gtk::add_account::{AddWorkerInput, QrWorkerInput};
 use paladin_gtk::app::state::{
     apply_add_vault_install_inplace, apply_edit_vault_install_inplace, apply_submit_add_inplace,
-    apply_submit_edit_inplace, apply_submit_rename_inplace, apply_submit_unlock_inplace,
-    apply_unlock_dispatch_inplace, apply_unlock_failure_action, apply_unlock_vault_install_inplace,
-    compose_add_worker_input, compose_edit_worker_input, compose_qr_worker_input,
-    compose_rename_worker_input, compose_unlock_dispatch, compose_unlock_worker_input,
-    decide_state_from_inspect, decide_state_from_open_error, decide_state_from_path_resolution,
-    decide_unlock_failure_action, decide_unlock_success_state, edit_final_app_state,
-    route_unlock_failure_effect, route_unlock_success_effect, route_unlock_worker_outcome,
-    run_unlock_worker, should_drop_unlock_dialog_after, submit_add_app_state,
-    submit_edit_app_state, submit_rename_app_state, submit_unlock_app_state,
-    unlock_app_state_after, unlock_dialog_msg_after, unlock_final_app_state, AppState,
-    OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
-    UnlockWorkerEffect, UnlockWorkerInput,
+    apply_submit_edit_inplace, apply_submit_unlock_inplace, apply_unlock_dispatch_inplace,
+    apply_unlock_failure_action, apply_unlock_vault_install_inplace, compose_add_worker_input,
+    compose_edit_worker_input, compose_qr_worker_input, compose_unlock_dispatch,
+    compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
+    decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
+    edit_final_app_state, route_unlock_failure_effect, route_unlock_success_effect,
+    route_unlock_worker_outcome, run_unlock_worker, should_drop_unlock_dialog_after,
+    submit_add_app_state, submit_edit_app_state, submit_unlock_app_state, unlock_app_state_after,
+    unlock_dialog_msg_after, unlock_final_app_state, AppState, OpenErrorOutcome,
+    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
+    UnlockWorkerInput,
 };
 use paladin_gtk::edit_dialog::{EditWorkerEffect, EditWorkerInput};
-use paladin_gtk::rename_dialog::RenameWorkerInput;
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
     route_unlock_open_error, InlineError, UnlockDialogMsg, UnlockOpenRouting,
@@ -3342,114 +3340,16 @@ fn submit_unlock_app_state_mirrors_enter_unlocking_busy_for_every_variant() {
 }
 
 // ---------------------------------------------------------------------------
-// submit_rename_app_state — pre-worker `Unlocked → UnlockedBusy` composer
-// ---------------------------------------------------------------------------
-//
-// Symmetric partner of `submit_unlock_app_state` for the rename path:
-// where `submit_unlock_app_state` covers `Locked → UnlockedBusy` (the
-// open worker is computing the `(Vault, Store)` pair),
-// `submit_rename_app_state` covers `Unlocked → UnlockedBusy` (the
-// rename worker takes the already-decrypted pair through
-// `Vault::mutate_and_save`). Both are name-the-entry-point wrappers
-// over the matching `AppState` transition method — this one delegates
-// to `AppState::enter_busy()`. Together they document each typed
-// dispatch's source-state contract at the call site in
-// `AppModel::update`. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
-// §"Vault interaction".
-
-#[test]
-fn submit_rename_app_state_from_unlocked_returns_unlocked_busy_preserving_path() {
-    // Happy path: `AppModel::update` receives
-    // `RenameDialogOutput::SubmitLabel` while the model is
-    // `AppState::Unlocked(path)`. The composer must hand `AppModel`
-    // the `UnlockedBusy(path)` transition that opens the busy gate
-    // for the `gio::spawn_blocking Vault::mutate_and_save(|v|
-    // v.rename(...))` worker. The resolved path is preserved
-    // verbatim so the rest of `AppModel` (account list, kebab menu,
-    // dialog chrome) still names the same vault destination.
-    let path = vault_path();
-    let unlocked = AppState::Unlocked { path: path.clone() };
-    let next = submit_rename_app_state(&unlocked)
-        .expect("Unlocked must transition to UnlockedBusy on submit");
-    assert!(matches!(next, AppState::UnlockedBusy { .. }));
-    assert_path_eq(&next, &path);
-}
-
-#[test]
-fn submit_rename_app_state_from_non_unlocked_returns_none() {
-    // Defensive: a stray `SubmitLabel` dispatch from any source
-    // state other than `Unlocked` is a no-op for the state machine.
-    // Missing / Locked have no live `(Vault, Store)` pair to hand
-    // off, `UnlockedBusy` already serializes through one worker per
-    // §"In-flight effect ownership", and `StartupError` is the
-    // non-mutating surface. Returning `None` matches
-    // `AppState::enter_busy`'s own refusal contract so
-    // `AppModel::update` leaves the source state in place rather
-    // than installing a phantom `UnlockedBusy` that would clobber
-    // the idle state.
-    let path = vault_path();
-    assert!(submit_rename_app_state(&AppState::Missing { path: path.clone() }).is_none());
-    assert!(submit_rename_app_state(&AppState::Locked { path: path.clone() }).is_none());
-    assert!(submit_rename_app_state(&AppState::UnlockedBusy { path: path.clone() }).is_none());
-    let startup = decide_state_from_inspect(&path, Err(invalid_header_err()))
-        .expect("inspect Err yields StartupError state");
-    assert!(submit_rename_app_state(&startup).is_none());
-}
-
-#[test]
-fn submit_rename_app_state_mirrors_enter_busy_for_every_variant() {
-    // Cross-check: the composer must mirror `AppState::enter_busy`
-    // exactly — the entry transition is `Unlocked → UnlockedBusy`
-    // for both helpers and `None` for every other source.
-    // `submit_rename_app_state` is a name-the-entry-point wrapper,
-    // not a re-derivation; this test pins that contract so the
-    // helper can't drift away from `enter_busy` without breaking
-    // here first.
-    let path = vault_path();
-    let sources = [
-        AppState::Missing { path: path.clone() },
-        AppState::Locked { path: path.clone() },
-        AppState::Unlocked { path: path.clone() },
-        AppState::UnlockedBusy { path: path.clone() },
-        decide_state_from_inspect(&path, Err(invalid_header_err()))
-            .expect("inspect Err yields StartupError state"),
-    ];
-    for source in &sources {
-        let mirror = source.clone().enter_busy();
-        let composed = submit_rename_app_state(source);
-        match (&mirror, &composed) {
-            (None, None) => {}
-            (Some(a), Some(b)) => {
-                assert_eq!(
-                    std::mem::discriminant::<AppState>(a),
-                    std::mem::discriminant::<AppState>(b),
-                    "composed variant must mirror enter_busy for source={source:?}",
-                );
-                assert_eq!(
-                    a.path().map(Path::to_path_buf),
-                    b.path().map(Path::to_path_buf),
-                    "composed path must mirror enter_busy for source={source:?}",
-                );
-            }
-            other => panic!(
-                "composed Some/None must mirror enter_busy for source={source:?}, \
-                 got {other:?}",
-            ),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // submit_add_app_state — pre-worker `Unlocked → UnlockedBusy` composer
 // ---------------------------------------------------------------------------
 //
-// Symmetric partner of `submit_rename_app_state` for the add path:
-// where `submit_rename_app_state` covers the `Unlocked → UnlockedBusy`
-// handoff for the `gio::spawn_blocking Vault::mutate_and_save(|v|
-// v.rename(...))` worker, `submit_add_app_state` covers the same
-// `Unlocked → UnlockedBusy` handoff for the `gio::spawn_blocking
-// Vault::mutate_and_save(|v| v.add(...))` worker. Both are name-the-
-// entry-point wrappers over `AppState::enter_busy()` so the call site
+// Symmetric partner of `submit_unlock_app_state` for the add path:
+// where `submit_unlock_app_state` covers `Locked → UnlockedBusy` for
+// the `gio::spawn_blocking paladin_core::open` worker,
+// `submit_add_app_state` covers the `Unlocked → UnlockedBusy` handoff
+// for the `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
+// worker. Both are name-the-entry-point wrappers over
+// `AppState::enter_busy()` so the call site
 // in `AppModel::update` documents which typed dispatch is opening the
 // busy gate. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
 
@@ -3535,15 +3435,14 @@ fn submit_add_app_state_mirrors_enter_busy_for_every_variant() {
 }
 
 #[test]
-fn submit_add_app_state_agrees_with_submit_rename_app_state() {
-    // Both `submit_add_app_state` and `submit_rename_app_state` are
-    // name-the-entry-point wrappers over `AppState::enter_busy` for
-    // the same `Unlocked → UnlockedBusy` handoff — the rename worker
-    // and the add worker both consume the already-decrypted
-    // `(Vault, Store)` pair through `Vault::mutate_and_save`. Pin
-    // that they agree on Some/None and produce equivalent variant /
-    // path so a future refactor of either composer can't silently
-    // diverge.
+fn submit_add_app_state_returns_unlocked_busy_only_from_unlocked() {
+    // `submit_add_app_state` is a name-the-entry-point wrapper over
+    // `AppState::enter_busy` for the `Unlocked → UnlockedBusy` handoff
+    // — the add worker consumes the already-decrypted `(Vault, Store)`
+    // pair through `Vault::mutate_and_save`. Pin the Some/None contract
+    // and the resulting variant / path directly so a future refactor
+    // of the composer can't silently diverge from the busy-gate
+    // contract.
     let path = vault_path();
     let sources = [
         AppState::Missing { path: path.clone() },
@@ -3555,199 +3454,57 @@ fn submit_add_app_state_agrees_with_submit_rename_app_state() {
     ];
     for source in &sources {
         let add = submit_add_app_state(source);
-        let rename = submit_rename_app_state(source);
-        match (&add, &rename) {
-            (None, None) => {}
-            (Some(a), Some(r)) => {
-                assert_eq!(
-                    std::mem::discriminant::<AppState>(a),
-                    std::mem::discriminant::<AppState>(r),
-                    "add composer must produce same variant as rename composer for \
-                     source={source:?}",
-                );
-                assert_eq!(
-                    a.path().map(Path::to_path_buf),
-                    r.path().map(Path::to_path_buf),
-                    "add composer must produce same path as rename composer for \
-                     source={source:?}",
-                );
-            }
-            other => panic!(
-                "submit_add_app_state and submit_rename_app_state must agree on Some/None for \
-                 source={source:?}, got {other:?}",
-            ),
+        if let AppState::Unlocked { path: src_path } = source {
+            let next = add.expect("add composer must transition from Unlocked");
+            assert!(
+                matches!(&next, AppState::UnlockedBusy { .. }),
+                "add composer must produce UnlockedBusy from Unlocked, got {next:?}",
+            );
+            assert_eq!(
+                next.path().map(Path::to_path_buf),
+                Some(src_path.clone()),
+                "add composer must preserve the path for source={source:?}",
+            );
+        } else {
+            assert!(
+                add.is_none(),
+                "add composer must return None for non-Unlocked source={source:?}, got {add:?}",
+            );
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// compose_rename_worker_input — pre-worker `(Vault, Store, AccountId,
-//                                            label, now)` bundler
-// ---------------------------------------------------------------------------
-//
-// Symmetric partner of `compose_unlock_worker_input` on the rename
-// path: where the unlock composer captures the resolved path plus the
-// typed `VaultLock` for the `gio::spawn_blocking paladin_core::open`
-// worker, the rename composer captures the live `(Vault, Store)` pair
-// plus the `RenameDialogOutput::SubmitLabel` payload (account id,
-// trimmed label) and the dispatch-site wall-clock for the
-// `gio::spawn_blocking Vault::mutate_and_save(|v| v.rename(...))`
-// worker. Both composers gate on the pre-transition source state
-// (`Locked` for unlock, `Unlocked` for rename) so `AppModel::update`
-// can call the composer before `submit_*_app_state` consumes the
-// variant.
-//
-// `compose_rename_worker_input` returns `Result<RenameWorkerInput,
-// (Vault, Store)>` rather than `Option` because the
-// `(Vault, Store)` pair is non-`Clone` and represents live unlocked
-// state — dropping it on a stray dispatch would lose the user's open
-// vault. The `Err((vault, store))` branch returns the pair so the
-// caller can put it back in `AppModel.vault`.
-
 /// Build a fresh plaintext `(Vault, Store)` pair under a unique
-/// tempdir for the `compose_rename_worker_input` fixtures. Returns
+/// tempdir for the mutating-worker composer fixtures. Returns
 /// the tempdir as well so the caller keeps it alive for the duration
 /// of the test — `Store::open` only needs the file to exist at the
 /// time of the open call.
 fn fresh_plaintext_pair() -> (tempfile::TempDir, PathBuf, Vault, Store) {
     use std::os::unix::fs::PermissionsExt;
-    let tempdir = tempfile::tempdir()
-        .expect("create tempdir for compose_rename_worker_input plaintext fixture");
+    let tempdir =
+        tempfile::tempdir().expect("create tempdir for mutating-worker plaintext fixture");
     std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("chmod tempdir to 0700 so Store::create accepts it");
     let path = tempdir.path().join("vault.bin");
     let (vault, store) = paladin_core::Store::create(&path, paladin_core::VaultInit::Plaintext)
-        .expect("create plaintext vault for compose_rename_worker_input fixture");
+        .expect("create plaintext vault for mutating-worker fixture");
     vault.save(&store).expect("persist plaintext vault to disk");
     let (vault, store) = paladin_core::Store::open(&path, paladin_core::VaultLock::Plaintext)
         .expect("reopen the plaintext vault for the test fixture");
     (tempdir, path, vault, store)
 }
 
-#[test]
-fn compose_rename_worker_input_from_unlocked_bundles_pair_and_payload() {
-    // Happy path: `AppModel::update` receives
-    // `RenameDialogOutput::SubmitLabel` while the model is
-    // `AppState::Unlocked(path)` with the live `(Vault, Store)` pair
-    // available in the sibling `Option<(Vault, Store)>` slot. The
-    // composer must move the pair plus the payload (account id,
-    // trimmed label, captured `SystemTime`) into a `RenameWorkerInput`
-    // so the `gio::spawn_blocking` closure can hand the bundle
-    // straight to `run_rename_worker`.
-    let (_tempdir, path, vault, store) = fresh_plaintext_pair();
-    let unlocked = AppState::Unlocked { path: path.clone() };
-    let account_id = AccountId::new();
-    let label = "renamed".to_string();
-    let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12_345);
-
-    let input: RenameWorkerInput =
-        compose_rename_worker_input(&unlocked, (vault, store), account_id, label, now)
-            .expect("Unlocked source must produce a RenameWorkerInput");
-
-    assert_eq!(input.account_id, account_id);
-    assert_eq!(input.label, "renamed");
-    assert_eq!(input.now, now);
-    // The `(Vault, Store)` pair moved into the bundle; smoke-check
-    // the carried vault still names the same `Store` by exercising
-    // a no-op `mutate_and_save` on a fresh, empty account list.
-    assert_eq!(
-        input.vault.summaries().count(),
-        0,
-        "fresh plaintext vault should carry zero accounts into the worker bundle",
-    );
-}
-
-#[test]
-fn compose_rename_worker_input_from_non_unlocked_returns_pair_back() {
-    // Defensive: a stray `SubmitLabel` dispatch from any source
-    // other than `Unlocked` is a no-op for the worker spawn. The
-    // composer must hand the `(Vault, Store)` pair back via
-    // `Err((vault, store))` so the caller can restore it into
-    // `AppModel.vault` instead of leaking the live unlocked state.
-    let account_id = AccountId::new();
-    let label = "renamed".to_string();
-    let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12_345);
-    for variant in ["missing", "locked", "unlocked_busy", "startup_error"] {
-        let (_tempdir, path, vault, store) = fresh_plaintext_pair();
-        let source = match variant {
-            "missing" => AppState::Missing { path: path.clone() },
-            "locked" => AppState::Locked { path: path.clone() },
-            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
-            "startup_error" => decide_state_from_inspect(&path, Err(invalid_header_err()))
-                .expect("inspect Err yields StartupError state"),
-            _ => unreachable!(),
-        };
-        let outcome =
-            compose_rename_worker_input(&source, (vault, store), account_id, label.clone(), now);
-        let Err((returned_vault, _returned_store)) = outcome else {
-            panic!(
-                "compose_rename_worker_input must return the pair back via Err for variant={variant}",
-            );
-        };
-        assert_eq!(
-            returned_vault.summaries().count(),
-            0,
-            "returned vault must still be the same live pair for variant={variant}",
-        );
-    }
-}
-
-#[test]
-fn compose_rename_worker_input_mirrors_submit_rename_app_state_gating() {
-    // Cross-check: the two entry-side rename composers — state
-    // transition (`submit_rename_app_state`) and worker bundling
-    // (`compose_rename_worker_input`) — must agree on the
-    // `Some`/`None` (resp. `Ok`/`Err`) gating decision so
-    // `AppModel::update` can call them in series without either one
-    // accepting a dispatch the other refuses.
-    let account_id = AccountId::new();
-    let label = "renamed".to_string();
-    let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12_345);
-    for variant in [
-        "missing",
-        "locked",
-        "unlocked",
-        "unlocked_busy",
-        "startup_error",
-    ] {
-        let (_tempdir, path, vault, store) = fresh_plaintext_pair();
-        let source = match variant {
-            "missing" => AppState::Missing { path: path.clone() },
-            "locked" => AppState::Locked { path: path.clone() },
-            "unlocked" => AppState::Unlocked { path: path.clone() },
-            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
-            "startup_error" => decide_state_from_inspect(&path, Err(invalid_header_err()))
-                .expect("inspect Err yields StartupError state"),
-            _ => unreachable!(),
-        };
-        let submit_ok = submit_rename_app_state(&source).is_some();
-        let worker_ok =
-            compose_rename_worker_input(&source, (vault, store), account_id, label.clone(), now)
-                .is_ok();
-        assert_eq!(
-            submit_ok, worker_ok,
-            "submit_rename_app_state and compose_rename_worker_input must agree on Ok/Err \
-             for variant={variant}: submit_ok={submit_ok}, worker_ok={worker_ok}",
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
 // compose_add_worker_input — pre-worker `(Vault, Store, Account)` bundler
 // ---------------------------------------------------------------------------
 //
-// Symmetric partner of `compose_rename_worker_input` on the add path:
-// where the rename composer captures the live `(Vault, Store)` pair
-// plus the `RenameDialogOutput::SubmitLabel` payload (account id,
-// trimmed label, dispatch-site wall-clock) for the
-// `gio::spawn_blocking Vault::mutate_and_save(|v| v.rename(...))`
-// worker, the add composer captures the live `(Vault, Store)` pair
+// The add composer captures the live `(Vault, Store)` pair
 // plus the `ValidatedAccount::account` extracted from
 // `classify_manual_submit` / `classify_uri_submit` for the
 // `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(account))`
-// worker. Both composers gate on the pre-transition source state
-// (`Unlocked` for both — the add and rename workers each consume the
-// already-decrypted live pair) so `AppModel::update` can call the
+// worker. It gates on the pre-transition source state
+// (`Unlocked` — the add worker consumes the already-decrypted live
+// pair) so `AppModel::update` can call the
 // composer before `submit_add_app_state` consumes the variant.
 //
 // `compose_add_worker_input` returns `Result<AddWorkerInput,
@@ -3867,8 +3624,8 @@ fn compose_add_worker_input_mirrors_submit_add_app_state_gating() {
     // (resp. `Ok`/`Err`) gating decision so `AppModel::update` can
     // call them in series without either one accepting a dispatch
     // the other refuses. This mirrors the equivalent cross-check
-    // between `submit_rename_app_state` and
-    // `compose_rename_worker_input` for the rename path.
+    // between `submit_edit_app_state` and
+    // `compose_edit_worker_input` for the edit path.
     for variant in [
         "missing",
         "locked",
@@ -3898,16 +3655,13 @@ fn compose_add_worker_input_mirrors_submit_add_app_state_gating() {
 }
 
 #[test]
-fn compose_add_worker_input_agrees_with_compose_rename_worker_input_gating() {
-    // Both `compose_add_worker_input` and `compose_rename_worker_input`
-    // bundle the live `(Vault, Store)` pair for a
-    // `Vault::mutate_and_save` worker that needs the already-decrypted
-    // pair. Pin that they agree on `Ok`/`Err` per source state so a
-    // future refactor of either composer can't silently diverge on
-    // the source-state contract.
-    let account_id = AccountId::new();
-    let label = "renamed".to_string();
-    let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12_345);
+fn compose_add_worker_input_is_ok_only_from_unlocked() {
+    // `compose_add_worker_input` bundles the live `(Vault, Store)`
+    // pair for a `Vault::mutate_and_save` worker that needs the
+    // already-decrypted pair. Pin the `Ok`/`Err` source-state contract
+    // directly: `Ok` only from `Unlocked`, `Err` (handing the
+    // non-`Clone` pair back) for every other source state, so a future
+    // refactor of the composer can't silently diverge.
     for variant in [
         "missing",
         "locked",
@@ -3916,7 +3670,6 @@ fn compose_add_worker_input_agrees_with_compose_rename_worker_input_gating() {
         "startup_error",
     ] {
         let (_tempdir, path, vault_for_add, store_for_add) = fresh_plaintext_pair();
-        let (_tempdir2, _path2, vault_for_rename, store_for_rename) = fresh_plaintext_pair();
         let source = match variant {
             "missing" => AppState::Missing { path: path.clone() },
             "locked" => AppState::Locked { path: path.clone() },
@@ -3929,18 +3682,11 @@ fn compose_add_worker_input_agrees_with_compose_rename_worker_input_gating() {
         let account = fresh_add_account();
         let add_ok =
             compose_add_worker_input(&source, (vault_for_add, store_for_add), account).is_ok();
-        let rename_ok = compose_rename_worker_input(
-            &source,
-            (vault_for_rename, store_for_rename),
-            account_id,
-            label.clone(),
-            now,
-        )
-        .is_ok();
+        let expected_ok = variant == "unlocked";
         assert_eq!(
-            add_ok, rename_ok,
-            "compose_add_worker_input and compose_rename_worker_input must agree on Ok/Err for \
-             variant={variant}: add_ok={add_ok}, rename_ok={rename_ok}",
+            add_ok, expected_ok,
+            "compose_add_worker_input must be Ok only from Unlocked for \
+             variant={variant}: add_ok={add_ok}, expected_ok={expected_ok}",
         );
     }
 }
@@ -4131,8 +3877,8 @@ fn compose_qr_worker_input_agrees_with_compose_add_worker_input_gating() {
     // decrypted pair. Pin that they agree on `Ok`/`Err` per source
     // state so a future refactor of either composer can't silently
     // diverge on the source-state contract — symmetric with the
-    // `compose_add_worker_input_agrees_with_compose_rename_worker_input_gating`
-    // cross-check on the rename path.
+    // `compose_add_worker_input_is_ok_only_from_unlocked` direct
+    // gating check on the add path.
     let import_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12_345);
     for variant in [
         "missing",
@@ -5370,154 +5116,18 @@ fn apply_submit_unlock_inplace_mirrors_submit_unlock_app_state_for_every_variant
 }
 
 // ---------------------------------------------------------------------------
-// apply_submit_rename_inplace — `AppModel::update` mut-state wrapper
-// ---------------------------------------------------------------------------
-//
-// Symmetric partner of `apply_submit_unlock_inplace` for the rename
-// path: where `apply_submit_unlock_inplace` covers `Locked →
-// UnlockedBusy` (the open worker is about to compute the `(Vault,
-// Store)` pair), `apply_submit_rename_inplace` covers `Unlocked →
-// UnlockedBusy` (the rename worker takes the already-decrypted pair
-// through `Vault::mutate_and_save`). Both are thin mut-reference
-// wrappers over their matching `submit_*_app_state` composer so
-// `AppModel::update`'s `RenameDialogOutput::SubmitLabel` handler
-// does not have to manage the take-and-restore dance around the
-// composer's `Option<AppState>` return — the wrapper keeps the
-// side-effect decision unit-testable here without spinning up GTK /
-// libadwaita.
-
-#[test]
-fn apply_submit_rename_inplace_from_unlocked_mutates_to_unlocked_busy_and_returns_true() {
-    // Happy path: `AppModel::update` mutates `self.state` in place
-    // via the helper when `RenameDialogOutput::SubmitLabel` arrives
-    // from `AppState::Unlocked`. The resolved path is preserved
-    // verbatim so the rest of `AppModel` (account list, kebab menu,
-    // dialog chrome) still names the same vault destination. The
-    // `true` return signals that the state actually transitioned so
-    // the caller can spawn the `gio::spawn_blocking
-    // Vault::mutate_and_save(|v| v.rename(...))` worker — the
-    // `false` arm of the API is the defensive no-op for stray
-    // dispatches.
-    let path = vault_path();
-    let mut state = AppState::Unlocked { path: path.clone() };
-    let transitioned = apply_submit_rename_inplace(&mut state);
-    assert!(
-        transitioned,
-        "apply_submit_rename_inplace must return true on the Unlocked → UnlockedBusy transition",
-    );
-    assert!(matches!(state, AppState::UnlockedBusy { .. }));
-    assert_path_eq(&state, &path);
-}
-
-#[test]
-fn apply_submit_rename_inplace_from_non_unlocked_leaves_state_unchanged_and_returns_false() {
-    // Defensive: a stray `SubmitLabel` dispatch from any non-
-    // `Unlocked` source is a no-op. The wrapped state must survive
-    // the call byte-for-byte so `AppModel::update` cannot
-    // accidentally clobber an idle state (`Missing` / `Locked` /
-    // `UnlockedBusy` / `StartupError`) with a phantom
-    // `UnlockedBusy`. The `false` return tells the caller not to
-    // spawn the rename worker.
-    let path = vault_path();
-    let sources = [
-        AppState::Missing { path: path.clone() },
-        AppState::Locked { path: path.clone() },
-        AppState::UnlockedBusy { path: path.clone() },
-        decide_state_from_inspect(&path, Err(invalid_header_err()))
-            .expect("inspect Err yields StartupError state"),
-    ];
-    for source in sources {
-        let original_discriminant = std::mem::discriminant::<AppState>(&source);
-        let original_path = source.path().map(Path::to_path_buf);
-        let mut state = source.clone();
-        let transitioned = apply_submit_rename_inplace(&mut state);
-        assert!(
-            !transitioned,
-            "apply_submit_rename_inplace must return false for non-Unlocked source={source:?}",
-        );
-        assert_eq!(
-            std::mem::discriminant::<AppState>(&state),
-            original_discriminant,
-            "apply_submit_rename_inplace must leave variant unchanged for source={source:?}",
-        );
-        assert_eq!(
-            state.path().map(Path::to_path_buf),
-            original_path,
-            "apply_submit_rename_inplace must leave path unchanged for source={source:?}",
-        );
-    }
-}
-
-#[test]
-fn apply_submit_rename_inplace_mirrors_submit_rename_app_state_for_every_variant() {
-    // Cross-check: the wrapper must mirror `submit_rename_app_state`
-    // exactly. It is a name-the-call-site wrapper, not a
-    // re-derivation — the `true` / `false` partition matches the
-    // `Some` / `None` partition of the composer, and the resulting
-    // state on `true` matches the `Some(_)` variant + path the
-    // composer reports. This test pins that contract so the wrapper
-    // can't drift away from `submit_rename_app_state` without
-    // breaking here first.
-    let path = vault_path();
-    let sources = [
-        AppState::Missing { path: path.clone() },
-        AppState::Locked { path: path.clone() },
-        AppState::Unlocked { path: path.clone() },
-        AppState::UnlockedBusy { path: path.clone() },
-        decide_state_from_inspect(&path, Err(invalid_header_err()))
-            .expect("inspect Err yields StartupError state"),
-    ];
-    for source in &sources {
-        let composed = submit_rename_app_state(source);
-        let mut state = source.clone();
-        let transitioned = apply_submit_rename_inplace(&mut state);
-        if let Some(expected) = composed {
-            assert!(
-                transitioned,
-                "wrapper must return true when composer returns Some for source={source:?}",
-            );
-            assert_eq!(
-                std::mem::discriminant::<AppState>(&state),
-                std::mem::discriminant::<AppState>(&expected),
-                "wrapper variant must mirror composer for source={source:?}",
-            );
-            assert_eq!(
-                state.path().map(Path::to_path_buf),
-                expected.path().map(Path::to_path_buf),
-                "wrapper path must mirror composer for source={source:?}",
-            );
-        } else {
-            assert!(
-                !transitioned,
-                "wrapper must return false when composer returns None for source={source:?}",
-            );
-            assert_eq!(
-                std::mem::discriminant::<AppState>(&state),
-                std::mem::discriminant::<AppState>(source),
-                "wrapper must leave variant unchanged when composer returns None for source={source:?}",
-            );
-            assert_eq!(
-                state.path().map(Path::to_path_buf),
-                source.path().map(Path::to_path_buf),
-                "wrapper must leave path unchanged when composer returns None for source={source:?}",
-            );
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // apply_submit_add_inplace — `AppModel::update` mut-state wrapper
 // ---------------------------------------------------------------------------
 //
-// Symmetric partner of `apply_submit_rename_inplace` for the add
-// path: both cover `Unlocked → UnlockedBusy` (the worker takes the
-// already-decrypted `(Vault, Store)` pair through
-// `Vault::mutate_and_save`), but they bridge different dispatch
-// origins. `apply_submit_rename_inplace` fires from
-// `RenameDialogOutput::SubmitLabel`; `apply_submit_add_inplace`
-// fires from `AddAccountOutput::Submit{Manual,Uri}`. Both are thin
-// mut-reference wrappers over their matching `submit_*_app_state`
-// composer so `AppModel::update`'s submit handler does not have to
+// Symmetric partner of `apply_submit_unlock_inplace` for the add
+// path: where `apply_submit_unlock_inplace` covers `Locked →
+// UnlockedBusy` (the open worker is about to compute the `(Vault,
+// Store)` pair), `apply_submit_add_inplace` covers `Unlocked →
+// UnlockedBusy` (the add worker takes the already-decrypted pair
+// through `Vault::mutate_and_save`). It fires from
+// `AddAccountOutput::Submit{Manual,Uri}` and is a thin mut-reference
+// wrapper over the `submit_add_app_state` composer so
+// `AppModel::update`'s submit handler does not have to
 // manage the take-and-restore dance around the composer's
 // `Option<AppState>` return — the wrapper keeps the side-effect
 // decision unit-testable here without spinning up GTK / libadwaita.
@@ -5642,16 +5252,13 @@ fn apply_submit_add_inplace_mirrors_submit_add_app_state_for_every_variant() {
 }
 
 #[test]
-fn apply_submit_add_inplace_agrees_with_apply_submit_rename_inplace() {
-    // Both `apply_submit_add_inplace` and `apply_submit_rename_inplace`
-    // bridge `Unlocked → UnlockedBusy` via the same
-    // `AppState::enter_busy` contract — they only differ by the
-    // dispatch origin (manual/URI submit vs. label submit). For every
-    // possible `AppState` variant the `true`/`false` return and the
-    // resulting state's variant + path must match. Pinning the
-    // agreement here ensures the two helpers can't silently diverge
-    // on the busy-gate transition even though they live in
-    // independent call sites.
+fn apply_submit_add_inplace_transitions_only_from_unlocked() {
+    // `apply_submit_add_inplace` bridges `Unlocked → UnlockedBusy` via
+    // the `AppState::enter_busy` contract. For every possible
+    // `AppState` variant pin the `true`/`false` return and the
+    // resulting state's variant + path directly: only `Unlocked`
+    // transitions (to `UnlockedBusy` preserving the path); every other
+    // source is left unchanged and returns `false`.
     let path = vault_path();
     let sources = [
         AppState::Missing { path: path.clone() },
@@ -5663,26 +5270,34 @@ fn apply_submit_add_inplace_agrees_with_apply_submit_rename_inplace() {
     ];
     for source in &sources {
         let mut add_state = source.clone();
-        let mut rename_state = source.clone();
         let add_transitioned = apply_submit_add_inplace(&mut add_state);
-        let rename_transitioned = apply_submit_rename_inplace(&mut rename_state);
-        assert_eq!(
-            add_transitioned, rename_transitioned,
-            "apply_submit_add_inplace and apply_submit_rename_inplace must agree on true/false \
-             for source={source:?}",
-        );
-        assert_eq!(
-            std::mem::discriminant::<AppState>(&add_state),
-            std::mem::discriminant::<AppState>(&rename_state),
-            "apply_submit_add_inplace and apply_submit_rename_inplace must produce the same \
-             variant for source={source:?}",
-        );
-        assert_eq!(
-            add_state.path().map(Path::to_path_buf),
-            rename_state.path().map(Path::to_path_buf),
-            "apply_submit_add_inplace and apply_submit_rename_inplace must produce the same \
-             path for source={source:?}",
-        );
+        if let AppState::Unlocked { path: src_path } = source {
+            assert!(
+                add_transitioned,
+                "apply_submit_add_inplace must return true from Unlocked for source={source:?}",
+            );
+            assert!(
+                matches!(&add_state, AppState::UnlockedBusy { .. }),
+                "apply_submit_add_inplace must produce UnlockedBusy from Unlocked, got \
+                 {add_state:?}",
+            );
+            assert_eq!(
+                add_state.path().map(Path::to_path_buf),
+                Some(src_path.clone()),
+                "apply_submit_add_inplace must preserve the path for source={source:?}",
+            );
+        } else {
+            assert!(
+                !add_transitioned,
+                "apply_submit_add_inplace must return false for non-Unlocked source={source:?}",
+            );
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&add_state),
+                std::mem::discriminant::<AppState>(source),
+                "apply_submit_add_inplace must leave a non-Unlocked source unchanged for \
+                 source={source:?}",
+            );
+        }
     }
 }
 
@@ -5690,7 +5305,7 @@ fn apply_submit_add_inplace_agrees_with_apply_submit_rename_inplace() {
 // apply_add_vault_install_inplace — `AppModel::vault` mut-slot wrapper
 // ---------------------------------------------------------------------------
 //
-// Symmetric partner of `apply_rename_vault_install_inplace` for the
+// Symmetric partner of `apply_edit_vault_install_inplace` for the
 // add path. `AddWorkerCompletion` carries the live `(Vault, Store)`
 // pair *unconditionally* (every effect branch — `Success`,
 // `save_durability_unconfirmed`, `save_not_committed`, and the
@@ -5702,8 +5317,8 @@ fn apply_submit_add_inplace_agrees_with_apply_submit_rename_inplace() {
 // `apply_unlock_vault_install_inplace` uses. The
 // `AppMsg::AddWorkerCompleted` handler that lands in a follow-up
 // commit will call it next to `apply_add_dispatch_inplace` the same
-// way the rename dispatch installs the pair next to
-// `apply_rename_dispatch_inplace`.
+// way the add dispatch installs the pair next to
+// `apply_add_dispatch_inplace`.
 
 #[test]
 fn apply_add_vault_install_inplace_writes_pair_into_empty_slot() {
@@ -5800,7 +5415,7 @@ fn apply_add_vault_install_inplace_consumes_run_add_worker_completion_pair() {
 // add_final_app_state — unified state-transition composer
 // ---------------------------------------------------------------------------
 //
-// Symmetric partner of `rename_final_app_state` for the add path.
+// Symmetric partner of `edit_final_app_state` for the add path.
 // Every `AddWorkerEffect` variant — `Success { account_id }` and
 // `Failure(AddPostEffectOutcome::{Inline, KeepWithWarning})` — lands
 // on the same `UnlockedBusy → Unlocked` transition via
@@ -5817,7 +5432,7 @@ fn apply_add_vault_install_inplace_consumes_run_add_worker_completion_pair() {
 // (`Inline(InlineError)` for `save_not_committed` / `io_error` /
 // defensive `validation_error` / `invalid_state`, and
 // `KeepWithWarning(InlineWarning)` for `save_durability_unconfirmed`)
-// — narrower than the rename outcome's three-way split because the
+// — narrower than the remove outcome's three-way split because the
 // add path has no equivalent of `RestorePrior` / `KeepNewWithWarning`
 // since there is no pre-existing field to roll back to.
 
@@ -6426,7 +6041,7 @@ fn apply_unlock_vault_install_inplace_some_pair_replaces_existing_slot_and_retur
     // Defensive: although the unlock flow only ever calls this
     // wrapper against an empty slot, the contract for symmetry with
     // every other vault-touching worker (HOTP `next`, add / remove /
-    // rename, settings saves, import / export, passphrase
+    // edit, settings saves, import / export, passphrase
     // transitions) is that an incoming `Some(_)` always overwrites.
     // Those workers take `(Vault, Store)` out into the closure, leave
     // `AppModel::vault` `None` through `UnlockedBusy`, and reinstall
@@ -6512,1581 +6127,6 @@ fn apply_unlock_vault_install_inplace_mirrors_route_unlock_open_completion_pair_
             "Err-branch must leave slot empty for err={err_dbg}",
         );
     }
-}
-
-// ---------------------------------------------------------------------------
-// apply_rename_vault_install_inplace — `AppModel::vault` mut-slot wrapper
-// ---------------------------------------------------------------------------
-//
-// Symmetric partner of `apply_unlock_vault_install_inplace` for the
-// rename path. `RenameWorkerCompletion` carries the live `(Vault,
-// Store)` pair *unconditionally* (every effect branch — `Success`,
-// `save_durability_unconfirmed`, `save_not_committed`, and the
-// defensive `validation_error` / `invalid_state` cases — comes back
-// with the same pair because `Vault::mutate_and_save` is the
-// authoritative rollback / durability source per docs/DESIGN.md §4.3),
-// so this wrapper takes the pair by value rather than the
-// `Option<(Vault, Store)>` shape `apply_unlock_vault_install_inplace`
-// uses. The `AppMsg::RenameWorkerCompleted` handler that lands in a
-// follow-up commit will call it next to `apply_rename_dispatch_inplace`
-// the same way the unlock dispatch installs the pair next to
-// `apply_unlock_dispatch_inplace`.
-
-#[test]
-fn apply_rename_vault_install_inplace_writes_pair_into_empty_slot() {
-    // Defensive: the rename flow enters with `AppModel::vault =
-    // Some(_)` (the dispatch comes from `Unlocked`), but a stray
-    // dispatch from a non-`Unlocked` source state could leave the
-    // slot empty when the completion arrives. The wrapper must still
-    // install the pair — `Vault::mutate_and_save` returned an
-    // authoritative `(Vault, Store)` and silently dropping it on the
-    // floor would leak the unlocked state.
-    let (_tempdir, _path, pair) = fresh_plaintext_vault_pair();
-    let mut slot: Option<(paladin_core::Vault, paladin_core::Store)> = None;
-    paladin_gtk::app::state::apply_rename_vault_install_inplace(&mut slot, pair);
-    assert!(
-        slot.is_some(),
-        "apply_rename_vault_install_inplace must install the pair into an empty slot",
-    );
-}
-
-#[test]
-fn apply_rename_vault_install_inplace_replaces_existing_slot() {
-    // Happy path: rename dispatch enters with `AppModel::vault =
-    // Some(pair_a)` from the pre-`UnlockedBusy` snapshot. The worker
-    // takes the pair out, runs `mutate_and_save`, and returns a
-    // fresh `(Vault, Store)` pair (`pair_b`). The wrapper must
-    // overwrite `pair_a` with `pair_b` so the live slot reflects
-    // the post-save state — `Vault::mutate_and_save` is the
-    // authoritative rollback / durability source, so the returned
-    // pair is the only correct slot value regardless of the typed
-    // effect.
-    let (_tempdir_a, _path_a, pair_a) = fresh_plaintext_vault_pair();
-    let (_tempdir_b, _path_b, pair_b) = fresh_plaintext_vault_pair();
-    let mut slot = Some(pair_a);
-    paladin_gtk::app::state::apply_rename_vault_install_inplace(&mut slot, pair_b);
-    assert!(
-        slot.is_some(),
-        "apply_rename_vault_install_inplace must leave the slot filled after a replacement",
-    );
-}
-
-#[test]
-fn apply_rename_vault_install_inplace_consumes_run_rename_worker_completion_pair() {
-    // Cross-check: the wrapper must round-trip the unconditional
-    // `(Vault, Store)` pair carried by `RenameWorkerCompletion`
-    // regardless of the `RenameWorkerEffect` variant. The rename
-    // worker always returns the pair — `Success`, durability-
-    // unconfirmed warnings, and `save_not_committed` rollbacks all
-    // come back with the same shape — so the wrapper is contract-
-    // identical across every effect branch. Pinning this here means
-    // the wrapper can't drift away from `run_rename_worker`'s pair
-    // contract without breaking here first.
-    use paladin_core::{validate_manual, AccountInput, AccountKindInput, Algorithm, IconHintInput};
-    use secrecy::SecretString;
-
-    let (_tempdir, _vault_path, pair) = fresh_plaintext_vault_pair();
-    let (mut vault, store) = pair;
-    let input = AccountInput {
-        label: "label".to_string(),
-        issuer: Some("issuer".to_string()),
-        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
-        algorithm: Algorithm::Sha1,
-        digits: 6,
-        kind: AccountKindInput::Totp,
-        period_secs: None,
-        counter: None,
-        icon_hint: IconHintInput::Default,
-    };
-    let validated =
-        validate_manual(input, SystemTime::UNIX_EPOCH).expect("totp account input validates");
-    let account_id = vault.add(validated.account);
-    vault.save(&store).expect("commit seeded account");
-
-    let worker_input = RenameWorkerInput {
-        vault,
-        store,
-        account_id,
-        label: "renamed-label".to_string(),
-        now: SystemTime::UNIX_EPOCH,
-    };
-    let completion = paladin_gtk::rename_dialog::run_rename_worker(worker_input);
-
-    let mut slot: Option<(paladin_core::Vault, paladin_core::Store)> = None;
-    paladin_gtk::app::state::apply_rename_vault_install_inplace(
-        &mut slot,
-        (completion.vault, completion.store),
-    );
-    assert!(
-        slot.is_some(),
-        "run_rename_worker completion pair must install (rename always returns the pair)",
-    );
-    let (installed_vault, _installed_store) = slot.expect("installed pair");
-    let renamed = installed_vault
-        .accounts()
-        .iter()
-        .find(|a| a.id() == account_id)
-        .expect("renamed account survives the install");
-    assert_eq!(
-        renamed.label(),
-        "renamed-label",
-        "post-install vault must reflect the renamed label (mirrors run_rename_worker output)",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// rename_final_app_state — unified state-transition composer
-// ---------------------------------------------------------------------------
-//
-// Symmetric partner of `unlock_final_app_state` for the rename path.
-// Where `unlock_final_app_state` has to fan three effect branches
-// into two state transitions (success → `Unlocked`, startup-routed
-// failure → `StartupError`, inline failure → `Locked` rollback),
-// every `RenameWorkerEffect` variant — `Success` and all
-// `Failure(RenameErrorOutcome)` projections — lands on the same
-// `UnlockedBusy → Unlocked` transition via `AppState::leave_busy`.
-// The dialog drop / inline-message decisions split off the effect
-// in a sibling composer (`should_drop_rename_dialog_after`); this
-// composer owns only the state-machine roll-back.
-//
-// The `None` return is reserved for the defensive case where the
-// completion arrives but `current` is not `UnlockedBusy` — a stray
-// call from an unexpected source state that should not silently
-// install a phantom `Unlocked` over another idle state.
-
-#[test]
-fn rename_final_app_state_success_rolls_back_to_unlocked_preserving_path() {
-    use paladin_gtk::app::state::rename_final_app_state;
-    use paladin_gtk::rename_dialog::RenameWorkerEffect;
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let effect = RenameWorkerEffect::Success;
-    let next = rename_final_app_state(&busy, &effect)
-        .expect("success outcome rolls back UnlockedBusy → Unlocked");
-    assert!(matches!(next, AppState::Unlocked { .. }));
-    assert_path_eq(&next, &path);
-}
-
-#[test]
-fn rename_final_app_state_failure_restore_prior_rolls_back_to_unlocked_preserving_path() {
-    use paladin_gtk::app::state::rename_final_app_state;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let err = PaladinError::SaveNotCommitted {
-        committed: false,
-        backup_path: None,
-    };
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::RestorePrior(_)),
-        "save_not_committed routes to RestorePrior (pinned in rename_dialog tests)",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    let next = rename_final_app_state(&busy, &effect)
-        .expect("RestorePrior failure rolls back UnlockedBusy → Unlocked (dialog stays inline)");
-    assert!(matches!(next, AppState::Unlocked { .. }));
-    assert_path_eq(&next, &path);
-}
-
-#[test]
-fn rename_final_app_state_failure_keep_new_with_warning_rolls_back_to_unlocked_preserving_path() {
-    use paladin_gtk::app::state::rename_final_app_state;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let err = PaladinError::SaveDurabilityUnconfirmed;
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::KeepNewWithWarning(_)),
-        "save_durability_unconfirmed routes to KeepNewWithWarning",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    let next = rename_final_app_state(&busy, &effect).expect(
-        "KeepNewWithWarning failure rolls back UnlockedBusy → Unlocked (dialog keeps warning)",
-    );
-    assert!(matches!(next, AppState::Unlocked { .. }));
-    assert_path_eq(&next, &path);
-}
-
-#[test]
-fn rename_final_app_state_failure_inline_error_rolls_back_to_unlocked_preserving_path() {
-    use paladin_gtk::app::state::rename_final_app_state;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    // Defensive: an `invalid_state` would only fire if the targeted
-    // account is removed mid-flight; `classify_rename_error` routes
-    // it to `InlineError`. Pin the same `UnlockedBusy → Unlocked`
-    // rollback for the defensive branch.
-    let err = PaladinError::InvalidState {
-        operation: "rename",
-        state: "account_not_found",
-    };
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::InlineError(_)),
-        "defensive invalid_state routes to InlineError",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    let next = rename_final_app_state(&busy, &effect)
-        .expect("InlineError failure rolls back UnlockedBusy → Unlocked (dialog stays inline)");
-    assert!(matches!(next, AppState::Unlocked { .. }));
-    assert_path_eq(&next, &path);
-}
-
-#[test]
-fn rename_final_app_state_from_non_unlocked_busy_returns_none() {
-    // Defensive: a stray completion arriving while `current` is not
-    // `UnlockedBusy` must not silently install a phantom `Unlocked`
-    // transition over another idle state. The composer mirrors the
-    // `AppState::leave_busy` contract and returns `None` for every
-    // non-`UnlockedBusy` source. Pinned across every typed effect so
-    // the defensive arm cannot drift with the effect routing.
-    use paladin_gtk::app::state::rename_final_app_state;
-    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
-
-    let path = vault_path();
-    let effects = [
-        RenameWorkerEffect::Success,
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: false,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(
-            &PaladinError::SaveDurabilityUnconfirmed,
-        )),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
-            operation: "rename",
-            state: "account_not_found",
-        })),
-    ];
-    let sources = [
-        AppState::Missing { path: path.clone() },
-        AppState::Locked { path: path.clone() },
-        AppState::Unlocked { path: path.clone() },
-        decide_state_from_inspect(&path, Err(invalid_header_err()))
-            .expect("inspect Err yields StartupError state"),
-    ];
-    for effect in &effects {
-        for source in &sources {
-            assert!(
-                rename_final_app_state(source, effect).is_none(),
-                "rename_final_app_state must return None for non-UnlockedBusy source={source:?} effect={effect:?}",
-            );
-        }
-    }
-}
-
-#[test]
-fn rename_final_app_state_mirrors_leave_busy_for_every_variant() {
-    // Cross-check: the composer is a name-the-call-site wrapper over
-    // `AppState::leave_busy`, not a re-derivation. The `Some` /
-    // `None` partition across source states must mirror `leave_busy`
-    // byte-for-byte (and the result on `Some` must match
-    // `leave_busy`'s `Unlocked { path }` projection) so the wrapper
-    // can't drift away from the underlying method without breaking
-    // here first. Pinned across every typed effect because the
-    // composer ignores `effect` for the state decision.
-    use paladin_gtk::app::state::rename_final_app_state;
-    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
-
-    let path = vault_path();
-    let effects = [
-        RenameWorkerEffect::Success,
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: true,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(
-            &PaladinError::SaveDurabilityUnconfirmed,
-        )),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
-            operation: "rename",
-            state: "account_not_found",
-        })),
-    ];
-    let sources = [
-        AppState::Missing { path: path.clone() },
-        AppState::Locked { path: path.clone() },
-        AppState::Unlocked { path: path.clone() },
-        AppState::UnlockedBusy { path: path.clone() },
-        decide_state_from_inspect(&path, Err(invalid_header_err()))
-            .expect("inspect Err yields StartupError state"),
-    ];
-    for effect in &effects {
-        for source in &sources {
-            let composed = rename_final_app_state(source, effect);
-            let direct = source.clone().leave_busy();
-            match (&composed, &direct) {
-                (Some(a), Some(b)) => {
-                    assert_eq!(
-                        std::mem::discriminant::<AppState>(a),
-                        std::mem::discriminant::<AppState>(b),
-                        "wrapper variant must mirror leave_busy for source={source:?} effect={effect:?}",
-                    );
-                    assert_eq!(
-                        a.path().map(Path::to_path_buf),
-                        b.path().map(Path::to_path_buf),
-                        "wrapper path must mirror leave_busy for source={source:?} effect={effect:?}",
-                    );
-                }
-                (None, None) => {}
-                _ => panic!(
-                    "wrapper / leave_busy Some/None partition diverged for source={source:?} effect={effect:?}: composed={composed:?} direct={direct:?}",
-                ),
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// should_drop_rename_dialog_after — drop-decision projection
-// ---------------------------------------------------------------------------
-//
-// Symmetric partner of `should_drop_unlock_dialog_after` for the
-// rename path. `AppMsg::RenameWorkerCompleted` consults this to
-// decide whether to detach the live `RenameDialogComponent` from
-// the content tree after applying the worker outcome:
-//
-// * `Success` → drop (the dialog dismisses itself and the visible
-//   row label updates to the new value).
-// * `Failure(RestorePrior)` → stay mounted (the dialog rolls the
-//   visible label back to the pre-submit value and renders the
-//   typed inline error).
-// * `Failure(KeepNewWithWarning)` → stay mounted (the visible
-//   label keeps the new value and the warning attaches to the
-//   dialog body).
-// * `Failure(InlineError)` → stay mounted (the defensive branch
-//   renders the typed inline error without transitioning out).
-//
-// The projection inspects only the typed `RenameWorkerEffect`
-// variant — it does not consult `AppState`, the live `(Vault,
-// Store)` pair, or the `RenameDialogState` — so the side-effect
-// decision in `AppModel::update` stays unit-testable without
-// spinning up GTK / libadwaita.
-
-#[test]
-fn should_drop_rename_dialog_after_success_returns_true() {
-    use paladin_gtk::app::state::should_drop_rename_dialog_after;
-    use paladin_gtk::rename_dialog::RenameWorkerEffect;
-
-    let effect = RenameWorkerEffect::Success;
-    assert!(
-        should_drop_rename_dialog_after(&effect),
-        "Success must drop the rename dialog so the row label updates and the dialog dismisses",
-    );
-}
-
-#[test]
-fn should_drop_rename_dialog_after_failure_restore_prior_returns_false() {
-    use paladin_gtk::app::state::should_drop_rename_dialog_after;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let err = PaladinError::SaveNotCommitted {
-        committed: false,
-        backup_path: None,
-    };
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::RestorePrior(_)),
-        "save_not_committed routes to RestorePrior",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    assert!(
-        !should_drop_rename_dialog_after(&effect),
-        "RestorePrior keeps the dialog mounted so the inline error is visible",
-    );
-}
-
-#[test]
-fn should_drop_rename_dialog_after_failure_keep_new_with_warning_returns_false() {
-    use paladin_gtk::app::state::should_drop_rename_dialog_after;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let err = PaladinError::SaveDurabilityUnconfirmed;
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::KeepNewWithWarning(_)),
-        "save_durability_unconfirmed routes to KeepNewWithWarning",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    assert!(
-        !should_drop_rename_dialog_after(&effect),
-        "KeepNewWithWarning keeps the dialog mounted so the warning attaches to the body",
-    );
-}
-
-#[test]
-fn should_drop_rename_dialog_after_failure_inline_error_returns_false() {
-    use paladin_gtk::app::state::should_drop_rename_dialog_after;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let err = PaladinError::InvalidState {
-        operation: "rename",
-        state: "account_not_found",
-    };
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::InlineError(_)),
-        "invalid_state routes to defensive InlineError",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    assert!(
-        !should_drop_rename_dialog_after(&effect),
-        "defensive InlineError keeps the dialog mounted so the typed error is visible",
-    );
-}
-
-#[test]
-fn should_drop_rename_dialog_after_partitions_on_success_only() {
-    // Cross-check: the projection partitions effects into "drop"
-    // (Success only) and "keep" (every Failure variant). Pin the
-    // partition across every typed outcome so a future routing
-    // refinement that swaps a Failure branch into the drop side
-    // (or vice versa) is caught here.
-    use paladin_gtk::app::state::should_drop_rename_dialog_after;
-    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
-
-    let drop_effects = [RenameWorkerEffect::Success];
-    let keep_effects = [
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: false,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: true,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(
-            &PaladinError::SaveDurabilityUnconfirmed,
-        )),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
-            operation: "rename",
-            state: "account_not_found",
-        })),
-    ];
-    for effect in &drop_effects {
-        assert!(
-            should_drop_rename_dialog_after(effect),
-            "drop partition expects true for effect={effect:?}",
-        );
-    }
-    for effect in &keep_effects {
-        assert!(
-            !should_drop_rename_dialog_after(effect),
-            "keep partition expects false for effect={effect:?}",
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// should_refresh_list_after_rename — list-refresh decision projection
-// ---------------------------------------------------------------------------
-//
-// `AppMsg::RenameWorkerCompleted` consults this to decide whether to
-// re-project rows off the freshly reinstalled `(Vault, Store)` pair
-// and emit `AccountListMsg::Refresh` so the visible row label
-// matches the post-mutation vault state per
-// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-// `AccountListComponent` ("Refresh the store after every vault
-// mutation … without reordering surviving rows"):
-//
-// * `Success` → `true`. The rename committed and the new label
-//   must surface in the list.
-// * `Failure(RestorePrior)` → `false`. `Vault::mutate_and_save`
-//   rolled back to the pre-attempt snapshot; the visible rows
-//   already match the post-rollback state.
-// * `Failure(KeepNewWithWarning)` → `true`. Primary save succeeded
-//   so the new label is durable in memory; the list must surface
-//   it even though the parent fsync was uncertain.
-// * `Failure(InlineError)` → `false`. Defensive branch where
-//   `Vault::rename` rejected the call before any mutation
-//   occurred.
-//
-// The projection inspects only the typed `RenameWorkerEffect`
-// variant so the side-effect decision in `AppModel::update` stays
-// unit-testable without spinning up GTK / libadwaita.
-
-#[test]
-fn should_refresh_list_after_rename_success_returns_true() {
-    use paladin_gtk::app::state::should_refresh_list_after_rename;
-    use paladin_gtk::rename_dialog::RenameWorkerEffect;
-
-    let effect = RenameWorkerEffect::Success;
-    assert!(
-        should_refresh_list_after_rename(&effect),
-        "Success refreshes the list so the row label updates to the new value",
-    );
-}
-
-#[test]
-fn should_refresh_list_after_rename_failure_restore_prior_returns_false() {
-    use paladin_gtk::app::state::should_refresh_list_after_rename;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let err = PaladinError::SaveNotCommitted {
-        committed: false,
-        backup_path: None,
-    };
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::RestorePrior(_)),
-        "save_not_committed routes to RestorePrior",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    assert!(
-        !should_refresh_list_after_rename(&effect),
-        "RestorePrior leaves vault state unchanged so no list refresh is needed",
-    );
-}
-
-#[test]
-fn should_refresh_list_after_rename_failure_keep_new_with_warning_returns_true() {
-    use paladin_gtk::app::state::should_refresh_list_after_rename;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let err = PaladinError::SaveDurabilityUnconfirmed;
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::KeepNewWithWarning(_)),
-        "save_durability_unconfirmed routes to KeepNewWithWarning",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    assert!(
-        should_refresh_list_after_rename(&effect),
-        "KeepNewWithWarning commits the new label in memory; the list must surface it",
-    );
-}
-
-#[test]
-fn should_refresh_list_after_rename_failure_inline_error_returns_false() {
-    use paladin_gtk::app::state::should_refresh_list_after_rename;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let err = PaladinError::InvalidState {
-        operation: "rename",
-        state: "account_not_found",
-    };
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::InlineError(_)),
-        "invalid_state routes to defensive InlineError",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    assert!(
-        !should_refresh_list_after_rename(&effect),
-        "defensive InlineError leaves vault state unchanged so no list refresh is needed",
-    );
-}
-
-#[test]
-fn should_refresh_list_after_rename_partitions_on_committed_outcomes() {
-    // Cross-check: the projection partitions effects into "refresh"
-    // (`Success` + `KeepNewWithWarning`) and "skip" (`RestorePrior`
-    // + defensive `InlineError`). Pin the partition across every
-    // typed outcome so a future routing refinement that flips a
-    // branch is caught here.
-    use paladin_gtk::app::state::should_refresh_list_after_rename;
-    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
-
-    let refresh_effects = [
-        RenameWorkerEffect::Success,
-        RenameWorkerEffect::Failure(classify_rename_error(
-            &PaladinError::SaveDurabilityUnconfirmed,
-        )),
-    ];
-    let skip_effects = [
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: false,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: true,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
-            operation: "rename",
-            state: "account_not_found",
-        })),
-    ];
-    for effect in &refresh_effects {
-        assert!(
-            should_refresh_list_after_rename(effect),
-            "refresh partition expects true for effect={effect:?}",
-        );
-    }
-    for effect in &skip_effects {
-        assert!(
-            !should_refresh_list_after_rename(effect),
-            "skip partition expects false for effect={effect:?}",
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// rename_dialog_msg_after — inline-message projection
-// ---------------------------------------------------------------------------
-//
-// Symmetric partner of `unlock_dialog_msg_after` for the rename
-// path. `AppMsg::RenameWorkerCompleted` consults this to decide
-// what message (if any) to forward into the live
-// `RenameDialogComponent` after applying the worker outcome:
-//
-// * `Success` → `None`. The dialog is being dropped — there is no
-//   live controller to forward to.
-// * `Failure(outcome)` → `Some(RenameDialogMsg::WorkerFailed(
-//   outcome.clone()))`. The dialog stays mounted; the message
-//   carries the typed `RenameErrorOutcome` so the dialog can route
-//   the visible label / inline error / inline warning without
-//   re-deriving the routing off the `PaladinError`.
-//
-// The projection returns an *owned* `Option<RenameDialogMsg>`
-// rather than a borrow into the effect because `RenameWorkerEffect`
-// carries the typed `RenameErrorOutcome` rather than a pre-built
-// dialog message (the unlock effect carries its dialog message
-// directly via `UnlockFailureEffect::SendUnlockDialogMsg`, so the
-// unlock variant can borrow). The clone is cheap — the outcome
-// only holds an `InlineError` / `InlineWarning` struct of an
-// `ErrorKind` and a `String` body.
-//
-// The projection inspects only the typed `RenameWorkerEffect`
-// variant — it does not consult `AppState`, the live `(Vault,
-// Store)` pair, or the `RenameDialogState` — so the side-effect
-// decision in `AppModel::update` stays unit-testable without
-// spinning up GTK / libadwaita.
-
-#[test]
-fn rename_dialog_msg_after_success_returns_none() {
-    use paladin_gtk::app::state::rename_dialog_msg_after;
-    use paladin_gtk::rename_dialog::RenameWorkerEffect;
-
-    let effect = RenameWorkerEffect::Success;
-    assert!(
-        rename_dialog_msg_after(&effect).is_none(),
-        "Success drops the dialog, so no inline message is forwarded",
-    );
-}
-
-#[test]
-fn rename_dialog_msg_after_failure_restore_prior_forwards_worker_failed_with_outcome() {
-    use paladin_gtk::app::state::rename_dialog_msg_after;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let err = PaladinError::SaveNotCommitted {
-        committed: false,
-        backup_path: None,
-    };
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::RestorePrior(_)),
-        "save_not_committed routes to RestorePrior",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    let msg = rename_dialog_msg_after(&effect)
-        .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
-    match msg {
-        RenameDialogMsg::WorkerFailed(RenameErrorOutcome::RestorePrior(inline)) => {
-            assert_eq!(
-                inline.kind,
-                ErrorKind::SaveNotCommitted,
-                "RestorePrior must round-trip the SaveNotCommitted ErrorKind",
-            );
-        }
-        other => panic!("expected RenameDialogMsg::WorkerFailed(RestorePrior), got {other:?}"),
-    }
-}
-
-#[test]
-fn rename_dialog_msg_after_failure_keep_new_with_warning_forwards_worker_failed_with_outcome() {
-    use paladin_gtk::app::state::rename_dialog_msg_after;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let err = PaladinError::SaveDurabilityUnconfirmed;
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::KeepNewWithWarning(_)),
-        "save_durability_unconfirmed routes to KeepNewWithWarning",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    let msg = rename_dialog_msg_after(&effect)
-        .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
-    match msg {
-        RenameDialogMsg::WorkerFailed(RenameErrorOutcome::KeepNewWithWarning(warning)) => {
-            assert_eq!(
-                warning.kind,
-                ErrorKind::SaveDurabilityUnconfirmed,
-                "KeepNewWithWarning must round-trip the SaveDurabilityUnconfirmed ErrorKind",
-            );
-        }
-        other => {
-            panic!("expected RenameDialogMsg::WorkerFailed(KeepNewWithWarning), got {other:?}")
-        }
-    }
-}
-
-#[test]
-fn rename_dialog_msg_after_failure_inline_error_forwards_worker_failed_with_outcome() {
-    use paladin_gtk::app::state::rename_dialog_msg_after;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let err = PaladinError::InvalidState {
-        operation: "rename",
-        state: "account_not_found",
-    };
-    let outcome = classify_rename_error(&err);
-    assert!(
-        matches!(outcome, RenameErrorOutcome::InlineError(_)),
-        "invalid_state routes to defensive InlineError",
-    );
-    let effect = RenameWorkerEffect::Failure(outcome);
-    let msg = rename_dialog_msg_after(&effect)
-        .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
-    match msg {
-        RenameDialogMsg::WorkerFailed(RenameErrorOutcome::InlineError(inline)) => {
-            assert_eq!(
-                inline.kind,
-                ErrorKind::InvalidState,
-                "InlineError must round-trip the defensive InvalidState ErrorKind",
-            );
-        }
-        other => panic!("expected RenameDialogMsg::WorkerFailed(InlineError), got {other:?}"),
-    }
-}
-
-#[test]
-fn rename_dialog_msg_after_is_mutually_exclusive_with_should_drop() {
-    // Cross-check: the inline-message projection must report `Some`
-    // exactly when `should_drop_rename_dialog_after` reports
-    // `false` (dialog stays mounted), and `None` when the dispatch
-    // drops the dialog. Pinned across every typed effect so the two
-    // projections can't drift apart silently — a future routing
-    // refinement that puts a Failure variant on the drop side would
-    // need to update both helpers in lockstep, and this test
-    // catches the partial update.
-    use paladin_gtk::app::state::{rename_dialog_msg_after, should_drop_rename_dialog_after};
-    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
-
-    let effects = [
-        RenameWorkerEffect::Success,
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: false,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: true,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(
-            &PaladinError::SaveDurabilityUnconfirmed,
-        )),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
-            operation: "rename",
-            state: "account_not_found",
-        })),
-    ];
-    for effect in &effects {
-        let drops = should_drop_rename_dialog_after(effect);
-        let has_msg = rename_dialog_msg_after(effect).is_some();
-        assert_eq!(
-            drops, !has_msg,
-            "drops/has_msg must be mutually exclusive for effect={effect:?}: drops={drops}, has_msg={has_msg}",
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// compose_rename_dispatch — bundling composer for the rename worker outcome
-// ---------------------------------------------------------------------------
-//
-// Symmetric partner of `compose_unlock_dispatch` for the rename path.
-// Bundles the trio (`rename_final_app_state`,
-// `rename_dialog_msg_after`, `should_drop_rename_dialog_after`) into
-// a single `RenameDispatch` value so `AppModel::update` can apply the
-// worker outcome in one shot — no re-routing of the
-// `RenameWorkerEffect` and no spreading of the trio across the
-// dispatch site.
-//
-// Invariants pinned at the trio level carry through:
-//
-// * `drop_dialog == true` iff the worker outcome is
-//   `RenameWorkerEffect::Success` — the dialog drops on success and
-//   stays mounted on every `Failure(RenameErrorOutcome)` variant.
-// * `dialog_msg.is_some() == !drop_dialog`: a dropped dialog gets no
-//   inline message; a mounted dialog gets `WorkerFailed(outcome)`.
-// * `app_state` mirrors `rename_final_app_state` — `Some(Unlocked)`
-//   for the `UnlockedBusy → Unlocked` rollback regardless of typed
-//   effect, `None` for non-`UnlockedBusy` source states.
-//
-// The composer stays shape-only — it delegates to the trio without
-// inspecting the typed `RenameWorkerEffect` variant itself — so the
-// dispatch contract stays unit-testable without spinning up GTK /
-// libadwaita.
-
-#[test]
-fn compose_rename_dispatch_success_bundles_drop_and_unlocked_rollback() {
-    use paladin_gtk::app::state::compose_rename_dispatch;
-    use paladin_gtk::rename_dialog::RenameWorkerEffect;
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let effect = RenameWorkerEffect::Success;
-    let dispatch = compose_rename_dispatch(&busy, &effect);
-    assert!(
-        dispatch.drop_dialog,
-        "Success drops the RenameDialog controller so the row label updates and the dialog dismisses",
-    );
-    assert!(
-        dispatch.dialog_msg.is_none(),
-        "Success drops the dialog, so no inline message is forwarded",
-    );
-    let next = dispatch
-        .app_state
-        .expect("Success rolls UnlockedBusy back to Unlocked");
-    assert!(
-        matches!(next, AppState::Unlocked { .. }),
-        "Success rollback target must be Unlocked, got {next:?}",
-    );
-    assert_path_eq(&next, &path);
-}
-
-#[test]
-fn compose_rename_dispatch_failure_restore_prior_keeps_dialog_with_msg_and_unlocked_rollback() {
-    use paladin_gtk::app::state::compose_rename_dispatch;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let err = PaladinError::SaveNotCommitted {
-        committed: false,
-        backup_path: None,
-    };
-    let outcome = classify_rename_error(&err);
-    assert!(matches!(outcome, RenameErrorOutcome::RestorePrior(_)));
-    let effect = RenameWorkerEffect::Failure(outcome);
-    let dispatch = compose_rename_dispatch(&busy, &effect);
-    assert!(
-        !dispatch.drop_dialog,
-        "RestorePrior keeps the RenameDialog mounted so the inline error is visible",
-    );
-    let msg = dispatch
-        .dialog_msg
-        .as_ref()
-        .expect("RestorePrior forwards a WorkerFailed message");
-    assert!(
-        matches!(
-            msg,
-            RenameDialogMsg::WorkerFailed(RenameErrorOutcome::RestorePrior(_))
-        ),
-        "RestorePrior must forward WorkerFailed(RestorePrior), got {msg:?}",
-    );
-    let next = dispatch
-        .app_state
-        .expect("Failure still rolls UnlockedBusy back to Unlocked");
-    assert!(matches!(next, AppState::Unlocked { .. }));
-    assert_path_eq(&next, &path);
-}
-
-#[test]
-fn compose_rename_dispatch_failure_keep_new_with_warning_keeps_dialog_with_msg_and_unlocked_rollback(
-) {
-    use paladin_gtk::app::state::compose_rename_dispatch;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let err = PaladinError::SaveDurabilityUnconfirmed;
-    let outcome = classify_rename_error(&err);
-    assert!(matches!(outcome, RenameErrorOutcome::KeepNewWithWarning(_)));
-    let effect = RenameWorkerEffect::Failure(outcome);
-    let dispatch = compose_rename_dispatch(&busy, &effect);
-    assert!(
-        !dispatch.drop_dialog,
-        "KeepNewWithWarning keeps the RenameDialog mounted so the warning attaches to the body",
-    );
-    let msg = dispatch
-        .dialog_msg
-        .as_ref()
-        .expect("KeepNewWithWarning forwards a WorkerFailed message");
-    assert!(matches!(
-        msg,
-        RenameDialogMsg::WorkerFailed(RenameErrorOutcome::KeepNewWithWarning(_)),
-    ));
-    let next = dispatch
-        .app_state
-        .expect("Failure still rolls UnlockedBusy back to Unlocked");
-    assert!(matches!(next, AppState::Unlocked { .. }));
-    assert_path_eq(&next, &path);
-}
-
-#[test]
-fn compose_rename_dispatch_failure_inline_error_keeps_dialog_with_msg_and_unlocked_rollback() {
-    use paladin_gtk::app::state::compose_rename_dispatch;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let err = PaladinError::InvalidState {
-        operation: "rename",
-        state: "account_not_found",
-    };
-    let outcome = classify_rename_error(&err);
-    assert!(matches!(outcome, RenameErrorOutcome::InlineError(_)));
-    let effect = RenameWorkerEffect::Failure(outcome);
-    let dispatch = compose_rename_dispatch(&busy, &effect);
-    assert!(
-        !dispatch.drop_dialog,
-        "defensive InlineError keeps the RenameDialog mounted so the typed error is visible",
-    );
-    let msg = dispatch
-        .dialog_msg
-        .as_ref()
-        .expect("defensive InlineError forwards a WorkerFailed message");
-    assert!(matches!(
-        msg,
-        RenameDialogMsg::WorkerFailed(RenameErrorOutcome::InlineError(_)),
-    ));
-    let next = dispatch
-        .app_state
-        .expect("Failure still rolls UnlockedBusy back to Unlocked");
-    assert!(matches!(next, AppState::Unlocked { .. }));
-    assert_path_eq(&next, &path);
-}
-
-#[test]
-fn compose_rename_dispatch_mirrors_trio_for_every_effect() {
-    use paladin_gtk::app::state::{
-        compose_rename_dispatch, rename_dialog_msg_after, rename_final_app_state,
-        rename_success_toast_after, should_drop_rename_dialog_after,
-        should_refresh_list_after_rename,
-    };
-    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let effects = [
-        RenameWorkerEffect::Success,
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: false,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: true,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(
-            &PaladinError::SaveDurabilityUnconfirmed,
-        )),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
-            operation: "rename",
-            state: "account_not_found",
-        })),
-    ];
-    for effect in &effects {
-        let dispatch = compose_rename_dispatch(&busy, effect);
-        assert_eq!(
-            dispatch.drop_dialog,
-            should_drop_rename_dialog_after(effect),
-            "drop_dialog must mirror the trio for effect={effect:?}",
-        );
-        assert_eq!(
-            dispatch.refresh_list,
-            should_refresh_list_after_rename(effect),
-            "refresh_list must mirror the helper for effect={effect:?}",
-        );
-        assert_eq!(
-            dispatch.success_toast,
-            rename_success_toast_after(effect),
-            "success_toast must mirror the projection for effect={effect:?}",
-        );
-        let trio_msg = rename_dialog_msg_after(effect);
-        match (&dispatch.dialog_msg, &trio_msg) {
-            (None, None) | (Some(_), Some(_)) => {}
-            other => panic!(
-                "dialog_msg Some/None must mirror the trio for effect={effect:?}, got {other:?}",
-            ),
-        }
-        let trio_state = rename_final_app_state(&busy, effect);
-        match (&dispatch.app_state, &trio_state) {
-            (None, None) => {}
-            (Some(a), Some(b)) => {
-                assert_eq!(
-                    std::mem::discriminant::<AppState>(a),
-                    std::mem::discriminant::<AppState>(b),
-                    "app_state variant must mirror the trio for effect={effect:?}",
-                );
-                assert_eq!(
-                    a.path().map(Path::to_path_buf),
-                    b.path().map(Path::to_path_buf),
-                    "app_state path must mirror the trio for effect={effect:?}",
-                );
-            }
-            other => panic!(
-                "app_state Some/None must mirror the trio for effect={effect:?}, got {other:?}",
-            ),
-        }
-    }
-}
-
-#[test]
-fn compose_rename_dispatch_from_non_unlocked_busy_returns_no_app_state() {
-    // Defensive: when the rename worker returns but `current` is not
-    // `UnlockedBusy` (a stray dispatch from any other source state),
-    // the composer mirrors `rename_final_app_state` and reports
-    // `app_state = None`. `drop_dialog` and `dialog_msg` still mirror
-    // the trio because they inspect only the typed effect — the
-    // worker outcome is visible to the dialog regardless of the
-    // source state.
-    use paladin_gtk::app::state::compose_rename_dispatch;
-    use paladin_gtk::rename_dialog::{
-        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
-    };
-
-    let path = vault_path();
-    let err = PaladinError::SaveNotCommitted {
-        committed: false,
-        backup_path: None,
-    };
-    let outcome = classify_rename_error(&err);
-    assert!(matches!(outcome, RenameErrorOutcome::RestorePrior(_)));
-    let effect = RenameWorkerEffect::Failure(outcome);
-    let invalid_sources = [
-        AppState::Missing { path: path.clone() },
-        AppState::Locked { path: path.clone() },
-        AppState::Unlocked { path: path.clone() },
-    ];
-    for source in &invalid_sources {
-        let dispatch = compose_rename_dispatch(source, &effect);
-        assert!(
-            !dispatch.drop_dialog,
-            "Failure keeps the dialog mounted regardless of source={source:?}",
-        );
-        assert!(
-            matches!(
-                dispatch.dialog_msg.as_ref(),
-                Some(RenameDialogMsg::WorkerFailed(
-                    RenameErrorOutcome::RestorePrior(_)
-                )),
-            ),
-            "Failure forwards WorkerFailed regardless of source={source:?}",
-        );
-        assert!(
-            dispatch.app_state.is_none(),
-            "non-UnlockedBusy source={source:?} must refuse to install a phantom Unlocked, \
-             got {:?}",
-            dispatch.app_state,
-        );
-    }
-}
-
-// rename_success_toast_after — toast-body projection for the rename
-// worker outcome. `AppMsg::RenameWorkerCompleted` consults this to
-// decide whether to raise an `AdwToast` on the `adw::ToastOverlay`
-// per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
-// "In-app account rename" ("On success, refresh
-// `AccountListComponent` from the returned vault, close the dialog,
-// and surface a status / toast confirmation."). The projection
-// inspects only the typed `RenameWorkerEffect` variant so the
-// side-effect decision in `AppModel::update` stays unit-testable
-// without spinning up GTK / libadwaita.
-
-#[test]
-fn rename_success_toast_after_success_returns_body() {
-    use paladin_gtk::app::state::rename_success_toast_after;
-    use paladin_gtk::rename_dialog::{format_rename_dialog_success_toast, RenameWorkerEffect};
-
-    let toast = rename_success_toast_after(&RenameWorkerEffect::Success)
-        .expect("Success must surface a confirmation toast");
-    assert_eq!(
-        toast,
-        format_rename_dialog_success_toast(),
-        "toast body must come from format_rename_dialog_success_toast so wording stays single-sourced",
-    );
-}
-
-#[test]
-fn rename_success_toast_after_failure_returns_none() {
-    use paladin_gtk::app::state::rename_success_toast_after;
-    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
-
-    let failures = [
-        PaladinError::SaveNotCommitted {
-            committed: false,
-            backup_path: None,
-        },
-        PaladinError::SaveNotCommitted {
-            committed: true,
-            backup_path: None,
-        },
-        PaladinError::SaveDurabilityUnconfirmed,
-        PaladinError::InvalidState {
-            operation: "rename",
-            state: "account_not_found",
-        },
-    ];
-    for err in &failures {
-        let outcome = classify_rename_error(err);
-        let effect = RenameWorkerEffect::Failure(outcome);
-        assert!(
-            rename_success_toast_after(&effect).is_none(),
-            "Failure must not raise a success toast for err={err:?}",
-        );
-    }
-}
-
-#[test]
-fn compose_rename_dispatch_populates_success_toast_only_on_success() {
-    // `compose_rename_dispatch` bundles `rename_success_toast_after`
-    // alongside the existing drop-dialog / refresh-list / dialog-msg /
-    // app-state decisions so the dispatch site can raise the toast in
-    // one shot. The success branch carries the toast body so the
-    // widget layer just adds it as an `adw::Toast::new(&body)`; the
-    // failure branches stay `None` so the dialog's inline error /
-    // warning is the only surface that conveys the typed outcome.
-    use paladin_gtk::app::state::{compose_rename_dispatch, rename_success_toast_after};
-    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let effects = [
-        RenameWorkerEffect::Success,
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: false,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(
-            &PaladinError::SaveDurabilityUnconfirmed,
-        )),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
-            operation: "rename",
-            state: "account_not_found",
-        })),
-    ];
-    for effect in &effects {
-        let dispatch = compose_rename_dispatch(&busy, effect);
-        assert_eq!(
-            dispatch.success_toast,
-            rename_success_toast_after(effect),
-            "success_toast must mirror the projection for effect={effect:?}",
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// apply_rename_dispatch_inplace — `AppModel::update` mut-state wrapper
-// ---------------------------------------------------------------------------
-//
-// Symmetric partner of `apply_unlock_dispatch_inplace` for the rename
-// path. `compose_rename_dispatch(&AppState, &RenameWorkerEffect) ->
-// RenameDispatch` bundles the three worker-completion decisions; the
-// wrapper here lets `AppMsg::RenameWorkerCompleted` install the new
-// `dispatch.app_state` against the cached `AppState` in place,
-// mirroring `apply_submit_rename_inplace`'s contract for the entry
-// transition. The remaining `dialog_msg` / `drop_dialog` projections
-// drive widget-side work in the handler and are not the wrapper's
-// concern.
-
-#[test]
-fn apply_rename_dispatch_inplace_success_rolls_back_to_unlocked_and_returns_true() {
-    // Worker reported `Ok(())`: `compose_rename_dispatch` carries
-    // `Some(Unlocked(path))` in `app_state`. The wrapper installs the
-    // rollback against the cached `UnlockedBusy` state and returns
-    // `true` so `AppModel::update` can release the busy gate and drop
-    // the `RenameDialogComponent`.
-    use paladin_gtk::app::state::{apply_rename_dispatch_inplace, compose_rename_dispatch};
-    use paladin_gtk::rename_dialog::RenameWorkerEffect;
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let effect = RenameWorkerEffect::Success;
-    let dispatch = compose_rename_dispatch(&busy, &effect);
-    let mut state = busy.clone();
-    let transitioned = apply_rename_dispatch_inplace(&mut state, &dispatch);
-    assert!(
-        transitioned,
-        "apply_rename_dispatch_inplace must return true on the Success rollback",
-    );
-    assert!(
-        matches!(state, AppState::Unlocked { .. }),
-        "Success rollback target must be Unlocked, got {state:?}",
-    );
-    assert_path_eq(&state, &path);
-}
-
-#[test]
-fn apply_rename_dispatch_inplace_failure_rolls_back_to_unlocked_and_returns_true() {
-    // Worker reported a Failure (RestorePrior): the rename worker
-    // always rolls the busy gate back to `Unlocked` regardless of
-    // typed effect because `Vault::mutate_and_save` is authoritative
-    // for rollback / durability-unconfirmed semantics. The wrapper
-    // installs the rollback and returns `true`; widget-side work (the
-    // inline message and the still-mounted dialog) is driven by the
-    // remaining dispatch fields.
-    use paladin_gtk::app::state::{apply_rename_dispatch_inplace, compose_rename_dispatch};
-    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let err = PaladinError::SaveNotCommitted {
-        committed: false,
-        backup_path: None,
-    };
-    let effect = RenameWorkerEffect::Failure(classify_rename_error(&err));
-    let dispatch = compose_rename_dispatch(&busy, &effect);
-    let mut state = busy.clone();
-    let transitioned = apply_rename_dispatch_inplace(&mut state, &dispatch);
-    assert!(
-        transitioned,
-        "apply_rename_dispatch_inplace must return true on the Failure rollback",
-    );
-    assert!(
-        matches!(state, AppState::Unlocked { .. }),
-        "Failure rollback target must be Unlocked, got {state:?}",
-    );
-    assert_path_eq(&state, &path);
-}
-
-#[test]
-fn apply_rename_dispatch_inplace_from_non_unlocked_busy_leaves_state_unchanged_and_returns_false() {
-    // Defensive: when the worker outcome arrives but the cached state
-    // is not `UnlockedBusy` (a stray dispatch from any other source),
-    // `compose_rename_dispatch` reports `app_state = None` to refuse a
-    // phantom `Unlocked` transition. The wrapper must leave the cached
-    // state untouched byte-for-byte and return `false` so
-    // `AppModel::update` does not clobber an idle state with a phantom
-    // rollback.
-    use paladin_gtk::app::state::{apply_rename_dispatch_inplace, compose_rename_dispatch};
-    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
-
-    let path = vault_path();
-    let err = PaladinError::SaveNotCommitted {
-        committed: false,
-        backup_path: None,
-    };
-    let effect = RenameWorkerEffect::Failure(classify_rename_error(&err));
-    let invalid_sources = [
-        AppState::Missing { path: path.clone() },
-        AppState::Locked { path: path.clone() },
-        AppState::Unlocked { path: path.clone() },
-    ];
-    for source in invalid_sources {
-        let dispatch = compose_rename_dispatch(&source, &effect);
-        assert!(
-            dispatch.app_state.is_none(),
-            "fixture invariant: non-UnlockedBusy source must carry app_state=None",
-        );
-        let original_discriminant = std::mem::discriminant::<AppState>(&source);
-        let original_path = source.path().map(Path::to_path_buf);
-        let mut state = source.clone();
-        let transitioned = apply_rename_dispatch_inplace(&mut state, &dispatch);
-        assert!(
-            !transitioned,
-            "apply_rename_dispatch_inplace must return false when dispatch.app_state is None \
-             for source={source:?}",
-        );
-        assert_eq!(
-            std::mem::discriminant::<AppState>(&state),
-            original_discriminant,
-            "wrapper must leave variant unchanged when dispatch.app_state is None \
-             for source={source:?}",
-        );
-        assert_eq!(
-            state.path().map(Path::to_path_buf),
-            original_path,
-            "wrapper must leave path unchanged when dispatch.app_state is None \
-             for source={source:?}",
-        );
-    }
-}
-
-#[test]
-fn apply_rename_dispatch_inplace_mirrors_compose_rename_dispatch_for_every_effect() {
-    // Cross-check: the wrapper must mirror the
-    // `compose_rename_dispatch.app_state` Some/None partition exactly.
-    // The cached source is always `UnlockedBusy(path)` since that is
-    // the only state `AppModel::update` ever reaches when the worker
-    // returns.
-    use paladin_gtk::app::state::{apply_rename_dispatch_inplace, compose_rename_dispatch};
-    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
-
-    let path = vault_path();
-    let busy = AppState::UnlockedBusy { path: path.clone() };
-    let effects = [
-        RenameWorkerEffect::Success,
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: false,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
-            committed: true,
-            backup_path: None,
-        })),
-        RenameWorkerEffect::Failure(classify_rename_error(
-            &PaladinError::SaveDurabilityUnconfirmed,
-        )),
-        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
-            operation: "rename",
-            state: "account_not_found",
-        })),
-    ];
-    for effect in &effects {
-        let dispatch = compose_rename_dispatch(&busy, effect);
-        let mut state = busy.clone();
-        let transitioned = apply_rename_dispatch_inplace(&mut state, &dispatch);
-        if let Some(expected) = dispatch.app_state.as_ref() {
-            assert!(
-                transitioned,
-                "wrapper must return true when dispatch.app_state is Some for effect={effect:?}",
-            );
-            assert_eq!(
-                std::mem::discriminant::<AppState>(&state),
-                std::mem::discriminant::<AppState>(expected),
-                "wrapper variant must mirror composer for effect={effect:?}",
-            );
-            assert_eq!(
-                state.path().map(Path::to_path_buf),
-                expected.path().map(Path::to_path_buf),
-                "wrapper path must mirror composer for effect={effect:?}",
-            );
-        } else {
-            assert!(
-                !transitioned,
-                "wrapper must return false when dispatch.app_state is None for effect={effect:?}",
-            );
-            assert_eq!(
-                std::mem::discriminant::<AppState>(&state),
-                std::mem::discriminant::<AppState>(&busy),
-                "wrapper must leave variant unchanged when dispatch.app_state is None \
-                 for effect={effect:?}",
-            );
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Full rename pipeline composition order
-// ---------------------------------------------------------------------------
-//
-// `AppModel::update`'s `AppMsg::RenameDialogAction(SubmitLabel)` and
-// `AppMsg::RenameWorkerCompleted` handlers chain the rename helpers
-// in a fixed order:
-//
-//   1. `compose_rename_worker_input(state, pair, account_id, label, now)`
-//      over the `Unlocked` state takes the live `(Vault, Store)` pair
-//      out of `AppModel.vault` and bundles a `RenameWorkerInput`.
-//   2. `apply_submit_rename_inplace(state)` transitions `Unlocked →
-//      UnlockedBusy` so `is_busy()` / `allows_mutating_menu()` cover
-//      the worker's lifetime.
-//   3. `run_rename_worker(input)` calls
-//      `Vault::mutate_and_save(|v| v.rename(...))` and bundles the
-//      outcome into a `RenameWorkerCompletion`.
-//   4. `apply_rename_vault_install_inplace(&mut vault_slot, (vault,
-//      store))` reinstalls the worker-returned pair into
-//      `AppModel.vault` regardless of typed effect.
-//   5. `compose_rename_dispatch(state, &effect)` +
-//      `apply_rename_dispatch_inplace(state, &dispatch)` transition
-//      `UnlockedBusy → Unlocked` and project the dialog message /
-//      drop-decision the widget layer applies.
-//
-// Each helper has its own unit test. The tests below pin the
-// *composition order* so a future reorder cannot silently break the
-// dispatch sequence the widget layer relies on.
-
-#[test]
-fn rename_pipeline_success_returns_to_unlocked_with_renamed_vault_and_drops_dialog() {
-    use paladin_core::{validate_manual, AccountInput, AccountKindInput, Algorithm, IconHintInput};
-    use paladin_gtk::app::state::{
-        apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, compose_rename_dispatch,
-    };
-    use paladin_gtk::rename_dialog::{
-        run_rename_worker, RenameWorkerCompletion, RenameWorkerEffect,
-    };
-    use secrecy::SecretString;
-
-    let (_tempdir, path, pair) = fresh_plaintext_vault_pair();
-    let (mut vault, store) = pair;
-    let input = AccountInput {
-        label: "old-label".to_string(),
-        issuer: Some("issuer".to_string()),
-        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
-        algorithm: Algorithm::Sha1,
-        digits: 6,
-        kind: AccountKindInput::Totp,
-        period_secs: None,
-        counter: None,
-        icon_hint: IconHintInput::Default,
-    };
-    let validated =
-        validate_manual(input, SystemTime::UNIX_EPOCH).expect("totp account input validates");
-    let account_id = vault.add(validated.account);
-    vault.save(&store).expect("commit seeded account");
-
-    // 1. Compose worker input from `Unlocked` over the live pair.
-    let mut state = AppState::Unlocked { path: path.clone() };
-    let mut vault_slot: Option<(Vault, Store)> = Some((vault, store));
-    let worker_input = compose_rename_worker_input(
-        &state,
-        vault_slot.take().expect("vault slot is filled"),
-        account_id,
-        "new-label".to_string(),
-        SystemTime::UNIX_EPOCH,
-    )
-    .expect("compose returns Ok when state is Unlocked");
-
-    // 2. Busy-gate transition.
-    let transitioned = apply_submit_rename_inplace(&mut state);
-    assert!(
-        transitioned,
-        "apply_submit_rename_inplace must return true on Unlocked source"
-    );
-    assert!(
-        matches!(state, AppState::UnlockedBusy { .. }),
-        "state must be UnlockedBusy"
-    );
-
-    // 3. Worker body.
-    let completion = run_rename_worker(worker_input);
-    let RenameWorkerCompletion {
-        effect,
-        vault,
-        store,
-    } = completion;
-    assert!(
-        matches!(effect, RenameWorkerEffect::Success),
-        "rename worker must succeed for a valid account_id + non-empty label",
-    );
-
-    // 4. Reinstall pair.
-    apply_rename_vault_install_inplace(&mut vault_slot, (vault, store));
-    let (installed_vault, _) = vault_slot.as_ref().expect("pair reinstalled");
-    let renamed = installed_vault
-        .accounts()
-        .iter()
-        .find(|a| a.id() == account_id)
-        .expect("renamed account survives");
-    assert_eq!(renamed.label(), "new-label", "vault must reflect rename");
-
-    // 5. Dispatch over UnlockedBusy + Success.
-    let dispatch = compose_rename_dispatch(&state, &effect);
-    assert!(dispatch.drop_dialog, "drop_dialog == true on Success");
-    assert!(
-        dispatch.dialog_msg.is_none(),
-        "dialog_msg == None on Success (dropped dialog gets no message)",
-    );
-    let dispatched = apply_rename_dispatch_inplace(&mut state, &dispatch);
-    assert!(
-        dispatched,
-        "apply_rename_dispatch_inplace must return true on UnlockedBusy source"
-    );
-    assert!(
-        matches!(state, AppState::Unlocked { path: ref p } if *p == path),
-        "state must be Unlocked at path after Success dispatch",
-    );
-}
-
-#[test]
-fn rename_pipeline_failure_restore_prior_keeps_pair_installed_and_returns_to_unlocked() {
-    // Force a `save_not_committed` failure by giving the worker an
-    // `account_id` that no account in the vault carries. The
-    // worker's `mutate_and_save` invokes `Vault::rename` which
-    // returns `PaladinError::InvalidState { state: "account_not_found"
-    // }` — `classify_rename_error` routes that to
-    // `RenameErrorOutcome::InlineError`. The dispatch must still
-    // roll the busy-gate back to `Unlocked`, must NOT drop the
-    // dialog, and must forward a `WorkerFailed(outcome)` to the
-    // live dialog.
-    use paladin_core::AccountId;
-    use paladin_gtk::app::state::{
-        apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, compose_rename_dispatch,
-    };
-    use paladin_gtk::rename_dialog::{
-        run_rename_worker, RenameDialogMsg, RenameErrorOutcome, RenameWorkerCompletion,
-        RenameWorkerEffect,
-    };
-
-    let (_tempdir, path, pair) = fresh_plaintext_vault_pair();
-    // Empty vault — any account_id lookup misses, triggering the
-    // defensive `account_not_found` path.
-    let bogus_account = AccountId::new();
-
-    let mut state = AppState::Unlocked { path: path.clone() };
-    let mut vault_slot: Option<(Vault, Store)> = Some(pair);
-    let worker_input = compose_rename_worker_input(
-        &state,
-        vault_slot.take().expect("vault slot is filled"),
-        bogus_account,
-        "new-label".to_string(),
-        SystemTime::UNIX_EPOCH,
-    )
-    .expect("compose returns Ok when state is Unlocked");
-
-    apply_submit_rename_inplace(&mut state);
-
-    let RenameWorkerCompletion {
-        effect,
-        vault,
-        store,
-    } = run_rename_worker(worker_input);
-    match &effect {
-        RenameWorkerEffect::Failure(RenameErrorOutcome::InlineError(_)) => {}
-        other => panic!("expected InlineError for account_not_found, got {other:?}"),
-    }
-
-    apply_rename_vault_install_inplace(&mut vault_slot, (vault, store));
-    assert!(
-        vault_slot.is_some(),
-        "pair must be reinstalled even on failure"
-    );
-
-    let dispatch = compose_rename_dispatch(&state, &effect);
-    assert!(!dispatch.drop_dialog, "drop_dialog == false on Failure");
-    match dispatch.dialog_msg.as_ref() {
-        Some(RenameDialogMsg::WorkerFailed(_)) => {}
-        other => panic!("dialog_msg must carry WorkerFailed on Failure, got {other:?}"),
-    }
-    let dispatched = apply_rename_dispatch_inplace(&mut state, &dispatch);
-    assert!(
-        dispatched,
-        "apply_rename_dispatch_inplace must transition on UnlockedBusy source"
-    );
-    assert!(
-        matches!(state, AppState::Unlocked { path: ref p } if *p == path),
-        "state must roll back to Unlocked on Failure (busy gate always releases)",
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -8355,9 +6395,9 @@ fn run_unlock_worker_success_attaches_caller_provided_path_to_completion_effect(
 // ---------------------------------------------------------------------------
 // Remove state transitions
 //
-// Mirrors the rename block above for the remove path. The remove
+// Mirrors the add block above for the remove path. The remove
 // worker shares the busy-gate semantics (`Unlocked → UnlockedBusy →
-// Unlocked`) with the rename worker, so the tests verify the same
+// Unlocked`) with the add worker, so the tests verify the same
 // invariants against the remove-side helpers.
 // ---------------------------------------------------------------------------
 
@@ -8912,7 +6952,7 @@ fn apply_remove_vault_install_inplace_replaces_existing_slot() {
 // should_drop_add_dialog_after — drop-decision projection
 // ---------------------------------------------------------------------------
 //
-// Symmetric partner of `should_drop_rename_dialog_after` for the
+// Symmetric partner of `should_drop_remove_dialog_after` for the
 // add path. `AppMsg::AddWorkerCompleted` consults this to decide
 // whether to detach the live `AddAccountComponent` from the
 // content tree after applying the worker outcome:
@@ -9225,7 +7265,7 @@ fn should_refresh_list_after_add_partitions_on_committed_outcomes() {
 // add_dialog_msg_after — inline-message projection
 // ---------------------------------------------------------------------------
 //
-// Symmetric partner of `rename_dialog_msg_after` for the add path.
+// Symmetric partner of `remove_dialog_msg_after` for the add path.
 // `AppMsg::AddWorkerCompleted` consults this to decide what message
 // (if any) to forward into the live `AddAccountComponent` after
 // applying the worker outcome:
@@ -9439,7 +7479,7 @@ fn add_dialog_msg_after_is_mutually_exclusive_with_should_drop() {
 // The projection inspects only the typed `AddWorkerEffect` variant so
 // the side-effect decision in `AppModel::update` stays unit-testable
 // in `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
-// Sibling of `rename_success_toast_after` / `remove_success_toast_after`.
+// Sibling of `remove_success_toast_after` / `add_success_toast_after`.
 
 #[test]
 fn add_success_toast_after_success_returns_body() {
@@ -9536,7 +7576,7 @@ fn compose_add_dispatch_populates_success_toast_only_on_success() {
 // compose_add_dispatch — bundling composer for the add worker outcome
 // ---------------------------------------------------------------------------
 //
-// Symmetric partner of `compose_rename_dispatch` for the add path.
+// Symmetric partner of `compose_remove_dispatch` for the add path.
 // Bundles the trio of add-dispatch decisions (`add_final_app_state`,
 // `add_dialog_msg_after`, `should_drop_add_dialog_after`) into a
 // single `AddDispatch` value so `AppModel::update` can apply the
@@ -9823,7 +7863,7 @@ fn compose_add_dispatch_from_non_unlocked_busy_returns_no_app_state() {
 // apply_add_dispatch_inplace — `AppModel::update` mut-state wrapper
 // ---------------------------------------------------------------------------
 //
-// Symmetric partner of `apply_rename_dispatch_inplace` for the add
+// Symmetric partner of `apply_remove_dispatch_inplace` for the add
 // path. `compose_add_dispatch(&AppState, &AddWorkerEffect) ->
 // AddDispatch` bundles the three worker-completion decisions; the
 // wrapper here lets `AppMsg::AddWorkerCompleted` install the new
@@ -9978,8 +8018,8 @@ fn apply_add_dispatch_inplace_from_non_unlocked_busy_leaves_state_unchanged_and_
 // `run_add_worker` → `apply_add_vault_install_inplace` →
 // `compose_add_dispatch` → `apply_add_dispatch_inplace`.
 //
-// Symmetric partner of `rename_pipeline_success_*` /
-// `rename_pipeline_failure_*` for the add path. The individual
+// Symmetric partner of the remove-pipeline composition-order tests
+// for the add path. The individual
 // projections are exhaustively tested above; these pipeline tests
 // guard against composition-order regressions in `AppModel::update`.
 // ---------------------------------------------------------------------------
@@ -10556,7 +8596,7 @@ fn qr_pipeline_failure_keep_with_warning_keeps_pair_installed_refreshes_list_and
     // Durability-unconfirmed path: simulate a `save_durability_unconfirmed`
     // outcome from `Vault::mutate_and_save`. The merged accounts already
     // live in memory (matching the on-disk primary that committed past the
-    // rename point), so the dispatch must:
+    // mutation point), so the dispatch must:
     //
     // * Release the busy gate back to `Unlocked` so the row factory can
     //   re-project the live list.
@@ -10599,7 +8639,7 @@ fn qr_pipeline_failure_keep_with_warning_keeps_pair_installed_refreshes_list_and
     assert!(matches!(state, AppState::UnlockedBusy { .. }));
 
     // Synthesize a typed `save_durability_unconfirmed` failure as if
-    // `mutate_and_save` had committed past the rename point but the
+    // `mutate_and_save` had committed past the mutation point but the
     // parent fsync was not confirmed. The worker hands the pair back
     // (post-commit vault state) regardless of the typed outcome, so
     // the test reuses a fresh plaintext pair to stand in.
@@ -10652,7 +8692,7 @@ fn qr_pipeline_failure_keep_with_warning_keeps_pair_installed_refreshes_list_and
 // ---------------------------------------------------------------------------
 // Import dispatch — entry-side bundling
 // (submit_import_app_state / apply_submit_import_inplace /
-// compose_import_worker_input). Symmetric partners of the rename /
+// compose_import_worker_input). Symmetric partners of the edit /
 // remove / add entry-side trio. The composer stays shape-only —
 // `AppState` discriminant + carried-path cloning — so the tests
 // exercise the routing rules without spinning up GTK / libadwaita.
@@ -11106,7 +9146,7 @@ fn apply_import_vault_install_inplace_replaces_existing_slot() {
 // pre-worker `Unlocked → UnlockedBusy` busy-gate composer for the
 // passphrase-transition path.
 //
-// Mirrors the `submit_remove_app_state` / `submit_rename_app_state`
+// Mirrors the `submit_remove_app_state` / `submit_edit_app_state`
 // suite: the `Unlocked` source transitions to `UnlockedBusy`
 // preserving the path; every other source is a defensive no-op.
 // ---------------------------------------------------------------------------
@@ -12562,18 +10602,15 @@ fn format_app_busy_spinner_visible_startup_error_returns_false() {
 //                                          AccountEdit, now)` bundler
 // ---------------------------------------------------------------------------
 //
-// Edit-path sibling of `compose_rename_worker_input` (Milestone 9
-// slice 4 supersedes the rename AppModel route with the edit route).
-// Where the rename composer captures the live `(Vault, Store)` pair
-// plus the `RenameDialogOutput::SubmitLabel` payload (account id,
-// trimmed label) and the dispatch-site wall-clock, the edit composer
-// captures the same pair plus the `EditDialogOutput::Submit` payload
-// (account id, assembled `AccountEdit`) and the wall-clock for the
+// Add-path sibling of `compose_add_worker_input`. The edit composer
+// captures the live `(Vault, Store)` pair plus the
+// `EditDialogOutput::Submit` payload (account id, assembled
+// `AccountEdit`) and the dispatch-site wall-clock for the
 // `gio::spawn_blocking Vault::mutate_and_save(|v|
-// v.edit_account_metadata(...))` worker. Both gate on the
+// v.edit_account_metadata(...))` worker. It gates on the
 // pre-transition source state (`Unlocked`) so `AppModel::update` can
 // call the composer before `submit_edit_app_state` consumes the
-// variant, and both return `Result<_, (Vault, Store)>` so the
+// variant, and returns `Result<_, (Vault, Store)>` so the
 // non-`Clone` live pair is handed back on a stray dispatch rather
 // than dropped on the floor.
 
@@ -12694,12 +10731,12 @@ fn compose_edit_worker_input_mirrors_submit_edit_app_state_gating() {
 }
 
 #[test]
-fn compose_edit_worker_input_agrees_with_compose_rename_worker_input_gating() {
-    // Cross-check the two mutating-worker composers gate identically:
-    // the edit route supersedes the rename route in `AppModel`, but
-    // both still bracket the same `Unlocked`-only source-state
-    // contract, so a single change to the gating must move them
-    // together.
+fn compose_edit_worker_input_is_ok_only_from_unlocked() {
+    // The edit route is the canonical metadata-mutation worker in
+    // `AppModel`. Pin its `Unlocked`-only source-state contract
+    // directly: `Ok` only from `Unlocked`, `Err` (handing the
+    // non-`Clone` `(Vault, Store)` pair back) for every other source
+    // state, so a single change to the gating is caught.
     let account_id = AccountId::new();
     let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12_345);
     for variant in [
@@ -12725,14 +10762,11 @@ fn compose_edit_worker_input_agrees_with_compose_rename_worker_input_gating() {
         };
         let edit_ok =
             compose_edit_worker_input(&source(&p1), (v1, s1), account_id, edit, now).is_ok();
-        let (_t2, p2, v2, s2) = fresh_plaintext_pair();
-        let rename_ok =
-            compose_rename_worker_input(&source(&p2), (v2, s2), account_id, "renamed".into(), now)
-                .is_ok();
+        let expected_ok = variant == "unlocked";
         assert_eq!(
-            edit_ok, rename_ok,
-            "compose_edit_worker_input and compose_rename_worker_input must agree on Ok/Err for \
-             variant={variant}: edit_ok={edit_ok}, rename_ok={rename_ok}",
+            edit_ok, expected_ok,
+            "compose_edit_worker_input must be Ok only from Unlocked for \
+             variant={variant}: edit_ok={edit_ok}, expected_ok={expected_ok}",
         );
     }
 }
@@ -12741,11 +10775,10 @@ fn compose_edit_worker_input_agrees_with_compose_rename_worker_input_gating() {
 // apply_submit_edit_inplace — `AppModel::update` mut-state wrapper
 // ---------------------------------------------------------------------------
 //
-// Edit-path sibling of `apply_submit_rename_inplace`. Both cover
+// Add-path sibling of `apply_submit_add_inplace`. Both cover
 // `Unlocked → UnlockedBusy` (the worker takes the already-decrypted
 // `(Vault, Store)` pair through `Vault::mutate_and_save`); the edit
-// wrapper fires from `EditDialogOutput::Submit` where the rename
-// wrapper fired from `RenameDialogOutput::SubmitLabel`. Both are thin
+// wrapper fires from `EditDialogOutput::Submit`. Both are thin
 // mut-reference wrappers over their matching `submit_*_app_state`
 // composer so `AppModel::update` does not have to manage the
 // take-and-restore dance around the composer's `Option<AppState>`
@@ -12859,11 +10892,11 @@ fn apply_submit_edit_inplace_mirrors_submit_edit_app_state_for_every_variant() {
 }
 
 #[test]
-fn apply_submit_edit_inplace_agrees_with_apply_submit_rename_inplace() {
-    // Both wrappers cover the same `Unlocked → UnlockedBusy`
-    // busy-gate transition from different dispatch origins (edit vs
-    // rename). Pin that they agree on the true/false partition and on
-    // the resulting variant for every source state.
+fn apply_submit_edit_inplace_true_false_partition_over_every_variant() {
+    // Pin the full per-variant table directly: `apply_submit_edit_inplace`
+    // returns `true` and lands on `UnlockedBusy` only from `Unlocked`,
+    // and returns `false` leaving the variant untouched for every other
+    // source state (the `Unlocked → UnlockedBusy` busy-gate contract).
     let path = vault_path();
     let sources = [
         AppState::Missing { path: path.clone() },
@@ -12876,19 +10909,25 @@ fn apply_submit_edit_inplace_agrees_with_apply_submit_rename_inplace() {
     for source in &sources {
         let mut edit_state = source.clone();
         let edit_transitioned = apply_submit_edit_inplace(&mut edit_state);
-        let mut rename_state = source.clone();
-        let rename_transitioned = apply_submit_rename_inplace(&mut rename_state);
+        let expected = matches!(source, AppState::Unlocked { .. });
         assert_eq!(
-            edit_transitioned, rename_transitioned,
-            "apply_submit_edit_inplace and apply_submit_rename_inplace must agree on true/false \
-             for source={source:?}",
+            edit_transitioned, expected,
+            "apply_submit_edit_inplace must return {expected} for source={source:?}",
         );
-        assert_eq!(
-            std::mem::discriminant::<AppState>(&edit_state),
-            std::mem::discriminant::<AppState>(&rename_state),
-            "apply_submit_edit_inplace and apply_submit_rename_inplace must land on the same \
-             variant for source={source:?}",
-        );
+        if expected {
+            assert!(
+                matches!(&edit_state, AppState::UnlockedBusy { .. }),
+                "apply_submit_edit_inplace must land on UnlockedBusy from Unlocked, got \
+                 {edit_state:?}",
+            );
+        } else {
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&edit_state),
+                std::mem::discriminant::<AppState>(source),
+                "apply_submit_edit_inplace must leave a non-Unlocked source unchanged for \
+                 source={source:?}",
+            );
+        }
     }
 }
 
@@ -12896,7 +10935,7 @@ fn apply_submit_edit_inplace_agrees_with_apply_submit_rename_inplace() {
 // apply_edit_vault_install_inplace — `AppModel::vault` mut-slot wrapper
 // ---------------------------------------------------------------------------
 //
-// Edit-path sibling of `apply_rename_vault_install_inplace`.
+// Edit-path sibling of `apply_add_vault_install_inplace`.
 // `EditWorkerCompletion` carries the live `(Vault, Store)` pair
 // *unconditionally* (every effect branch — `Success`,
 // `save_durability_unconfirmed`, `save_not_committed`, defensive
@@ -13013,7 +11052,7 @@ fn apply_edit_vault_install_inplace_consumes_run_edit_worker_completion_pair() {
 // edit_final_app_state — unified state-transition composer
 // ---------------------------------------------------------------------------
 //
-// Edit-path sibling of `rename_final_app_state`. Every
+// Add-path sibling of `add_final_app_state`. Every
 // `EditWorkerEffect` variant — `Success` and the
 // `Failure(PostEffectOutcome)` projection — lands on the same
 // `UnlockedBusy → Unlocked` transition via `AppState::leave_busy`.
@@ -13099,16 +11138,13 @@ fn edit_final_app_state_from_non_unlocked_busy_returns_none() {
 }
 
 #[test]
-fn edit_final_app_state_mirrors_rename_final_for_every_source() {
-    // Cross-check: the edit composer is a name-the-call-site wrapper
-    // over `AppState::leave_busy`, the same underlying transition the
-    // rename composer uses. The `Some` / `None` partition across
-    // source states (and the resulting variant on `Some`) must match
-    // `rename_final_app_state` so the edit route inherits the exact
-    // busy-gate rollback the rename route had.
-    use paladin_gtk::app::state::rename_final_app_state;
-    use paladin_gtk::rename_dialog::RenameWorkerEffect;
-
+fn edit_final_app_state_rolls_back_to_unlocked_only_from_unlocked_busy() {
+    // The edit composer is a name-the-call-site wrapper over
+    // `AppState::leave_busy`. Pin its busy-gate rollback directly:
+    // `Some(Unlocked { path })` only from `UnlockedBusy` (preserving
+    // the path), `None` from every other source state so a stray
+    // completion can't install a phantom `Unlocked` over another idle
+    // state.
     let path = vault_path();
     let sources = [
         AppState::Missing { path: path.clone() },
@@ -13119,28 +11155,24 @@ fn edit_final_app_state_mirrors_rename_final_for_every_source() {
             .expect("inspect Err yields StartupError state"),
     ];
     let edit_effect = EditWorkerEffect::Success { post_summary: None };
-    let rename_effect = RenameWorkerEffect::Success;
     for source in &sources {
         let edit_next = edit_final_app_state(source, &edit_effect);
-        let rename_next = rename_final_app_state(source, &rename_effect);
-        assert_eq!(
-            edit_next.is_some(),
-            rename_next.is_some(),
-            "edit_final_app_state and rename_final_app_state must agree on Some/None for \
-             source={source:?}",
-        );
-        if let (Some(edit_state), Some(rename_state)) = (edit_next, rename_next) {
-            assert_eq!(
-                std::mem::discriminant::<AppState>(&edit_state),
-                std::mem::discriminant::<AppState>(&rename_state),
-                "edit_final_app_state and rename_final_app_state must land on the same variant \
-                 for source={source:?}",
+        if let AppState::UnlockedBusy { path: src_path } = source {
+            let next = edit_next.expect("edit_final_app_state must roll back from UnlockedBusy");
+            assert!(
+                matches!(&next, AppState::Unlocked { .. }),
+                "edit_final_app_state must roll back to Unlocked from UnlockedBusy, got {next:?}",
             );
             assert_eq!(
-                edit_state.path().map(Path::to_path_buf),
-                rename_state.path().map(Path::to_path_buf),
-                "edit_final_app_state and rename_final_app_state must preserve the same path for \
-                 source={source:?}",
+                next.path().map(Path::to_path_buf),
+                Some(src_path.clone()),
+                "edit_final_app_state must preserve the path for source={source:?}",
+            );
+        } else {
+            assert!(
+                edit_next.is_none(),
+                "edit_final_app_state must return None for non-UnlockedBusy source={source:?}, \
+                 got {edit_next:?}",
             );
         }
     }

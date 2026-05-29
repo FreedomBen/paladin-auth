@@ -226,7 +226,7 @@ pub enum SaveOutcome {
         field: SettingsField,
     },
     /// `save_durability_unconfirmed` — the file is on disk (the
-    /// primary rename succeeded) but the parent-directory `fsync`
+    /// primary save succeeded) but the parent-directory `fsync`
     /// failed. The visible widget value sticks and the warning
     /// attaches to the changed row so the user can decide whether
     /// to retry.
@@ -251,7 +251,7 @@ pub enum SaveOutcome {
 ///
 /// Carries the stable §5 [`ErrorKind`] for instrumentation and the
 /// rendered body for display. Mirrors the
-/// [`crate::rename_dialog::InlineError`] / [`crate::export_dialog::InlineError`]
+/// [`crate::edit_dialog::InlineError`] / [`crate::export_dialog::InlineError`]
 /// shape so callers share one widget pattern across dialogs.
 #[derive(Debug, Clone)]
 pub struct InlineError {
@@ -338,7 +338,7 @@ pub fn clamp_clipboard_clear_secs(value: u32) -> u32 {
 /// Pure — returns a `'static str` without allocating. Sibling of
 /// [`crate::unlock_dialog::format_unlock_dialog_title`],
 /// [`crate::init_dialog::format_init_dialog_title`],
-/// [`crate::rename_dialog::format_rename_dialog_title`],
+/// [`crate::edit_dialog::format_edit_dialog_title`],
 /// [`crate::remove_dialog::format_remove_dialog_title`], and
 /// [`crate::startup_error::format_startup_error_title`] on the
 /// dialog-header-title side; together they pin every dialog's
@@ -939,7 +939,7 @@ pub fn compose_settings_dialog_inline_subtitle_revealed_for_field(
 ///
 /// * [`SaveOutcome::Inline`] / [`SaveOutcome::Rollback`] → the
 ///   matching row carries the `"error"` class (red foreground,
-///   matching the `crate::rename_dialog::RenameDialogComponent`
+///   matching the `crate::edit_dialog::EditDialogComponent`
 ///   inline-error label styling so failures across dialogs read
 ///   identically).
 /// * [`SaveOutcome::DurabilityWarning`] → the matching row carries
@@ -1901,7 +1901,7 @@ pub enum SettingsDialogMsg {
     /// `AppModel::sync_settings_busy` emits `SetBusy(true)` when
     /// entering `AppState::UnlockedBusy` (with this dialog as the
     /// originating effect) and `SetBusy(false)` on the worker
-    /// return, mirroring the add / rename / remove submit dimming
+    /// return, mirroring the add / edit / remove submit dimming
     /// pattern. The toggle and spinner sensitivity helpers consult
     /// the latch through [`SettingsState::is_busy`].
     SetBusy(bool),

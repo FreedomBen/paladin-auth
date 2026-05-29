@@ -412,8 +412,8 @@ pub fn compose_uri_submit_outcome(
 /// is built by `compose_submit_outcome` at the boundary the widget
 /// consults.
 ///
-/// Naming parallels [`crate::rename_dialog::SubmitOutcome`] on the
-/// rename path; each dialog scopes its own `SubmitOutcome` to its
+/// Naming parallels [`crate::edit_dialog::SubmitOutcome`] on the
+/// edit path; each dialog scopes its own `SubmitOutcome` to its
 /// module so the variants stay narrow.
 ///
 /// * [`SubmitOutcome::Proceed`] — validated account; the widget
@@ -1163,7 +1163,7 @@ impl InlineWarning {
 
 /// Inbound messages handled by `AddAccountComponent`.
 ///
-/// Symmetric partner of [`crate::rename_dialog::RenameDialogMsg`]
+/// Symmetric partner of [`crate::edit_dialog::EditDialogMsg`]
 /// on the add path. Pinned as a typed enum so future Component
 /// scaffolding (manual / URI / QR input plumbing, switching path,
 /// duplicate prompt, etc.) can land as additional variants without
@@ -1193,9 +1193,9 @@ pub enum AddAccountMsg {
     /// to the dialog after the
     /// `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
     /// worker reports a failure. Symmetric partner of
-    /// [`crate::rename_dialog::RenameDialogMsg::WorkerFailed`] on
-    /// the add path: where the rename variant carries the typed
-    /// [`crate::rename_dialog::RenameErrorOutcome`], the add
+    /// [`crate::edit_dialog::EditDialogMsg::WorkerCompleted`] on
+    /// the add path: where the edit variant carries the typed
+    /// [`crate::edit_dialog::PostEffectOutcome`], the add
     /// variant carries the typed [`AddPostEffectOutcome`] so the
     /// dialog's handler can route `Inline` (render the typed
     /// inline error and keep the form populated for retry) or
@@ -1582,7 +1582,7 @@ pub enum AddAccountMsg {
 /// Outbound messages emitted by [`AddAccountComponent`] back to
 /// `AppModel`.
 ///
-/// Symmetric partner of [`crate::rename_dialog::RenameDialogOutput`]
+/// Symmetric partner of [`crate::edit_dialog::EditDialogOutput`]
 /// on the add path. Pinned as a typed enum so future Component
 /// scaffolding (manual / URI / QR submit variants) can land as
 /// additional variants without an `_` catch-all in the dispatch
@@ -1684,7 +1684,7 @@ pub enum AddAccountOutput {
 
 /// Construction parameters for [`AddAccountComponent`].
 ///
-/// Mirrors the shape of [`crate::rename_dialog::RenameDialogInit`]
+/// Mirrors the shape of [`crate::edit_dialog::EditDialogInit`]
 /// but carries the vault path rather than a target account — the
 /// add dialog creates a *new* account rather than mutating an
 /// existing one. The path is retained on `self` so the smoke test
@@ -1704,7 +1704,7 @@ pub struct AddAccountInit {
 /// `xvfb-run`.
 ///
 /// Symmetric partner of
-/// [`crate::rename_dialog::RENAME_DIALOG_MARKER_PREFIX`]; the
+/// [`crate::edit_dialog::EDIT_DIALOG_MARKER_PREFIX`]; the
 /// literal is pinned by `tests/add_account_logic.rs` so the
 /// pure-logic projection and the smoke marker never drift.
 pub const ADD_DIALOG_MARKER_PREFIX: &str = "paladin-gtk: add_dialog_path=";
@@ -1713,7 +1713,7 @@ pub const ADD_DIALOG_MARKER_PREFIX: &str = "paladin-gtk: add_dialog_path=";
 /// header-bar `+` button mounts the [`AddAccountComponent`].
 ///
 /// Symmetric partner of
-/// [`crate::rename_dialog::format_rename_dialog_marker`]. The marker
+/// [`crate::edit_dialog::format_edit_dialog_marker`]. The marker
 /// carries the resolved vault path so a future
 /// `tests/gtk_smoke.rs` variant can assert that the dialog mounted
 /// against the same path the startup probes resolved.
@@ -3489,7 +3489,7 @@ pub fn compose_uri_text_value(state: &AddDialogState) -> &str {
 /// `adw::ToastOverlay` after the dispatch drops the dialog and the
 /// new row appears in `AccountListComponent` through
 /// `AccountListMsg::Refresh`. Sibling of
-/// [`crate::rename_dialog::format_rename_dialog_success_toast`] /
+/// [`crate::edit_dialog::format_edit_dialog_success_toast`] /
 /// [`crate::remove_dialog::format_remove_dialog_success_toast`] on
 /// the toast-body-text side.
 ///
@@ -3509,7 +3509,7 @@ pub fn format_add_dialog_success_toast() -> &'static str {
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
 ///
-/// Symmetric partner of [`crate::rename_dialog::apply_msg`] on the
+/// Symmetric partner of [`crate::edit_dialog::apply_msg`] on the
 /// add path. Pulled out of [`AddAccountComponent::update`] so the
 /// routing decision stays unit-testable in
 /// `tests/add_account_logic.rs` without spinning up GTK.
@@ -3543,7 +3543,7 @@ pub fn format_add_dialog_success_toast() -> &'static str {
 /// Reactive state owned by the live [`AddAccountComponent`].
 ///
 /// Symmetric partner of
-/// [`crate::rename_dialog::RenameDialogState`] on the add path: the
+/// [`crate::edit_dialog::EditDialogState`] on the add path: the
 /// only field at present is `worker_outcome`, the typed
 /// [`AddPostEffectOutcome`] from the most recent
 /// `Vault::mutate_and_save` worker completion. The widget view
@@ -3671,7 +3671,7 @@ impl AddDialogState {
     /// Construct an empty state for a freshly-opened dialog.
     ///
     /// No worker has run yet, so [`Self::worker_outcome`] returns
-    /// `None`. Mirror of [`crate::rename_dialog::RenameDialogState::new`]
+    /// `None`. Mirror of [`crate::edit_dialog::EditDialogState::new`]
     /// on the add path; pre-populated dialog state lands as
     /// additional construction arguments when the editable manual /
     /// URI / QR sub-paths are wired in follow-up commits.
@@ -3913,7 +3913,7 @@ pub fn should_present_duplicate_alert(was_stage_pending: bool, state: &AddDialog
 /// Draft-changed / duplicate-confirm routing land in follow-up
 /// commits as additional variants are added to [`AddAccountMsg`] /
 /// [`AddAccountOutput`]. Mirror of
-/// [`crate::rename_dialog::apply_msg`] on the add path: the per-
+/// [`crate::edit_dialog::apply_msg`] on the add path: the per-
 /// message decisions stay co-located with the state struct so a
 /// future refactor cannot silently reorder them.
 //
@@ -3960,7 +3960,7 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             //   render alongside the inline error and mislead the
             //   user about the latest attempt.
             // * `KeepWithWarning` (`save_durability_unconfirmed`):
-            //   `Vault::mutate_and_save` commits past the rename point
+            //   `Vault::mutate_and_save` commits past the mutation point
             //   but discards the closure's `ImportReport`, so the
             //   dialog has no fresh counts to show. The durability
             //   warning renders via `post_effect_warning_label`
@@ -4322,7 +4322,7 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
 /// header-bar wiring per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 /// §"Component tree" > `AddAccountComponent`.
 ///
-/// Symmetric partner of [`crate::rename_dialog::RenameDialogComponent`]
+/// Symmetric partner of [`crate::edit_dialog::EditDialogComponent`]
 /// for the add path. The Component is `pub` so the future header-
 /// bar wiring commit can mount it from `AppModel::update`'s
 /// `AppMsg::OpenAddDialog` arm without re-declaring the widget
@@ -4845,7 +4845,7 @@ impl SimpleComponent for AddAccountComponent {
             // from `classify_manual_submit`, `classify_uri_submit`,
             // or the QR path's no-image / decode-failure / zero-QR
             // / invalid-payload arms. The `error` CSS class matches
-            // the rename / remove / unlock dialogs' inline-error
+            // the edit / remove / unlock dialogs' inline-error
             // styling. Drained by `apply_msg` on the next user
             // edit (any `Manual*Changed` / `UriTextChanged` arm),
             // on `SwitchPath` across sub-paths, on `SubmitProceed`

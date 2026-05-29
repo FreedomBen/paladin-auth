@@ -228,7 +228,7 @@ pub fn format_remove_dialog_remove_label() -> &'static str {
 /// [`RemoveDialogComponent`]'s footer Cancel `gtk::Button::set_label`.
 ///
 /// The label is the action-specific GNOME-HIG verb for the
-/// surface — matching the rename / add dialog cancel affordance
+/// surface — matching the edit / add dialog cancel affordance
 /// so the dialog footer wording stays uniform across every per-
 /// account surface. No TUI parity: the TUI's `remove` command is
 /// CLI-shaped and prompts on stdin rather than rendering a
@@ -238,7 +238,7 @@ pub fn format_remove_dialog_remove_label() -> &'static str {
 /// `tests/remove_dialog_logic.rs`.
 ///
 /// Pure — returns a `'static str` without allocating. Sibling of
-/// [`crate::rename_dialog::format_rename_dialog_cancel_label`]
+/// [`crate::edit_dialog::format_edit_dialog_cancel_label`]
 /// and [`crate::add_account::format_add_dialog_cancel_label`] on
 /// the dialog-footer-cancel side; together they pin every
 /// dialog's cancel affordance against a single source of truth.
@@ -303,8 +303,8 @@ pub fn format_remove_dialog_cancel_response_id() -> &'static str {
 /// shared by the widget binding and the pure-logic tests, and
 /// matches the parallel single-line "Verb-ing {display}." form
 /// used by
-/// [`crate::rename_dialog::format_rename_dialog_subtitle`] so the
-/// rename and remove dialogs read in parallel against the same
+/// [`crate::edit_dialog::format_edit_dialog_subtitle`] so the
+/// edit and remove dialogs read in parallel against the same
 /// display-label format.
 ///
 /// Takes the display label by `&str` so the widget can pass
@@ -333,8 +333,8 @@ pub fn format_remove_dialog_subtitle(display_label: &str) -> String {
 /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
 ///
 /// Pure — inspects only the busy latch. Sibling of
-/// [`crate::rename_dialog::format_rename_dialog_save_button_sensitive`]
-/// on the destructive-confirm side; the rename projector also
+/// [`crate::edit_dialog::format_edit_dialog_save_button_sensitive`]
+/// on the destructive-confirm side; the edit projector also
 /// guards against the validation gate, but the Remove dialog has
 /// no editable draft so the busy latch is the only gate here.
 #[must_use]
@@ -352,7 +352,7 @@ pub fn format_remove_dialog_destructive_response_enabled(state: &RemoveDialogSta
 /// raises the toast on the `adw::ToastOverlay` after the dispatch
 /// drops the dialog and the row drops out of `AccountListComponent`
 /// through `AccountListMsg::Refresh`. Sibling of
-/// [`crate::rename_dialog::format_rename_dialog_success_toast`] on
+/// [`crate::edit_dialog::format_edit_dialog_success_toast`] on
 /// the toast-body-text side.
 ///
 /// The wording is intentionally generic so the toast does not need
@@ -411,7 +411,7 @@ pub fn format_remove_dialog_icon_name() -> &'static str {
 /// Pure — returns a `'static str` without allocating. Sibling of
 /// [`crate::unlock_dialog::format_unlock_dialog_title`],
 /// [`crate::init_dialog::format_init_dialog_title`],
-/// [`crate::rename_dialog::format_rename_dialog_title`],
+/// [`crate::edit_dialog::format_edit_dialog_title`],
 /// [`crate::add_account::format_add_dialog_title`], and
 /// [`crate::startup_error::format_startup_error_title`] on the
 /// dialog-header-title side; together they pin every dialog's
@@ -493,7 +493,7 @@ pub fn format_remove_dialog_inline_warning_visible(state: &RemoveDialogState) ->
 /// for the `gio::spawn_blocking
 /// Vault::mutate_and_save(|v| v.remove(...))` worker.
 ///
-/// Symmetric partner of [`crate::rename_dialog::RenameWorkerInput`] on
+/// Symmetric partner of [`crate::edit_dialog::EditWorkerInput`] on
 /// the remove path. Carries the live `(Vault, Store)` pair plus the
 /// stable account id from the dialog so the worker thread can call
 /// `mutate_and_save` without re-fetching from `AppModel`. `Clone` /
@@ -670,8 +670,8 @@ pub fn decide_remove_target(vault: &Vault, id: AccountId) -> Option<RemoveDialog
 /// dialog body can re-render the inline error / warning across
 /// re-renders.
 ///
-/// Symmetric partner of [`crate::rename_dialog::RenameDialogState`]
-/// on the remove path. Where the rename state carries a live draft,
+/// Symmetric partner of [`crate::edit_dialog::EditDialogState`]
+/// on the remove path. Where the edit state carries a live draft,
 /// the remove state only carries the stable seeded values plus the
 /// worker outcome — `Confirm` does not mutate the state, it only
 /// fires the worker through `AppModel`.
@@ -696,7 +696,7 @@ pub struct RemoveDialogState {
     /// Vault::mutate_and_save(|v| v.remove(...))` worker. While
     /// `true`, [`format_remove_dialog_destructive_response_enabled`]
     /// returns `false` so the `AlertDialog`'s destructive Remove
-    /// response dims, mirroring the rename / add submit dimming per
+    /// response dims, mirroring the edit / add submit dimming per
     /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
     /// ownership".
     busy: bool,
@@ -816,7 +816,7 @@ pub enum RemoveDialogMsg {
     /// the dialog after the `gio::spawn_blocking
     /// Vault::mutate_and_save(|v| v.remove(...))` worker reports a
     /// failure. Symmetric partner of
-    /// [`crate::rename_dialog::RenameDialogMsg::WorkerFailed`] on
+    /// [`crate::edit_dialog::EditDialogMsg::WorkerCompleted`] on
     /// the remove path: the dialog stores the typed outcome on
     /// [`RemoveDialogState::worker_outcome`] so the body can route
     /// `RestorePrior` (render the inline error), `KeepRemovedWithWarning`
@@ -824,7 +824,7 @@ pub enum RemoveDialogMsg {
     /// defensive `InlineError` (render the typed error) without
     /// re-deriving the routing off the [`PaladinError`].
     ///
-    /// Unlike the rename variant, there is no draft to roll back —
+    /// Unlike the edit variant, there is no draft to roll back —
     /// the confirmation body is immutable, so `apply_msg` only
     /// stores the outcome.
     WorkerFailed(RemoveErrorOutcome),
@@ -833,7 +833,7 @@ pub enum RemoveDialogMsg {
     /// `AppModel::sync_remove_dialog_busy` emits `SetBusy(true)`
     /// when entering `AppState::UnlockedBusy` (with this dialog as
     /// the originating effect) and `SetBusy(false)` on the worker
-    /// return, mirroring the rename / add submit dimming pattern.
+    /// return, mirroring the edit / add submit dimming pattern.
     SetBusy(bool),
 }
 
@@ -899,8 +899,8 @@ pub fn apply_msg(
             // `mutate_and_save` already restored the in-memory
             // account on `save_not_committed`, so the dialog body
             // only needs the typed outcome to re-render. Symmetric
-            // partner of `RenameDialogMsg::WorkerFailed` minus the
-            // `set_draft(prior_label)` rollback step.
+            // partner of `EditDialogMsg::WorkerCompleted` minus the
+            // editable-draft rollback step.
             state.worker_outcome = Some(outcome);
             None
         }
@@ -929,7 +929,7 @@ pub fn apply_msg(
 /// removed; the `extra_child` slot carries the inline error / warning
 /// labels that surface `Vault::mutate_and_save(|v| v.remove(...))`
 /// worker outcomes. Mirrors the
-/// [`crate::rename_dialog::RenameDialogComponent`] pattern on the
+/// [`crate::edit_dialog::EditDialogComponent`] pattern on the
 /// dispatch side but uses the [`adw::AlertDialog`] chrome rather than
 /// a hand-rolled `gtk::Box` footer.
 pub struct RemoveDialogComponent {
