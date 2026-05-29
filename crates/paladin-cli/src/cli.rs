@@ -108,6 +108,8 @@ pub enum Command {
         #[command(subcommand)]
         action: SettingsCommand,
     },
+    /// Permanently delete the vault file (and its `.bak`) from disk.
+    Destroy(DestroyArgs),
     /// Launch the TUI by exec'ing `paladin-tui` with shared flags.
     Tui,
 }
@@ -225,6 +227,25 @@ pub struct RemoveArgs {
 pub struct RenameArgs {
     pub query: String,
     pub new_label: String,
+}
+
+/// `paladin destroy [--yes]` argv shape per
+/// `docs/IMPLEMENTATION_PLAN_02_CLI.md` "Destroy command (Milestone 10)".
+///
+/// `destroy` runs no Argon2id work, so the flattened [`KdfArgs`] exist
+/// only so any KDF flag parses and can be rejected in-handler with
+/// `validation_error` (`field: "argv"`, `reason: "kdf_flags_not_supported"`)
+/// before any I/O — surfacing them as supported would be a lie. There
+/// is no global KDF arg, so the flatten is the only way the flags reach
+/// the parser.
+#[derive(Debug, Args)]
+pub struct DestroyArgs {
+    /// Skip the destructive-confirmation prompt (required under `--json`).
+    #[arg(long)]
+    pub yes: bool,
+
+    #[command(flatten)]
+    pub kdf: KdfArgs,
 }
 
 /// `paladin edit <query>` argv shape per

@@ -189,6 +189,19 @@ pub fn write_rename_success(account: &AccountSummary, mut out: impl Write) -> st
     writeln!(out, "Renamed to {}.", display_label(account))
 }
 
+/// Print the success line for `paladin destroy` to stdout. Mirrors the
+/// §5 JSON `destroyed` envelope: `Deleted vault.` when the sibling
+/// `.bak` was present and unlinked (`backup_deleted == true`), and
+/// `Deleted vault (backup remained on disk).` when no backup was
+/// deleted (`backup_deleted == false`, the no-`.bak` case).
+pub fn write_destroy_success(backup_deleted: bool, mut out: impl Write) -> std::io::Result<()> {
+    if backup_deleted {
+        writeln!(out, "Deleted vault.")
+    } else {
+        writeln!(out, "Deleted vault (backup remained on disk).")
+    }
+}
+
 /// Print the success line for `paladin passphrase
 /// {set,change,remove}` to stdout. Mirrors the JSON envelope's
 /// `{ "ok": true, "status": ... }` in human-readable form. Callers

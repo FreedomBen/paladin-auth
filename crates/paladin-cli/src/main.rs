@@ -78,6 +78,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             SettingsCommand::Get { key } => commands::settings::get(global, key.as_deref()),
             SettingsCommand::Set { key, value } => commands::settings::set(global, key, value),
         },
+        Command::Destroy(args) => commands::destroy::run(global, args),
         Command::Tui => exec_tui::run(global),
     }
 }

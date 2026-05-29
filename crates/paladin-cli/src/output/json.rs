@@ -191,6 +191,46 @@ pub fn write_remove_success(account: &AccountSummary, mut out: impl Write) -> st
     Ok(())
 }
 
+/// Inner object of the `paladin destroy` success envelope. `vault_path`
+/// is the resolved absolute path the CLI handed to `destroy_vault` (not
+/// the literal `--vault` argv); `primary_deleted` is always `true` on
+/// the success path, and `backup_deleted` reflects whether a sibling
+/// `vault.bin.bak` was present and unlinked.
+#[derive(Debug, Serialize)]
+struct DestroyedBody<'a> {
+    vault_path: &'a str,
+    primary_deleted: bool,
+    backup_deleted: bool,
+}
+
+/// `paladin destroy` success envelope per the §5 JSON shape table:
+/// `{ "destroyed": { "vault_path", "primary_deleted": true,
+/// "backup_deleted": <bool> } }`.
+#[derive(Debug, Serialize)]
+struct DestroySuccess<'a> {
+    destroyed: DestroyedBody<'a>,
+}
+
+/// Render the `paladin destroy` success envelope.
+pub fn write_destroy_success(
+    vault_path: &std::path::Path,
+    primary_deleted: bool,
+    backup_deleted: bool,
+    mut out: impl Write,
+) -> std::io::Result<()> {
+    let vault_path = vault_path.to_string_lossy();
+    let env = DestroySuccess {
+        destroyed: DestroyedBody {
+            vault_path: &vault_path,
+            primary_deleted,
+            backup_deleted,
+        },
+    };
+    serde_json::to_writer(&mut out, &env).map_err(std::io::Error::other)?;
+    writeln!(out)?;
+    Ok(())
+}
+
 /// `paladin rename` success envelope per the §5 JSON shape table:
 /// `{ "account": AccountSummary }`. The summary reflects the
 /// post-rename state — including the bumped `updated_at` — so JSON

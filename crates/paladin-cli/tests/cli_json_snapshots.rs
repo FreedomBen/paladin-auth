@@ -490,6 +490,63 @@ fn snapshot_edit_help_envelope() {
 }
 
 #[test]
+fn snapshot_destroy_help_envelope() {
+    let out = run_paladin(&["--json", "destroy", "--help"]);
+    assert_success(&out);
+    assert_json_snapshot!(parse_stdout_json(&out), {
+        ".help.text" => "[help-text]",
+    });
+}
+
+#[test]
+fn snapshot_destroy_success_envelope() {
+    // A `.bak` present and unlinked pins `backup_deleted: true`.
+    let (_dir, path) = fresh_vault_path();
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).expect("create");
+    vault.save(&store).expect("save");
+    std::fs::write(path.with_file_name("vault.bin.bak"), b"bak").expect("write bak");
+
+    let out = run_paladin(&[
+        "--json",
+        "--vault",
+        path.to_str().unwrap(),
+        "destroy",
+        "--yes",
+    ]);
+    assert_success(&out);
+    assert_json_snapshot!(parse_stdout_json(&out), {
+        // The resolved temp path is volatile; redact so the shape is
+        // pinned without the per-run directory.
+        ".destroyed.vault_path" => "[vault-path]",
+    });
+}
+
+#[test]
+fn snapshot_destroy_partial_failure_unlink_backup_envelope() {
+    // A `.bak` directory survives the symlink probe (backup_present),
+    // the primary unlink succeeds, then `remove_file` on the directory
+    // fails → io_error (unlink_backup_file) with primary_deleted: true,
+    // backup_deleted: false. Pins the partial-failure envelope shape.
+    let (_dir, path) = fresh_vault_path();
+    std::fs::write(&path, b"vault").expect("write vault");
+    let bak = path.with_file_name("vault.bin.bak");
+    std::fs::create_dir(&bak).expect("create .bak dir");
+
+    let out = run_paladin(&[
+        "--json",
+        "--vault",
+        path.to_str().unwrap(),
+        "destroy",
+        "--yes",
+    ]);
+    assert_failure(&out);
+    assert_json_snapshot!(parse_stderr_json(&out), {
+        ".path" => "[vault-path]",
+    });
+    std::fs::remove_dir(&bak).ok();
+}
+
+#[test]
 fn snapshot_version_envelope() {
     let out = run_paladin(&["--json", "--version"]);
     assert_success(&out);

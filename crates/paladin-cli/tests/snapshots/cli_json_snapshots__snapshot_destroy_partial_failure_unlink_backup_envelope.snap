@@ -1,0 +1,11 @@
+---
+source: crates/paladin-cli/tests/cli_json_snapshots.rs
+expression: parse_stderr_json(&out)
+---
+{
+  "backup_deleted": false,
+  "error_kind": "io_error",
+  "operation": "unlink_backup_file",
+  "path": "[vault-path]",
+  "primary_deleted": true
+}

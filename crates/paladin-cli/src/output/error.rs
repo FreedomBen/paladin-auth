@@ -117,6 +117,30 @@ pub enum CliError {
         /// Underlying OS error reported by `DirBuilder::create`.
         source: std::io::Error,
     },
+    /// `paladin destroy` found no primary vault at the resolved path.
+    /// Path-aware specialization of `PaladinError::VaultMissing` — the
+    /// typed variant carries no path, but the §5 `destroy` contract
+    /// puts the resolved `path` on the `vault_missing` envelope so a
+    /// script sees which file was absent. Text mode falls through to
+    /// the `PaladinError::VaultMissing` `Display` wording.
+    DestroyVaultMissing {
+        /// Resolved absolute path destroy probed and found absent.
+        path: PathBuf,
+    },
+    /// `paladin destroy` failed at an I/O step (symlink defense, unlink,
+    /// or parent `fsync`). Wraps the originating `PaladinError::IoError`
+    /// or `PaladinError::DestroyIoError` and threads the resolved
+    /// `path` so the §5 `io_error` envelope carries the failing path;
+    /// for the post-primary variant the `primary_deleted` /
+    /// `backup_deleted` fields ride along so JSON callers see the
+    /// on-disk state without re-reading the filesystem.
+    DestroyIo {
+        /// Resolved absolute path destroy was operating on.
+        path: PathBuf,
+        /// Originating core error (`IoError` for pre-primary failures,
+        /// `DestroyIoError` for `unlink_backup_file` / `fsync_vault_dir`).
+        source: PaladinError,
+    },
 }
 
 impl From<PaladinError> for CliError {
@@ -171,6 +195,10 @@ impl std::fmt::Display for CliError {
                     .unwrap_or_else(|| synth.to_string());
                 f.write_str(&body)
             }
+            Self::DestroyVaultMissing { .. } => {
+                std::fmt::Display::fmt(&PaladinError::VaultMissing, f)
+            }
+            Self::DestroyIo { source, .. } => std::fmt::Display::fmt(source, f),
         }
     }
 }
@@ -189,8 +217,46 @@ impl std::error::Error for CliError {
         match self {
             Self::Paladin(p) => Some(p),
             Self::CreateVaultDir { source, .. } => Some(source),
+            Self::DestroyIo { source, .. } => Some(source),
             _ => None,
         }
+    }
+}
+
+/// Build the §5 `io_error` JSON envelope for a `paladin destroy`
+/// failure, threading the resolved `path`. Pre-primary failures
+/// (`PaladinError::IoError`) carry just `operation` + `path`;
+/// post-primary failures (`PaladinError::DestroyIoError`) also carry
+/// `primary_deleted` / `backup_deleted` so JSON callers learn the
+/// on-disk state without re-reading the filesystem. Any other wrapped
+/// error degrades to the generic core envelope (defensive — the
+/// command body only ever wraps the two I/O variants).
+fn destroy_io_envelope(path: &std::path::Path, source: &PaladinError) -> serde_json::Value {
+    let path = path.to_string_lossy();
+    match source {
+        PaladinError::IoError { operation, .. } => serde_json::json!({
+            "error_kind": "io_error",
+            "operation": operation,
+            "path": path,
+        }),
+        PaladinError::DestroyIoError {
+            operation,
+            primary_deleted,
+            backup_deleted,
+            ..
+        } => serde_json::json!({
+            "error_kind": "io_error",
+            "operation": operation,
+            "path": path,
+            "primary_deleted": primary_deleted,
+            "backup_deleted": backup_deleted,
+        }),
+        // The command body never wraps a non-I/O error here; fall back
+        // to the core envelope so a future caller can't silently lose
+        // the error_kind.
+        other => serde_json::to_value(other).unwrap_or_else(
+            |_| serde_json::json!({ "error_kind": other.kind().as_str(), "path": path }),
+        ),
     }
 }
 
@@ -201,6 +267,10 @@ impl std::error::Error for CliError {
 /// a single newline) and nothing else. In text mode the renderer prints
 /// `paladin: <message>` for runtime errors and the verbatim clap
 /// diagnostic for usage errors.
+// One match arm per `(Mode, CliError)` pairing — the length is
+// mechanical, not complexity. Mirrors the same allow on the
+// `PaladinError` serde impl above.
+#[allow(clippy::too_many_lines)]
 pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Result<()> {
     match (mode, err) {
         (Mode::Json, CliError::Paladin(p)) => {
@@ -263,6 +333,22 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
             serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
             writeln!(out)?;
         }
+        (Mode::Json, CliError::DestroyVaultMissing { path }) => {
+            // §5 `vault_missing` envelope, extended with the resolved
+            // `path` that destroy probed so a script sees which file
+            // was absent.
+            let envelope = serde_json::json!({
+                "error_kind": "vault_missing",
+                "path": path.to_string_lossy(),
+            });
+            serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
+            writeln!(out)?;
+        }
+        (Mode::Json, CliError::DestroyIo { path, source }) => {
+            serde_json::to_writer(&mut out, &destroy_io_envelope(path, source))
+                .map_err(std::io::Error::other)?;
+            writeln!(out)?;
+        }
         (Mode::Text { .. }, CliError::Usage { text_message }) => {
             // Clap's render() already terminates with a newline.
             write!(out, "{text_message}")?;
@@ -298,7 +384,9 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
             CliError::Paladin(_)
             | CliError::NoMatch { .. }
             | CliError::DuplicateAccount { .. }
-            | CliError::ClipboardWriteFailed { .. },
+            | CliError::ClipboardWriteFailed { .. }
+            | CliError::DestroyVaultMissing { .. }
+            | CliError::DestroyIo { .. },
         ) => {
             writeln!(out, "paladin: {err}")?;
         }

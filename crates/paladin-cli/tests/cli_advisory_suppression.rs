@@ -48,6 +48,11 @@ const ADVISORY_PLAINTEXT_STORAGE: &str = "Plaintext storage keeps account secret
 /// Substring from `format_plaintext_export_warning()`.
 const ADVISORY_PLAINTEXT_EXPORT: &str = "Plaintext export writes account secrets unencrypted";
 
+/// Substring from `format_destroy_warning(path, _)`. `destroy` prints
+/// this to stderr in text mode (even under `--yes`); under `--json` it
+/// is suppressed because the caller opted in with `--yes`.
+const ADVISORY_DESTROY: &str = "This will permanently delete the vault";
+
 /// §5 prompt-string prefix shared by `init`'s
 /// `"New passphrase (empty for plaintext): "` and
 /// `passphrase set`'s `"New passphrase: "`. Using the common prefix
@@ -200,4 +205,38 @@ fn json_export_plaintext_suppresses_unencrypted_secrets_advisory() {
     // Sanity: the §5 success envelope is on stdout.
     let env: Value = serde_json::from_str(stdout.trim()).expect("stdout is JSON envelope");
     assert_eq!(env["written"], serde_json::json!(out.to_str().unwrap()));
+}
+
+#[test]
+fn json_destroy_yes_suppresses_destructive_warning_advisory() {
+    // §5 / Milestone 10: `destroy` prints
+    // `format_destroy_warning(path, backup_present)` to stderr in text
+    // mode before the destructive confirmation (and even under `--yes`).
+    // Under `--json`, `--yes` is required at parse time and the warning
+    // is suppressed entirely because the caller opted in — the JSON
+    // envelope owns stdout. No PTY needed: `--yes` skips the prompt.
+    //
+    // The vault file is written directly (not via `Store::create`)
+    // because `destroy` ignores the §4.3 perms gate, so a raw blob in a
+    // possibly-0770 sandbox tempdir is a valid fixture.
+    let (_dir, vault_path) = fresh_vault_path();
+    std::fs::write(&vault_path, b"not-a-real-vault").expect("write vault fixture");
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "destroy",
+            "--yes",
+        ])
+        .assert()
+        .success();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    assert_lacks_advisory("stderr", stderr, ADVISORY_DESTROY);
+    assert_lacks_advisory("stdout", stdout, ADVISORY_DESTROY);
+    // Sanity: the §5 success envelope is the only thing on stdout.
+    let env: Value = serde_json::from_str(stdout.trim()).expect("stdout is JSON envelope");
+    assert_eq!(env["destroyed"]["primary_deleted"], serde_json::json!(true));
 }
