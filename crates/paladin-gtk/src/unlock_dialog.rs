@@ -666,6 +666,11 @@ pub enum UnlockDialogMsg {
     /// next keystroke clears the inline error through
     /// [`UnlockDialogState::set_passphrase`]'s built-in dismissal.
     OpenFailedInline(InlineError),
+    /// The `Delete vault…` footer link was clicked. The widget's
+    /// `update` forwards [`UnlockDialogOutput::DeleteVaultLinkClicked`]
+    /// so `AppModel` can present the `DestroyDialog` for the locked
+    /// vault. Emits no state change.
+    DeleteVaultLinkClicked,
 }
 
 /// Outputs forwarded from [`UnlockDialogComponent`] up to
@@ -694,6 +699,25 @@ pub enum UnlockDialogOutput {
     /// [`crate::app::state::AppState::UnlockedBusy`] →
     /// [`crate::app::state::AppState::Unlocked`].
     SubmitLock(VaultLock),
+    /// The `Delete vault…` footer link was clicked. `AppModel`
+    /// responds by dispatching `AppMsg::OpenDestroyDialog`, which
+    /// resolves the locked vault's path from
+    /// [`crate::app::state::AppState::Locked`] and presents the
+    /// `DestroyDialog`. Carries no payload.
+    DeleteVaultLinkClicked,
+}
+
+/// Fixed `"Delete vault…"` label the footer `gtk::Button` link in
+/// both [`UnlockDialogComponent`] and
+/// [`crate::startup_error::StartupErrorComponent`] displays for the
+/// destructive vault-deletion affordance.
+///
+/// Trailing ellipsis per the GNOME HIG (the link opens a confirmation
+/// dialog rather than acting immediately). Pure — returns a
+/// `'static str` without allocating.
+#[must_use]
+pub fn format_unlock_dialog_delete_vault_link_label() -> &'static str {
+    "Delete vault…"
 }
 
 /// Apply an inbound [`UnlockDialogMsg`] to `state` and return the
@@ -724,6 +748,7 @@ pub fn apply_msg(
             state.set_inline_error(Some(err));
             None
         }
+        UnlockDialogMsg::DeleteVaultLinkClicked => Some(UnlockDialogOutput::DeleteVaultLinkClicked),
     }
 }
 
@@ -911,6 +936,25 @@ impl SimpleComponent for UnlockDialogComponent {
                     connect_clicked[sender] => move |_| {
                         let _ = sender.input_sender().send(UnlockDialogMsg::SubmitClicked);
                     },
+                },
+            },
+
+            // Destructive escape hatch: a flat, centred link that
+            // activates `AppMsg::OpenDestroyDialog` for users who have
+            // forgotten the passphrase and want to delete and re-create
+            // the vault. Styled `flat` so it reads as a tertiary link,
+            // not a primary affordance.
+            #[name = "delete_vault_link"]
+            gtk::Button {
+                set_label: format_unlock_dialog_delete_vault_link_label(),
+                set_halign: gtk::Align::Center,
+                add_css_class: "flat",
+                // See the `connect_changed` comment for the
+                // panic-safe `Sender::send` rationale.
+                connect_clicked[sender] => move |_| {
+                    let _ = sender
+                        .input_sender()
+                        .send(UnlockDialogMsg::DeleteVaultLinkClicked);
                 },
             },
         }

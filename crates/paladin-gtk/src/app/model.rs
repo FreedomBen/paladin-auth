@@ -100,15 +100,15 @@ use crate::app::state::{
     apply_submit_import_inplace, apply_submit_passphrase_inplace, apply_submit_remove_inplace,
     apply_submit_settings_inplace, apply_submit_unlock_inplace, apply_unlock_dispatch_inplace,
     apply_unlock_vault_install_inplace, compose_add_dispatch, compose_add_worker_input,
-    compose_edit_worker_input, compose_export_dispatch, compose_export_worker_input,
-    compose_import_dispatch, compose_import_worker_input, compose_passphrase_dispatch,
-    compose_passphrase_worker_input, compose_qr_dispatch, compose_qr_worker_input,
-    compose_remove_dispatch, compose_remove_worker_input, compose_settings_dispatch,
-    compose_settings_worker_input, compose_unlock_dispatch, compose_unlock_worker_input,
-    decide_state_from_inspect, decide_state_from_open_error, edit_final_app_state,
-    handle_auto_lock_expiry, handle_effect_completion, handle_effect_request, handle_quit_request,
-    handle_worker_lost, initial_effects_for, run_unlock_worker, AppState, OpenErrorOutcome,
-    UnlockWorkerCompletion,
+    compose_destroy_dispatch, compose_edit_worker_input, compose_export_dispatch,
+    compose_export_worker_input, compose_import_dispatch, compose_import_worker_input,
+    compose_passphrase_dispatch, compose_passphrase_worker_input, compose_qr_dispatch,
+    compose_qr_worker_input, compose_remove_dispatch, compose_remove_worker_input,
+    compose_settings_dispatch, compose_settings_worker_input, compose_unlock_dispatch,
+    compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
+    edit_final_app_state, handle_auto_lock_expiry, handle_effect_completion, handle_effect_request,
+    handle_quit_request, handle_worker_lost, initial_effects_for, run_unlock_worker, AppState,
+    OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::auto_lock::{
     auto_lock_timer_transition, evaluate_timer_fire, idle_should_arm, lock_on_expiry,
@@ -118,6 +118,11 @@ use crate::auto_lock::{
 use crate::clipboard_clear::{
     evaluate_wake, format_copy_toast, format_next_code_copy_toast, prepare_copy_bytes,
     prepare_copy_next_code_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
+};
+use crate::destroy_dialog::{
+    clear_for_lock as destroy_clear_for_lock, probe_backup_present, run_destroy_worker,
+    DestroyDialogComponent, DestroyDialogInit, DestroyDialogMsg, DestroyDialogOutput,
+    DestroyWorkerEffect,
 };
 use crate::edit_dialog::{
     decide_edit_target, duplicate_marker_from_account, format_edit_dialog_success_toast,
@@ -270,6 +275,14 @@ pub struct AppModel {
     /// handler.
     #[allow(dead_code)]
     remove_dialog: Option<Controller<RemoveDialogComponent>>,
+    /// Live [`DestroyDialogComponent`] controller when the user has
+    /// activated the `app.delete-vault` action (primary menu /
+    /// `Ctrl+Shift+Delete`) or an unlock / startup-error footer link.
+    /// `None` between activations. Held on `self` so the presented
+    /// `AdwAlertDialog` is not dropped at the end of the
+    /// [`AppMsg::OpenDestroyDialog`] handler.
+    #[allow(dead_code)]
+    destroy_dialog: Option<Controller<DestroyDialogComponent>>,
     /// Live [`AddAccountComponent`] controller when the user has
     /// activated the header-bar `+` button. `None` between
     /// activations. Held on `self` so the rendered widget is not
@@ -586,6 +599,7 @@ pub struct AppModel {
 }
 
 impl std::fmt::Debug for AppModel {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppModel")
             .field("vault_path", &self.vault_path)
@@ -614,6 +628,10 @@ impl std::fmt::Debug for AppModel {
             .field(
                 "remove_dialog",
                 &self.remove_dialog.as_ref().map(|_| "<mounted>"),
+            )
+            .field(
+                "destroy_dialog",
+                &self.destroy_dialog.as_ref().map(|_| "<mounted>"),
             )
             .field("add_dialog", &self.add_dialog.as_ref().map(|_| "<mounted>"))
             .field(
@@ -1159,6 +1177,41 @@ pub enum AppMsg {
     /// [`crate::app::state::apply_remove_vault_install_inplace`]
     /// unconditionally.
     RemoveWorkerCompleted(RemoveWorkerCompletion),
+    /// Posted by the `app.delete-vault` `gio::SimpleAction` (primary
+    /// menu / `Ctrl+Shift+Delete`) and by the `UnlockComponent` /
+    /// `StartupErrorView` footer links. Resolves the target vault
+    /// path from the current [`AppState`] (`Unlocked` / `Locked` /
+    /// `StartupError`-with-path), probes `vault.bin.bak`, and mounts a
+    /// [`crate::destroy_dialog::DestroyDialogComponent`]. A dispatch
+    /// arriving in `Missing` / `UnlockedBusy` / path-less
+    /// `StartupError` is a benign no-op (no vault to destroy / a
+    /// worker is in flight).
+    OpenDestroyDialog,
+    /// Forwarded from the live [`crate::destroy_dialog::DestroyDialogComponent`]
+    /// when the user interacts with the dialog
+    /// ([`DestroyDialogOutput::Cancel`] drops the controller;
+    /// [`DestroyDialogOutput::SubmitConfirm`] enters the destroy
+    /// worker through the `UnlockedBusy` busy gate).
+    DestroyDialogAction(DestroyDialogOutput),
+    /// Entry side of the destroy effect. Carries the resolved vault
+    /// `path` so the `gio::spawn_blocking
+    /// paladin_core::destroy_vault(path)` worker targets the same
+    /// path the dialog seeded. Serialized through `effect_ownership`
+    /// (`EffectKind::DestroyVault`); the held `(Vault, Store)` pair
+    /// stays in [`AppModel::vault`] (the worker operates purely on the
+    /// path) and is dropped on success.
+    DestroyVault {
+        /// Resolved vault path to destroy.
+        path: std::path::PathBuf,
+    },
+    /// Posted by the `gio::spawn_blocking paladin_core::destroy_vault`
+    /// worker. [`crate::app::state::compose_destroy_dispatch`] routes
+    /// the typed `Result<DestroyReport, PaladinError>` (mapped to a
+    /// [`crate::destroy_dialog::DestroyWorkerEffect`]) to the terminal
+    /// `Missing` transition + `InitDialog` mount + secret wipe + toast
+    /// (success / vault-gone) or the inline-error re-display (typed
+    /// failure).
+    DestroyVaultCompleted(DestroyWorkerEffect),
     /// Posted by the `gio::spawn_blocking
     /// Vault::mutate_and_save(|v| v.add(account))` worker after it
     /// consumes a [`crate::add_account::AddWorkerInput`] and reports
@@ -1858,6 +1911,7 @@ impl SimpleComponent for AppModel {
             unlock_dialog,
             edit_dialog: None,
             remove_dialog: None,
+            destroy_dialog: None,
             add_dialog: None,
             settings_dialog: None,
             import_dialog: None,
@@ -4087,6 +4141,180 @@ impl SimpleComponent for AppModel {
                     });
                 }
             }
+            AppMsg::OpenDestroyDialog => {
+                // `app.delete-vault` activation (primary menu /
+                // `Ctrl+Shift+Delete`) or an unlock / startup-error
+                // footer link. Resolve the target path from the
+                // current state's `allows_destroy_action` gate, probe
+                // `vault.bin.bak`, and present the destructive
+                // `AdwAlertDialog`. A dispatch arriving where the gate
+                // is closed (`Missing` / `UnlockedBusy` / path-less
+                // `StartupError`) is a benign no-op. If a dialog is
+                // already mounted, drop the prior controller first so
+                // a double-activation cannot stack two dialogs.
+                let target = self
+                    .state
+                    .as_ref()
+                    .filter(|state| state.allows_destroy_action())
+                    .and_then(|state| state.path())
+                    .map(Path::to_path_buf);
+                if let Some(path) = target {
+                    if let Some(controller) = self.destroy_dialog.take() {
+                        controller.widget().force_close();
+                    }
+                    let backup_present = probe_backup_present(&path);
+                    let controller = DestroyDialogComponent::builder()
+                        .launch(DestroyDialogInit {
+                            path,
+                            backup_present,
+                        })
+                        .forward(sender.input_sender(), AppMsg::DestroyDialogAction);
+                    controller.widget().present(Some(&self.content));
+                    self.destroy_dialog = Some(controller);
+                }
+            }
+            AppMsg::DestroyDialogAction(DestroyDialogOutput::Cancel) => {
+                // Drop the controller so the `adw::AlertDialog` tears
+                // itself down (it self-detaches from the toplevel on
+                // close). Defensive `None` is a benign no-op.
+                self.destroy_dialog = None;
+            }
+            AppMsg::DestroyDialogAction(DestroyDialogOutput::SubmitConfirm { path }) => {
+                // The user typed `yes` and activated the destructive
+                // response. Dim the dialog and re-enter the effect
+                // through `AppMsg::DestroyVault` so the worker spawn,
+                // busy-gate (when `Unlocked`), and completion routing
+                // all run through one code path.
+                if let Some(controller) = self.destroy_dialog.as_ref() {
+                    controller.emit(DestroyDialogMsg::SetBusy(true));
+                }
+                sender.input(AppMsg::DestroyVault { path });
+            }
+            AppMsg::DestroyVault { path } => {
+                // Entry side of the `gio::spawn_blocking
+                // paladin_core::destroy_vault(path)` worker. When the
+                // app is `Unlocked` it holds a live `(Vault, Store)`
+                // pair and an `EffectOwnership` slot, so route the
+                // destroy through the busy gate
+                // (`Unlocked → UnlockedBusy`) like every other
+                // mutating effect — the held pair stays in
+                // `self.vault` (the worker operates purely on the
+                // path) and is dropped on success. When the app is
+                // `Locked` / `StartupError` (footer-link entry) there
+                // is no pair and no effects slot, so spawn the worker
+                // directly; the dialog's own busy latch prevents a
+                // double-submit and the completion path transitions to
+                // `Missing` regardless of the prior state.
+                let gate = match (self.state.as_ref(), self.effects.as_mut()) {
+                    (Some(AppState::Unlocked { .. }), Some(_)) => {
+                        match handle_effect_request(self.effects.as_mut(), EffectKind::DestroyVault)
+                        {
+                            EffectStart::Accepted => {
+                                if let Some(state) = self.state.as_mut() {
+                                    apply_submit_remove_inplace(state);
+                                }
+                                true
+                            }
+                            // Another worker is in flight; re-enable
+                            // the dialog so the user can retry once it
+                            // returns.
+                            EffectStart::Rejected => {
+                                if let Some(controller) = self.destroy_dialog.as_ref() {
+                                    controller.emit(DestroyDialogMsg::SetBusy(false));
+                                }
+                                false
+                            }
+                        }
+                    }
+                    // `Locked` / `StartupError` footer-link entry: no
+                    // busy gate, spawn directly.
+                    _ => true,
+                };
+                if gate {
+                    let sender = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        match gtk::gio::spawn_blocking(move || run_destroy_worker(path)).await {
+                            Ok(effect) => {
+                                sender.input(AppMsg::DestroyVaultCompleted(effect));
+                            }
+                            Err(_) => {
+                                sender.input(AppMsg::WorkerPanic(EffectKind::DestroyVault));
+                            }
+                        }
+                    });
+                }
+            }
+            AppMsg::DestroyVaultCompleted(effect) => {
+                // Worker-outcome dispatch. `compose_destroy_dispatch`
+                // bundles the typed `DestroyWorkerEffect` over the
+                // cached `AppState` into a `DestroyDispatch`:
+                //
+                // * `Success` / `VaultMissing` — terminal: drop the
+                //   held vault, wipe every secret buffer, tear down
+                //   open dialogs, transition to `Missing`, mount
+                //   `InitDialog`, and toast (backup-aware on success,
+                //   `Vault already gone.` on vault-gone).
+                // * `Failure` — keep the dialog open, roll the busy
+                //   gate back to `Unlocked`, forward the inline error,
+                //   re-enable the destructive button after a second
+                //   `yes`.
+                let dispatch = self
+                    .state
+                    .as_ref()
+                    .map(|state| compose_destroy_dispatch(state, &effect));
+                if let Some(dispatch) = dispatch {
+                    if dispatch.drop_vault {
+                        // Terminal branch: `complete_destroy_transition`
+                        // drops the vault, wipes secrets, tears down
+                        // dialogs, transitions to `Missing`, mounts
+                        // `InitDialog`, and toasts. The busy gate is
+                        // released below.
+                        let toast = dispatch.toast.clone().unwrap_or_else(|| {
+                            crate::destroy_dialog::format_destroy_dialog_vault_gone_toast()
+                                .to_string()
+                        });
+                        // Release the effect-ownership busy gate (if
+                        // any) before tearing down so a deferred
+                        // quit/lock drains against the post-destroy
+                        // state. The vault is gone, so the lock branch
+                        // is a no-op and quit still fires.
+                        let post = handle_effect_completion(self.effects.as_mut(), false);
+                        // Drop the effects slot — there is no vault to
+                        // own anymore.
+                        self.effects = None;
+                        self.complete_destroy_transition(&toast, &sender);
+                        self.apply_effect_completion_outcome(post, &sender);
+                    } else {
+                        // Typed-failure branch: roll the busy gate
+                        // back, re-enable the dialog after a fresh
+                        // `yes`, and forward the inline error.
+                        if let Some(new_state) = dispatch.app_state {
+                            if let Some(state) = self.state.as_mut() {
+                                *state = new_state;
+                            }
+                        }
+                        if let Some(msg) = dispatch.dialog_msg {
+                            if let Some(controller) = self.destroy_dialog.as_ref() {
+                                controller.emit(msg);
+                                controller.emit(DestroyDialogMsg::SetBusy(false));
+                            }
+                        }
+                        let vault_still_encrypted =
+                            self.vault.as_ref().is_some_and(|(v, _)| v.is_encrypted());
+                        let post =
+                            handle_effect_completion(self.effects.as_mut(), vault_still_encrypted);
+                        self.apply_effect_completion_outcome(post, &sender);
+                        self.sync_app_window_action_group_sensitivities();
+                    }
+                }
+            }
+            AppMsg::UnlockDialogAction(UnlockDialogOutput::DeleteVaultLinkClicked) => {
+                // Unlock-dialog footer link: re-enter the shared
+                // destroy flow. The path is resolved from
+                // `AppState::Locked` inside the `OpenDestroyDialog`
+                // handler.
+                sender.input(AppMsg::OpenDestroyDialog);
+            }
             AppMsg::UnlockDialogAction(UnlockDialogOutput::SubmitLock(lock)) => {
                 // Entry side of the `gio::spawn_blocking
                 // paladin_core::open` worker. Three steps run in
@@ -4925,6 +5153,104 @@ impl AppModel {
         self.idle_source.disarm();
     }
 
+    /// Apply the terminal destroy transition: drop the held vault,
+    /// wipe every secret-bearing UI buffer, tear down every open
+    /// dialog, transition to [`AppState::Missing`], mount the
+    /// `InitDialog`, and raise `toast_body`.
+    ///
+    /// Shared by the [`DestroyWorkerEffect::Success`] and
+    /// [`DestroyWorkerEffect::VaultMissing`] dispatch branches per the
+    /// `DestroyDialog` (Milestone 10) "Result routing" build step. The
+    /// secret-wipe roll-call mirrors
+    /// [`crate::secret_fields::clear_all`]: passphrase / add-secret /
+    /// add-URI / pending-duplicate / pending-`VaultInit` buffers
+    /// zeroize as their controllers drop here; the search query, HOTP
+    /// reveal state + captured `SecretString`, pending clipboard
+    /// auto-clear capture, and any open `ExportQrDialog`'s rendered
+    /// PNG / SVG / `gdk::Texture` buffers are wiped explicitly. The
+    /// destroy itself already removed the vault from disk, so the
+    /// held `(Vault, Store)` pair is dropped (not reinstalled).
+    fn complete_destroy_transition(&mut self, toast_body: &str, sender: &ComponentSender<Self>) {
+        // Drop the held vault — the file is gone from disk, so there
+        // is nothing to reinstall. The `(Vault, Store)` pair's
+        // `Zeroize`-on-drop wipes any in-memory secret material.
+        self.vault = None;
+
+        // Tear down every open modal dialog so its secret-bearing
+        // buffers wipe in lockstep. Each `clear_for_lock`-bearing
+        // dialog flushes its draft before the controller drops;
+        // `adw::Dialog` / `adw::AlertDialog` descendants are
+        // `force_close`'d so they detach from the toplevel rather
+        // than surviving as an orphan overlay.
+        if let Some(controller) = self.edit_dialog.as_ref() {
+            crate::edit_dialog::clear_for_lock(controller.state().get_mut().model.state_mut());
+            self.content.remove(controller.widget());
+        }
+        self.edit_dialog = None;
+        if let Some(controller) = self.remove_dialog.as_ref() {
+            controller.widget().force_close();
+        }
+        self.remove_dialog = None;
+        if let Some(controller) = self.destroy_dialog.as_ref() {
+            destroy_clear_for_lock(controller.state().get_mut().model.state_mut());
+            controller.widget().force_close();
+        }
+        self.destroy_dialog = None;
+        if let Some(controller) = self.add_dialog.as_ref() {
+            self.content.remove(controller.widget());
+        }
+        self.add_dialog = None;
+        if let Some(controller) = self.settings_dialog.as_ref() {
+            controller.widget().force_close();
+        }
+        self.settings_dialog = None;
+        if let Some(controller) = self.import_dialog.as_ref() {
+            controller.widget().force_close();
+        }
+        self.import_dialog = None;
+        if let Some(controller) = self.export_dialog.as_ref() {
+            controller.widget().force_close();
+        }
+        self.export_dialog = None;
+        if let Some(controller) = self.passphrase_dialog.as_ref() {
+            controller.widget().force_close();
+        }
+        self.passphrase_dialog = None;
+        if let Some(controller) = self.export_qr_dialog.as_ref() {
+            crate::export_qr_dialog::clear_for_lock(controller.state().get_mut().model.state_mut());
+            controller.widget().force_close();
+        }
+        self.export_qr_dialog = None;
+
+        // Wipe the remaining secret-bearing model state: reveal
+        // windows + their captured `SecretString`, pending clipboard
+        // auto-clear capture, and the search query.
+        self.reveal_windows.clear();
+        self.pending_clipboard = None;
+        self.pending_copy_after_advance = None;
+        self.search_query.clear();
+
+        // The vault is gone; the auto-lock idle deadline has nothing
+        // to lock, so disarm it (the success state is `Missing`).
+        self.idle_source.disarm();
+
+        // Transition to `Missing` and mount the `InitDialog`.
+        let path = self
+            .state
+            .as_ref()
+            .and_then(AppState::path)
+            .map(Path::to_path_buf)
+            .or_else(|| self.vault_path.clone());
+        if let Some(path) = path {
+            let new_state = AppState::Missing { path };
+            self.remount_for_state(&new_state, sender);
+            self.state = Some(new_state);
+            self.sync_app_window_action_group_sensitivities();
+        }
+
+        self.show_toast(sender, toast_body);
+    }
+
     /// Apply the typed [`CompleteOutcome`] returned by
     /// [`handle_effect_completion`] at a worker-completion site.
     ///
@@ -5299,6 +5625,18 @@ impl AppModel {
             controller.widget().force_close();
         }
         let remove_dialog = self.remove_dialog.take();
+        // Destroy dialog: explicit `clear_for_lock` zeroizes the
+        // confirmation buffer + cached worker outcome before the
+        // controller drops, so a lock that races an open destroy
+        // confirmation never leaves the typed `yes` (or a stale
+        // inline error) behind. The `AdwAlertDialog` is `force_close`'d
+        // so it detaches from the toplevel instead of surviving as an
+        // orphan overlay on the unlock screen.
+        if let Some(controller) = self.destroy_dialog.as_ref() {
+            destroy_clear_for_lock(controller.state().get_mut().model.state_mut());
+            controller.widget().force_close();
+        }
+        let destroy_dialog = self.destroy_dialog.take();
         if let Some(controller) = self.add_dialog.as_ref() {
             self.content.remove(controller.widget());
         }
@@ -5349,6 +5687,7 @@ impl AppModel {
         let modal = (
             edit_dialog,
             remove_dialog,
+            destroy_dialog,
             add_dialog,
             settings_dialog,
             import_dialog,
@@ -6827,6 +7166,76 @@ pub fn format_app_copy_next_code_label() -> &'static str {
     "Copy selected row's next code"
 }
 
+/// Human-readable label the primary `gio::Menu`'s destructive
+/// *Delete Vault…* entry displays, bound via
+/// [`format_app_menu_delete_vault_action`].
+///
+/// Returns the static label `"Delete Vault…"` (trailing ellipsis per
+/// the GNOME HIG for an entry that opens a confirmation dialog rather
+/// than acting immediately). Sibling of
+/// [`format_app_menu_delete_vault_action`] /
+/// [`format_app_menu_delete_vault_action_name`] /
+/// [`format_app_menu_delete_vault_accelerator`].
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_menu_delete_vault_label() -> &'static str {
+    "Delete Vault…"
+}
+
+/// Fully-qualified `detailed_action_name` the primary menu's
+/// *Delete Vault…* entry and the `Ctrl+Shift+Delete` accelerator
+/// both target.
+///
+/// Returns `"app.delete-vault"`. The `"app."` prefix names the
+/// group; `"delete-vault"` names the action. The matching
+/// `gio::SimpleAction` is registered on the application's `app`
+/// action group through [`format_app_primary_menu_action_names`].
+/// Sibling of [`format_app_menu_delete_vault_action_name`] (bare
+/// name) and [`format_app_menu_delete_vault_accelerator`] (key
+/// spelling).
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_menu_delete_vault_action() -> &'static str {
+    "app.delete-vault"
+}
+
+/// Bare `GLib` action name the *Delete Vault…* entry and the
+/// `Ctrl+Shift+Delete` accelerator bind via
+/// [`format_app_menu_delete_vault_action`].
+///
+/// Returns the static action name `"delete-vault"` — the name passed
+/// to `gio::SimpleAction::new(..., None)`. The fully-qualified
+/// `"app.delete-vault"` spelled by
+/// [`format_app_menu_delete_vault_action`] is the
+/// [`format_app_action_group_name`] prefix joined to this bare name.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_menu_delete_vault_action_name() -> &'static str {
+    "delete-vault"
+}
+
+/// Keyboard accelerator the *Delete Vault…* `gio::SimpleAction` is
+/// wired to per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"`DestroyDialog` (Milestone 10 ...)".
+///
+/// Returns the gtk-rs accelerator spelling `"<Control><Shift>Delete"`
+/// — the `<Control><Shift>` compound keeps the loudest, irreversible
+/// action behind a deliberate two-modifier chord so it cannot be hit
+/// by a stray `Delete` keystroke. The widget binding consumes this
+/// via
+/// `gio::Application::set_accels_for_action(format_app_menu_delete_vault_action(),
+/// &[format_app_menu_delete_vault_accelerator()])` so the accelerator
+/// and the action target stay against a single source of truth.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_menu_delete_vault_accelerator() -> &'static str {
+    "<Control><Shift>Delete"
+}
+
 /// Ordered `(accelerator, fully-qualified action target)` pairs
 /// the application-window wiring hands to
 /// `gio::Application::set_accels_for_action(target, &[accel])`
@@ -6858,7 +7267,7 @@ pub fn format_app_copy_next_code_label() -> &'static str {
 /// for every keyboard-reachable surface in the application
 /// window against a single source of truth.
 #[must_use]
-pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str); 5] {
+pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str); 6] {
     [
         (
             format_app_add_button_accelerator(),
@@ -6879,6 +7288,13 @@ pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str)
         (
             format_app_copy_next_code_accelerator(),
             format_app_copy_next_code_action(),
+        ),
+        // Loudest action last: the irreversible vault deletion sits at
+        // the end of the accelerator surface per the Milestone 10
+        // build order.
+        (
+            format_app_menu_delete_vault_accelerator(),
+            format_app_menu_delete_vault_action(),
         ),
     ]
 }
@@ -6941,7 +7357,7 @@ pub fn wire_app_window_accelerators(app: &gtk::Application) {
 /// Pure — returns a small fixed-size array of `'static` string
 /// pairs without allocating.
 #[must_use]
-pub fn format_app_primary_menu_entries() -> [(&'static str, &'static str); 7] {
+pub fn format_app_primary_menu_entries() -> [(&'static str, &'static str); 8] {
     [
         (
             format_app_menu_import_label(),
@@ -6968,6 +7384,13 @@ pub fn format_app_primary_menu_entries() -> [(&'static str, &'static str); 7] {
             format_app_menu_about_action(),
         ),
         (format_app_menu_quit_label(), format_app_menu_quit_action()),
+        // Destructive group: the irreversible vault deletion is
+        // appended last so it reads as its own group below a
+        // separator per the Milestone 10 build order.
+        (
+            format_app_menu_delete_vault_label(),
+            format_app_menu_delete_vault_action(),
+        ),
     ]
 }
 
@@ -7026,7 +7449,7 @@ pub fn build_app_primary_menu_model() -> gtk::gio::Menu {
 /// Pure — returns a small fixed-size array of `'static` strings
 /// without allocating.
 #[must_use]
-pub fn format_app_primary_menu_action_names() -> [&'static str; 7] {
+pub fn format_app_primary_menu_action_names() -> [&'static str; 8] {
     [
         format_app_menu_import_action_name(),
         format_app_menu_export_action_name(),
@@ -7035,6 +7458,7 @@ pub fn format_app_primary_menu_action_names() -> [&'static str; 7] {
         format_app_menu_keyboard_shortcuts_action_name(),
         format_app_menu_about_action_name(),
         format_app_menu_quit_action_name(),
+        format_app_menu_delete_vault_action_name(),
     ]
 }
 
@@ -7042,17 +7466,24 @@ pub fn format_app_primary_menu_action_names() -> [&'static str; 7] {
 /// [`format_app_primary_menu_entries`] and
 /// [`format_app_primary_menu_action_names`].
 ///
-/// Returns a `[bool; 7]` array whose slots match the §"libadwaita
+/// Returns a `[bool; 8]` array whose slots match the §"libadwaita
 /// usage" sequence (Import, Export, Passphrase, Preferences,
-/// Keyboard Shortcuts, About, Quit). The four mutating entries
-/// (Import / Export / Passphrase / Preferences) read their
+/// Keyboard Shortcuts, About, Quit, Delete Vault). The four mutating
+/// entries (Import / Export / Passphrase / Preferences) read their
 /// sensitivity from [`AppState::allows_mutating_menu`] so they
 /// are enabled only when `AppModel` is in
 /// [`AppState::Unlocked`] (disabled in `Missing` / `Locked` /
 /// `UnlockedBusy` / `StartupError`). Keyboard Shortcuts, About,
 /// and Quit stay enabled in every state per §"libadwaita usage" —
 /// the shortcuts window is purely informational and the GNOME HIG
-/// expects the affordance to be reachable from every state.
+/// expects the affordance to be reachable from every state. The
+/// destructive Delete Vault entry reads
+/// [`AppState::allows_destroy_action`] so it is enabled wherever a
+/// vault exists on disk and no worker is in flight (`Unlocked` /
+/// `Locked` / `StartupError`-with-path) — though the menu itself is
+/// only mounted on the unlocked surface, the shared
+/// `app.delete-vault` action also backs the `Ctrl+Shift+Delete`
+/// accelerator and the unlock / startup-error footer links.
 ///
 /// The widget binding consumes this array alongside
 /// [`format_app_primary_menu_action_names`] to keep each
@@ -7064,16 +7495,17 @@ pub fn format_app_primary_menu_action_names() -> [&'static str; 7] {
 /// Pure — returns a small fixed-size array of `bool` without
 /// allocating.
 #[must_use]
-pub fn format_app_primary_menu_action_sensitivities(state: &AppState) -> [bool; 7] {
+pub fn format_app_primary_menu_action_sensitivities(state: &AppState) -> [bool; 8] {
     let mutating = state.allows_mutating_menu();
     [
-        mutating, // Import
-        mutating, // Export
-        mutating, // Passphrase
-        mutating, // Preferences
-        true,     // Keyboard Shortcuts
-        true,     // About
-        true,     // Quit
+        mutating,                      // Import
+        mutating,                      // Export
+        mutating,                      // Passphrase
+        mutating,                      // Preferences
+        true,                          // Keyboard Shortcuts
+        true,                          // About
+        true,                          // Quit
+        state.allows_destroy_action(), // Delete Vault
     ]
 }
 
@@ -7850,14 +8282,14 @@ pub fn wire_app_window_action_activations(
 /// The pinned order keeps the menu entries first (matching
 /// the §"libadwaita usage" sequence), appends Add, and ends
 /// with Copy Next Code so callers that only care about the
-/// menu can take `&names[..7]` while the full array covers
+/// menu can take `&names[..8]` while the full array covers
 /// the entire action surface for `connect_activate` wiring
 /// and runtime sensitivity updates.
 ///
 /// Pure — returns an owned array of `&'static str` without
 /// allocating.
 #[must_use]
-pub fn format_app_window_action_names() -> [&'static str; 9] {
+pub fn format_app_window_action_names() -> [&'static str; 10] {
     let menu = format_app_primary_menu_action_names();
     [
         menu[0],
@@ -7867,6 +8299,7 @@ pub fn format_app_window_action_names() -> [&'static str; 9] {
         menu[4],
         menu[5],
         menu[6],
+        menu[7],
         format_app_add_button_action_name(),
         format_app_copy_next_code_action_name(),
     ]
@@ -7925,6 +8358,9 @@ pub fn dispatch_app_window_action(name: &str) -> Option<AppMsg> {
     if name == format_app_copy_next_code_action_name() {
         return Some(AppMsg::CopyNextCodeAccelerator);
     }
+    if name == format_app_menu_delete_vault_action_name() {
+        return Some(AppMsg::OpenDestroyDialog);
+    }
     None
 }
 
@@ -7966,6 +8402,7 @@ pub fn dispatch_startup_error_output(out: StartupErrorOutput) -> AppMsg {
     match out {
         StartupErrorOutput::Quit => AppMsg::Quit,
         StartupErrorOutput::Retry => AppMsg::StartupErrorRetry,
+        StartupErrorOutput::DeleteVaultLinkClicked => AppMsg::OpenDestroyDialog,
     }
 }
 

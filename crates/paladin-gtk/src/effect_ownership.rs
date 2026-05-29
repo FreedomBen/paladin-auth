@@ -76,6 +76,11 @@ pub enum EffectKind {
     PassphraseChange,
     /// `PassphraseDialog` remove sub-flow — `Vault::remove_passphrase`.
     PassphraseRemove,
+    /// `DestroyDialog` → `paladin_core::destroy_vault` (Milestone 10 —
+    /// the irreversible vault-deletion surface). Terminal: the worker
+    /// does not return a `(Vault, Store)` pair; the held pair is
+    /// dropped on success and the app transitions to `Missing`.
+    DestroyVault,
 }
 
 impl EffectKind {
@@ -101,6 +106,7 @@ impl EffectKind {
             Self::PassphraseSet => "passphrase set",
             Self::PassphraseChange => "passphrase change",
             Self::PassphraseRemove => "passphrase remove",
+            Self::DestroyVault => "destroy vault",
         }
     }
 }

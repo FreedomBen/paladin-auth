@@ -659,20 +659,45 @@ fn startup_error_output_quit_variant_exists() {
 }
 
 #[test]
-fn startup_error_output_is_exhaustively_retry_and_quit() {
-    // Display-only invariant per §"Vault interaction": Retry and Quit are
-    // the only actions; the component never creates, overwrites, repairs,
-    // chmods, or reroutes the vault path. Exhaustive match arms lock the
-    // Output enum so a mutating variant fails to compile.
+fn startup_error_output_is_exhaustively_retry_quit_and_delete_vault() {
+    // No-in-place-repair invariant per §"Vault interaction": the
+    // component never creates, overwrites, repairs, chmods, or reroutes
+    // the vault path. The Milestone 10 build order adds one destructive
+    // escape hatch — `DeleteVaultLinkClicked`, which routes to the shared
+    // `app.delete-vault` flow (the deletion itself runs in `AppModel` via
+    // `paladin_core::destroy_vault`, not here). Exhaustive match arms lock
+    // the Output enum so any further mutating variant fails to compile.
     use paladin_gtk::startup_error::StartupErrorOutput;
     fn classify(out: StartupErrorOutput) -> &'static str {
         match out {
             StartupErrorOutput::Retry => "retry",
             StartupErrorOutput::Quit => "quit",
+            StartupErrorOutput::DeleteVaultLinkClicked => "delete-vault",
         }
     }
     assert_eq!(classify(StartupErrorOutput::Retry), "retry");
     assert_eq!(classify(StartupErrorOutput::Quit), "quit");
+    assert_eq!(
+        classify(StartupErrorOutput::DeleteVaultLinkClicked),
+        "delete-vault"
+    );
+}
+
+#[test]
+fn apply_startup_error_msg_delete_vault_link_clicked_emits_delete_output() {
+    // The footer `Delete vault…` link's `connect_clicked` handler
+    // dispatches `StartupErrorMsg::DeleteVaultLinkClicked`, which the
+    // component routes through `apply_startup_error_msg` and surfaces as
+    // `StartupErrorOutput::DeleteVaultLinkClicked` for `AppModel` to
+    // forward as `AppMsg::OpenDestroyDialog`.
+    use paladin_gtk::startup_error::{
+        apply_startup_error_msg, StartupErrorMsg, StartupErrorOutput,
+    };
+    let output = apply_startup_error_msg(StartupErrorMsg::DeleteVaultLinkClicked);
+    assert!(matches!(
+        output,
+        Some(StartupErrorOutput::DeleteVaultLinkClicked)
+    ));
 }
 
 #[test]

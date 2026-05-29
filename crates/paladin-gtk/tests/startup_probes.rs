@@ -2378,17 +2378,18 @@ fn format_app_add_button_accelerator_returns_control_shift_n() {
 }
 
 #[test]
-fn format_app_window_accelerator_bindings_returns_five_pinned_pairs_in_order() {
+fn format_app_window_accelerator_bindings_returns_six_pinned_pairs_in_order() {
     // The application-window wiring iterates this array against
     // `gio::Application::set_accels_for_action(target, &[accel])`
     // for every pinned keyboard surface (Add, Quit, Preferences,
-    // Keyboard Shortcuts, Copy Next Code). The order matches the
-    // pinned-accelerator helper sequence
+    // Keyboard Shortcuts, Copy Next Code, Delete Vault). The order
+    // matches the pinned-accelerator helper sequence
     // (`format_app_add_button_accelerator`,
     //  `format_app_menu_quit_accelerator`,
     //  `format_app_menu_preferences_accelerator`,
     //  `format_app_menu_keyboard_shortcuts_accelerator`,
-    //  `format_app_copy_next_code_accelerator`) and each pair
+    //  `format_app_copy_next_code_accelerator`,
+    //  `format_app_menu_delete_vault_accelerator`) and each pair
     // sources its two slots from the matching `_accelerator` and
     // `_action` helpers so a future rename of any one helper
     // propagates through the bindings instead of drifting per-
@@ -2398,12 +2399,13 @@ fn format_app_window_accelerator_bindings_returns_five_pinned_pairs_in_order() {
     // `for (accel, target) in
     //  format_app_window_accelerator_bindings()` loop, so the
     // wiring stays a single iteration over the pinned source of
-    // truth instead of five hand-spelled
+    // truth instead of six hand-spelled
     // `set_accels_for_action` calls that could silently drift in
     // order or coverage.
     use paladin_gtk::app::model::{
         format_app_add_button_accelerator, format_app_add_button_action,
         format_app_copy_next_code_accelerator, format_app_copy_next_code_action,
+        format_app_menu_delete_vault_accelerator, format_app_menu_delete_vault_action,
         format_app_menu_keyboard_shortcuts_accelerator, format_app_menu_keyboard_shortcuts_action,
         format_app_menu_preferences_accelerator, format_app_menu_preferences_action,
         format_app_menu_quit_accelerator, format_app_menu_quit_action,
@@ -2413,8 +2415,8 @@ fn format_app_window_accelerator_bindings_returns_five_pinned_pairs_in_order() {
     let bindings = format_app_window_accelerator_bindings();
     assert_eq!(
         bindings.len(),
-        5,
-        "the five pinned keyboard surfaces (Add, Quit, Preferences, Keyboard Shortcuts, Copy Next Code) form the entire accelerator surface today",
+        6,
+        "the six pinned keyboard surfaces (Add, Quit, Preferences, Keyboard Shortcuts, Copy Next Code, Delete Vault) form the entire accelerator surface today",
     );
     assert_eq!(
         bindings[0],
@@ -2455,6 +2457,14 @@ fn format_app_window_accelerator_bindings_returns_five_pinned_pairs_in_order() {
             format_app_copy_next_code_action()
         ),
         "fifth binding must be the Copy Next Code accelerator's `<Control><Shift>c` -> `app.copy-next-code`",
+    );
+    assert_eq!(
+        bindings[5],
+        (
+            format_app_menu_delete_vault_accelerator(),
+            format_app_menu_delete_vault_action()
+        ),
+        "sixth (loudest, last) binding must be the Delete Vault accelerator's `<Control><Shift>Delete` -> `app.delete-vault`",
     );
 }
 
@@ -2685,34 +2695,37 @@ fn format_app_add_button_accelerator_is_non_empty_and_well_formed() {
 }
 
 #[test]
-fn format_app_primary_menu_entries_returns_seven_entries_in_pinned_order() {
+fn format_app_primary_menu_entries_returns_eight_entries_in_pinned_order() {
     // The `AppModel`'s primary `gio::Menu` is built by appending
     // each entry's (label, detailed-action-name) pair in the
     // §"libadwaita usage" sequence: Import, Export, Passphrase,
-    // Preferences, Keyboard Shortcuts, About Paladin, Quit. This
-    // helper returns the seven pairs in order so the widget
-    // binding does not need to hand-spell each `menu.append(...)`
-    // call against the individual `format_app_menu_*_label` /
-    // `_action` helpers, keeping the menu structure pinned to a
-    // single source of truth.
+    // Preferences, Keyboard Shortcuts, About Paladin, Quit, and the
+    // Milestone 10 destructive Delete Vault entry appended last. This
+    // helper returns the eight pairs in order so the widget binding
+    // does not need to hand-spell each `menu.append(...)` call
+    // against the individual `format_app_menu_*_label` / `_action`
+    // helpers, keeping the menu structure pinned to a single source
+    // of truth.
     use paladin_gtk::app::model::{
-        format_app_menu_about_action, format_app_menu_about_label, format_app_menu_export_action,
-        format_app_menu_export_label, format_app_menu_import_action, format_app_menu_import_label,
-        format_app_menu_keyboard_shortcuts_action, format_app_menu_keyboard_shortcuts_label,
-        format_app_menu_passphrase_action, format_app_menu_passphrase_label,
-        format_app_menu_preferences_action, format_app_menu_preferences_label,
-        format_app_menu_quit_action, format_app_menu_quit_label, format_app_primary_menu_entries,
+        format_app_menu_about_action, format_app_menu_about_label,
+        format_app_menu_delete_vault_action, format_app_menu_delete_vault_label,
+        format_app_menu_export_action, format_app_menu_export_label, format_app_menu_import_action,
+        format_app_menu_import_label, format_app_menu_keyboard_shortcuts_action,
+        format_app_menu_keyboard_shortcuts_label, format_app_menu_passphrase_action,
+        format_app_menu_passphrase_label, format_app_menu_preferences_action,
+        format_app_menu_preferences_label, format_app_menu_quit_action, format_app_menu_quit_label,
+        format_app_primary_menu_entries,
     };
 
     let entries = format_app_primary_menu_entries();
     assert_eq!(
         entries.len(),
-        7,
-        "primary menu must carry exactly seven entries; got {}",
+        8,
+        "primary menu must carry exactly eight entries; got {}",
         entries.len(),
     );
 
-    let expected: [(&'static str, &'static str); 7] = [
+    let expected: [(&'static str, &'static str); 8] = [
         (
             format_app_menu_import_label(),
             format_app_menu_import_action(),
@@ -2738,10 +2751,14 @@ fn format_app_primary_menu_entries_returns_seven_entries_in_pinned_order() {
             format_app_menu_about_action(),
         ),
         (format_app_menu_quit_label(), format_app_menu_quit_action()),
+        (
+            format_app_menu_delete_vault_label(),
+            format_app_menu_delete_vault_action(),
+        ),
     ];
     assert_eq!(
         entries, expected,
-        "primary menu entries must follow the pinned §\"libadwaita usage\" sequence (Import, Export, Passphrase, Preferences, Keyboard Shortcuts, About, Quit) and pair each label with its fully-qualified action target",
+        "primary menu entries must follow the pinned §\"libadwaita usage\" sequence (Import, Export, Passphrase, Preferences, Keyboard Shortcuts, About, Quit, Delete Vault) and pair each label with its fully-qualified action target",
     );
 }
 
@@ -3297,6 +3314,63 @@ fn dispatch_app_window_action_routes_quit_to_quit() {
     assert!(
         matches!(msg, Some(AppMsg::Quit)),
         "dispatch_app_window_action must route the quit bare action name to AppMsg::Quit; got {msg:?}",
+    );
+}
+
+#[test]
+fn dispatch_app_window_action_routes_delete_vault_to_open_destroy_dialog() {
+    // Per the Milestone 10 build order: the primary menu's
+    // `Delete Vault…` entry and the `Ctrl+Shift+Delete` accelerator
+    // both target `app.delete-vault`, whose activation dispatches
+    // `AppMsg::OpenDestroyDialog` so `AppModel` resolves the vault path
+    // and presents the `DestroyDialog`.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_menu_delete_vault_action_name, AppMsg,
+    };
+
+    let msg = dispatch_app_window_action(format_app_menu_delete_vault_action_name());
+    assert!(
+        matches!(msg, Some(AppMsg::OpenDestroyDialog)),
+        "dispatch_app_window_action must route the delete-vault bare action name to AppMsg::OpenDestroyDialog; got {msg:?}",
+    );
+}
+
+#[test]
+fn format_app_menu_delete_vault_accelerator_returns_control_shift_delete() {
+    // Pins the gtk-rs accelerator spelling `"<Control><Shift>Delete"`.
+    // The widget binding hands this verbatim to
+    // `gio::Application::set_accels_for_action` through the
+    // `format_app_window_accelerator_bindings` iteration, and the
+    // `format_app_window_accelerator_bindings_parse_via_gtk_accelerator_parse`
+    // test rounds it through `gtk::accelerator_parse` to catch
+    // unknown-keysym typos.
+    use paladin_gtk::app::model::format_app_menu_delete_vault_accelerator;
+
+    assert_eq!(
+        format_app_menu_delete_vault_accelerator(),
+        "<Control><Shift>Delete",
+        "Ctrl+Shift+Delete accelerator must use the gtk-rs `<Control><Shift>Delete` spelling per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §\"DestroyDialog (Milestone 10 ...)\"",
+    );
+}
+
+#[test]
+fn format_app_menu_delete_vault_action_is_app_group_qualified() {
+    // The fully-qualified `app.delete-vault` target must be the
+    // `app` group prefix joined to the bare `delete-vault` name.
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_menu_delete_vault_action,
+        format_app_menu_delete_vault_action_name,
+    };
+
+    assert_eq!(format_app_menu_delete_vault_action(), "app.delete-vault");
+    assert_eq!(
+        format_app_menu_delete_vault_action(),
+        format!(
+            "{}.{}",
+            format_app_action_group_name(),
+            format_app_menu_delete_vault_action_name()
+        ),
+        "delete-vault detailed action target must be `<group>.<bare-name>`",
     );
 }
 
@@ -4308,28 +4382,29 @@ fn build_app_primary_action_group_disables_mutating_actions_in_non_unlocked_stat
 }
 
 #[test]
-fn format_app_primary_menu_action_names_returns_seven_bare_names_in_pinned_order() {
+fn format_app_primary_menu_action_names_returns_eight_bare_names_in_pinned_order() {
     // Companion to `format_app_primary_menu_entries`: the widget
     // binding registers a `gio::SimpleAction` for each primary-
     // menu entry on the application's `app` action group. This
-    // helper returns the seven bare action names in the
+    // helper returns the eight bare action names in the
     // §"libadwaita usage" sequence (Import, Export, Passphrase,
-    // Preferences, Keyboard Shortcuts, About, Quit), parallel to
-    // `format_app_primary_menu_entries`, so the SimpleAction-
-    // registration loop and the `gio::Menu::append` loop iterate
-    // over a single pinned source of truth.
+    // Preferences, Keyboard Shortcuts, About, Quit, Delete Vault),
+    // parallel to `format_app_primary_menu_entries`, so the
+    // SimpleAction-registration loop and the `gio::Menu::append`
+    // loop iterate over a single pinned source of truth.
     use paladin_gtk::app::model::{
-        format_app_menu_about_action_name, format_app_menu_export_action_name,
-        format_app_menu_import_action_name, format_app_menu_keyboard_shortcuts_action_name,
-        format_app_menu_passphrase_action_name, format_app_menu_preferences_action_name,
-        format_app_menu_quit_action_name, format_app_primary_menu_action_names,
+        format_app_menu_about_action_name, format_app_menu_delete_vault_action_name,
+        format_app_menu_export_action_name, format_app_menu_import_action_name,
+        format_app_menu_keyboard_shortcuts_action_name, format_app_menu_passphrase_action_name,
+        format_app_menu_preferences_action_name, format_app_menu_quit_action_name,
+        format_app_primary_menu_action_names,
     };
 
     let names = format_app_primary_menu_action_names();
     assert_eq!(
         names.len(),
-        7,
-        "primary menu must register exactly seven SimpleActions; got {}",
+        8,
+        "primary menu must register exactly eight SimpleActions; got {}",
         names.len(),
     );
     assert_eq!(
@@ -4342,8 +4417,9 @@ fn format_app_primary_menu_action_names_returns_seven_bare_names_in_pinned_order
             format_app_menu_keyboard_shortcuts_action_name(),
             format_app_menu_about_action_name(),
             format_app_menu_quit_action_name(),
+            format_app_menu_delete_vault_action_name(),
         ],
-        "primary menu bare action names must follow the pinned §\"libadwaita usage\" sequence (Import, Export, Passphrase, Preferences, Keyboard Shortcuts, About, Quit)",
+        "primary menu bare action names must follow the pinned §\"libadwaita usage\" sequence (Import, Export, Passphrase, Preferences, Keyboard Shortcuts, About, Quit, Delete Vault)",
     );
 }
 
@@ -4417,8 +4493,8 @@ fn format_app_primary_menu_action_sensitivities_disables_mutating_entries_off_un
         let sens = format_app_primary_menu_action_sensitivities(&state);
         assert_eq!(
             sens.len(),
-            7,
-            "primary menu must carry exactly seven entries"
+            8,
+            "primary menu must carry exactly eight entries"
         );
         assert!(
             !sens[0],
@@ -4448,6 +4524,15 @@ fn format_app_primary_menu_action_sensitivities_disables_mutating_entries_off_un
             sens[6],
             "Quit must stay enabled for state={state:?} per §\"libadwaita usage\"",
         );
+        // Delete Vault reads `allows_destroy_action`: enabled in
+        // `Locked` / `StartupError`-with-path (footer-link surfaces),
+        // disabled in `Missing` (no vault) and `UnlockedBusy` (worker
+        // in flight).
+        assert_eq!(
+            sens[7],
+            state.allows_destroy_action(),
+            "Delete Vault sensitivity must mirror AppState::allows_destroy_action for state={state:?}",
+        );
     }
 }
 
@@ -4463,8 +4548,8 @@ fn format_app_primary_menu_action_sensitivities_enables_mutating_entries_on_unlo
     };
     let sens = format_app_primary_menu_action_sensitivities(&state);
     assert_eq!(
-        sens, [true; 7],
-        "every primary menu entry must be enabled when AppState is Unlocked",
+        sens, [true; 8],
+        "every primary menu entry (including Delete Vault) must be enabled when AppState is Unlocked",
     );
 }
 

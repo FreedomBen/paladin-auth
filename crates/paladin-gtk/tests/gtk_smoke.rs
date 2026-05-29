@@ -597,6 +597,102 @@ fn app_renders_unlock_dialog_for_encrypted_vault() {
     );
 }
 
+/// Plan bullet (Milestone 10): the happy-path destroy flow — launch
+/// with a fresh plaintext vault, delete it, and confirm the on-disk
+/// vault is gone and a re-launch routes to the `InitDialog`
+/// (`AppState::Missing`).
+///
+/// The `xvfb-run --exit-after-startup` marker harness cannot inject
+/// GTK pointer / key events, so the *interactive* leg of the flow
+/// (open the primary-menu `Delete Vault…` item, type `yes`, activate
+/// the destructive response, observe the `Vault deleted.` toast) is
+/// exercised by the manual test plan rather than here. This test
+/// covers the observable contract the dialog drives:
+///
+/// 1. With a fresh plaintext vault on disk, the app launches into
+///    `AppState::Unlocked` — the surface where the destroy action /
+///    accelerator / primary-menu item are reachable.
+/// 2. `paladin_core::destroy_vault` (the exact worker the dialog
+///    spawns through `gio::spawn_blocking`) removes the primary file.
+/// 3. A re-launch against the now-absent path routes to
+///    `AppState::Missing`, mounting the `InitDialog` — the same
+///    terminal transition `AppMsg::DestroyVaultCompleted` performs
+///    in-process, proving the post-destroy surface the user lands on.
+#[test]
+fn app_destroy_flow_removes_vault_and_routes_to_init_dialog() {
+    if !xvfb_run_available() {
+        eprintln!(
+            "skipping: `xvfb-run` is not on PATH. CI installs the xvfb \
+             package; install it locally to exercise this smoke test."
+        );
+        return;
+    }
+
+    let (tempdir, vault_path) = prepare_empty_plaintext_vault();
+    let path_str = vault_path
+        .to_str()
+        .expect("tempfile produced a non-UTF-8 vault path")
+        .to_owned();
+
+    // (1) Fresh plaintext vault launches into `Unlocked`, where the
+    // `app.delete-vault` action / `Ctrl+Shift+Delete` accelerator /
+    // primary-menu `Delete Vault…` item are reachable.
+    let before = run_under_xvfb(&["--vault", &path_str, "--exit-after-startup"]);
+    let before_stdout = String::from_utf8_lossy(&before.stdout);
+    let before_stderr = String::from_utf8_lossy(&before.stderr);
+    assert!(
+        before.status.success(),
+        "launch with prepared vault exited {:?}\n--- stdout ---\n{before_stdout}\n--- stderr ---\n{before_stderr}",
+        before.status,
+    );
+    let unlocked_marker = format!("paladin-gtk: startup_state=Unlocked path={path_str}");
+    assert!(
+        before_stdout.contains(&unlocked_marker),
+        "expected `{unlocked_marker}` before destroy\n--- stdout ---\n{before_stdout}",
+    );
+
+    // (2) Run the exact worker the `DestroyDialog` spawns. The vault
+    // has no `.bak`, so `backup_deleted` is `false` and only the
+    // primary is unlinked.
+    let report = paladin_core::destroy_vault(&vault_path).expect("destroy_vault must succeed");
+    assert!(
+        report.primary_deleted,
+        "primary vault file must be unlinked"
+    );
+    assert!(
+        !report.backup_deleted,
+        "no `.bak` was present, so backup_deleted must be false",
+    );
+    assert!(
+        !vault_path.exists(),
+        "the on-disk vault must be gone after destroy",
+    );
+
+    // (3) A re-launch against the absent path routes to `Missing`,
+    // mounting the `InitDialog` — the post-destroy surface the user
+    // lands on (mirrored in-process by `AppMsg::DestroyVaultCompleted`).
+    let after = run_under_xvfb(&["--vault", &path_str, "--exit-after-startup"]);
+    let after_stdout = String::from_utf8_lossy(&after.stdout);
+    let after_stderr = String::from_utf8_lossy(&after.stderr);
+    assert!(
+        after.status.success(),
+        "re-launch after destroy exited {:?}\n--- stdout ---\n{after_stdout}\n--- stderr ---\n{after_stderr}",
+        after.status,
+    );
+    let missing_marker = format!("paladin-gtk: startup_state=Missing path={path_str}");
+    assert!(
+        after_stdout.contains(&missing_marker),
+        "expected `{missing_marker}` after destroy\n--- stdout ---\n{after_stdout}",
+    );
+    let init_marker = paladin_gtk::init_dialog::format_init_dialog_marker(&vault_path);
+    assert!(
+        after_stdout.contains(&init_marker),
+        "expected the InitDialog marker `{init_marker}` after destroy\n--- stdout ---\n{after_stdout}",
+    );
+
+    drop(tempdir);
+}
+
 /// Add a validated TOTP or HOTP account to `vault` and persist to
 /// `store`. The secret is a fixed RFC 6238 base32 fixture; the same
 /// shape is used by the pure-logic fixtures in

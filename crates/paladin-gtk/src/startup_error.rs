@@ -41,6 +41,7 @@ use relm4::ComponentSender;
 use paladin_core::{format_unsafe_permissions, ErrorKind, PaladinError, VaultStatus};
 
 use crate::effect_ownership::EffectKind;
+use crate::unlock_dialog::format_unlock_dialog_delete_vault_link_label;
 
 /// Which startup step produced the error.
 ///
@@ -358,27 +359,35 @@ pub enum StartupErrorMsg {
     /// [`apply_startup_error_msg`] to
     /// [`StartupErrorOutput::Quit`].
     QuitClicked,
+    /// The `Delete vault…` footer link was clicked. Routes through
+    /// [`apply_startup_error_msg`] to
+    /// [`StartupErrorOutput::DeleteVaultLinkClicked`].
+    DeleteVaultLinkClicked,
 }
 
 /// Outputs emitted by [`StartupErrorComponent`].
 ///
 /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction"
-/// the `StartupErrorComponent` is display-only: Retry and Quit
-/// are the only actions, and the component never creates,
-/// overwrites, repairs, chmods, or selects a different vault
-/// path in v0.2. The two variants here lock that contract on
-/// the Output surface — adding a mutating variant (e.g. a
-/// "create vault here" affordance) would require an explicit
-/// design revisit in `docs/DESIGN.md` and `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
+/// the `StartupErrorComponent` performs no in-place vault repair:
+/// it never creates, overwrites, repairs, chmods, or selects a
+/// different vault path. Retry and Quit are the recovery actions;
+/// the `DestroyDialog` (Milestone 10) build order adds one
+/// destructive escape hatch — a `Delete vault…` footer link that
+/// activates the shared `app.delete-vault` flow so a user stuck on
+/// an unreadable / corrupt vault can delete it and re-create from
+/// scratch. The deletion itself runs through
+/// `paladin_core::destroy_vault` in `AppModel`, not here, so this
+/// surface stays free of storage logic.
 ///
-/// `AppModel` consumes both variants by forwarding them through
+/// `AppModel` consumes the variants by forwarding them through
 /// `crate::app::model::dispatch_startup_error_output`:
 /// [`StartupErrorOutput::Quit`] dispatches the same `AppMsg::Quit`
-/// shutdown path the primary menu's Quit entry uses, and
+/// shutdown path the primary menu's Quit entry uses,
 /// [`StartupErrorOutput::Retry`] dispatches a dedicated
 /// `AppMsg::StartupErrorRetry` that re-runs the path-resolution
-/// and `inspect` probe and re-routes to the matching per-state
-/// child controller.
+/// and `inspect` probe, and
+/// [`StartupErrorOutput::DeleteVaultLinkClicked`] dispatches
+/// `AppMsg::OpenDestroyDialog`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartupErrorOutput {
     /// User asked to re-run the startup probe.
@@ -386,6 +395,9 @@ pub enum StartupErrorOutput {
     /// User asked to tear the application down through the
     /// primary-menu shutdown path.
     Quit,
+    /// User clicked the `Delete vault…` footer link. `AppModel`
+    /// presents the `DestroyDialog` for the failing vault path.
+    DeleteVaultLinkClicked,
 }
 
 /// Translate a [`StartupErrorMsg`] into the optional
@@ -404,6 +416,7 @@ pub fn apply_startup_error_msg(msg: StartupErrorMsg) -> Option<StartupErrorOutpu
     match msg {
         StartupErrorMsg::RetryClicked => Some(StartupErrorOutput::Retry),
         StartupErrorMsg::QuitClicked => Some(StartupErrorOutput::Quit),
+        StartupErrorMsg::DeleteVaultLinkClicked => Some(StartupErrorOutput::DeleteVaultLinkClicked),
     }
 }
 
@@ -470,6 +483,23 @@ impl SimpleComponent for StartupErrorComponent {
                     // See the Retry button comment.
                     connect_clicked[sender] => move |_| {
                         let _ = sender.input_sender().send(StartupErrorMsg::QuitClicked);
+                    },
+                },
+
+                // Destructive escape hatch for a corrupt / unreadable
+                // vault: a flat link that activates the shared
+                // `app.delete-vault` flow via `AppMsg::OpenDestroyDialog`.
+                // Styled `flat` so it reads as a tertiary affordance
+                // beside the Retry / Quit pills.
+                #[name = "delete_vault_link"]
+                gtk::Button {
+                    set_label: format_unlock_dialog_delete_vault_link_label(),
+                    add_css_class: "flat",
+                    // See the Retry button comment.
+                    connect_clicked[sender] => move |_| {
+                        let _ = sender
+                            .input_sender()
+                            .send(StartupErrorMsg::DeleteVaultLinkClicked);
                     },
                 },
             },

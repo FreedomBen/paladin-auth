@@ -693,6 +693,9 @@ fn unlock_dialog_msg_passphrase_changed_carries_typed_text() {
         UnlockDialogMsg::OpenFailedInline(_) => {
             panic!("expected PassphraseChanged, got OpenFailedInline")
         }
+        UnlockDialogMsg::DeleteVaultLinkClicked => {
+            panic!("expected PassphraseChanged, got DeleteVaultLinkClicked")
+        }
     }
 }
 
@@ -1038,6 +1041,9 @@ fn unlock_dialog_msg_submit_clicked_pattern_matches() {
         UnlockDialogMsg::OpenFailedInline(_) => {
             panic!("expected SubmitClicked, got OpenFailedInline")
         }
+        UnlockDialogMsg::DeleteVaultLinkClicked => {
+            panic!("expected SubmitClicked, got DeleteVaultLinkClicked")
+        }
     }
 }
 
@@ -1058,6 +1064,9 @@ fn unlock_dialog_msg_open_failed_inline_pattern_matches() {
         }
         UnlockDialogMsg::PassphraseChanged(_) => {
             panic!("expected OpenFailedInline, got PassphraseChanged")
+        }
+        UnlockDialogMsg::DeleteVaultLinkClicked => {
+            panic!("expected OpenFailedInline, got DeleteVaultLinkClicked")
         }
     }
 }
@@ -1144,6 +1153,34 @@ fn apply_msg_submit_clicked_empty_stages_inline_error() {
 }
 
 #[test]
+fn apply_msg_delete_vault_link_clicked_returns_delete_output() {
+    // The footer `Delete vault…` link routes through `apply_msg` and
+    // surfaces `UnlockDialogOutput::DeleteVaultLinkClicked` for
+    // `AppModel` to forward as `AppMsg::OpenDestroyDialog`. The
+    // passphrase buffer is untouched.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("partial");
+    let out = apply_msg(&mut state, UnlockDialogMsg::DeleteVaultLinkClicked);
+    assert!(matches!(
+        out,
+        Some(UnlockDialogOutput::DeleteVaultLinkClicked)
+    ));
+    assert!(
+        !state.is_passphrase_empty(),
+        "the delete-vault link must not consume the passphrase buffer",
+    );
+}
+
+#[test]
+fn unlock_dialog_delete_vault_link_label_is_pinned() {
+    use paladin_gtk::unlock_dialog::format_unlock_dialog_delete_vault_link_label;
+    assert_eq!(
+        format_unlock_dialog_delete_vault_link_label(),
+        "Delete vault…"
+    );
+}
+
+#[test]
 fn apply_msg_submit_clicked_non_empty_returns_submit_lock() {
     let mut state = UnlockDialogState::new();
     state.set_passphrase("hunter2");
@@ -1154,6 +1191,9 @@ fn apply_msg_submit_clicked_non_empty_returns_submit_lock() {
             VaultLock::Encrypted(_) => {}
             other => panic!("expected VaultLock::Encrypted, got {other:?}"),
         },
+        UnlockDialogOutput::DeleteVaultLinkClicked => {
+            panic!("expected SubmitLock, got DeleteVaultLinkClicked")
+        }
     }
 }
 
@@ -1192,7 +1232,9 @@ fn unlock_dialog_output_submit_lock_carries_encrypted_variant() {
     state.set_passphrase("hunter2");
     let out = apply_msg(&mut state, UnlockDialogMsg::SubmitClicked)
         .expect("non-empty submit must forward");
-    let UnlockDialogOutput::SubmitLock(lock) = out;
+    let UnlockDialogOutput::SubmitLock(lock) = out else {
+        panic!("expected SubmitLock, got {out:?}");
+    };
     assert!(
         matches!(lock, VaultLock::Encrypted(_)),
         "SubmitLock must carry the encrypted lock built from the typed passphrase",

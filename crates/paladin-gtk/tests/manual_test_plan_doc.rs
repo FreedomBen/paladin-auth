@@ -61,6 +61,14 @@ const REQUIRED_ITEMS: &[&str] = &[
     "Passphrase `set` / `change` / `remove` flows complete end-to-end.",
     "Secret fields clear on cancel, submit, and auto-lock.",
     "Icon theme resolution + fallback work against the system theme.",
+    "Destroy vault via primary-menu item.",
+    "Destroy vault via unlock-dialog footer link.",
+    "Destroy vault via startup-error footer link.",
+    "Destroy vault via `Ctrl+Shift+Delete`.",
+    "Cancel destroy at confirmation prompt; vault unchanged.",
+    "Destroy vault with `.bak` present; both files unlinked, toast reads `Vault deleted.`.",
+    "Destroy vault with no `.bak`; primary unlinked, toast reads `Vault deleted.`.",
+    "Destroy vault while another dialog (Add, Edit, Passphrase) is open; that dialog closes and its sensitive buffers wipe.",
 ];
 
 fn manual_plan_path() -> PathBuf {

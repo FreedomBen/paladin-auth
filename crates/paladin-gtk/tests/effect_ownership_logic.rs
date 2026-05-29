@@ -158,6 +158,7 @@ fn control_gating_unlocked_busy_disables_all_mutating_controls() {
         EffectKind::PassphraseSet,
         EffectKind::PassphraseChange,
         EffectKind::PassphraseRemove,
+        EffectKind::DestroyVault,
     ] {
         let mut model = unlocked();
         model.start_effect(effect);

@@ -27,6 +27,7 @@ use relm4::gtk;
 use crate::app::model::{
     format_app_add_button_accelerator, format_app_add_button_tooltip,
     format_app_copy_next_code_accelerator, format_app_copy_next_code_label,
+    format_app_menu_delete_vault_accelerator, format_app_menu_delete_vault_label,
     format_app_menu_keyboard_shortcuts_accelerator, format_app_menu_keyboard_shortcuts_label,
     format_app_menu_preferences_accelerator, format_app_menu_preferences_label,
     format_app_menu_quit_accelerator, format_app_menu_quit_label,
@@ -95,11 +96,13 @@ pub fn format_app_shortcuts_window_section_title() -> &'static str {
 ///   entry.
 ///
 /// Display order is the most-frequent-use flow (Add → Search →
-/// Copy Next Code → Preferences → Keyboard Shortcuts → Quit) and
+/// Copy Next Code → Preferences → Keyboard Shortcuts → Quit →
+/// Delete Vault, with the loudest irreversible action last) and
 /// is intentionally distinct from the
 /// [`crate::app::model::format_app_window_accelerator_bindings`]
 /// iteration order (which is Add → Quit → Preferences →
-/// Keyboard Shortcuts → Copy Next Code) — the bindings array is
+/// Keyboard Shortcuts → Copy Next Code → Delete Vault) — the
+/// bindings array is
 /// sized to keep `set_accels_for_action` wiring stable, while this
 /// array is sized for human reading. The Search row is
 /// intentionally absent from
@@ -112,7 +115,7 @@ pub fn format_app_shortcuts_window_section_title() -> &'static str {
 /// Pure — returns an owned array of two-tuples without
 /// allocating.
 #[must_use]
-pub fn format_app_shortcuts_window_entries() -> [(&'static str, &'static str); 6] {
+pub fn format_app_shortcuts_window_entries() -> [(&'static str, &'static str); 7] {
     [
         (
             format_app_add_button_accelerator(),
@@ -137,6 +140,12 @@ pub fn format_app_shortcuts_window_entries() -> [(&'static str, &'static str); 6
         (
             format_app_menu_quit_accelerator(),
             format_app_menu_quit_label(),
+        ),
+        // Loudest action last in the display order per the
+        // Milestone 10 build order.
+        (
+            format_app_menu_delete_vault_accelerator(),
+            format_app_menu_delete_vault_label(),
         ),
     ]
 }
@@ -252,9 +261,9 @@ mod tests {
     }
 
     #[test]
-    fn format_app_shortcuts_window_entries_lists_six_rows_in_display_order() {
+    fn format_app_shortcuts_window_entries_lists_seven_rows_in_display_order() {
         let entries = format_app_shortcuts_window_entries();
-        assert_eq!(entries.len(), 6);
+        assert_eq!(entries.len(), 7);
         assert_eq!(
             entries[0],
             (
@@ -296,6 +305,14 @@ mod tests {
                 format_app_menu_quit_accelerator(),
                 format_app_menu_quit_label(),
             )
+        );
+        assert_eq!(
+            entries[6],
+            (
+                format_app_menu_delete_vault_accelerator(),
+                format_app_menu_delete_vault_label(),
+            ),
+            "Delete Vault must be the loudest row, last in the display order",
         );
     }
 

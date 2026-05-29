@@ -471,6 +471,92 @@ Exports:
     `crates/paladin-gtk/src/app/model.rs` `lock_on_auto_lock_expiry`
     routing through `clear_for_lock` before the controller drop.
 
+## 13. Destroy vault (`DestroyDialog`, DESIGN §4.3 / §7)
+
+The destructive vault-deletion surface. The dialog body text comes
+verbatim from `paladin_core::format_destroy_warning`; the destructive
+response is gated until the confirmation entry reads `yes`. The
+deletion runs `paladin_core::destroy_vault` on a `gio::spawn_blocking`
+worker. Pure-logic coverage lives in
+`tests/destroy_dialog_logic.rs`; the action / accelerator / menu /
+footer-link lockstep is pinned in `tests/startup_probes.rs`.
+
+- [ ] Destroy vault via primary-menu item.
+  * Expected: open the primary (kebab) menu in the unlocked list
+    view, click `Delete Vault…`. An `AdwAlertDialog` appears with the
+    `format_destroy_warning` body and a `Type 'yes' to confirm` entry.
+    The `Delete` response is red (destructive) and disabled until the
+    entry reads `yes`. Confirm → the vault file is unlinked, a
+    `Vault deleted.` toast shows, and the window transitions to the
+    `InitDialog` (no vault).
+  * Tied to: `tests/destroy_dialog_logic.rs`,
+    `tests/startup_probes.rs`
+    `dispatch_app_window_action_routes_delete_vault_to_open_destroy_dialog`.
+- [ ] Destroy vault via unlock-dialog footer link.
+  * Expected: for an encrypted vault, on the `UnlockComponent` screen
+    click the `Delete vault…` footer link (no passphrase required).
+    The same `DestroyDialog` appears; confirming deletes the vault and
+    lands on the `InitDialog`.
+  * Tied to: `tests/unlock_dialog_logic.rs`
+    `apply_msg_delete_vault_link_clicked_returns_delete_output`.
+- [ ] Destroy vault via startup-error footer link.
+  * Expected: with a corrupt / unreadable vault routed to
+    `StartupErrorComponent`, click the `Delete vault…` footer link
+    beside Retry / Quit. The `DestroyDialog` appears; confirming
+    deletes the failing vault and lands on the `InitDialog`.
+  * Tied to: `tests/startup_error_logic.rs`
+    `apply_startup_error_msg_delete_vault_link_clicked_emits_delete_output`.
+- [ ] Destroy vault via `Ctrl+Shift+Delete`.
+  * Expected: in the unlocked list view press `Ctrl+Shift+Delete`. The
+    `DestroyDialog` appears (same as the menu item). The accelerator
+    also appears in the Keyboard Shortcuts window (last row).
+  * Tied to: `tests/startup_probes.rs`
+    `format_app_menu_delete_vault_accelerator_returns_control_shift_delete`,
+    `format_app_window_accelerator_bindings_returns_six_pinned_pairs_in_order`.
+- [ ] Cancel destroy at confirmation prompt; vault unchanged.
+  * Expected: open the `DestroyDialog`, then press Escape / click
+    Cancel / click outside (without typing `yes`, or after typing it).
+    The dialog closes, no toast appears, and the vault file is still on
+    disk with its accounts intact.
+  * Tied to: `tests/destroy_dialog_logic.rs`
+    `cancel_emits_cancel_without_touching_confirmation`.
+- [ ] Destroy vault with `.bak` present; both files unlinked, toast
+  reads `Vault deleted.`.
+  * Expected: trigger a save first (e.g. add then remove an account)
+    so a `vault.bin.bak` exists, then destroy. The warning body names
+    both `vault.bin` and `vault.bin.bak`; after confirming, both files
+    are gone and the toast reads `Vault deleted.`.
+  * Tied to: `tests/destroy_dialog_logic.rs`
+    `run_destroy_worker_success_deletes_primary_and_backup`,
+    `success_with_backup_deleted_transitions_to_missing_and_drops_dialog`.
+- [ ] Destroy vault with no `.bak`; primary unlinked, toast reads
+  `Vault deleted.`.
+  * Expected: with no `vault.bin.bak` on disk, destroy. The warning
+    body names only `vault.bin`; after confirming, the primary is gone
+    and the toast reads `Vault deleted.` (the `backup_deleted == true`
+    wording covers the no-backup case).
+  * Tied to: `tests/destroy_dialog_logic.rs`
+    `run_destroy_worker_success_deletes_primary_only`,
+    `success_toast_wording_is_backup_aware`.
+- [ ] Destroy vault while another dialog (Add, Edit, Passphrase) is
+  open; that dialog closes and its sensitive buffers wipe.
+  * Expected: open an Add / Edit / Passphrase dialog, type some secret
+    input, then activate `Ctrl+Shift+Delete` and confirm the destroy.
+    The other dialog closes, its secret-bearing buffers are wiped (no
+    re-show carries the typed bytes), the vault is deleted, and the
+    `InitDialog` mounts.
+  * Tied to: `tests/destroy_dialog_logic.rs`
+    `clear_all_roll_call_covers_every_secret_surface`;
+    `crates/paladin-gtk/src/app/model.rs` `complete_destroy_transition`.
+- [ ] Destroy an already-missing vault (race): the toast reads
+  `Vault already gone.` and the `InitDialog` still mounts.
+  * Expected: this is hard to trigger by hand (the primary is removed
+    out from under an open dialog); if reproduced, confirming surfaces
+    the idempotent `Vault already gone.` toast rather than an error,
+    and the surface still lands on the `InitDialog`.
+  * Tied to: `tests/destroy_dialog_logic.rs`
+    `vault_missing_transitions_to_missing_with_already_gone_toast`.
+
 ## Reporting
 
 If a step fails, file a bug with:

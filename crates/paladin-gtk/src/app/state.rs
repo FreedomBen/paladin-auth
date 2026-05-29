@@ -64,6 +64,10 @@ use paladin_core::{
 use crate::add_account::{
     AddAccountMsg, AddWorkerEffect, AddWorkerInput, QrWorkerEffect, QrWorkerInput,
 };
+use crate::destroy_dialog::{
+    format_destroy_dialog_success_toast, format_destroy_dialog_vault_gone_toast, DestroyDialogMsg,
+    DestroyWorkerEffect,
+};
 use crate::edit_dialog::{EditWorkerEffect, EditWorkerInput};
 use crate::effect_ownership::{
     CompleteOutcome, EffectKind, EffectOwnership, EffectStart, LockDecision, QuitDecision,
@@ -188,6 +192,26 @@ impl AppState {
     #[must_use]
     pub fn allows_mutating_menu(&self) -> bool {
         matches!(self, Self::Unlocked { .. })
+    }
+
+    /// `true` when the *Delete Vault…* action / accelerator may fire.
+    ///
+    /// Per the `DestroyDialog` (Milestone 10) build order, vault
+    /// deletion is reachable from every state that has a vault on
+    /// disk to delete and no worker in flight: `Unlocked` (primary
+    /// menu + `Ctrl+Shift+Delete`), `Locked` (the `UnlockComponent`
+    /// footer link), and `StartupError` carrying a resolved path (the
+    /// `StartupErrorView` footer link). It is disabled in `Missing`
+    /// (no vault), in `UnlockedBusy` (a worker holds the pair), and in
+    /// a path-less `StartupError` (the failure came from
+    /// `default_vault_path`, so there is no target to destroy).
+    #[must_use]
+    pub fn allows_destroy_action(&self) -> bool {
+        match self {
+            Self::Unlocked { .. } | Self::Locked { .. } => true,
+            Self::StartupError { path, .. } => path.is_some(),
+            Self::Missing { .. } | Self::UnlockedBusy { .. } => false,
+        }
     }
 
     /// Transition [`AppState::Unlocked`] → [`AppState::UnlockedBusy`]
@@ -4338,5 +4362,134 @@ pub fn handle_auto_lock_expiry(
 pub fn handle_worker_lost(effects: Option<&mut EffectOwnership>) {
     if let Some(state) = effects {
         state.worker_lost();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Destroy-dialog dispatch
+// ---------------------------------------------------------------------------
+
+/// Bundle of dispatch decisions for the destroy worker outcome.
+///
+/// Per the `DestroyDialog` (Milestone 10) "Result routing" build
+/// step in `docs/IMPLEMENTATION_PLAN_04_GTK.md`,
+/// `AppMsg::DestroyVaultCompleted` runs [`compose_destroy_dispatch`]
+/// over the typed [`DestroyWorkerEffect`] so the call site applies
+/// all decisions (state transition, dialog teardown, held-vault
+/// drop, secret wipe, `InitDialog` mount, toast, inline-error
+/// forward) without re-deriving the routing.
+///
+/// Unlike [`RemoveDispatch`], the destroy worker is terminal — the
+/// success / vault-gone branches drop the held `(Vault, Store)` pair
+/// and transition to [`AppState::Missing`] rather than reinstalling
+/// the pair. The failure branch keeps the dialog open and rolls the
+/// busy gate back to [`AppState::Unlocked`] so the user can retry.
+// Four independent post-effect decisions (`drop_dialog`,
+// `drop_vault`, `wipe_secrets`, `mount_init`) each map to a distinct
+// `AppModel::update` side effect, mirroring the per-surface bool
+// fields on `RemoveDispatch` / `ControlGating`; a packed flag set
+// would obscure the call sites.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone)]
+pub struct DestroyDispatch {
+    /// New [`AppState`] to install on `AppModel.state`. `Some(Missing
+    /// { path })` for the success / vault-gone branches (the destroy
+    /// is terminal); `Some(Unlocked { path })` for the failure branch
+    /// (roll the busy gate back so controls re-enable). `None` only
+    /// when the cached state carried no path (defensive — every
+    /// `UnlockedBusy` / `Unlocked` carries one).
+    pub app_state: Option<AppState>,
+    /// Inline message to forward to the live
+    /// [`crate::destroy_dialog::DestroyDialogComponent`] controller.
+    /// `Some(WorkerFailed(outcome))` on the failure branch (the
+    /// dialog stays mounted and re-renders the inline error); `None`
+    /// on the success / vault-gone branches that drop the dialog.
+    pub dialog_msg: Option<DestroyDialogMsg>,
+    /// Whether `AppModel::update` should drop the live
+    /// [`crate::destroy_dialog::DestroyDialogComponent`] controller.
+    /// `true` on success / vault-gone; `false` on failure (stays
+    /// mounted so the inline error is visible and the user can retry).
+    pub drop_dialog: bool,
+    /// Whether `AppModel::update` should drop the held
+    /// `(Vault, Store)` pair. `true` on success / vault-gone (the
+    /// vault is gone from disk); `false` on failure (the pair was
+    /// never handed to the worker, so the model still owns it).
+    pub drop_vault: bool,
+    /// Whether `AppModel::update` should wipe every secret-bearing UI
+    /// buffer via the [`crate::secret_fields::clear_all`] roll-call.
+    /// `true` on success / vault-gone; `false` on failure.
+    pub wipe_secrets: bool,
+    /// Whether `AppModel::update` should mount the `InitDialog` after
+    /// transitioning to `Missing`. `true` on success / vault-gone;
+    /// `false` on failure.
+    pub mount_init: bool,
+    /// Optional `AdwToast` body to raise on the shared
+    /// `adw::ToastOverlay`. `Some(Vault deleted[. | (backup remained
+    /// on disk).])` on success (backup-aware); `Some(Vault already
+    /// gone.)` on vault-gone; `None` on failure (the inline error is
+    /// the only surface).
+    pub toast: Option<String>,
+}
+
+/// Resolve the destroyed-vault path from the cached [`AppState`].
+///
+/// Every `Unlocked` / `UnlockedBusy` state carries the resolved vault
+/// path; this returns it so the success / vault-gone branches can
+/// build [`AppState::Missing`] carrying the same path (so a follow-up
+/// `InitDialog` creates the vault at the same location).
+fn destroy_target_path(current: &AppState) -> Option<PathBuf> {
+    current.path().map(Path::to_path_buf)
+}
+
+/// Aggregate the destroy-dispatch projections into a single
+/// [`DestroyDispatch`].
+///
+/// * [`DestroyWorkerEffect::Success`] — transition to
+///   [`AppState::Missing`], drop the dialog + held vault, wipe
+///   secrets, mount `InitDialog`, and raise the backup-aware success
+///   toast (`Vault deleted.` / `Vault deleted (backup remained on
+///   disk).`).
+/// * [`DestroyWorkerEffect::VaultMissing`] — identical terminal
+///   routing (the destroy is idempotent), with the `Vault already
+///   gone.` toast.
+/// * [`DestroyWorkerEffect::Failure`] — keep the dialog open, roll
+///   the busy gate back to [`AppState::Unlocked`], forward the inline
+///   error, and raise no toast.
+#[must_use]
+pub fn compose_destroy_dispatch(
+    current: &AppState,
+    effect: &DestroyWorkerEffect,
+) -> DestroyDispatch {
+    let path = destroy_target_path(current);
+    match effect {
+        DestroyWorkerEffect::Success(report) => DestroyDispatch {
+            app_state: path.map(|path| AppState::Missing { path }),
+            dialog_msg: None,
+            drop_dialog: true,
+            drop_vault: true,
+            wipe_secrets: true,
+            mount_init: true,
+            toast: Some(format_destroy_dialog_success_toast(report.backup_deleted).to_string()),
+        },
+        DestroyWorkerEffect::VaultMissing => DestroyDispatch {
+            app_state: path.map(|path| AppState::Missing { path }),
+            dialog_msg: None,
+            drop_dialog: true,
+            drop_vault: true,
+            wipe_secrets: true,
+            mount_init: true,
+            toast: Some(format_destroy_dialog_vault_gone_toast().to_string()),
+        },
+        DestroyWorkerEffect::Failure(outcome) => DestroyDispatch {
+            // Roll the busy gate back so the mutating controls
+            // re-enable; the dialog stays open with the inline error.
+            app_state: path.map(|path| AppState::Unlocked { path }),
+            dialog_msg: Some(DestroyDialogMsg::WorkerFailed(outcome.clone())),
+            drop_dialog: false,
+            drop_vault: false,
+            wipe_secrets: false,
+            mount_init: false,
+            toast: None,
+        },
     }
 }

@@ -61,6 +61,74 @@ pub enum ClearReason {
     PathSwitch,
 }
 
+/// One secret-bearing (or secret-adjacent) UI buffer wiped when the
+/// vault leaves the unlocked session.
+///
+/// Per `docs/DESIGN.md` §8 and the `DestroyDialog` (Milestone 10)
+/// "Result routing" build step, the destroy-success path (and its
+/// sibling auto-lock path) must wipe *every* secret-bearing UI
+/// buffer in lockstep with dropping the `(Vault, Store)` pair. This
+/// enum is the authoritative roll-call: [`clear_all`] returns one
+/// entry per surface so the success / lock handlers in
+/// `app::model` cannot silently skip a surface, and the pure-logic
+/// test in `tests/destroy_dialog_logic.rs` asserts the roll-call is
+/// complete. The actual byte-wipe of each surface lives in the
+/// component that owns its buffer (the `Zeroizing<...>` /
+/// `clear_for_lock` mechanisms); this enum names *which* surfaces,
+/// not *how* they are wiped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SecretSurface {
+    /// Passphrase entries across `UnlockComponent`, `InitDialog`,
+    /// and `PassphraseDialog` (`SecretEntry` shadows).
+    PassphraseFields,
+    /// The Add dialog's manual base32 secret entry.
+    AddManualSecret,
+    /// The Add dialog's `otpauth://` URI entry.
+    AddUri,
+    /// The Add dialog's pending validated-duplicate
+    /// [`ValidatedAccount`] slot.
+    AddPendingDuplicate,
+    /// The Init dialog's pending [`VaultInit`] slot.
+    InitPendingVaultInit,
+    /// The account-list search query (may echo a label fragment).
+    SearchQuery,
+    /// Open HOTP reveal windows' in-memory reveal state.
+    HotpRevealState,
+    /// The HOTP reveal's captured [`secrecy::SecretString`].
+    HotpRevealSecret,
+    /// The pending clipboard auto-clear byte capture
+    /// (`Zeroizing<Vec<u8>>`).
+    PendingClipboardAutoClear,
+    /// Any open `ExportQrDialog`'s rendered PNG / SVG /
+    /// `gdk::Texture` buffers.
+    ExportQrRenderedBuffers,
+}
+
+/// Authoritative roll-call of every [`SecretSurface`] wiped when the
+/// vault leaves the unlocked session (destroy success / vault-gone /
+/// auto-lock).
+///
+/// Returns the surfaces in a stable order so `app::model`'s
+/// destroy-success and lock handlers can iterate the same list the
+/// pure-logic test pins, guaranteeing no secret-bearing buffer is
+/// skipped. Pure — allocates a fresh `Vec` of `Copy` discriminators
+/// on each call; safe to call from tests without a GTK display.
+#[must_use]
+pub fn clear_all() -> Vec<SecretSurface> {
+    vec![
+        SecretSurface::PassphraseFields,
+        SecretSurface::AddManualSecret,
+        SecretSurface::AddUri,
+        SecretSurface::AddPendingDuplicate,
+        SecretSurface::InitPendingVaultInit,
+        SecretSurface::SearchQuery,
+        SecretSurface::HotpRevealState,
+        SecretSurface::HotpRevealSecret,
+        SecretSurface::PendingClipboardAutoClear,
+        SecretSurface::ExportQrRenderedBuffers,
+    ]
+}
+
 /// Paladin-owned shadow copy of a secret-bearing GTK entry buffer.
 ///
 /// The component layer shadows every keystroke into this struct so
