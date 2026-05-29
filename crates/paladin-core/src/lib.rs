@@ -57,13 +57,13 @@ pub use policy::{hotp_reveal_deadline, ClipboardClearPolicy, ClipboardClearToken
 #[cfg(feature = "test-zeroize-witness")]
 pub use storage::_testing_write_encrypted_with_raw_plaintext;
 pub use storage::{
-    classify_init_precheck, default_vault_path, inspect, write_secret_file_atomic, InitPrecheck,
-    Store, VaultInit, VaultLock, VaultSettings, VaultStatus,
+    classify_init_precheck, default_vault_path, destroy_vault, inspect, write_secret_file_atomic,
+    DestroyReport, InitPrecheck, Store, VaultInit, VaultLock, VaultSettings, VaultStatus,
 };
 pub use text::{
-    format_create_vault_dir_error, format_init_force_warning, format_plaintext_export_warning,
-    format_plaintext_qr_export_warning, format_plaintext_storage_warning,
-    format_unsafe_permissions, format_validation_warning,
+    format_create_vault_dir_error, format_destroy_warning, format_init_force_warning,
+    format_plaintext_export_warning, format_plaintext_qr_export_warning,
+    format_plaintext_storage_warning, format_unsafe_permissions, format_validation_warning,
 };
 pub use ui_contract::{
     summary_display_label, AUTO_LOCK_SECS_MAX, AUTO_LOCK_SECS_MIN, CLIPBOARD_CLEAR_SECS_MAX,

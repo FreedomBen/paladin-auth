@@ -193,6 +193,162 @@ pub fn classify_init_precheck(probe: Result<VaultStatus>) -> InitPrecheck {
     }
 }
 
+/// Report returned by [`destroy_vault`] (docs/DESIGN.md §4.3).
+///
+/// `primary_deleted` is `true` when `vault.bin` was unlinked
+/// successfully. `backup_deleted` is `true` when a sibling
+/// `vault.bin.bak` was present and unlinked, and `false` when no backup
+/// was present (or when its unlink failed after the primary had already
+/// been removed — that partial case is *also* surfaced as
+/// `io_error { operation: "unlink_backup_file" }`). Front ends render
+/// "Deleted vault." vs. "Deleted vault (backup remained on disk)" off
+/// these fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "error-serde", serde(rename_all = "snake_case"))]
+pub struct DestroyReport {
+    /// `true` once the primary `vault.bin` has been unlinked.
+    pub primary_deleted: bool,
+    /// `true` when a sibling `vault.bin.bak` was present and unlinked.
+    pub backup_deleted: bool,
+}
+
+/// File-level wipe of the vault at `path` (docs/DESIGN.md §4.3).
+///
+/// The path-targeted inverse of `init`: the vault need not be open and a
+/// forgotten passphrase does not block the operation, because file
+/// access already lets any local actor `rm` the bytes. The steps:
+///
+/// 1. `vault_missing` if `path` does not exist — no `.bak` is touched, so
+///    a script that re-runs after a successful destroy is idempotent.
+/// 2. Reject a symlinked primary or backup with
+///    `io_error { operation: "vault_file_is_symlink" / "backup_file_is_symlink" }`
+///    *before* anything is unlinked, so a hostile link cannot redirect
+///    the delete.
+/// 3. Unlink the primary. On failure, return
+///    `io_error { operation: "unlink_vault_file" }` and leave the backup
+///    untouched — the primary is still authoritative on disk.
+/// 4. Unlink `vault.bin.bak` if present (`NotFound` is not an error). A
+///    later failure returns
+///    `io_error { operation: "unlink_backup_file" }` carrying
+///    `primary_deleted: true, backup_deleted: false`.
+/// 5. `fsync` the parent directory. Failure returns
+///    `io_error { operation: "fsync_vault_dir" }` with the completed
+///    state populated.
+/// 6. Return [`DestroyReport`].
+///
+/// Any leftover `vault.bin.tmp` / `vault.bin.bak.tmp` from a crashed
+/// prior save is best-effort unlinked when present; their removal
+/// failures neither block the operation nor appear in the report, which
+/// tracks only the primary and the one-generation backup. This is a
+/// plain unlink, **not** a secure-erase; §4.4 encryption is the at-rest
+/// protection.
+pub fn destroy_vault(path: &Path) -> Result<DestroyReport> {
+    // Step 1 + 2 (probe): `symlink_metadata` so a dangling symlink at
+    // `path` is still "present" and gets rejected as a symlink below
+    // rather than mistaken for a missing vault.
+    let primary_meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(PaladinError::VaultMissing);
+        }
+        Err(err) => {
+            return Err(PaladinError::IoError {
+                operation: "stat_vault_file",
+                source: err,
+            });
+        }
+    };
+    if primary_meta.file_type().is_symlink() {
+        return Err(PaladinError::IoError {
+            operation: "vault_file_is_symlink",
+            source: io::Error::new(io::ErrorKind::InvalidInput, "vault file is a symbolic link"),
+        });
+    }
+
+    let bak = append_suffix(path, ".bak");
+    let backup_present = match fs::symlink_metadata(&bak) {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() {
+                return Err(PaladinError::IoError {
+                    operation: "backup_file_is_symlink",
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "backup file is a symbolic link",
+                    ),
+                });
+            }
+            true
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+        Err(err) => {
+            return Err(PaladinError::IoError {
+                operation: "stat_backup_file",
+                source: err,
+            });
+        }
+    };
+
+    // Step 3: unlink the primary. Until this succeeds the primary is
+    // authoritative on disk, so a failure here is a plain `io_error`
+    // with no partial-completion envelope.
+    fs::remove_file(path).map_err(|err| PaladinError::IoError {
+        operation: "unlink_vault_file",
+        source: err,
+    })?;
+
+    // Step 4: unlink the backup if it was present. A `NotFound` race
+    // (e.g. a concurrent `destroy`) is benign; any other failure carries
+    // the partial-completion envelope so a front end can say "primary
+    // wiped, backup still on disk".
+    let mut backup_deleted = false;
+    if backup_present {
+        match fs::remove_file(&bak) {
+            Ok(()) => backup_deleted = true,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(PaladinError::DestroyIoError {
+                    operation: "unlink_backup_file",
+                    source: err,
+                    primary_deleted: true,
+                    backup_deleted: false,
+                });
+            }
+        }
+    }
+
+    // Best-effort cleanup of any leftover staging files from a crashed
+    // prior save. Unlike `cleanup_leftover_temp` (the strict open-path
+    // helper), destroy swallows every failure here: §4.3 says these
+    // neither block the operation nor appear in the report.
+    let _ = fs::remove_file(append_suffix(path, ".tmp"));
+    let _ = fs::remove_file(append_suffix(path, ".bak.tmp"));
+
+    // Step 5: make the unlinks durable. Reuses the save pipeline's
+    // post-commit parent-`fsync` fault-injection point (see
+    // `storage::fault`) so the `fsync_vault_dir` error path is testable.
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        let fsync_result = if fault::post_commit_should_fail() {
+            Err(io::Error::other("post-commit fault injection"))
+        } else {
+            fsync_dir(parent)
+        };
+        if let Err(err) = fsync_result {
+            return Err(PaladinError::DestroyIoError {
+                operation: "fsync_vault_dir",
+                source: err,
+                primary_deleted: true,
+                backup_deleted,
+            });
+        }
+    }
+
+    Ok(DestroyReport {
+        primary_deleted: true,
+        backup_deleted,
+    })
+}
+
 // ---------- Store + VaultLock + VaultInit (docs/DESIGN.md §4.7) ----------
 
 /// Caller-supplied lock used by [`Store::open`] to assert the on-disk

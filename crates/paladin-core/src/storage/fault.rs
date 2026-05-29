@@ -96,6 +96,12 @@ pub(crate) fn pre_commit_should_fail() -> bool {
 /// site — i.e. the `test-fault-injection` cargo feature is enabled and
 /// `PALADIN_FAULT_INJECT=post_commit` is set in the process environment.
 /// Always `false` on production builds.
+///
+/// Besides the atomic-write sites, `destroy_vault` (docs/DESIGN.md §4.3)
+/// reuses this same parent-directory-`fsync` injection point so its
+/// `fsync_vault_dir` error path is deterministically testable; the
+/// destroy site maps the fired fault to an `io_error` rather than
+/// `save_durability_unconfirmed`.
 #[inline]
 pub(crate) fn post_commit_should_fail() -> bool {
     #[cfg(feature = "test-fault-injection")]

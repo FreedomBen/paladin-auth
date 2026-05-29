@@ -32,8 +32,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use paladin_core::{
-    parse_otpauth, write_secret_file_atomic, Account, AccountEdit, Argon2Params, EncryptionOptions,
-    ErrorKind, IconHintInput, PaladinError, Store, VaultInit, VaultLock, VaultMode,
+    destroy_vault, parse_otpauth, write_secret_file_atomic, Account, AccountEdit, Argon2Params,
+    EncryptionOptions, ErrorKind, IconHintInput, PaladinError, Store, VaultInit, VaultLock,
+    VaultMode,
 };
 use secrecy::SecretString;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1420,5 +1421,48 @@ fn edit_account_metadata_mutate_and_save_pre_commit_rolls_back_all_fields() {
         assert_eq!(after.updated_at(), pre_updated_at);
         // On-disk primary unchanged.
         assert_eq!(std::fs::read(&path).unwrap(), primary_before);
+    });
+}
+
+// ──────────────────────────────────────────────────────────────────
+// destroy_vault — its parent-directory fsync reuses the post_commit
+// injection point, but maps a fired fault to `io_error` rather than
+// `save_durability_unconfirmed` (docs/DESIGN.md §4.3 step 5).
+// ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn destroy_vault_post_commit_surfaces_fsync_vault_dir_partial() {
+    run_serial(|| {
+        let dir = test_tempdir();
+        let path = dir.path().join("vault.bin");
+        let bak = dir.path().join("vault.bin.bak");
+        // destroy_vault is file-level and skips the §4.3 perms gate, so
+        // a byte blob is a faithful primary + backup pair.
+        std::fs::write(&path, b"primary bytes").unwrap();
+        std::fs::write(&bak, b"backup bytes").unwrap();
+
+        let err = with_fault(POST, || destroy_vault(&path)).expect_err("post_commit must fail");
+
+        // The fault fires only after both unlinks, so the error reports
+        // the completed state and serializes as `io_error`, not
+        // `save_durability_unconfirmed`.
+        assert_eq!(err.kind(), ErrorKind::IoError);
+        match err {
+            PaladinError::DestroyIoError {
+                operation,
+                primary_deleted,
+                backup_deleted,
+                ..
+            } => {
+                assert_eq!(operation, "fsync_vault_dir");
+                assert!(primary_deleted, "primary was unlinked before the fsync");
+                assert!(backup_deleted, "backup was unlinked before the fsync");
+            }
+            other => panic!("expected DestroyIoError, got {other:?}"),
+        }
+
+        // Both files are genuinely gone — only durability is unconfirmed.
+        assert!(!path.exists(), "primary must be unlinked");
+        assert!(!bak.exists(), "backup must be unlinked");
     });
 }

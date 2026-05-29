@@ -104,6 +104,38 @@ fn backup_path_for(primary: &Path) -> PathBuf {
     primary.with_file_name(name)
 }
 
+/// Format the destructive-confirmation text shown by CLI `destroy`
+/// (§5 text mode), the TUI Destroy modal (§6), and the GTK
+/// `DestroyDialog` (§7) before a vault is wiped from disk.
+///
+/// Names the resolved primary path and — when `backup_present` is
+/// `true` — the derived `vault.bin.bak` path, states the operation is
+/// irreversible, and notes the file is unlinked rather than
+/// securely erased so an encrypted vault (§4.4) is the only reliable
+/// protection for secrets already on disk.
+///
+/// Callers compute `backup_present` from `try_exists` on the sibling
+/// `.bak`; passing `false` when no backup is on disk keeps the wording
+/// honest. The derived `.bak` path appends a `.bak` suffix to the file
+/// name component, matching [`format_init_force_warning`], so a
+/// non-default `--vault` path renders the real rotation target.
+#[must_use]
+pub fn format_destroy_warning(vault_path: &Path, backup_present: bool) -> String {
+    if backup_present {
+        let bak = backup_path_for(vault_path);
+        format!(
+            "This will permanently delete the vault at {} and its backup at {}. This cannot be undone. The files are unlinked, not securely erased, so an encrypted vault is the only reliable protection for secrets already written to disk.",
+            vault_path.display(),
+            bak.display(),
+        )
+    } else {
+        format!(
+            "This will permanently delete the vault at {}. This cannot be undone. The file is unlinked, not securely erased, so an encrypted vault is the only reliable protection for secrets already written to disk.",
+            vault_path.display(),
+        )
+    }
+}
+
 /// Static warning shown before a plaintext-mode vault is created
 /// (CLI `init`, GUI `InitDialog`) or before a passphrase is removed
 /// (CLI `passphrase remove`, TUI Passphrase modal, GUI
@@ -358,6 +390,53 @@ mod tests {
             "This will overwrite the existing vault at /tmp/work/secrets.dat. \
              The previous vault will be rotated to /tmp/work/secrets.dat.bak; \
              any prior backup at that location will be overwritten."
+        );
+    }
+
+    #[test]
+    fn format_destroy_warning_without_backup_names_only_primary() {
+        assert_eq!(
+            format_destroy_warning(Path::new("/home/u/.local/share/paladin/vault.bin"), false,),
+            "This will permanently delete the vault at /home/u/.local/share/paladin/vault.bin. \
+             This cannot be undone. The file is unlinked, not securely erased, so an encrypted \
+             vault is the only reliable protection for secrets already written to disk."
+        );
+    }
+
+    #[test]
+    fn format_destroy_warning_with_backup_names_primary_and_bak() {
+        assert_eq!(
+            format_destroy_warning(Path::new("/home/u/.local/share/paladin/vault.bin"), true,),
+            "This will permanently delete the vault at /home/u/.local/share/paladin/vault.bin \
+             and its backup at /home/u/.local/share/paladin/vault.bin.bak. This cannot be \
+             undone. The files are unlinked, not securely erased, so an encrypted vault is the \
+             only reliable protection for secrets already written to disk."
+        );
+    }
+
+    #[test]
+    fn format_destroy_warning_custom_basename_renders_real_bak_path() {
+        // A `--vault` override may name the file something other than
+        // `vault.bin`; the named backup must reflect the actual basename
+        // so the user sees the files that will actually be deleted.
+        assert_eq!(
+            format_destroy_warning(Path::new("/tmp/work/secrets.dat"), true),
+            "This will permanently delete the vault at /tmp/work/secrets.dat and its backup at \
+             /tmp/work/secrets.dat.bak. This cannot be undone. The files are unlinked, not \
+             securely erased, so an encrypted vault is the only reliable protection for secrets \
+             already written to disk."
+        );
+    }
+
+    #[test]
+    fn format_destroy_warning_backup_flag_changes_wording() {
+        // The `backup_present` flag must change the rendered text — the
+        // with-backup branch names a second file and pluralizes, so the
+        // two branches can never collapse to the same string.
+        let primary = Path::new("/tmp/work/vault.bin");
+        assert_ne!(
+            format_destroy_warning(primary, true),
+            format_destroy_warning(primary, false)
         );
     }
 

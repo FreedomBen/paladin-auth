@@ -314,6 +314,33 @@ pub enum PaladinError {
         #[source]
         source: std::io::Error,
     },
+
+    /// `destroy_vault` (§4.3) step failed *after* the primary `vault.bin`
+    /// was already unlinked, so the partial-completion state must travel
+    /// with the error. Shares the §5 `io_error` `error_kind` with
+    /// [`PaladinError::IoError`] (so `kind()` is identical) but carries
+    /// the extra `primary_deleted` / `backup_deleted` envelope fields the
+    /// §5 `--json` output and the GUI inline-error renderer need to show
+    /// an accurate "primary wiped, backup remained on disk" message.
+    /// Only the `unlink_backup_file` and `fsync_vault_dir` operations use
+    /// this variant; pre-primary failures (`vault_file_is_symlink`,
+    /// `backup_file_is_symlink`, `unlink_vault_file`) stay plain
+    /// [`PaladinError::IoError`]. See docs/DESIGN.md §4.3.
+    #[error("I/O error during {operation}: {source}")]
+    DestroyIoError {
+        /// Stable, core-owned operation string from §5 (one of
+        /// `"unlink_backup_file"` / `"fsync_vault_dir"`).
+        operation: &'static str,
+        /// Underlying I/O failure that triggered the error.
+        #[source]
+        source: std::io::Error,
+        /// `true` once the primary `vault.bin` has been unlinked — always
+        /// `true` for this variant since it only fires post-primary.
+        primary_deleted: bool,
+        /// `true` if the sibling `vault.bin.bak` was unlinked before the
+        /// failing step (only possible for `fsync_vault_dir`).
+        backup_deleted: bool,
+    },
 }
 
 impl PaladinError {
@@ -342,7 +369,10 @@ impl PaladinError {
             Self::TimeRange { .. } => ErrorKind::TimeRange,
             Self::SaveNotCommitted { .. } => ErrorKind::SaveNotCommitted,
             Self::SaveDurabilityUnconfirmed => ErrorKind::SaveDurabilityUnconfirmed,
-            Self::IoError { .. } => ErrorKind::IoError,
+            // §4.3: a destroy partial-failure is still an `io_error` on
+            // the wire — the extra envelope fields ride along, so it
+            // shares `IoError`'s discriminant.
+            Self::IoError { .. } | Self::DestroyIoError { .. } => ErrorKind::IoError,
         }
     }
 
@@ -379,6 +409,7 @@ impl PaladinError {
 /// the platform-specific message.
 #[cfg(feature = "error-serde")]
 impl serde::Serialize for PaladinError {
+    #[allow(clippy::too_many_lines)] // mechanical: one match arm per variant
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -476,6 +507,16 @@ impl serde::Serialize for PaladinError {
             }
             Self::IoError { operation, .. } => {
                 map.serialize_entry("operation", operation)?;
+            }
+            Self::DestroyIoError {
+                operation,
+                primary_deleted,
+                backup_deleted,
+                ..
+            } => {
+                map.serialize_entry("operation", operation)?;
+                map.serialize_entry("primary_deleted", primary_deleted)?;
+                map.serialize_entry("backup_deleted", backup_deleted)?;
             }
         }
         map.end()
@@ -664,5 +705,24 @@ mod tests {
         for (err, expected) in cases {
             assert_eq!(err.kind(), expected, "kind mismatch for {err}");
         }
+    }
+
+    #[test]
+    fn destroy_io_error_shares_io_error_kind() {
+        // §4.3: the destroy partial-failure variant must serialize as
+        // `io_error` on the wire — same `ErrorKind` as `IoError` — so
+        // front ends key off `operation` plus the envelope bools.
+        let err = PaladinError::DestroyIoError {
+            operation: "unlink_backup_file",
+            source: std::io::Error::other("backup is a directory"),
+            primary_deleted: true,
+            backup_deleted: false,
+        };
+        assert_eq!(err.kind(), ErrorKind::IoError);
+        // Display matches the plain IoError wording so callers that print
+        // the error see no destroy-specific phrasing.
+        assert!(err
+            .to_string()
+            .starts_with("I/O error during unlink_backup_file: "));
     }
 }

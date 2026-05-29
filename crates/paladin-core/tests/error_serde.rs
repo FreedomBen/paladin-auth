@@ -482,6 +482,32 @@ fn paladin_error_io_error_skips_underlying_source() {
 }
 
 #[test]
+fn paladin_error_destroy_io_error_carries_partial_state_envelope() {
+    // §4.3: a destroy partial-failure serializes as `io_error` plus the
+    // `primary_deleted` / `backup_deleted` envelope, so a `--json`
+    // caller can render "primary wiped, backup remained on disk".
+    let err = PaladinError::DestroyIoError {
+        operation: "unlink_backup_file",
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "EACCES"),
+        primary_deleted: true,
+        backup_deleted: false,
+    };
+    let value = serde_json::to_value(&err).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "error_kind": "io_error",
+            "operation": "unlink_backup_file",
+            "primary_deleted": true,
+            "backup_deleted": false,
+        })
+    );
+    // The underlying OS message must not leak, same as plain IoError.
+    let s = serde_json::to_string(&err).unwrap();
+    assert!(!s.contains("EACCES"), "io::Error message leaked: {s}");
+}
+
+#[test]
 fn paladin_error_counter_overflow_includes_account_summary() {
     let summary = fixture_summary();
     let err = PaladinError::CounterOverflow {
@@ -613,6 +639,15 @@ fn one_per_variant() -> Vec<(PaladinError, ErrorKind)> {
             PaladinError::IoError {
                 operation: "read_vault_file",
                 source: IoError::other("x"),
+            },
+            ErrorKind::IoError,
+        ),
+        (
+            PaladinError::DestroyIoError {
+                operation: "unlink_backup_file",
+                source: IoError::other("x"),
+                primary_deleted: true,
+                backup_deleted: false,
             },
             ErrorKind::IoError,
         ),

@@ -413,6 +413,11 @@ pub enum paladin_core::PaladinError
 pub paladin_core::PaladinError::CounterOverflow
 pub paladin_core::PaladinError::CounterOverflow::account: paladin_core::AccountSummary
 pub paladin_core::PaladinError::DecryptFailed
+pub paladin_core::PaladinError::DestroyIoError
+pub paladin_core::PaladinError::DestroyIoError::backup_deleted: bool
+pub paladin_core::PaladinError::DestroyIoError::operation: &'static str
+pub paladin_core::PaladinError::DestroyIoError::primary_deleted: bool
+pub paladin_core::PaladinError::DestroyIoError::source: std::io::error::Error
 pub paladin_core::PaladinError::InvalidHeader
 pub paladin_core::PaladinError::InvalidPassphrase
 pub paladin_core::PaladinError::InvalidPassphrase::reason: &'static str
@@ -878,6 +883,25 @@ impl core::marker::Unpin for paladin_core::Code
 impl core::marker::UnsafeUnpin for paladin_core::Code
 impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::Code
 impl core::panic::unwind_safe::UnwindSafe for paladin_core::Code
+pub struct paladin_core::DestroyReport
+pub paladin_core::DestroyReport::backup_deleted: bool
+pub paladin_core::DestroyReport::primary_deleted: bool
+impl core::clone::Clone for paladin_core::DestroyReport
+pub fn paladin_core::DestroyReport::clone(&self) -> paladin_core::DestroyReport
+impl core::cmp::Eq for paladin_core::DestroyReport
+impl core::cmp::PartialEq for paladin_core::DestroyReport
+pub fn paladin_core::DestroyReport::eq(&self, other: &paladin_core::DestroyReport) -> bool
+impl core::fmt::Debug for paladin_core::DestroyReport
+pub fn paladin_core::DestroyReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::DestroyReport
+impl core::marker::StructuralPartialEq for paladin_core::DestroyReport
+impl core::marker::Freeze for paladin_core::DestroyReport
+impl core::marker::Send for paladin_core::DestroyReport
+impl core::marker::Sync for paladin_core::DestroyReport
+impl core::marker::Unpin for paladin_core::DestroyReport
+impl core::marker::UnsafeUnpin for paladin_core::DestroyReport
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::DestroyReport
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::DestroyReport
 pub struct paladin_core::EncryptionOptions
 pub paladin_core::EncryptionOptions::kdf_params: paladin_core::Argon2Params
 pub paladin_core::EncryptionOptions::passphrase: secrecy::SecretString
@@ -1127,8 +1151,10 @@ pub fn paladin_core::account_matches_search(account: &paladin_core::Account, que
 pub fn paladin_core::classify_init_precheck(probe: paladin_core::Result<paladin_core::VaultStatus>) -> paladin_core::InitPrecheck
 pub fn paladin_core::classify_paladin_import_precheck(path: &std::path::Path, forced_format: core::option::Option<paladin_core::import::ImportFormat>) -> paladin_core::PaladinImportPrecheck
 pub fn paladin_core::default_vault_path() -> paladin_core::Result<std::path::PathBuf>
+pub fn paladin_core::destroy_vault(path: &std::path::Path) -> paladin_core::Result<paladin_core::DestroyReport>
 pub fn paladin_core::detect(bytes: &[u8]) -> paladin_core::import::ImportFormat
 pub fn paladin_core::format_create_vault_dir_error(err: &paladin_core::PaladinError, attempted_dir: &std::path::Path) -> core::option::Option<alloc::string::String>
+pub fn paladin_core::format_destroy_warning(vault_path: &std::path::Path, backup_present: bool) -> alloc::string::String
 pub fn paladin_core::format_init_force_warning(existing_vault: &std::path::Path) -> alloc::string::String
 pub fn paladin_core::format_plaintext_export_warning() -> alloc::string::String
 pub fn paladin_core::format_plaintext_qr_export_warning() -> alloc::string::String
