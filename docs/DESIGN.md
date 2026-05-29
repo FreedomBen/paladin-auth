@@ -2269,7 +2269,7 @@ Library: **Relm4** on **GTK4**. Component tree:
   `RenameDialog`-era effect-ownership contract.
 - **Row context menu and per-row kebab** — every account row exposes
   a context menu with four entries in this order: *Copy code* /
-  *Edit…* / *Export QR…* / *Delete…*. The same `gio::MenuModel` is
+  *Edit…* / *Show QR…* / *Remove…*. The same `gio::MenuModel` is
   bound to the row's kebab `gtk::MenuButton` and to a row-body
   `gtk::GestureClick` configured for the secondary mouse button
   (and to the GNOME-canonical `Menu` key / `Shift+F10` keyboard
@@ -2283,7 +2283,7 @@ Library: **Relm4** on **GTK4**. Component tree:
   Section header rows are non-selectable and do not raise the menu.
   *Copy code* is disabled on hidden HOTP rows (parity with the
   inline copy button via the shared `RowDisplay::copy_enabled`
-  projection); *Edit…*, *Export QR…*, and *Delete…* are
+  projection); *Edit…*, *Show QR…*, and *Remove…* are
   unconditional on account rows. Every menu entry targets a
   `gio::SimpleAction` in the per-row `gio::SimpleActionGroup` —
   `row.copy`, `row.edit`, `row.show-qr`, `row.remove` —
@@ -2305,8 +2305,8 @@ Library: **Relm4** on **GTK4**. Component tree:
   `write_secret_file_atomic` and surfaces the `0600` output path on
   success.
 - `ExportQrDialog` — per-account QR export (§4.6). Opened from the
-  account row's kebab menu via a new `Show QR…` entry placed
-  between `Rename…` and `Remove…`. The dialog opens on a warning
+  account row's kebab menu via a `Show QR…` entry placed
+  between `Edit…` and `Remove…`. The dialog opens on a warning
   page rendered verbatim from
   `paladin_core::format_plaintext_qr_export_warning()` with an
   `AdwSwitchRow` ack gate alongside two footer buttons — `Cancel`
@@ -3180,7 +3180,7 @@ artifacts side by side.
   confirmation); logic tests for the reducer state machine
   including a cross-modal regression test (`Shift+E` while Rename
   is open is silently rejected, and vice versa).
-- [ ] GTK `EditDialog` superseding `RenameDialog`: three editable
+- [x] GTK `EditDialog` superseding `RenameDialog`: three editable
   `AdwEntryRow` widgets (Label / Issuer with an `AdwEntryRow`
   *suffix-area* clear button / Icon hint slug parsed via
   `parse_icon_hint_token`), inline validation, save-effect plumbing
@@ -3190,7 +3190,7 @@ artifacts side by side.
   helper is never reached on an invalid draft). Row context menu
   (and `Menu` / `Shift+F10` keyboard equivalent) bound to the same
   `gio::MenuModel` as the per-row kebab, four entries in order
-  *Copy code* / *Edit…* / *Export QR…* / *Delete…*. Pure-logic
+  *Copy code* / *Edit…* / *Show QR…* / *Remove…*. Pure-logic
   tests for the new menu model, the `AccountEdit` projection, the
   per-field clear/leave-untouched semantics, the
   account-kind-agnostic HOTP-vs-TOTP rendering (identical
@@ -3491,7 +3491,7 @@ artifacts side by side.
 - The GTK row context menu is the user-visible surface that
   motivates this work. The kebab `gio::MenuModel` (v0.2 foundation:
   *Rename…* / *Show QR…* / *Remove…*) is replaced by the four-entry
-  shared model *Copy code* / *Edit…* / *Export QR…* / *Delete…*,
+  shared model *Copy code* / *Edit…* / *Show QR…* / *Remove…*,
   and a right-click `gtk::GestureClick` on the row body binds the
   same model. The `Menu` key / `Shift+F10` keyboard equivalent is
   routed through the same path via a `gtk::ShortcutController` on

@@ -2532,7 +2532,7 @@ core.
    intentionally retained as a forwarder over
    `edit_account_metadata` so the CLI / TUI rename surfaces
    keep their existing single-call API.
-- [ ] **Slice 7 — Docs sync.** Update `DESIGN.md` §7 / §12 /
+- [x] **Slice 7 — Docs sync.** Update `DESIGN.md` §7 / §12 /
    §13 and this plan's checklists to reflect the final
    shape; tick the Milestone 9 entries as each slice lands.
 
@@ -3355,16 +3355,17 @@ locked Phase M contract:
 
 #### `tests/row_context_menu_logic.rs`
 
-v0.2 (DESIGN §7 Milestone 9). All bullets are red until the
-right-click gesture slice lands.
+v0.2 (DESIGN §7 Milestone 9). Green as of slice 5 — the right-click
+gesture / keyboard / single-popover surfaces and their pure-logic
+decision shadows landed in `tests/row_context_menu_logic.rs`.
 
-- [ ] `build_row_context_menu_model()` returns a `gio::Menu` with
+- [x] `build_row_context_menu_model()` returns a `gio::Menu` with
   the four entries in this order: *Copy code* → `row.copy`,
   *Edit…* → `row.edit`, *Show QR…* → `row.show-qr`,
   *Remove…* → `row.remove`. Pinned by a table-driven assertion
   against the menu's `n_items()` and per-position attribute
   pair (`label`, `action`).
-- [ ] `pop_row_context_menu_decision(row_kind, busy, hidden_hotp)`
+- [x] `pop_row_context_menu_decision(row_kind, busy, hidden_hotp)`
   returns `Suppress` for section rows and
   `Pop { copy_sensitive, actions_sensitive }` for account
   rows, with `copy_sensitive = !hidden_hotp` and
@@ -3374,32 +3375,32 @@ right-click gesture slice lands.
   `(busy, hidden_hotp)` cells for the account-row case so the
   per-state enablement matrix is covered without spinning up
   GTK.
-- [ ] `account_list::install_row_context_menu_controllers` (the
+- [x] `account_list::install_row_context_menu_controllers` (the
   pure-logic decision shadow) returns the expected controller
   set (secondary-button `gtk::GestureClick` + a single
   `gtk::ShortcutController` carrying three triggers: `Menu`,
   `Shift+F10`, and `Shift+E`) for an account row container and
   the empty set for a section row container.
-- [ ] `Shift+E` on a focused account row activates `row.edit`
+- [x] `Shift+E` on a focused account row activates `row.edit`
   through the row's `gtk::ShortcutController` /
   `gtk::NamedAction` binding and emits
   `AccountListOutput::OpenEditDialog(account_id)`; section
   rows do not install the controller, so the trigger does not
   fire from a section row.
-- [ ] `Shift+E` is silently rejected while another modal
+- [x] `Shift+E` is silently rejected while another modal
   `adw::Dialog` is open: the dialog's modal focus capture
   consumes the keypress before it reaches the row's
   `gtk::ShortcutController`, so no new `OpenEditDialog` is
   emitted and the existing dialog stays mounted (TUI parity
   with DESIGN §6's `Q` / `Shift+E` rule).
-- [ ] `AccountListComponent::pop_row_popover(account_id, anchor)`
+- [x] `AccountListComponent::pop_row_popover(account_id, anchor)`
   unparents and drops any prior popover before mounting a fresh
   one — pinned via the pure-logic
   `single_popover_invariant` decision that the widget binding
   calls into. Same decision fires on
   `AccountListMsg::Refresh` (any prior popover drops because
   its `RowItem` may have been spliced) and on auto-lock.
-- [ ] Per-row action targets resolve to the same
+- [x] Per-row action targets resolve to the same
   `gio::SimpleActionGroup` as the kebab — verified by
   installing the group, activating `row.copy` / `row.edit` /
   `row.show-qr` / `row.remove`, and asserting the matching
