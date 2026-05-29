@@ -2719,6 +2719,61 @@ fn snapshot_edit_modal_icon_hint_slug_mode() {
 }
 
 #[test]
+fn snapshot_edit_modal_status_line_confirmation() {
+    // docs/IMPLEMENTATION_PLAN_03_TUI.md > Edit modal > `EffectResult`
+    // Ok-arm bullet: "A companion snapshot
+    // `snapshot_edit_modal_status_line_confirmation` pins the
+    // post-close list-view frame with the confirmation text visible in
+    // the status line." Drive the real reducer Ok-arm (mirroring
+    // `effect_result_edit_ok_closes_modal_with_status_line_confirmation`)
+    // so the snapshot binds to the exact
+    // `format!("Edited {}.", summary_display_label(&summary))` wording
+    // the reducer publishes rather than a hand-typed literal. The Ok
+    // closes the modal, leaving the list view with the confirmation in
+    // the status line; rendered at 80x12 to match the
+    // `snapshot_list_view_status_line_after_*` family (the modal is
+    // gone, so the taller modal frame is unnecessary).
+    let state = fresh_edit_modal_state(
+        "ben@example.com",
+        Some("GitHub"),
+        EditIconHintSelector::LeaveUnchanged,
+        "github",
+        None,
+        EditFocus::Label,
+        false,
+    );
+    let (path, id, summary) = match &state {
+        AppState::Unlocked {
+            path,
+            vault,
+            modal: Some(Modal::Edit(edit)),
+            ..
+        } => {
+            let id = edit.account_id;
+            let summary = vault
+                .iter()
+                .find(|a| a.id() == id)
+                .expect("edited account present in vault")
+                .summary();
+            (path.clone(), id, summary)
+        }
+        other => panic!("expected Unlocked with edit modal open, got {other:?}"),
+    };
+    let ok = AppEvent::EffectResult(EffectResult::EditAccountMetadata {
+        path,
+        account_id: id,
+        result: Ok(summary),
+    });
+    let (state, _) = reduce(state, ok);
+    let rendered = render_to_text(&state, snapshot_now(), 80, 12);
+    assert!(
+        rendered.contains("Edited "),
+        "expected post-edit status-line confirmation, got:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_import_modal_default() {
     // Plan L1886: "Import modal." Drive `view::render` against an
     // `Unlocked` state with `Modal::Import(ImportModal::default())`

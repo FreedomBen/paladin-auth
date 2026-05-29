@@ -2709,7 +2709,7 @@ implementation-checklist bullet above.
   rollback on `save_not_committed` and the commit-then-warn on
   `save_durability_unconfirmed` per DESIGN §4.5). End-to-end mode/key
   transition rollback lives in the `paladin-core` plan.)*
-- [ ] Edit modal *(v0.2)*: `save_not_committed` restores the
+- [x] Edit modal *(v0.2)*: `save_not_committed` restores the
   pre-edit `Account` byte-for-byte (asserted via
   `Vault::get(id)` against the pre-attempt snapshot) and keeps
   the modal open with the inline `save_not_committed` wording;
@@ -4924,7 +4924,7 @@ terminal theme and survives `--no-color`.
     inline `save_not_committed` / `save_durability_unconfirmed`
     wording so any future change in `render_error_message`
     surfaces here as a diff.)*
-- [ ] **v0.2 — Edit modal** per the §"Modals (per §6)" `Edit`
+- [x] **v0.2 — Edit modal** per the §"Modals (per §6)" `Edit`
   entry and DESIGN §4.7 / §6 / §10 Milestone 9. Lands the
   `Shift+E` keybinding, the `EditModal` state variant
   (label / issuer / icon-hint controls with the four-option
@@ -4975,7 +4975,7 @@ terminal theme and survives `--no-color`.
     empty-rejection is the mutator's responsibility on the
     core side and the reducer's explicit pre-check on the TUI
     side.
-  - [ ] All `tests/reducer_tests.rs::edit_modal_*` bullets
+  - [x] All `tests/reducer_tests.rs::edit_modal_*` bullets
     ticked, the executor-side bullets in
     `tests/effect_tests.rs::execute_edit_*` ticked, and the
     Edit-modal insta snapshots
