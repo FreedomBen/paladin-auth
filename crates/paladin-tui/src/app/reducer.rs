@@ -33,8 +33,8 @@ use crate::app::state::{
     AddManualFocus, AddModal, AddMode, AppState, ChordLeader, CountsPanel, DestroyAction,
     EditFocus, EditIconHintSelector, EditModal, EditPrior, ExportFormat, ExportModal, Focus,
     HotpReveal, ImportModal, Modal, PassphraseModal, PassphraseSubFlow, PendingClipboardClear,
-    PendingDuplicateAdd, QrExportFocus, QrExportModal, QrExportPage, QrSaveFocus, QrSaveFormat,
-    QrSaveStep, QrSaveSubFlow, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
+    PendingDuplicateAdd, QrExportFocus, QrExportModal, QrSaveFocus, QrSaveFormat, QrSaveStep,
+    QrSaveSubFlow, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
     CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED, VAULT_ALREADY_GONE, VAULT_DELETED,
     VAULT_DELETED_BACKUP_REMAINED,
 };
@@ -2170,7 +2170,9 @@ fn pending_qr_export_for_char(
     }
     let id = selected?;
     vault.iter().find(|a| a.id() == id)?;
-    Some(QrExportModal::new(id))
+    let mut modal = QrExportModal::new(id);
+    stage_qr_export_ansi(&mut modal, vault);
+    Some(modal)
 }
 
 /// Dispatch a key event to the open modal's modal-local input path.
@@ -2204,7 +2206,7 @@ fn route_modal_input(
             effects
         }
         Some(Modal::QrExport(qr)) => {
-            let (effects, close) = route_qr_export_modal_input(path, qr, vault, key);
+            let (effects, close) = route_qr_export_modal_input(path, qr, key);
             if close {
                 *modal = None;
             }
@@ -3306,96 +3308,55 @@ fn route_export_modal_input(
 /// QR Export modal's input path (v0.2; DESIGN §4.6 / §6).
 ///
 /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > QR Export
-/// the modal is a small two-page state machine. The reducer arms here
-/// cover the **read-only** axis (open / ack-toggle / focus-cycle /
-/// Enter on Cancel or Done); the save sub-flow (destination prompt,
-/// overwrite gate, PNG / SVG executors) lands in a follow-up slice.
+/// the modal is a single page: it opens directly on the rendered QR
+/// (no acknowledgment gate) with Save-as-PNG / Save-as-SVG / Done
+/// actions and an informational warning footer.
 ///
-/// Returns `true` if the modal should close (Enter on Cancel on
-/// Page 1, Enter on Done on Page 2). `Esc` is handled by
-/// [`apply_esc_dismiss`] upstream and never reaches this routine.
+/// Returns `true` if the modal should close (Enter on Done). `Esc` is
+/// handled by [`apply_esc_dismiss`] upstream and never reaches this
+/// routine.
 ///
-/// **Page 1 keys** — `Space` on the ack checkbox toggles `ack`. The
-/// toggle-on path immediately advances to
-/// [`QrExportPage::QrAndActions`] and populates `staged_ansi` via
-/// [`paladin_core::Vault::export_qr_ansi`] (the
-/// `account_not_found` path stores the rendered error inline rather
-/// than crashing). The toggle-off path drops `staged_ansi` and
-/// returns to [`QrExportPage::WarningAck`]. `Tab` / `Ctrl-N` advance
-/// focus forward (Ack → Cancel → Ack) and `Shift-Tab` / `Ctrl-P`
-/// retreat. `Enter` on [`QrExportFocus::CancelButton`] closes the
-/// modal; `Enter` on [`QrExportFocus::AckCheckbox`] toggles the ack
-/// (same wiring as `Space`).
-///
-/// **Page 2 keys** — `Tab` / `Ctrl-N` advance focus among
-/// `SavePngButton` / `SaveSvgButton` / `DoneButton` (wrapping);
-/// `Shift-Tab` / `Ctrl-P` retreat. `Enter` on
-/// [`QrExportFocus::DoneButton`] closes the modal. `Enter` on the
-/// Save buttons is reserved for the save sub-flow slice (currently a
-/// silent no-op so the modal-trap contract holds).
+/// An active save sub-flow gets first crack at input. Otherwise
+/// `Tab` / `Ctrl-N` advance focus among `SavePngButton` /
+/// `SaveSvgButton` / `DoneButton` (wrapping) and `Shift-Tab` /
+/// `Ctrl-P` retreat. `Enter` on [`QrExportFocus::DoneButton`] closes
+/// the modal; `Enter` on [`QrExportFocus::SavePngButton`] /
+/// [`QrExportFocus::SaveSvgButton`] opens the matching save sub-flow.
 fn route_qr_export_modal_input(
     path: &std::path::Path,
     qr: &mut QrExportModal,
-    vault: &Vault,
     key: &KeyEvent,
 ) -> (Vec<Effect>, bool) {
     // Active sub-flow gets first crack at input — Tab/focus cycling
     // and Enter/Space land on the sub-flow's controls, not the
-    // Page-2 button row.
+    // button row.
     if qr.save_sub_flow.is_some() {
         return route_qr_save_sub_flow_input(path, qr, key);
     }
 
     if is_modal_focus_next(key) {
-        qr.focus = qr_export_focus_next(qr.focus, qr.page);
+        qr.focus = qr_export_focus_next(qr.focus);
         return (Vec::new(), false);
     }
     if is_modal_focus_prev(key) {
-        qr.focus = qr_export_focus_prev(qr.focus, qr.page);
+        qr.focus = qr_export_focus_prev(qr.focus);
         return (Vec::new(), false);
     }
-    match qr.page {
-        QrExportPage::WarningAck => match key.code {
-            KeyCode::Char(' ') if qr.focus == QrExportFocus::AckCheckbox => {
-                toggle_qr_export_ack(qr, vault);
+    match key.code {
+        KeyCode::Enter => match qr.focus {
+            QrExportFocus::DoneButton => (Vec::new(), true),
+            QrExportFocus::SavePngButton => {
+                qr.save_sub_flow = Some(QrSaveSubFlow::new(QrSaveFormat::Png));
+                qr.error = None;
                 (Vec::new(), false)
             }
-            KeyCode::Enter => match qr.focus {
-                QrExportFocus::AckCheckbox => {
-                    toggle_qr_export_ack(qr, vault);
-                    (Vec::new(), false)
-                }
-                QrExportFocus::CancelButton => (Vec::new(), true),
-                _ => (Vec::new(), false),
-            },
-            _ => (Vec::new(), false),
-        },
-        QrExportPage::QrAndActions => match key.code {
-            KeyCode::Char(' ') if qr.focus == QrExportFocus::AckCheckbox => {
-                // The ack control still owns the toggle even when the
-                // user has Tabbed back to it from Page 2's button row
-                // (defensive — the focus enum is shared across pages,
-                // and a future redesign that surfaces the ack on
-                // Page 2 should not silently drop the bind).
-                toggle_qr_export_ack(qr, vault);
+            QrExportFocus::SaveSvgButton => {
+                qr.save_sub_flow = Some(QrSaveSubFlow::new(QrSaveFormat::Svg));
+                qr.error = None;
                 (Vec::new(), false)
             }
-            KeyCode::Enter => match qr.focus {
-                QrExportFocus::DoneButton => (Vec::new(), true),
-                QrExportFocus::SavePngButton => {
-                    qr.save_sub_flow = Some(QrSaveSubFlow::new(QrSaveFormat::Png));
-                    qr.error = None;
-                    (Vec::new(), false)
-                }
-                QrExportFocus::SaveSvgButton => {
-                    qr.save_sub_flow = Some(QrSaveSubFlow::new(QrSaveFormat::Svg));
-                    qr.error = None;
-                    (Vec::new(), false)
-                }
-                _ => (Vec::new(), false),
-            },
-            _ => (Vec::new(), false),
         },
+        _ => (Vec::new(), false),
     }
 }
 
@@ -3575,78 +3536,48 @@ fn qr_save_focus_prev(focus: QrSaveFocus, step: QrSaveStep) -> QrSaveFocus {
     }
 }
 
-/// Toggle the QR Export modal's ack checkbox and apply the
-/// page-mount side effects per DESIGN §4.6 / §6.
-///
-/// Toggling on advances to [`QrExportPage::QrAndActions`] and
-/// populates [`QrExportModal::staged_ansi`] via
-/// [`paladin_core::Vault::export_qr_ansi`]. Toggling off drops the
-/// staged buffer (zeroizing on `Drop`) and returns to
-/// [`QrExportPage::WarningAck`]. The page-1 focus snaps to
-/// [`QrExportFocus::AckCheckbox`] on toggle-off so the user returns
-/// to the same control that triggered the ack; the page-2 focus
-/// snaps to [`QrExportFocus::SavePngButton`] on toggle-on so the
-/// user's next Enter targets the canonical save path.
+/// Render the half-block ANSI QR for the modal's account into
+/// [`QrExportModal::staged_ansi`] so the code is visible the moment
+/// the modal opens — there is no acknowledgment gate per DESIGN
+/// §4.6 / §6 (the warning is shown as an informational footer
+/// instead).
 ///
 /// Encoder failures (the `qrcode` crate's `data_too_long` on a
-/// payload past QR version 40, or the defensive
-/// `account_not_found` path if the vault mutates while the modal is
-/// open) render inline through [`render_error_message`] and leave
-/// the modal on Page 1 with `ack = false`.
-fn toggle_qr_export_ack(qr: &mut QrExportModal, vault: &Vault) {
-    if qr.ack {
-        // Toggle off: drop staged buffers (and any in-flight save
-        // sub-flow) and return to Page 1.
-        qr.ack = false;
-        qr.staged_ansi = None;
-        qr.save_sub_flow = None;
-        qr.page = QrExportPage::WarningAck;
-        qr.focus = QrExportFocus::AckCheckbox;
-        return;
-    }
+/// payload past QR version 40, or the defensive `account_not_found`
+/// path if the vault mutates between selection and modal open)
+/// render inline through [`render_error_message`] and leave
+/// `staged_ansi` empty; the modal still opens with the warning
+/// footer and the inline error in place of the QR body.
+fn stage_qr_export_ansi(qr: &mut QrExportModal, vault: &Vault) {
     match vault.export_qr_ansi(qr.account_id) {
         Ok(rendered) => {
-            qr.ack = true;
             qr.staged_ansi = Some(rendered);
-            qr.page = QrExportPage::QrAndActions;
-            qr.focus = QrExportFocus::SavePngButton;
             qr.error = None;
         }
         Err(err) => {
+            qr.staged_ansi = None;
             qr.error = Some(render_error_message(&err));
         }
     }
 }
 
 /// Advance focus within the QR Export modal, wrapping at either end
-/// of the current page's control set.
-fn qr_export_focus_next(focus: QrExportFocus, page: QrExportPage) -> QrExportFocus {
-    match page {
-        QrExportPage::WarningAck => match focus {
-            QrExportFocus::AckCheckbox => QrExportFocus::CancelButton,
-            _ => QrExportFocus::AckCheckbox,
-        },
-        QrExportPage::QrAndActions => match focus {
-            QrExportFocus::SavePngButton => QrExportFocus::SaveSvgButton,
-            QrExportFocus::SaveSvgButton => QrExportFocus::DoneButton,
-            _ => QrExportFocus::SavePngButton,
-        },
+/// of the Save-as-PNG / Save-as-SVG / Done control set.
+fn qr_export_focus_next(focus: QrExportFocus) -> QrExportFocus {
+    match focus {
+        QrExportFocus::SavePngButton => QrExportFocus::SaveSvgButton,
+        QrExportFocus::SaveSvgButton => QrExportFocus::DoneButton,
+        QrExportFocus::DoneButton => QrExportFocus::SavePngButton,
     }
 }
 
 /// Retreat focus within the QR Export modal, wrapping at either end
-/// of the current page's control set.
-fn qr_export_focus_prev(focus: QrExportFocus, page: QrExportPage) -> QrExportFocus {
-    match page {
-        QrExportPage::WarningAck => match focus {
-            QrExportFocus::CancelButton => QrExportFocus::AckCheckbox,
-            _ => QrExportFocus::CancelButton,
-        },
-        QrExportPage::QrAndActions => match focus {
-            QrExportFocus::DoneButton => QrExportFocus::SaveSvgButton,
-            QrExportFocus::SaveSvgButton => QrExportFocus::SavePngButton,
-            _ => QrExportFocus::DoneButton,
-        },
+/// of the Save-as-PNG / Save-as-SVG / Done control set.
+fn qr_export_focus_prev(focus: QrExportFocus) -> QrExportFocus {
+    match focus {
+        QrExportFocus::SavePngButton => QrExportFocus::DoneButton,
+        QrExportFocus::DoneButton => QrExportFocus::SaveSvgButton,
+        QrExportFocus::SaveSvgButton => QrExportFocus::SavePngButton,
     }
 }
 

@@ -26,8 +26,8 @@ use paladin_tui::app::event::{AppEvent, Effect};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     AppState, ChordLeader, EditFocus, EditIconHintSelector, EditModal, EditPrior, Focus,
-    HotpReveal, Modal, PassphraseModal, PendingClipboardClear, QrExportFocus, QrExportPage,
-    QrSaveFocus, QrSaveFormat, QrSaveStep,
+    HotpReveal, Modal, PassphraseModal, PendingClipboardClear, QrExportFocus, QrSaveFocus,
+    QrSaveFormat, QrSaveStep,
 };
 
 // ---------------------------------------------------------------------------
@@ -494,9 +494,9 @@ fn add_totp_account(vault: &mut Vault, store: &Store, label: &str) -> AccountId 
 }
 
 /// Assert preconditions for the QR-Export auto-lock test: the modal
-/// must be on Page 2 with `staged_ansi` populated, the Save PNG sub-
-/// flow open on the path field with `path_text == expected_path`, and
-/// the idle deadline rebased to `expected_deadline`.
+/// must have `staged_ansi` populated, the Save PNG sub-flow open on
+/// the path field with `path_text == expected_path`, and the idle
+/// deadline rebased to `expected_deadline`.
 fn assert_qr_export_modal_loaded(
     state: &AppState,
     expected_path: &str,
@@ -508,9 +508,7 @@ fn assert_qr_export_modal_loaded(
             idle_deadline,
             ..
         } => {
-            assert!(qr.ack, "ack must be on after Space toggle");
-            assert_eq!(qr.page, QrExportPage::QrAndActions);
-            assert!(qr.staged_ansi.is_some(), "Page 2 must have ANSI staged");
+            assert!(qr.staged_ansi.is_some(), "the modal must have ANSI staged");
             assert_eq!(qr.focus, QrExportFocus::SavePngButton);
             let sub = qr
                 .save_sub_flow
@@ -529,7 +527,7 @@ fn assert_qr_export_modal_loaded(
                 "each input rebased to t0 + 600s so the Tick boundary is deterministic",
             );
         }
-        other => panic!("expected Unlocked with QR Export modal Page 2 + sub-flow, got {other:?}",),
+        other => panic!("expected Unlocked with QR Export modal + sub-flow, got {other:?}",),
     }
 }
 
@@ -542,18 +540,18 @@ fn auto_lock_with_qr_export_modal_open_drops_modal_and_rendered_buffers() {
     // buffers, **and** the in-memory vault, then re-presents the
     // unlock screen."
     //
-    // Slice covered: a fully-loaded QR Export modal — Page 2 with
-    // `staged_ansi` populated, the Save PNG sub-flow open with a
-    // typed destination path — must be discarded alongside the
-    // `Vault` / `Store` on the idle-expiry Tick. The resulting
-    // `Locked` carries only the resolved vault path so the UI can
-    // re-present the unlock screen on the next render pass.
+    // Slice covered: a fully-loaded QR Export modal — `staged_ansi`
+    // populated, the Save PNG sub-flow open with a typed destination
+    // path — must be discarded alongside the `Vault` / `Store` on the
+    // idle-expiry Tick. The resulting `Locked` carries only the
+    // resolved vault path so the UI can re-present the unlock screen
+    // on the next render pass.
     //
-    // The modal is driven through the reducer (Q → Space → Enter →
-    // typed path) so `staged_ansi` is populated by the real ack-
-    // toggle-on path rather than fabricated; that wires the
-    // zeroizing buffer drop through the same code path the runtime
-    // uses. Each input event passes `t0` as its `at` instant so
+    // The modal is driven through the reducer (Q → Enter → typed
+    // path) so `staged_ansi` is populated by the real open path
+    // rather than fabricated; that wires the zeroizing buffer drop
+    // through the same code path the runtime uses. Each input event
+    // passes `t0` as its `at` instant so
     // every reducer call rebases `idle_deadline` to `t0 + 600s` —
     // the lock Tick is then `t0 + 600s + 1ms`, guaranteed past the
     // deadline.
@@ -583,11 +581,9 @@ fn auto_lock_with_qr_export_modal_open_drops_modal_and_rendered_buffers() {
         help_open: false,
     };
 
-    // Q → open QR Export modal on Page 1 (ack off).
+    // Q → open QR Export modal directly on the QR view; `staged_ansi`
+    // is populated and focus lands on `SavePngButton`.
     let (state, _) = reduce(state, key_input_at(KeyCode::Char('Q'), t0));
-    // Space → toggle ack on, auto-advance to Page 2, populate `staged_ansi`,
-    // land focus on `SavePngButton`.
-    let (state, _) = reduce(state, key_input_at(KeyCode::Char(' '), t0));
     // Enter on Save PNG button → open the destination-path sub-flow.
     let (state, _) = reduce(state, key_input_at(KeyCode::Enter, t0));
     // Type a destination path so `save_sub_flow.path_text` is non-empty.

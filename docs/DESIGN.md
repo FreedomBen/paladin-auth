@@ -504,10 +504,13 @@ Three formats, user picks per invocation:
   `show`, so a user who scans the QR into a second device and then
   continues using the original loses no codes to a phantom advance.
   The CLI / TUI / GUI all render this warning verbatim, sourced from
-  `paladin_core::format_plaintext_qr_export_warning()`, before any
-  pixel of the QR is shown or written: the QR encodes the account
-  secret, anyone who sees or photographs it can clone the OTP, and
-  the user should treat it like the plaintext URI list above.
+  `paladin_core::format_plaintext_qr_export_warning()`, alongside the
+  QR: the QR encodes the account secret, anyone who sees or
+  photographs it can clone the OTP, and the user should treat it like
+  the plaintext URI list above. The warning is informational and does
+  not gate the code behind a separate click-to-acknowledge step — the
+  CLI prints it ahead of the rendered QR, and the TUI shows it as a
+  footer beneath the on-screen QR and its save actions.
   Three render targets are supported and all three live in
   `paladin-core` so the front ends stay thin:
     * **PNG bytes** — written to disk through `write_secret_file_atomic`

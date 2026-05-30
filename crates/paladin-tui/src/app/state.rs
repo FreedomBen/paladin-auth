@@ -1492,42 +1492,21 @@ pub struct PassphraseModal {
     pub error: Option<String>,
 }
 
-/// Page within the QR Export modal — DESIGN §4.6 / §6.
-///
-/// The modal is a small two-page state machine: Page 1 shows the
-/// warning + ack checkbox + Cancel button (no QR rendered so a
-/// closing-terminal glimpse cannot expose the secret), and Page 2
-/// renders the ANSI QR body plus Save as PNG / Save as SVG / Done
-/// actions. The user moves between pages by toggling the ack
-/// checkbox on Page 1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QrExportPage {
-    /// Warning + ack checkbox + Cancel button. ANSI body is NOT rendered.
-    WarningAck,
-    /// Caption + ANSI QR body + Save PNG / Save SVG / Done buttons.
-    QrAndActions,
-}
-
 /// Focusable control within the QR Export modal.
 ///
-/// Page 1 cycles between [`AckCheckbox`](Self::AckCheckbox) and
-/// [`CancelButton`](Self::CancelButton); Page 2 cycles among
+/// The modal is a single page that cycles among
 /// [`SavePngButton`](Self::SavePngButton),
 /// [`SaveSvgButton`](Self::SaveSvgButton), and
 /// [`DoneButton`](Self::DoneButton). `Tab` / `Ctrl-N` advance focus
 /// forward and `Shift-Tab` / `Ctrl-P` retreat, both wrapping at
-/// either end of the page's control set.
+/// either end of the control set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QrExportFocus {
-    /// Page 1 ack checkbox (default initial focus).
-    AckCheckbox,
-    /// Page 1 Cancel button.
-    CancelButton,
-    /// Page 2 "Save as PNG…" button.
+    /// "Save as PNG…" button (default initial focus on modal open).
     SavePngButton,
-    /// Page 2 "Save as SVG…" button.
+    /// "Save as SVG…" button.
     SaveSvgButton,
-    /// Page 2 "Done" button.
+    /// "Done" button.
     DoneButton,
 }
 
@@ -1591,7 +1570,7 @@ pub enum QrSaveFocus {
 ///
 /// Opened on Enter against [`QrExportFocus::SavePngButton`] /
 /// [`QrExportFocus::SaveSvgButton`]; closed by `Esc`, the Cancel
-/// button, modal close, ack-toggle-off, or auto-lock. Holds no
+/// button, modal close, or auto-lock. Holds no
 /// secret bytes (the destination path is non-secret); the
 /// in-flight PNG / SVG buffer lives in the executor and never lands
 /// here, so this struct does not need `Zeroizing` wrappers.
@@ -1638,27 +1617,23 @@ impl QrSaveSubFlow {
 ///
 /// Per `docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > QR Export:
 /// *"single-account QR modal opened with `Q` (Shift-q) on the focused
-/// list row. The modal is a small two-page state machine."*
+/// list row. The modal is a single page that opens directly on the
+/// rendered QR (no acknowledgment gate)."*
 ///
 /// **Read-only contract** — the modal NEVER routes through
 /// `Vault::mutate_and_save`, the HOTP counter never advances, and
 /// `updated_at` is never bumped. The PNG / SVG / ANSI buffers
 /// returned by core are `Zeroizing<...>`; the modal holds them only
 /// for the duration the body is rendered and drops them on submit /
-/// cancel / `Esc` / modal close / auto-lock. Toggling the Page-1 ack
-/// back off also drops the Page-2 buffers and returns the body to
-/// Page 1.
+/// cancel / `Esc` / modal close / auto-lock.
 ///
-/// **Page 1 (`WarningAck`)** renders the warning body verbatim from
-/// `paladin_core::format_plaintext_qr_export_warning()` plus an ack
-/// checkbox and Cancel button. The ANSI QR is NOT rendered on
-/// Page 1 so a closing-terminal glimpse cannot expose the secret.
-///
-/// **Page 2 (`QrAndActions`)** is mounted only after the user toggles
-/// the Page-1 ack on. The body renders the Unicode half-block QR via
+/// The body renders the Unicode half-block QR via
 /// `paladin_core::Vault::export_qr_ansi(id)` (cached in
-/// [`staged_ansi`](Self::staged_ansi)) with the account's
-/// `summary_display_label` caption on the line above the QR.
+/// [`staged_ansi`](Self::staged_ansi) when the modal opens) with the
+/// account's `summary_display_label` caption on the line above the QR
+/// and the verbatim
+/// `paladin_core::format_plaintext_qr_export_warning()` text as an
+/// informational footer beneath the save actions.
 #[derive(Debug)]
 pub struct QrExportModal {
     /// The account being exported. Captured at modal-open time
@@ -1668,19 +1643,12 @@ pub struct QrExportModal {
     /// `invalid_state { operation: "export_qr_*", state:
     /// "account_not_found" }` from the executor.
     pub account_id: AccountId,
-    /// Current page (warning-ack vs QR + save actions).
-    pub page: QrExportPage,
-    /// Whether the user has acknowledged the warning. Toggling on
-    /// advances to [`QrExportPage::QrAndActions`] and populates
-    /// [`staged_ansi`](Self::staged_ansi); toggling off drops the
-    /// staged buffers and returns to [`QrExportPage::WarningAck`].
-    pub ack: bool,
     /// Currently focused control.
     pub focus: QrExportFocus,
     /// Cached half-block QR body rendered via
-    /// [`paladin_core::Vault::export_qr_ansi`]. Populated when
-    /// [`ack`](Self::ack) toggles on, dropped (zeroizing) when it
-    /// toggles off, the modal closes, or auto-lock fires.
+    /// [`paladin_core::Vault::export_qr_ansi`]. Populated when the
+    /// modal opens, dropped (zeroizing) when the modal closes or
+    /// auto-lock fires.
     pub staged_ansi: Option<Zeroizing<String>>,
     /// Active save sub-flow (destination prompt + optional
     /// overwrite gate). `None` while the user is on the bare
@@ -1701,16 +1669,16 @@ pub struct QrExportModal {
 }
 
 impl QrExportModal {
-    /// Construct a freshly opened modal for `account_id` — Page 1,
-    /// ack off, focus on the ack checkbox, no staged buffers and no
-    /// inline error.
+    /// Construct a freshly opened modal for `account_id` — focus on
+    /// the Save-as-PNG button, no staged buffers and no inline error.
+    /// The caller stages the ANSI QR body (and surfaces any encoder
+    /// error inline) immediately after construction so the code is
+    /// visible without a gate.
     #[must_use]
     pub fn new(account_id: AccountId) -> Self {
         Self {
             account_id,
-            page: QrExportPage::WarningAck,
-            ack: false,
-            focus: QrExportFocus::AckCheckbox,
+            focus: QrExportFocus::SavePngButton,
             staged_ansi: None,
             save_sub_flow: None,
             last_save_path: None,
@@ -1753,9 +1721,9 @@ pub enum Modal {
     Passphrase(PassphraseModal),
     /// Settings: auto-lock and clipboard-clear toggles + timeouts.
     Settings(SettingsModal),
-    /// Per-account QR Export modal (v0.2; DESIGN §4.6 / §6) —
-    /// warning-ack page → ANSI body + Save as PNG / Save as SVG
-    /// sub-flow. Read-only — never routes through
+    /// Per-account QR Export modal (v0.2; DESIGN §4.6 / §6) — ANSI
+    /// body + Save as PNG / Save as SVG sub-flow + informational
+    /// warning footer. Read-only — never routes through
     /// `Vault::mutate_and_save`.
     QrExport(QrExportModal),
 }

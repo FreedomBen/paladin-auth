@@ -36,8 +36,8 @@ use paladin_tui::app::state::{
     format_qr_import_failure, render_error_message, AddManualFocus, AddModal, AddMode, AppState,
     ChordLeader, EditFocus, EditIconHintSelector, EditModal, EditPrior, ExportFormat, ExportModal,
     Focus, HotpReveal, ImportFormatSelector, ImportModal, Modal, PassphraseModal,
-    PendingDuplicateAdd, QrExportFocus, QrExportPage, QrSaveFocus, QrSaveFormat, QrSaveStep,
-    RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
+    PendingDuplicateAdd, QrExportFocus, QrSaveFocus, QrSaveFormat, QrSaveStep, RemoveModal,
+    RenameModal, SettingsFocus, SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -21355,7 +21355,10 @@ fn qr_unlocked_no_selection() -> AppState {
 }
 
 #[test]
-fn pressing_q_from_list_focus_opens_qr_export_modal_on_warning_ack_page() {
+fn pressing_q_from_list_focus_opens_qr_export_modal_on_qr_view() {
+    // The modal opens directly on the rendered QR — no acknowledgment
+    // gate per DESIGN §4.6 / §6. The ANSI body is staged immediately
+    // and focus lands on the Save-as-PNG button.
     let (unlocked, account_id, _path) = qr_unlocked_with_one_totp();
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('Q')));
     assert!(effects.is_empty(), "opening a modal must not emit effects");
@@ -21365,10 +21368,11 @@ fn pressing_q_from_list_focus_opens_qr_export_modal_on_warning_ack_page() {
             ..
         } => {
             assert_eq!(qr.account_id, account_id);
-            assert_eq!(qr.page, QrExportPage::WarningAck);
-            assert!(!qr.ack, "modal opens with ack off per DESIGN §4.6 / §6");
-            assert_eq!(qr.focus, QrExportFocus::AckCheckbox);
-            assert!(qr.staged_ansi.is_none(), "no QR is staged pre-ack");
+            assert_eq!(qr.focus, QrExportFocus::SavePngButton);
+            assert!(
+                qr.staged_ansi.is_some(),
+                "QR is staged the moment the modal opens"
+            );
             assert!(qr.last_save_path.is_none());
             assert!(qr.error.is_none());
         }
@@ -21488,12 +21492,12 @@ fn pressing_q_with_settings_modal_open_is_silent_no_op() {
 fn pressing_q_with_qr_export_modal_open_is_silent_no_op() {
     // Self re-open guard: once the QR Export modal is on screen,
     // pressing `Q` again must not replace it with a fresh modal —
-    // `route_modal_input` consumes the keystroke (it's not bound on
-    // either Page 1 or Page 2, so the modal-local handler treats it
-    // as a silent no-op) and `dispatch_unlocked_char` never runs.
-    // We open the modal through the reducer (rather than
-    // constructing it directly) so the account-id wiring matches
-    // the production opener path.
+    // `route_modal_input` consumes the keystroke (it's not bound in
+    // the modal, so the modal-local handler treats it as a silent
+    // no-op) and `dispatch_unlocked_char` never runs. We open the
+    // modal through the reducer (rather than constructing it
+    // directly) so the account-id wiring matches the production
+    // opener path.
     let (unlocked, account_id, _path) = qr_unlocked_with_one_totp();
     let (opened, _) = reduce(unlocked, key(KeyCode::Char('Q')));
     let (state, effects) = reduce(opened, key(KeyCode::Char('Q')));
@@ -21510,15 +21514,9 @@ fn pressing_q_with_qr_export_modal_open_is_silent_no_op() {
                 qr.account_id, account_id,
                 "second Q must not swap the modal's account_id"
             );
-            assert_eq!(
-                qr.page,
-                QrExportPage::WarningAck,
-                "second Q must not advance the page"
-            );
-            assert!(!qr.ack, "second Q must not flip the ack");
             assert!(
-                qr.staged_ansi.is_none(),
-                "second Q must not stage a QR (still pre-ack)"
+                qr.staged_ansi.is_some(),
+                "second Q must not drop the staged QR"
             );
         }
         AppState::Unlocked { modal, .. } => {
@@ -21627,102 +21625,32 @@ fn pressing_q_on_startup_error_screen_is_silent_no_op() {
 }
 
 #[test]
-fn qr_export_modal_pre_ack_body_does_not_stage_qr() {
-    // Per DESIGN §4.6: *"The ANSI QR is **not** rendered on this
-    // page so a closing-terminal glimpse cannot expose the
-    // secret."* The reducer must not populate `staged_ansi` until
-    // the user acks the warning.
-    let (unlocked, _id, _path) = qr_unlocked_with_one_totp();
-    let (state, _) = reduce(unlocked, key(KeyCode::Char('Q')));
-    match state {
-        AppState::Unlocked {
-            modal: Some(Modal::QrExport(qr)),
-            ..
-        } => {
-            assert!(qr.staged_ansi.is_none());
-        }
-        other => panic!("expected QR modal open, got {other:?}"),
-    }
-}
-
-#[test]
-fn qr_export_modal_ack_toggle_on_advances_to_page2_and_stages_ansi() {
-    // Toggling the ack on (Space on the focused checkbox)
-    // immediately advances the modal to Page 2 and populates
-    // `staged_ansi` with the value `Vault::export_qr_ansi` would
-    // return for the same account_id.
+fn qr_export_modal_open_stages_ansi_matching_core() {
+    // The modal stages the ANSI QR body the moment it opens (no
+    // acknowledgment gate per DESIGN §4.6 / §6) and the staged bytes
+    // match what `Vault::export_qr_ansi` returns for the same
+    // account_id.
     let (unlocked, account_id, _path) = qr_unlocked_with_one_totp();
     let (state, _) = reduce(unlocked, key(KeyCode::Char('Q')));
-    let (state, _) = reduce(state, key(KeyCode::Char(' ')));
     match state {
         AppState::Unlocked {
             modal: Some(Modal::QrExport(qr)),
             vault,
             ..
         } => {
-            assert_eq!(qr.page, QrExportPage::QrAndActions);
-            assert!(qr.ack);
             assert_eq!(qr.focus, QrExportFocus::SavePngButton);
             let expected = vault.export_qr_ansi(account_id).expect("ansi render");
             let staged = qr
                 .staged_ansi
                 .as_ref()
-                .expect("staged_ansi populated on ack-toggle-on");
+                .expect("staged_ansi populated when the modal opens");
             assert_eq!(
                 staged.as_str(),
                 expected.as_str(),
                 "staged ANSI must match Vault::export_qr_ansi byte-for-byte"
             );
         }
-        other => panic!("expected QR modal Page 2, got {other:?}"),
-    }
-}
-
-#[test]
-fn qr_export_modal_ack_toggle_off_drops_rendered_qr_and_returns_to_page1() {
-    // Toggling the ack back off drops `staged_ansi` (zeroizing on
-    // drop) and returns to Page 1.
-    let (unlocked, _id, _path) = qr_unlocked_with_one_totp();
-    let (state, _) = reduce(unlocked, key(KeyCode::Char('Q')));
-    let (state, _) = reduce(state, key(KeyCode::Char(' ')));
-    // Now ack is on, Page 2. Tab back to AckCheckbox.
-    let (state, _) = reduce(state, key(KeyCode::Tab));
-    let (state, _) = reduce(state, key(KeyCode::Tab));
-    let (state, _) = reduce(state, key(KeyCode::Tab));
-    // SavePng → SaveSvg → Done → SavePng wrap. We need AckCheckbox
-    // which is not on Page 2's focus cycle. Use BackTab to skip
-    // around — actually the focus cycle is page-scoped so the only
-    // way back to AckCheckbox is to toggle ack off via Space (which
-    // routes through the ack-focus branch even on Page 2 by
-    // contract). Use a direct Space toggle as the canonical
-    // ack-off path:
-    //
-    // Instead of cycling, drive the toggle through the modal's
-    // Ack-control branch. The reducer's `route_qr_export_modal_input`
-    // honors Space on `QrExportFocus::AckCheckbox` regardless of
-    // page (defensive — see the Page-2 match arm).
-    // For this test we re-Toggle by simulating focus=Ack + Space.
-    // Easier: re-open the modal and only toggle once to test the
-    // toggle-off side via the reducer's Page-2 branch.
-    //
-    // Direct exercise: drive the toggle-off through the same
-    // reducer arm.
-    let (state, _) = reduce(state, key(KeyCode::Char(' ')));
-    // After three Tabs from SavePng, focus is SavePng again (wraps).
-    // Space on a button focus is a no-op, so this should NOT toggle.
-    match state {
-        AppState::Unlocked {
-            modal: Some(Modal::QrExport(qr)),
-            ..
-        } => {
-            assert_eq!(
-                qr.page,
-                QrExportPage::QrAndActions,
-                "Space on a button focus must not toggle ack"
-            );
-            assert!(qr.ack);
-        }
-        other => panic!("expected Page 2 still, got {other:?}"),
+        other => panic!("expected QR modal open, got {other:?}"),
     }
 }
 
@@ -21743,28 +21671,10 @@ fn qr_export_modal_warning_text_matches_paladin_core_verbatim() {
 }
 
 #[test]
-fn qr_export_modal_enter_on_cancel_button_closes_modal() {
-    let (unlocked, _id, _path) = qr_unlocked_with_one_totp();
-    let (state, _) = reduce(unlocked, key(KeyCode::Char('Q')));
-    // Tab from AckCheckbox to CancelButton.
-    let (state, _) = reduce(state, key(KeyCode::Tab));
-    let (state, effects) = reduce(state, key(KeyCode::Enter));
-    assert!(effects.is_empty());
-    match state {
-        AppState::Unlocked { modal: None, .. } => {}
-        AppState::Unlocked { modal, .. } => {
-            panic!("expected modal closed, got {modal:?}")
-        }
-        other => panic!("expected Unlocked, got {other:?}"),
-    }
-}
-
-#[test]
 fn qr_export_modal_enter_on_done_button_closes_modal() {
     let (unlocked, _id, _path) = qr_unlocked_with_one_totp();
     let (state, _) = reduce(unlocked, key(KeyCode::Char('Q')));
-    let (state, _) = reduce(state, key(KeyCode::Char(' ')));
-    // On Page 2, Tab from SavePng → SaveSvg → Done.
+    // Tab from SavePng → SaveSvg → Done, then Enter on Done.
     let (state, _) = reduce(state, key(KeyCode::Tab));
     let (state, _) = reduce(state, key(KeyCode::Tab));
     let (state, effects) = reduce(state, key(KeyCode::Enter));
@@ -21795,8 +21705,8 @@ fn qr_export_modal_esc_closes_modal() {
 
 #[test]
 fn qr_export_modal_open_and_close_does_not_advance_hotp_counter() {
-    // Read-only contract — opening the modal, toggling ack on /
-    // off, and `Esc`-closing it leaves the HOTP counter unchanged.
+    // Read-only contract — opening the modal (which stages the QR)
+    // and `Esc`-closing it leaves the HOTP counter unchanged.
     let tmp = secure_tempdir();
     let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
     let hotp_id = add_hotp_account(&mut vault, &store, "hotp-acct");
@@ -21823,7 +21733,6 @@ fn qr_export_modal_open_and_close_does_not_advance_hotp_counter() {
         help_open: false,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('Q')));
-    let (state, _) = reduce(state, key(KeyCode::Char(' ')));
     let (state, _) = reduce(state, key(KeyCode::Esc));
     match state {
         AppState::Unlocked { vault, .. } => {
@@ -21842,36 +21751,9 @@ fn qr_export_modal_open_and_close_does_not_advance_hotp_counter() {
 }
 
 #[test]
-fn qr_export_modal_focus_cycle_page1_wraps_at_ends() {
+fn qr_export_modal_focus_cycle_cycles_through_save_buttons() {
     let (unlocked, _id, _path) = qr_unlocked_with_one_totp();
     let (state, _) = reduce(unlocked, key(KeyCode::Char('Q')));
-    // AckCheckbox → CancelButton (Tab).
-    let (state, _) = reduce(state, key(KeyCode::Tab));
-    let focus_after_tab = match &state {
-        AppState::Unlocked {
-            modal: Some(Modal::QrExport(qr)),
-            ..
-        } => qr.focus,
-        _ => panic!(),
-    };
-    assert_eq!(focus_after_tab, QrExportFocus::CancelButton);
-    // CancelButton → AckCheckbox (Tab again, wraps).
-    let (state, _) = reduce(state, key(KeyCode::Tab));
-    let focus_after_wrap = match &state {
-        AppState::Unlocked {
-            modal: Some(Modal::QrExport(qr)),
-            ..
-        } => qr.focus,
-        _ => panic!(),
-    };
-    assert_eq!(focus_after_wrap, QrExportFocus::AckCheckbox);
-}
-
-#[test]
-fn qr_export_modal_focus_cycle_page2_cycles_through_save_buttons() {
-    let (unlocked, _id, _path) = qr_unlocked_with_one_totp();
-    let (state, _) = reduce(unlocked, key(KeyCode::Char('Q')));
-    let (state, _) = reduce(state, key(KeyCode::Char(' ')));
     // SavePngButton → SaveSvgButton (Tab).
     let (state, _) = reduce(state, key(KeyCode::Tab));
     let focus = match &state {
@@ -21904,36 +21786,16 @@ fn qr_export_modal_focus_cycle_page2_cycles_through_save_buttons() {
     assert_eq!(focus, QrExportFocus::SavePngButton);
 }
 
-#[test]
-fn qr_export_modal_enter_on_ack_checkbox_toggles_ack() {
-    // Enter on the ack checkbox is wired identically to Space so
-    // the user can advance from Page 1 with either key.
-    let (unlocked, _id, _path) = qr_unlocked_with_one_totp();
-    let (state, _) = reduce(unlocked, key(KeyCode::Char('Q')));
-    let (state, _) = reduce(state, key(KeyCode::Enter));
-    match state {
-        AppState::Unlocked {
-            modal: Some(Modal::QrExport(qr)),
-            ..
-        } => {
-            assert!(qr.ack);
-            assert_eq!(qr.page, QrExportPage::QrAndActions);
-        }
-        other => panic!("expected QR modal Page 2, got {other:?}"),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // QR Export — Save-as-PNG / Save-as-SVG sub-flow tests
 // (`docs/IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > QR Export).
 // ---------------------------------------------------------------------------
 
-/// Drive `Q` → Space sequence so the modal is on Page 2 ready for a
+/// Drive `Q` so the modal opens directly on the QR view, ready for a
 /// save action. Returns the state and account id.
-fn qr_unlocked_page2() -> (AppState, AccountId, PathBuf) {
+fn qr_unlocked_qr_view() -> (AppState, AccountId, PathBuf) {
     let (unlocked, id, path) = qr_unlocked_with_one_totp();
     let (state, _) = reduce(unlocked, key(KeyCode::Char('Q')));
-    let (state, _) = reduce(state, key(KeyCode::Char(' ')));
     (state, id, path)
 }
 
@@ -21951,8 +21813,8 @@ fn type_chars(mut state: AppState, s: &str) -> AppState {
 fn pressing_save_as_png_button_opens_destination_prompt() {
     // Enter on the Save as PNG… button opens the inline
     // destination-path sub-flow.
-    let (state, _id, _path) = qr_unlocked_page2();
-    // Focus is on SavePngButton after ack-toggle-on.
+    let (state, _id, _path) = qr_unlocked_qr_view();
+    // Focus is on SavePngButton on open.
     let (state, effects) = reduce(state, key(KeyCode::Enter));
     assert!(
         effects.is_empty(),
@@ -21981,7 +21843,7 @@ fn pressing_save_as_png_button_opens_destination_prompt() {
 #[test]
 fn pressing_save_as_svg_button_opens_destination_prompt_with_svg_format() {
     // Tab from SavePng to SaveSvg, Enter opens sub-flow with Svg.
-    let (state, _id, _path) = qr_unlocked_page2();
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Tab));
     let (state, effects) = reduce(state, key(KeyCode::Enter));
     assert!(effects.is_empty());
@@ -22002,7 +21864,7 @@ fn pressing_save_as_svg_button_opens_destination_prompt_with_svg_format() {
 #[test]
 fn qr_export_modal_save_with_empty_destination_path_rejects_inline() {
     // Confirm with empty path rejects inline; no effect is emitted.
-    let (state, _id, _path) = qr_unlocked_page2();
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter)); // open PNG sub-flow
                                                          // Tab to Confirm button.
     let (state, _) = reduce(state, key(KeyCode::Tab));
@@ -22030,7 +21892,7 @@ fn qr_export_modal_save_with_existing_destination_shows_overwrite_gate() {
     let tmp = secure_tempdir();
     let existing = tmp.path().join("clash.png");
     fs::write(&existing, b"prior bytes").expect("seed existing file");
-    let (state, _id, _path) = qr_unlocked_page2();
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter)); // open PNG sub-flow
     let state = type_chars(state, existing.to_str().expect("utf-8 path"));
     let (state, effects) = reduce(state, key(KeyCode::Enter));
@@ -22055,7 +21917,7 @@ fn qr_export_modal_save_overwrite_ack_off_rejects_inline_and_leaves_existing_fil
     let tmp = secure_tempdir();
     let existing = tmp.path().join("clash.png");
     fs::write(&existing, b"prior bytes").expect("seed existing file");
-    let (state, _id, _path) = qr_unlocked_page2();
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter)); // open PNG sub-flow
     let state = type_chars(state, existing.to_str().expect("utf-8 path"));
     let (state, _) = reduce(state, key(KeyCode::Enter)); // flip to overwrite gate
@@ -22083,7 +21945,7 @@ fn qr_export_modal_save_with_fresh_path_emits_qr_export_effect() {
     // and the right format.
     let tmp = secure_tempdir();
     let target = tmp.path().join("fresh.png");
-    let (state, id, vault_path) = qr_unlocked_page2();
+    let (state, id, vault_path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter)); // open PNG sub-flow
     let state = type_chars(state, target.to_str().expect("utf-8 path"));
     let (_state, effects) = reduce(state, key(KeyCode::Enter));
@@ -22111,7 +21973,7 @@ fn qr_export_modal_save_overwrite_ack_on_emits_qr_export_effect() {
     let tmp = secure_tempdir();
     let existing = tmp.path().join("clash.png");
     fs::write(&existing, b"prior bytes").expect("seed existing file");
-    let (state, _id, _path) = qr_unlocked_page2();
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter)); // open PNG sub-flow
     let state = type_chars(state, existing.to_str().expect("utf-8 path"));
     let (state, _) = reduce(state, key(KeyCode::Enter)); // flip to overwrite gate
@@ -22129,10 +21991,10 @@ fn qr_export_modal_save_overwrite_ack_on_emits_qr_export_effect() {
 }
 
 #[test]
-fn qr_export_modal_esc_in_destination_prompt_cancels_save_subflow_and_preserves_page2() {
-    // Esc inside the sub-flow drops it back to Page 2 with the QR
-    // body intact.
-    let (state, _id, _path) = qr_unlocked_page2();
+fn qr_export_modal_esc_in_destination_prompt_cancels_save_subflow_and_preserves_qr_view() {
+    // Esc inside the sub-flow drops it back to the QR view with the
+    // QR body intact.
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter)); // open PNG sub-flow
     let state = type_chars(state, "/tmp/some.png");
     let (state, effects) = reduce(state, key(KeyCode::Esc));
@@ -22143,22 +22005,21 @@ fn qr_export_modal_esc_in_destination_prompt_cancels_save_subflow_and_preserves_
             ..
         } => {
             assert!(qr.save_sub_flow.is_none(), "Esc drops the sub-flow");
-            assert!(qr.staged_ansi.is_some(), "Page-2 QR body survives");
-            assert_eq!(qr.page, QrExportPage::QrAndActions);
+            assert!(qr.staged_ansi.is_some(), "the QR body survives");
             assert_eq!(qr.focus, QrExportFocus::SavePngButton);
         }
-        other => panic!("expected QR modal Page 2, got {other:?}"),
+        other => panic!("expected QR modal still open, got {other:?}"),
     }
 }
 
 #[test]
-fn qr_export_modal_esc_in_overwrite_gate_cancels_save_subflow_and_preserves_page2() {
+fn qr_export_modal_esc_in_overwrite_gate_cancels_save_subflow_and_preserves_qr_view() {
     // Same as above, but Esc fires while the sub-flow is on the
     // overwrite gate.
     let tmp = secure_tempdir();
     let existing = tmp.path().join("clash.png");
     fs::write(&existing, b"prior bytes").expect("seed existing file");
-    let (state, _id, _path) = qr_unlocked_page2();
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter)); // open PNG sub-flow
     let state = type_chars(state, existing.to_str().expect("utf-8 path"));
     let (state, _) = reduce(state, key(KeyCode::Enter)); // flip to overwrite gate
@@ -22169,10 +22030,9 @@ fn qr_export_modal_esc_in_overwrite_gate_cancels_save_subflow_and_preserves_page
             ..
         } => {
             assert!(qr.save_sub_flow.is_none());
-            assert_eq!(qr.page, QrExportPage::QrAndActions);
             assert!(qr.staged_ansi.is_some());
         }
-        other => panic!("expected QR modal Page 2, got {other:?}"),
+        other => panic!("expected QR modal still open, got {other:?}"),
     }
     std::mem::forget(tmp);
 }
@@ -22182,7 +22042,7 @@ fn effect_result_qr_export_ok_stashes_last_save_path_and_closes_sub_flow() {
     // EffectResult::QrExport(Ok(path)) stashes the path in
     // last_save_path and closes the sub-flow without closing the
     // modal.
-    let (state, _id, _path) = qr_unlocked_page2();
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter)); // open PNG sub-flow
     let state = type_chars(state, "/tmp/fresh.png");
     // Inject a synthetic Ok result.
@@ -22211,7 +22071,7 @@ fn effect_result_qr_export_ok_stashes_last_save_path_and_closes_sub_flow() {
 fn qr_export_modal_second_successful_save_replaces_inline_success_path() {
     // Two successful saves in a row leave last_save_path equal to
     // the most recent path (replace-only — no accumulation).
-    let (state, _id, _path) = qr_unlocked_page2();
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let png_path = PathBuf::from("/tmp/first.png");
     let svg_path = PathBuf::from("/tmp/second.svg");
     // First save success.
@@ -22252,7 +22112,7 @@ fn qr_export_modal_second_successful_save_replaces_inline_success_path() {
 fn effect_result_qr_export_err_io_error_surfaces_inline_and_keeps_modal_open() {
     // EffectResult::QrExport(Err(io_error)) surfaces the rendered
     // error inline on the sub-flow and leaves the modal open.
-    let (state, _id, _path) = qr_unlocked_page2();
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter)); // open PNG sub-flow
     let state = type_chars(state, "/tmp/whatever.png");
     let err = PaladinError::IoError {
@@ -22279,7 +22139,7 @@ fn effect_result_qr_export_err_io_error_surfaces_inline_and_keeps_modal_open() {
 fn effect_result_qr_export_err_save_not_committed_surfaces_inline_and_keeps_modal_open() {
     // save_not_committed (PALADIN_FAULT_INJECT=pre_commit family)
     // surfaces inline; the modal stays open.
-    let (state, _id, _path) = qr_unlocked_page2();
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter));
     let state = type_chars(state, "/tmp/whatever.png");
     let err = PaladinError::SaveNotCommitted {
@@ -22305,7 +22165,7 @@ fn effect_result_qr_export_err_save_not_committed_surfaces_inline_and_keeps_moda
 fn effect_result_qr_export_err_save_durability_unconfirmed_surfaces_inline_and_keeps_modal_open() {
     // save_durability_unconfirmed (PALADIN_FAULT_INJECT=post_commit)
     // surfaces inline; the modal stays open.
-    let (state, _id, _path) = qr_unlocked_page2();
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter));
     let state = type_chars(state, "/tmp/whatever.png");
     let err = PaladinError::SaveDurabilityUnconfirmed;
@@ -22325,26 +22185,24 @@ fn effect_result_qr_export_err_save_durability_unconfirmed_surfaces_inline_and_k
 }
 
 #[test]
-fn qr_export_modal_ack_toggle_off_drops_save_sub_flow() {
-    // Toggling ack back off mid-sub-flow drops the sub-flow along
-    // with the staged ANSI body.
-    let (state, _id, _path) = qr_unlocked_page2();
+fn qr_export_modal_esc_unwinds_sub_flow_then_closes_modal() {
+    // Two-stage Esc unwind: the first Esc drops the active save
+    // sub-flow (the staged QR body survives), and a second Esc from
+    // the QR view root closes the modal.
+    let (state, _id, _path) = qr_unlocked_qr_view();
     let (state, _) = reduce(state, key(KeyCode::Enter)); // open PNG sub-flow
     let state = type_chars(state, "/tmp/x.png");
-    // Tab back to the AckCheckbox on Page 1 first requires closing
-    // the sub-flow. Instead, simulate ack toggle off through Space
-    // on AckCheckbox — but to do that we'd need to cancel the
-    // sub-flow first. Easier path: just verify modal-close drops
-    // the sub-flow via Esc closing the modal.
-    // The ack-toggle-off path is exercised by the
-    // existing `qr_export_modal_ack_toggle_off_drops_rendered_qr_and_returns_to_page1`
-    // for the ANSI body; here we cover the sub-flow drop axis by
-    // dropping the modal entirely and confirming the value drops
-    // too.
     let (state, _) = reduce(state, key(KeyCode::Esc)); // drop sub-flow
-    let (state, _) = reduce(state, key(KeyCode::Tab)); // SavePng → SaveSvg
-    let (state, _) = reduce(state, key(KeyCode::Tab)); // SaveSvg → Done
-    let (state, _) = reduce(state, key(KeyCode::Tab)); // Done → SavePng
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::QrExport(qr)),
+            ..
+        } => {
+            assert!(qr.save_sub_flow.is_none(), "first Esc drops the sub-flow");
+            assert!(qr.staged_ansi.is_some(), "the QR body survives");
+        }
+        other => panic!("expected QR modal still open, got {other:?}"),
+    }
     let (state, _) = reduce(state, key(KeyCode::Esc)); // close modal
     match state {
         AppState::Unlocked { modal: None, .. } => {}

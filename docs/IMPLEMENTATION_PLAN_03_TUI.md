@@ -697,24 +697,14 @@ dismiss deliberately.
   is no rollback path.
 - **QR Export** (v0.2; DESIGN §4.6 / §6) — single-account QR
   modal opened with `Q` (Shift-q) on the focused list row. The
-  modal is a small two-page state machine:
-  * **Page 1 — Warning ack.** The modal opens on the warning
-    body rendered verbatim from
-    `paladin_core::format_plaintext_qr_export_warning()` (sourced
-    through the same helper the CLI / GUI use), a `[ ]` ack
-    `Checkbox` (default off, initial focus), and a `Cancel`
-    button. Toggling the checkbox on (Space) immediately
-    advances the modal to Page 2; toggling it back off returns
-    to Page 1 and drops the Page-2 buffers (matching DESIGN §6
-    "on ack, the same modal switches"). Pressing `Cancel` (or
-    `Esc`) closes the modal. The ANSI QR is **not** rendered on
-    this page so a closing-terminal glimpse cannot expose the
-    secret.
-  * **Page 2 — QR + save actions.** Mounted only after the user
-    toggles the Page-1 ack on. The body renders the Unicode half-block QR
-    via `paladin_core::Vault::export_qr_ansi(id)`, with the
-    account's `summary_display_label` caption on the line above
-    the QR (CLI / GUI parity). Two save buttons sit below the QR:
+  modal is a single page that opens directly on the rendered QR
+  (no acknowledgment gate — user testing found the pre-QR ack
+  checkbox needlessly annoying, so the code is shown immediately):
+  * **QR + save actions.** The body renders the Unicode half-block QR
+    via `paladin_core::Vault::export_qr_ansi(id)` (staged into
+    `staged_ansi` when the modal opens), with the account's
+    `summary_display_label` caption on the line above the QR
+    (CLI / GUI parity). Two save buttons sit below the QR:
     `Save as PNG…` and `Save as SVG…`, each routed through the
     matching `Vault::export_qr_png` / `Vault::export_qr_svg` call
     and `paladin_core::write_secret_file_atomic` (0600, tempfile
@@ -737,25 +727,28 @@ dismiss deliberately.
     map.) A `Done` button closes the modal. `Esc` while
     focus is inside the destination-path sub-flow (text field
     or overwrite-gate confirmation) cancels just that sub-flow
-    and returns to the Page-2 QR body, zeroizing the typed path
-    buffer; `Esc` from the Page-2 root closes the entire modal
+    and returns to the QR body, zeroizing the typed path
+    buffer; `Esc` from the modal root closes the entire modal
     (parity with how the Export modal's `Esc` unwinds its inner
     overwrite gate before closing).
+  * **Warning footer.** The verbatim
+    `paladin_core::format_plaintext_qr_export_warning()` text
+    (sourced through the same helper the CLI / GUI use) is
+    rendered as a footer beneath the save actions so the user is
+    reminded the QR encodes the account secret. It is
+    informational only — it never gates the QR behind a click.
+    The modal is sized tall enough that the QR stays fully
+    scannable above the footer; `centered_rect` clamps to the
+    terminal so short terminals degrade gracefully.
   Read-only contract — the modal **never** routes through
   `Vault::mutate_and_save`, the HOTP counter never advances, and
   `updated_at` is never bumped. Saving never happens until the
-  user confirms the destination plus any overwrite gate; the
-  ANSI render lives only in the modal body. The PNG /
+  user confirms the destination plus any overwrite gate. The PNG /
   SVG / ANSI buffers returned by core are `Zeroizing<Vec<u8>>` /
   `Zeroizing<String>`; the modal holds them only for the duration
   the body is rendered (or the save worker is in flight) and
   drops them on submit / cancel / `Esc` / modal close /
-  auto-lock. Toggling the Page-1 ack back off also drops the
-  Page-2 buffers and returns the body to Page 1; the buffer
-  drop on ack-off matches the GTK `ExportQrDialog` behavior
-  (GTK does not auto-advance on ack-on, so the navigation
-  diverges, but both surfaces zeroize the rendered bytes the
-  moment the user un-acks the warning). Save failures
+  auto-lock. Save failures
   (`save_not_committed`, `save_durability_unconfirmed`,
   `io_error`) stay inline in the modal as the existing Export
   modal handles them. `validation_error` (`field: "qr_render"`)
