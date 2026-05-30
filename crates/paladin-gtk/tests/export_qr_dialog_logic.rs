@@ -5,17 +5,18 @@
 //! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"QR export dialog
 //! implementation" > "Pure-logic unit tests", these tests pin the
 //! widget-free helpers the `ExportQrDialogComponent` reducer binds
-//! so the warning-ack gate, the no-auto-render contract, the
-//! `AdwViewStack` visible-child reducer, and the user-facing label
-//! stability are exercised without spinning up GTK / libadwaita
-//! (the parallel `tests/gtk_smoke.rs` covers the live `adw::Dialog`
-//! mount end-to-end under `xvfb-run` in CI).
+//! so the open-time QR staging (`decide_export_qr_target` →
+//! `ExportQrDialogInit`), the informational warning footer, the
+//! save / copy plumbing, and the user-facing label stability are
+//! exercised without spinning up GTK / libadwaita (the parallel
+//! `tests/gtk_smoke.rs` covers the live `adw::Dialog` mount
+//! end-to-end under `xvfb-run` in CI).
 //!
-//! Tests for the Page-2 `ShowQr` render path, the Save-as-PNG /
-//! Save-as-SVG worker, the Copy image clipboard plumbing, the
-//! auto-lock pruning hook, and the HOTP-counter-unchanged
-//! tempfile-backed invariant land alongside the matching commits
-//! in the §"QR export dialog implementation" build order.
+//! The dialog opens directly on the rendered QR — there is no
+//! warning-ack gate. The Save-as-PNG / Save-as-SVG worker, the Copy
+//! image clipboard plumbing, the auto-lock pruning hook, and the
+//! HOTP-counter-unchanged tempfile-backed invariant are all covered
+//! below.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -29,22 +30,20 @@ use paladin_core::{
     PaladinError, QrRenderOptions, Store, Vault, VaultInit, VaultLock,
 };
 use paladin_gtk::export_qr_dialog::{
-    apply_msg, apply_msg_ack_toggled, apply_msg_copy_image_failed, apply_msg_copy_image_succeeded,
+    apply_msg, apply_msg_copy_image_failed, apply_msg_copy_image_succeeded,
     apply_msg_overwrite_acknowledged, apply_msg_save_completed, apply_msg_save_destination_picked,
-    apply_msg_show_qr, classify_export_qr_save_error, clear_for_lock,
-    compose_copy_image_button_sensitive, compose_copy_image_request_output,
-    compose_export_qr_caption_style_class, compose_export_qr_caption_text,
-    compose_export_qr_warning_body, compose_save_can_fire,
-    compose_save_target_overwrite_gate_visible, compose_show_qr_button_sensitive,
-    compose_visible_child_name, decide_export_qr_target, format_export_qr_dialog_copy_image_label,
-    format_export_qr_dialog_copy_image_success_toast, format_export_qr_dialog_done_label,
-    format_export_qr_dialog_save_as_png_label, format_export_qr_dialog_save_as_svg_label,
-    format_export_qr_dialog_save_success_toast, format_export_qr_dialog_show_qr_button_label,
+    classify_export_qr_save_error, clear_for_lock, compose_copy_image_button_sensitive,
+    compose_copy_image_request_output, compose_export_qr_caption_style_class,
+    compose_export_qr_caption_text, compose_export_qr_warning_body,
+    compose_qr_save_buttons_sensitive, compose_save_can_fire,
+    compose_save_target_overwrite_gate_visible, decide_export_qr_target,
+    format_export_qr_dialog_copy_image_label, format_export_qr_dialog_copy_image_success_toast,
+    format_export_qr_dialog_done_label, format_export_qr_dialog_save_as_png_label,
+    format_export_qr_dialog_save_as_svg_label, format_export_qr_dialog_save_success_toast,
     format_export_qr_dialog_title, render_show_qr_error_message, run_export_qr_save_worker,
     ExportQrDialogInit, ExportQrDialogMsg, ExportQrDialogOutput, ExportQrDialogState,
     ExportQrSaveCompletion, ExportQrSaveOutcome, ExportQrSaveRequest, ExportQrSaveWorkerCompletion,
     ExportQrSaveWorkerInput, SaveKind, SaveTarget, COPY_IMAGE_CLIPBOARD_MIME_TYPE,
-    VIEW_STACK_QR_PAGE_NAME, VIEW_STACK_WARNING_PAGE_NAME,
 };
 
 /// Build a synthetic TOTP [`AccountSummary`] for the fixture used
@@ -71,20 +70,22 @@ fn fixture_state() -> ExportQrDialogState {
     ExportQrDialogState::new(ExportQrDialogInit {
         account_id: summary.id,
         account_summary: summary,
+        staged_png: None,
+        render_error: None,
     })
 }
 
 // ---------------------------------------------------------------------------
-// Group A — Skeleton + warning page
+// Group A — Skeleton + warning footer
 // ---------------------------------------------------------------------------
 
 #[test]
 fn format_export_qr_dialog_warning_body_matches_paladin_core_verbatim() {
-    // Page-1 warning body must be the verbatim
-    // `paladin_core::format_plaintext_qr_export_warning()` output
-    // so the CLI / TUI / GTK warnings flow through one helper —
-    // a future warning reword lands in `paladin-core` once and
-    // every front-end picks it up.
+    // The warning-footer body must be the verbatim
+    // `paladin_core::format_plaintext_qr_export_warning()` output so
+    // the CLI / TUI / GTK warnings flow through one helper — a future
+    // warning reword lands in `paladin-core` once and every front-end
+    // picks it up. The footer informs; it does not gate the code.
     assert_eq!(
         compose_export_qr_warning_body(),
         format_plaintext_qr_export_warning(),
@@ -92,181 +93,92 @@ fn format_export_qr_dialog_warning_body_matches_paladin_core_verbatim() {
 }
 
 #[test]
-fn compose_show_qr_button_sensitive_false_until_ack_revealed() {
-    // The Page-1 `Show QR` button is desensitized until the user
-    // explicitly toggles the ack switch — the warning-ack gate is
-    // the one safeguard between the warning page and the rendered
-    // QR. Fresh state must report `false`.
-    let state = fixture_state();
-    assert!(!state.ack_revealed);
-    assert!(!compose_show_qr_button_sensitive(&state));
-}
-
-#[test]
-fn compose_show_qr_button_sensitive_true_after_ack_toggled_on() {
-    // After the user explicitly flips the ack switch on, the
-    // `Show QR` button becomes sensitive so the user can advance
-    // to the QR page.
-    let mut state = fixture_state();
-    apply_msg_ack_toggled(&mut state, true);
-    assert!(state.ack_revealed);
-    assert!(compose_show_qr_button_sensitive(&state));
-}
-
-#[test]
-fn compose_visible_child_name_warning_before_show_qr() {
-    // The AdwViewStack defaults to the warning page; a Show-QR
-    // render switches it to the QR page; an ack-off reset (which
-    // clears `staged_png`) flips it back. This test pins the
-    // pre-ShowQr default state.
-    let state = fixture_state();
-    assert!(state.staged_png.is_none());
-    assert_eq!(
-        compose_visible_child_name(&state),
-        VIEW_STACK_WARNING_PAGE_NAME
-    );
-}
-
-#[test]
-fn apply_msg_ack_toggled_does_not_dispatch_show_qr() {
-    // Toggling the ack on must not auto-render the QR — the
-    // user has to press the explicit `Show QR` button. The
-    // reducer mutates only `ack_revealed`; `staged_png` /
-    // `staged_svg` stay empty, the visible child stays on the
-    // warning page, and no `Vault::export_qr_png` call is fired
-    // (no vault is even reachable from this pure helper).
-    let mut state = fixture_state();
-
-    apply_msg_ack_toggled(&mut state, true);
-
-    assert!(state.ack_revealed);
-    assert!(
-        state.staged_png.is_none(),
-        "ack-on must not stage PNG bytes"
-    );
-    assert!(
-        state.staged_svg.is_none(),
-        "ack-on must not stage SVG bytes"
-    );
-    assert_eq!(
-        compose_visible_child_name(&state),
-        VIEW_STACK_WARNING_PAGE_NAME,
-        "ack-on must keep the warning page visible",
-    );
-}
-
-#[test]
-fn apply_msg_ack_toggled_off_clears_staged_png_and_paintable_and_resets_visible_child() {
-    // Toggling the ack off after a successful Show-QR must drop
-    // the staged PNG / SVG / save-target / overwrite-ack state
-    // and switch the view stack back to the warning page so a
-    // glimpsed QR cannot leak through a re-open without a fresh
-    // ack toggle. The Picture's paintable reset to
-    // `gdk::Paintable::new_empty` is enforced at the widget
-    // layer (it depends on a `gdk::Paintable`); the state-side
-    // contract is the buffer drop + visible-child reset.
-    use zeroize::Zeroizing;
-
-    let mut state = fixture_state();
-    state.ack_revealed = true;
-    state.staged_png = Some(Zeroizing::new(vec![1, 2, 3]));
-    state.staged_svg = Some(Zeroizing::new("<svg/>".to_string()));
-
-    apply_msg_ack_toggled(&mut state, false);
-
-    assert!(!state.ack_revealed);
-    assert!(state.staged_png.is_none());
-    assert!(state.staged_svg.is_none());
-    assert!(state.save_target.is_none());
-    assert!(!state.overwrite_acknowledged);
-    assert!(!state.destination_exists);
-    assert_eq!(
-        compose_visible_child_name(&state),
-        VIEW_STACK_WARNING_PAGE_NAME,
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Group D — Page-2 mount (Show-QR render)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn apply_msg_show_qr_button_press_calls_export_qr_png_with_default_options() {
-    // The Page-1 `Show QR` button dispatches `ExportQrDialogMsg::ShowQr`,
-    // which the `SimpleComponent` routes through `apply_msg_show_qr`.
-    // The helper must call
-    // `vault.export_qr_png(state.account_id, &QrRenderOptions::default())`
-    // and stage the returned bytes in `state.staged_png` so the on-screen
-    // Picture bytes and the on-disk Save bytes are byte-identical by
-    // construction.
-    let dir = secure_tempdir();
-    let path = dir.path().join("vault.bin");
-    let (mut vault, store) = open_plaintext_pair(&path);
-    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
-    let init = decide_export_qr_target(&vault, id).expect("known account id resolves");
-    let mut state = ExportQrDialogState::new(init);
-    state.ack_revealed = true;
-
-    apply_msg_show_qr(&mut state, &vault);
-
-    let expected = vault
-        .export_qr_png(id, &QrRenderOptions::default())
-        .expect("plaintext vault renders QR");
-    let staged = state
-        .staged_png
-        .as_ref()
-        .expect("Show-QR press must stage PNG bytes");
-    assert_eq!(staged.as_slice(), expected.as_slice());
+fn export_qr_dialog_state_new_stages_png_from_init() {
+    // The dialog opens directly on the rendered QR: `AppModel`
+    // pre-renders the PNG and hands it through `ExportQrDialogInit`,
+    // so a fresh state adopts the staged bytes and carries no inline
+    // render error. There is no warning-ack gate to clear.
+    let summary = fixture_summary();
+    let state = ExportQrDialogState::new(ExportQrDialogInit {
+        account_id: summary.id,
+        account_summary: summary,
+        staged_png: Some(Zeroizing::new(vec![0x89, b'P', b'N', b'G'])),
+        render_error: None,
+    });
+    assert!(state.staged_png.is_some(), "init PNG must stage on open");
     assert!(state.show_qr_error.is_none());
 }
 
 #[test]
-fn apply_msg_show_qr_renders_picture_paintable_from_png_bytes() {
-    // After a successful Show-QR render the staged PNG bytes are the
-    // single source for both the on-screen `gtk::Picture` paintable
-    // (via `gdk::Texture::from_bytes(&glib::Bytes::from(&bytes))`)
-    // and the `Copy image` clipboard provider. Pin that `state.staged_png`
-    // becomes `Some(_)` with non-empty bytes — the widget layer builds
-    // the texture from this slot.
+fn export_qr_dialog_state_new_surfaces_render_error_from_init() {
+    // A failed open-time render rides in
+    // `ExportQrDialogInit::render_error`; the fresh state surfaces it
+    // inline and leaves `staged_png` empty so the save / copy actions
+    // stay desensitized.
+    let summary = fixture_summary();
+    let state = ExportQrDialogState::new(ExportQrDialogInit {
+        account_id: summary.id,
+        account_summary: summary,
+        staged_png: None,
+        render_error: Some("validation_error { field: \"qr_render\" }".to_string()),
+    });
+    assert!(state.staged_png.is_none());
+    assert_eq!(
+        state.show_qr_error.as_deref(),
+        Some("validation_error { field: \"qr_render\" }"),
+    );
+}
+
+#[test]
+fn compose_qr_save_buttons_sensitive_tracks_staged_png() {
+    // The Save-as-PNG / Save-as-SVG buttons are live only when the
+    // open-time render staged the QR bytes; on a render failure they
+    // are desensitized so a Save-as-PNG dispatch never fires without
+    // the staged bytes its worker `expect`s.
+    let mut state = fixture_state();
+    assert!(state.staged_png.is_none());
+    assert!(!compose_qr_save_buttons_sensitive(&state));
+    state.staged_png = Some(Zeroizing::new(vec![1, 2, 3]));
+    assert!(compose_qr_save_buttons_sensitive(&state));
+}
+
+// ---------------------------------------------------------------------------
+// Group D — Open-time QR staging (decide_export_qr_target) + caption
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decide_export_qr_target_stages_png_matching_export_qr_png() {
+    // `decide_export_qr_target` renders the QR PNG up front through
+    // the read-only `Vault::export_qr_png` so the dialog opens
+    // directly on the QR. The staged bytes must be byte-identical to a
+    // direct `export_qr_png` render so the on-screen Picture and the
+    // Save-as-PNG bytes match by construction, and they must survive
+    // into the dialog state.
     let dir = secure_tempdir();
     let path = dir.path().join("vault.bin");
     let (mut vault, store) = open_plaintext_pair(&path);
     let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+
     let init = decide_export_qr_target(&vault, id).expect("known account id resolves");
-    let mut state = ExportQrDialogState::new(init);
-    state.ack_revealed = true;
-
-    apply_msg_show_qr(&mut state, &vault);
-
-    let staged = state
+    let expected = vault
+        .export_qr_png(id, &QrRenderOptions::default())
+        .expect("plaintext vault renders QR");
+    let staged = init
         .staged_png
         .as_ref()
-        .expect("Show-QR press must stage PNG bytes");
+        .expect("decide must stage PNG bytes on success");
+    assert_eq!(staged.as_slice(), expected.as_slice());
     assert!(!staged.is_empty(), "staged PNG bytes must be non-empty");
+    assert!(init.render_error.is_none());
+
+    let state = ExportQrDialogState::new(init);
+    assert!(state.staged_png.is_some());
+    assert!(state.show_qr_error.is_none());
 }
 
 #[test]
-fn apply_msg_show_qr_switches_visible_child_to_qr() {
-    // Only a successful `ShowQr` render switches the visible child
-    // to the QR page; the visible-child reducer keys off
-    // `state.staged_png.is_some()`, so the post-render state must
-    // report `VIEW_STACK_QR_PAGE_NAME`.
-    let dir = secure_tempdir();
-    let path = dir.path().join("vault.bin");
-    let (mut vault, store) = open_plaintext_pair(&path);
-    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
-    let init = decide_export_qr_target(&vault, id).expect("known account id resolves");
-    let mut state = ExportQrDialogState::new(init);
-    state.ack_revealed = true;
-
-    apply_msg_show_qr(&mut state, &vault);
-
-    assert_eq!(compose_visible_child_name(&state), VIEW_STACK_QR_PAGE_NAME,);
-}
-
-#[test]
-fn apply_msg_show_qr_sets_caption_label_text_from_summary_display_label() {
-    // The Page-2 `<issuer>:<label>` caption must read from
+fn compose_export_qr_caption_text_reads_summary_display_label() {
+    // The `<issuer>:<label>` caption must read from
     // `paladin_core::summary_display_label(&state.account_summary)`
     // so the issuer:label rendering matches the CLI / TUI parity
     // rule and a future change to `summary_display_label` flows
@@ -287,6 +199,8 @@ fn apply_msg_show_qr_sets_caption_label_text_from_summary_display_label() {
     let state = ExportQrDialogState::new(ExportQrDialogInit {
         account_id: summary.id,
         account_summary: summary.clone(),
+        staged_png: None,
+        render_error: None,
     });
 
     assert_eq!(
@@ -298,60 +212,21 @@ fn apply_msg_show_qr_sets_caption_label_text_from_summary_display_label() {
 
 #[test]
 fn compose_export_qr_dialog_caption_widget_uses_title_3_style_class() {
-    // The Page-2 caption widget carries the `title-3` style class so
-    // it renders at libadwaita's display-3 heading weight. Pinned via
+    // The caption widget carries the `title-3` style class so it
+    // renders at libadwaita's display-3 heading weight. Pinned via
     // the `compose_export_qr_caption_style_class()` helper the
     // `view!` macro binds.
     assert_eq!(compose_export_qr_caption_style_class(), "title-3");
 }
 
 #[test]
-fn apply_msg_show_qr_invalid_state_account_not_found_renders_inline() {
-    // Defensive — production renders go through `decide_export_qr_target`
-    // which only mounts the dialog for known IDs, but if the account
-    // is removed between mount and a re-render the
-    // `Vault::export_qr_png` call returns
-    // `InvalidState { state: "account_not_found" }`. The reducer must
-    // surface that inline on Page 1 (a `show_qr_error` string), leave
-    // `staged_png` empty, and leave the visible child on `"warning"`.
-    let dir = secure_tempdir();
-    let path = dir.path().join("vault.bin");
-    let (mut vault, store) = open_plaintext_pair(&path);
-    add_totp(&mut vault, &store, Some("GitHub"), "ben");
-
-    let stray_summary = fixture_summary();
-    let stray_id = stray_summary.id;
-    let mut state = ExportQrDialogState::new(ExportQrDialogInit {
-        account_id: stray_id,
-        account_summary: stray_summary,
-    });
-    state.ack_revealed = true;
-
-    apply_msg_show_qr(&mut state, &vault);
-
-    assert!(
-        state.staged_png.is_none(),
-        "render failure must not stage PNG bytes",
-    );
-    assert!(
-        state.show_qr_error.is_some(),
-        "render failure must surface an inline error",
-    );
-    assert_eq!(
-        compose_visible_child_name(&state),
-        VIEW_STACK_WARNING_PAGE_NAME,
-        "render failure keeps the visible child on the warning page",
-    );
-}
-
-#[test]
-fn apply_msg_show_qr_validation_error_renders_inline() {
+fn render_show_qr_error_message_mentions_failing_field_or_reason() {
     // Defensive — today's `otpauth://` URIs fit inside QR version 10
     // with M-level ECC comfortably, but if `qrcode` rejects a payload
-    // the reducer renders the `validation_error` inline rather than
-    // crashing. Exercise the renderer with a synthetic
-    // `PaladinError::ValidationError` so the wording wiring is pinned
-    // without inventing a too-long secret.
+    // `decide_export_qr_target` renders the `validation_error` inline
+    // (into `ExportQrDialogInit::render_error`) rather than crashing.
+    // Exercise the renderer with a synthetic `ValidationError` so the
+    // wording wiring is pinned without inventing a too-long secret.
     let err = PaladinError::ValidationError {
         field: "qr_render",
         reason: "payload_too_large".to_string(),
@@ -371,75 +246,20 @@ fn apply_msg_show_qr_validation_error_renders_inline() {
     );
 }
 
-#[test]
-fn apply_msg_show_qr_success_clears_prior_inline_error() {
-    // A stale inline error from a previous failed Show-QR press must
-    // not survive a subsequent successful render — Page 1 has no
-    // dismiss surface for the error label other than the next render.
-    let dir = secure_tempdir();
-    let path = dir.path().join("vault.bin");
-    let (mut vault, store) = open_plaintext_pair(&path);
-    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
-    let init = decide_export_qr_target(&vault, id).expect("known account id resolves");
-    let mut state = ExportQrDialogState::new(init);
-    state.ack_revealed = true;
-    state.show_qr_error = Some("stale error".to_string());
-
-    apply_msg_show_qr(&mut state, &vault);
-
-    assert!(
-        state.staged_png.is_some(),
-        "successful render must stage PNG bytes",
-    );
-    assert!(
-        state.show_qr_error.is_none(),
-        "successful render must clear any prior inline error",
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Group E — Output variants
 // ---------------------------------------------------------------------------
 
 #[test]
 fn export_qr_dialog_output_cancel_is_distinct_from_close() {
-    // `Cancel` and `Close` must be distinct variants so future
-    // telemetry / undo surfaces can differentiate the explicit
-    // Cancel-button click from a window-manager close. Pinning
-    // the distinction prevents a future drift where the two
-    // surfaces silently collapse.
+    // `Cancel` (a bare Escape press) and `Close` (the `Done` button /
+    // window-manager close) must be distinct variants so future
+    // telemetry / undo surfaces can differentiate the two dismissal
+    // surfaces. Pinning the distinction prevents a future drift where
+    // they silently collapse.
     let cancel = ExportQrDialogOutput::Cancel;
     let close = ExportQrDialogOutput::Close;
     assert_ne!(cancel, close);
-}
-
-#[test]
-fn export_qr_dialog_msg_ack_toggled_carries_active_flag() {
-    // The reducer reads the boolean off the message variant;
-    // pin the wire shape so a future refactor that drops the
-    // payload (e.g., "AckToggledOn" / "AckToggledOff") forces a
-    // matching update to the SwitchRow binding instead of
-    // silently flipping the contract.
-    assert_eq!(
-        ExportQrDialogMsg::AckToggled(true),
-        ExportQrDialogMsg::AckToggled(true),
-    );
-    assert_ne!(
-        ExportQrDialogMsg::AckToggled(true),
-        ExportQrDialogMsg::AckToggled(false),
-    );
-}
-
-#[test]
-fn view_stack_page_names_are_distinct_and_non_empty() {
-    // The two AdwViewStack child names must be distinct so a
-    // `set_visible_child_name(...)` call lands on the right page;
-    // both must be non-empty so AdwViewStack accepts them
-    // (libadwaita treats empty names as `NULL` and rejects the
-    // call).
-    assert_ne!(VIEW_STACK_WARNING_PAGE_NAME, VIEW_STACK_QR_PAGE_NAME);
-    assert!(!VIEW_STACK_WARNING_PAGE_NAME.is_empty());
-    assert!(!VIEW_STACK_QR_PAGE_NAME.is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -449,11 +269,6 @@ fn view_stack_page_names_are_distinct_and_non_empty() {
 #[test]
 fn format_export_qr_dialog_title_is_non_empty() {
     assert!(!format_export_qr_dialog_title().is_empty());
-}
-
-#[test]
-fn format_export_qr_dialog_show_qr_button_label_is_non_empty() {
-    assert!(!format_export_qr_dialog_show_qr_button_label().is_empty());
 }
 
 #[test]
@@ -496,25 +311,21 @@ fn format_export_qr_dialog_save_success_toast_is_non_empty() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn apply_msg_ack_toggled_returns_none() {
-    // Ack toggling never emits an output; only `CancelPressed` and
-    // `Close` lift the dialog out via `ExportQrDialogOutput`.
+fn apply_msg_save_action_triggers_return_none() {
+    // The `SaveAsPngPressed` / `SaveAsSvgPressed` / `CopyImage` arms
+    // are pure view-layer triggers — the `SimpleComponent` opens a
+    // file picker or emits `CopyImageRequested` from `update`; the
+    // reducer arm itself is a no-op so the dispatch table stays
+    // exhaustive without spurious state churn. Only `CancelPressed`
+    // and `Close` lift the dialog out via `ExportQrDialogOutput`.
     let mut state = fixture_state();
-    let out = apply_msg(&mut state, ExportQrDialogMsg::AckToggled(true));
-    assert!(out.is_none());
-    assert!(state.ack_revealed);
-}
-
-#[test]
-fn apply_msg_show_qr_returns_none() {
-    // The pure-logic `apply_msg` is a no-op for `ShowQr` — the
-    // `SimpleComponent` owns the `Vault::export_qr_png` render and
-    // stages the bytes through a side channel because `Vault` is
-    // not reachable from this pure helper.
-    let mut state = fixture_state();
-    state.ack_revealed = true;
-    let out = apply_msg(&mut state, ExportQrDialogMsg::ShowQr);
-    assert!(out.is_none());
+    for msg in [
+        ExportQrDialogMsg::SaveAsPngPressed,
+        ExportQrDialogMsg::SaveAsSvgPressed,
+        ExportQrDialogMsg::CopyImage,
+    ] {
+        assert!(apply_msg(&mut state, msg).is_none());
+    }
 }
 
 #[test]
@@ -532,7 +343,6 @@ fn apply_msg_cancel_pressed_clears_staged_buffers() {
     // `self.export_qr_dialog = None` controller drop releases a
     // fresh slate.
     let mut state = fixture_state();
-    state.ack_revealed = true;
     state.staged_png = Some(Zeroizing::new(vec![1, 2, 3]));
     state.staged_svg = Some(Zeroizing::new("<svg/>".to_string()));
 
@@ -1331,9 +1141,9 @@ fn format_export_qr_dialog_copy_image_success_toast_renders_image_copied() {
 
 #[test]
 fn compose_copy_image_button_sensitive_false_without_staged_png() {
-    // Page 2 is only mounted after a successful `ShowQr` render, so
-    // the helper acts as a defensive guard against the dialog being
-    // driven into an impossible state.
+    // The QR is staged at open time, so in practice `staged_png` is
+    // `Some`; the helper acts as a defensive guard against an
+    // open-time render failure (or auto-lock reset) leaving it empty.
     let mut state = fixture_state();
     state.staged_png = None;
     assert!(!compose_copy_image_button_sensitive(&state));
@@ -1392,7 +1202,7 @@ fn apply_msg_copy_image_routes_through_set_content_with_image_png_mime() {
     // 2. The `CopyImage` reducer arm itself is a no-op (the output
     //    routing happens in the `SimpleComponent::update` arm using
     //    `compose_copy_image_request_output`, mirroring the
-    //    `ShowQr` / `ShowQrRequested` round-trip).
+    //    `SaveRequested` Output-then-Input round-trip).
     let before_png = state.staged_png.as_ref().map(|b| b.to_vec());
     let out = apply_msg(&mut state, ExportQrDialogMsg::CopyImage);
     assert!(out.is_none(), "CopyImage reducer arm must be a no-op");
@@ -1491,21 +1301,6 @@ fn apply_msg_copy_image_succeeded_keeps_staged_png_for_repeated_copies() {
 }
 
 #[test]
-fn apply_msg_ack_toggled_off_clears_copy_image_error() {
-    // Re-acking after a failed copy resets the dialog to the
-    // warning page; the prior inline error must not survive into
-    // the next reveal cycle.
-    let mut state = fixture_state();
-    state.ack_revealed = true;
-    state.staged_png = Some(Zeroizing::new(vec![0x89]));
-    state.copy_image_error = Some("io_error".to_string());
-
-    apply_msg_ack_toggled(&mut state, false);
-
-    assert!(state.copy_image_error.is_none());
-}
-
-#[test]
 fn apply_msg_cancel_pressed_clears_copy_image_error() {
     // Pressing Cancel must drop the inline copy-image error along
     // with the staged buffers — a re-open starts fresh.
@@ -1588,13 +1383,11 @@ fn dispatch_root_dismiss_key_ignores_other_keys() {
 
 #[test]
 fn escape_dismissal_routes_through_cancel_pressed_msg() {
-    // The dispatched message must match the Cancel-button path so
-    // the secret-wipe / `ExportQrDialogOutput::Cancel` flow is
-    // identical regardless of dismissal surface. Drive the
-    // reducer with `CancelPressed` and assert it clears the
-    // staged buffers and emits the matching Output.
+    // Escape is the dialog's only Cancel surface; it posts
+    // `CancelPressed` so the secret-wipe / `ExportQrDialogOutput::Cancel`
+    // flow runs. Drive the reducer with `CancelPressed` and assert it
+    // clears the staged buffers and emits the matching Output.
     let mut state = fixture_state();
-    state.ack_revealed = true;
     state.staged_png = Some(Zeroizing::new(vec![0x89, b'P', b'N', b'G']));
     state.staged_svg = Some(Zeroizing::new("<svg/>".to_string()));
 
@@ -1614,17 +1407,16 @@ fn escape_dismissal_routes_through_cancel_pressed_msg() {
 // PNG / SVG buffers and the inline-error bodies are wiped before
 // the `(Vault, Store)` pair is destroyed. Dropping the controller
 // then tears down the widget tree, including the Picture's
-// `gdk::Paintable` (proxied here by the `staged_png.is_none()` ⇒
-// `compose_visible_child_name == warning` invariant).
+// `gdk::Paintable` (proxied here by the `staged_png.is_none()`
+// invariant — an empty paintable on the next re-mount).
 
 #[test]
 fn clear_for_lock_drops_staged_buffers_and_paintable() {
-    // Set up a state that exercises every persistent slot: ack on,
-    // staged PNG + SVG bytes, a save target with overwrite-ack
-    // armed, a recorded last-save path, and inline bodies on all
-    // three error / warning slots.
+    // Set up a state that exercises every persistent slot: staged
+    // PNG + SVG bytes, a save target with overwrite-ack armed, a
+    // recorded last-save path, and inline bodies on all three
+    // error / warning slots.
     let mut state = fixture_state();
-    state.ack_revealed = true;
     state.staged_png = Some(Zeroizing::new(vec![0x89, b'P', b'N', b'G']));
     state.staged_svg = Some(Zeroizing::new("<svg>secret</svg>".to_string()));
     state.save_target = Some(SaveTarget {
@@ -1659,16 +1451,6 @@ fn clear_for_lock_drops_staged_buffers_and_paintable() {
     assert!(state.save_error.is_none());
     assert!(state.save_warning.is_none());
     assert!(state.copy_image_error.is_none());
-    // The ack is reset so a re-mount lands on the warning page.
-    assert!(!state.ack_revealed);
-    // Visible-child reducer reports the warning page because
-    // `staged_png` is now `None` — equivalent to the Picture
-    // paintable being empty when the widget tears down.
-    assert_eq!(
-        compose_visible_child_name(&state),
-        VIEW_STACK_WARNING_PAGE_NAME,
-        "ack reset must surface the warning page on a re-mount"
-    );
 }
 
 #[test]
@@ -1684,8 +1466,9 @@ fn clear_for_lock_preserves_account_id_and_summary() {
     let mut state = ExportQrDialogState::new(ExportQrDialogInit {
         account_id,
         account_summary: summary,
+        staged_png: None,
+        render_error: None,
     });
-    state.ack_revealed = true;
     state.staged_png = Some(Zeroizing::new(vec![1, 2, 3]));
 
     clear_for_lock(&mut state);
@@ -1700,14 +1483,12 @@ fn clear_for_lock_on_fresh_state_is_a_noop() {
     // if the user never opened the QR dialog. Pin that calling the
     // helper on a freshly-init'd state leaves it unchanged.
     let mut state = fixture_state();
-    let initial_visible = compose_visible_child_name(&state).to_string();
 
     clear_for_lock(&mut state);
 
     assert!(state.staged_png.is_none());
     assert!(state.staged_svg.is_none());
-    assert!(!state.ack_revealed);
-    assert_eq!(compose_visible_child_name(&state), initial_visible);
+    assert!(state.last_save_path.is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -1773,15 +1554,14 @@ fn export_qr_dialog_does_not_advance_hotp_counter() {
     let (counter_before, updated_at_before) = snapshot_hotp(&vault, id);
     assert_eq!(counter_before, Some(42));
 
-    // 1. Show-QR render via the dialog reducer (calls
-    //    `Vault::export_qr_png` under the hood).
+    // 1. Open-time QR render via `decide_export_qr_target` (calls
+    //    the read-only `Vault::export_qr_png` under the hood) →
+    //    `ExportQrDialogState::new` stages the bytes on open.
     let init = decide_export_qr_target(&vault, id).expect("HOTP account resolves");
     let mut state = ExportQrDialogState::new(init);
-    state.ack_revealed = true;
-    apply_msg_show_qr(&mut state, &vault);
     assert!(
         state.staged_png.is_some(),
-        "ShowQr must stage PNG bytes for the HOTP account"
+        "open-time render must stage PNG bytes for the HOTP account"
     );
 
     // 2. Save-as-PNG worker run against a tempfile destination —
@@ -1798,7 +1578,7 @@ fn export_qr_dialog_does_not_advance_hotp_counter() {
         .staged_png
         .as_ref()
         .map(|b| Zeroizing::new(b.to_vec()))
-        .expect("staged PNG present after ShowQr");
+        .expect("staged PNG present after open-time render");
     let _ = run_export_qr_save_worker(ExportQrSaveWorkerInput::Png {
         path: png_path.clone(),
         bytes: staged_png,

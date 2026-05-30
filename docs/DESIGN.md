@@ -509,8 +509,8 @@ Three formats, user picks per invocation:
   photographs it can clone the OTP, and the user should treat it like
   the plaintext URI list above. The warning is informational and does
   not gate the code behind a separate click-to-acknowledge step — the
-  CLI prints it ahead of the rendered QR, and the TUI shows it as a
-  footer beneath the on-screen QR and its save actions.
+  CLI prints it ahead of the rendered QR, and the TUI and GTK GUI
+  show it as a footer beneath the on-screen QR and its save actions.
   Three render targets are supported and all three live in
   `paladin-core` so the front ends stay thin:
     * **PNG bytes** — written to disk through `write_secret_file_atomic`

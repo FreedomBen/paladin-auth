@@ -52,7 +52,7 @@ crates/paladin-gtk/
 │   ├── edit_dialog.rs     # v0.2 / DESIGN §7 Milestone 9: EditDialog — three editable AdwEntryRow widgets (Label / Issuer + inline clear / Icon hint slug) over an AccountEdit value; calls Vault::edit_account_metadata inside Vault::mutate_and_save. Pure-logic state machine in this module; widget binding mirrors RenameDialog conventions.
 │   ├── import_dialog.rs   # ImportDialog (file picker + format + on-conflict + bundle passphrase)
 │   ├── export_dialog.rs   # ExportDialog (file picker + format + overwrite + encrypted passphrase)
-│   ├── export_qr_dialog.rs # ExportQrDialog — per-account QR export: adw::Dialog wrapping an AdwViewStack with "warning"/"qr" pages (warning-ack gate → Page-1 Cancel/Show-QR footer → on-screen gtk::Picture + Save PNG / Save SVG / Copy image to GDK clipboard / Done)
+│   ├── export_qr_dialog.rs # ExportQrDialog — per-account QR export: single-page adw::Dialog opening directly on the rendered QR (no warning-ack gate) — caption + on-screen gtk::Picture (PNG staged at open by decide_export_qr_target) + Save PNG / Save SVG / Copy image to GDK clipboard / Done + informational warning footer
 │   ├── passphrase_dialog.rs # PassphraseDialog (set / change / remove flows)
 │   ├── destroy_dialog.rs  # DestroyDialog (Milestone 10) — AdwAlertDialog with destructive styling; calls paladin_core::destroy_vault on gio::spawn_blocking; opened from the primary-menu *Delete Vault…* entry, the unlock-dialog and startup-error footer link, and the Ctrl+Shift+Delete accelerator
 │   ├── init_dialog.rs     # InitDialog — vault creation from the GUI (incl. create_force clobber confirmation)
@@ -675,77 +675,62 @@ inclusion.
   (placed between `Rename…` and `Remove…`; the kebab's
   `gio::Menu` order is pinned by
   `tests/account_list_logic.rs::build_kebab_menu_model_exposes_rename_show_qr_and_remove_in_order`
-  once the menu model is extended). The dialog is an
-  `adw::Dialog` whose body is an `AdwViewStack` with two named
-  pages (`"warning"` and `"qr"`) driven by
-  `crate::export_qr_dialog::ExportQrDialogState`. The
-  `AdwViewStack` is not paired with an `AdwViewSwitcher` — the
-  state machine moves between pages programmatically by
-  `set_visible_child_name`, not by user-clickable tabs, so a
-  closing-window glimpse cannot expose the QR by switching tabs
-  past the warning:
-    * **Page 1 — Warning ack** (`AdwViewStack` child name
-      `"warning"`). Body renders
-      `paladin_core::format_plaintext_qr_export_warning()` verbatim
-      via an `adw::ActionRow` with `set_use_markup: false`,
-      `set_title_lines: 0`, `set_subtitle_lines: 0`. An
-      `adw::SwitchRow` ack ("I understand — show the QR") starts
-      off and dispatches only `ExportQrDialogMsg::AckToggled(bool)`
-      on `connect_active_notify`; it does not auto-render the QR.
-      The footer carries exactly two buttons: `Cancel` (always
-      sensitive; dispatches the secret-wipe path through
-      `ExportQrDialogOutput::Cancel`) and `Show QR` (the primary
-      `suggested-action` button; sensitive only while
-      `state.ack_revealed == true`, dispatches
-      `ExportQrDialogMsg::ShowQr` on press, which calls
-      `Vault::export_qr_png` and switches the `AdwViewStack` to
-      the `"qr"` child). The QR `gtk::Picture` is not constructed
-      on this page, so a closing-window glimpse cannot expose
-      the secret.
-    * **Page 2 — QR + actions** (`AdwViewStack` child name
-      `"qr"`). Reached by `set_visible_child_name("qr")` after a
-      successful `ShowQr` render against the user-pressed
-      Page-1 button (never auto-shown on bare ack toggle).
-      Renders the QR via a `gtk::Picture`
-      whose `paintable` is built from
-      `gdk::Texture::from_bytes(&glib::Bytes::from(&png_bytes))`
-      where `png_bytes` is the `Zeroizing<Vec<u8>>` returned by
-      `Vault::export_qr_png(id, QrRenderOptions::default())` on
-      the main loop (the encoder is sub-millisecond on realistic
-      `otpauth://` URI lengths, so no thread hop is needed; the
-      `gio::spawn_blocking` hop exists only on the *save* path to
-      keep `write_secret_file_atomic`'s `fsync` chain off the main
-      loop — see §"QR export dialog implementation" / Design
-      contract / Thread isolation). A `gtk::Label` caption above
-      the `Picture` (with the `title-3` style class for a heading
-      weight) shows the account's `summary_display_label` (CLI /
-      TUI parity). Four buttons sit in the dialog footer:
-      `Save as PNG…`, `Save as SVG…`, `Copy image`, and `Done`.
-      `Save as PNG…` and `Save as SVG…` open a
-      `gtk::FileDialog::save`, run the same inline overwrite gate
-      as `ExportDialog` (an `adw::SwitchRow` revealed only when the
-      picked target already exists; the worker rechecks
-      `Path::try_exists` post-pick so a stale tick cannot stomp a
-      newly-created file), and write through
+  once the menu model is extended). The dialog is a single-page
+  `adw::Dialog` whose body is a `gtk::Box` driven by
+  `crate::export_qr_dialog::ExportQrDialogState`. It opens directly
+  on the rendered QR — there is **no warning-ack gate** (removed for
+  parity with the CLI / TUI per DESIGN §4.6 after user testing found
+  the gate needlessly obstructive). `AppModel` renders the QR PNG up
+  front in `crate::export_qr_dialog::decide_export_qr_target` (the
+  read-only `Vault::export_qr_png(id, QrRenderOptions::default())`,
+  sub-millisecond on realistic `otpauth://` URI lengths, so no
+  thread hop is needed; the `gio::spawn_blocking` hop exists only on
+  the *save* path to keep `write_secret_file_atomic`'s `fsync` chain
+  off the main loop — see §"QR export dialog implementation" /
+  Design contract / Thread isolation), and the `Zeroizing<Vec<u8>>`
+  bytes ride into the dialog already staged on
+  `ExportQrDialogState::staged_png`, so the page shows the QR the
+  moment it mounts. The page carries, top to bottom:
+    * A `gtk::Label` caption (with the `title-3` style class for a
+      heading weight) showing the account's `summary_display_label`
+      (CLI / TUI parity).
+    * The on-screen QR `gtk::Picture` whose `paintable` is built from
+      `gdk::Texture::from_bytes(&glib::Bytes::from(&png_bytes))` over
+      the staged PNG bytes. On the rare open-time render failure
+      (e.g. `qrcode` rejecting an over-long payload) the bytes are
+      absent, an inline error renders instead, and the save / copy
+      actions are desensitized — only `Done` stays live.
+    * The inline save / copy status labels and the inline overwrite
+      gate (an `adw::SwitchRow` revealed only when the picked target
+      already exists; the worker rechecks `Path::try_exists`
+      post-pick so a stale tick cannot stomp a newly-created file),
+      mirroring `ExportDialog`.
+    * A four-button footer: `Save as PNG…`, `Save as SVG…`,
+      `Copy image`, and `Done`. `Save as PNG…` / `Save as SVG…` open
+      a `gtk::FileDialog::save` and write through
       `paladin_core::write_secret_file_atomic` on
       `gio::spawn_blocking`. `Copy image` builds a
-      `gdk::ContentProvider::for_value` carrying a
-      `glib::Bytes` of the PNG payload with MIME `image/png` and
-      hands it to `gdk::Clipboard::set_content`. No auto-clear
-      schedule arms for QR image copies — `clipboard.clear_enabled`
-      covers the code-copy path only, so QR image copies persist
-      on the clipboard until the user replaces or clears them (the
-      dialog body still calls out the clipboard-history risk via
-      DESIGN §8 bullet 6 wording). `Done` closes the dialog.
+      `gdk::ContentProvider::for_value` carrying a `glib::Bytes` of
+      the PNG payload with MIME `image/png` and hands it to
+      `gdk::Clipboard::set_content`. No auto-clear schedule arms for
+      QR image copies — `clipboard.clear_enabled` covers the
+      code-copy path only, so QR image copies persist on the
+      clipboard until the user replaces or clears them. `Done` closes
+      the dialog.
+    * Beneath the actions, an **informational warning footer**
+      `gtk::Label` (the `warning` style class) rendering
+      `paladin_core::format_plaintext_qr_export_warning()` verbatim.
+      It reminds the user to protect the QR but does **not** gate the
+      code behind a click — the warning informs only (the
+      clipboard-history risk per DESIGN §8 bullet 6 is part of this
+      body).
   `ExportQrDialog` is read-only — it never enters
   `Vault::mutate_and_save`, never advances a HOTP counter, and never
   mutates `updated_at`. PNG bytes, SVG text, and the rendered
   `gdk::Texture` are dropped (and zeroized at the core boundary)
-  when the dialog closes, when the ack switch is toggled back off
-  (the QR `Picture` paintable is replaced with `gdk::Paintable::new_empty`
-  and the staged `Zeroizing<Vec<u8>>` is dropped), or when
-  auto-lock fires (`AppModel`'s lock-transition pruning routes
-  through `crate::export_qr_dialog::clear_for_lock`). The dialog
+  when the dialog closes or when auto-lock fires (`AppModel`'s
+  lock-transition pruning routes through
+  `crate::export_qr_dialog::clear_for_lock`). The dialog
   surface is disabled while `AppModel` is `UnlockedBusy` per
   §"In-flight effect ownership"; the save actions stage their own
   in-flight effect ownership through the same one-slot serializer
@@ -753,12 +738,16 @@ inclusion.
   even though the underlying operation does not touch `Vault::save`.
   `Copy image` runs synchronously on the main loop and does not
   claim the busy slot.
-  Typed errors from
-  `Vault::export_qr_png` / `export_qr_svg` (`invalid_state`
-  `state: "account_not_found"`, `validation_error`
-  `field: "qr_render"`, defensive encoder failures) stay inline in
-  the dialog; `save_not_committed` / `save_durability_unconfirmed`
-  from `write_secret_file_atomic` also stay inline. A bubble-phase
+  If the open-time `Vault::export_qr_png` render fails (a defensive
+  `validation_error` `field: "qr_render"`, or encoder failures), the
+  dialog opens showing that message inline with the save / copy
+  actions desensitized; an account removed before the dialog mounts
+  makes `decide_export_qr_target` return `None` so the dialog never
+  opens (the `invalid_state` `state: "account_not_found"` race is
+  resolved at decide time, not inline). Typed errors from the save
+  path — `export_qr_svg` failures and `save_not_committed` /
+  `save_durability_unconfirmed` from `write_secret_file_atomic` —
+  stay inline beneath the QR. A bubble-phase
   `gtk::EventControllerKey` on the dialog root routes a bare
   `Escape` (no `CTRL` / `ALT` / `SHIFT` / `SUPER` / `HYPER` / `META`)
   through the dialog's cancel path, mirroring `AddAccountComponent`'s
@@ -1602,23 +1591,26 @@ re-deriving the touch points.
   invariant is pinned by a tempfile-backed pure-logic test that
   reads `account.counter()` before and after a save-as-PNG worker
   round trip and asserts equality.
-* **Warning-ack gate.** `ExportQrDialogState` carries
-  `ack_revealed: bool` defaulting to `false`. The `AdwViewStack`'s
-  visible child is `"warning"` until a successful `ShowQr` render
-  switches it to `"qr"`; the `gtk::Picture` widget lives inside
-  the `"qr"` child from init with a `gdk::Paintable::new_empty`
-  paintable, and `ack_revealed` gates the Page-1 `Show QR`
-  button's sensitivity rather than the Picture's existence.
-  Toggling the ack switch off resets `ack_revealed` to `false`,
-  switches the view stack back to `"warning"`, replaces the
-  Picture's paintable with `gdk::Paintable::new_empty`, and drops
-  the staged PNG / SVG / texture buffers (the staged values are
-  held in `Zeroizing<Vec<u8>>` / `Zeroizing<String>` so the drop
-  zeroes the bytes). The warning text is pulled verbatim from
-  `paladin_core::format_plaintext_qr_export_warning()` and rendered
-  through `set_use_markup: false`, `set_title_lines: 0`,
-  `set_subtitle_lines: 0` so long-form wording wraps without
-  honoring stray markup. A pure-logic test
+* **Open-time staging — no ack gate.** The dialog opens directly on
+  the rendered QR; user testing found a click-to-acknowledge gate
+  needlessly obstructive, so it was removed for parity with the CLI
+  / TUI (DESIGN §4.6). `AppModel` pre-renders the PNG in
+  `decide_export_qr_target` and the `Zeroizing<Vec<u8>>` bytes ride
+  into the dialog on `ExportQrDialogInit::staged_png`;
+  `ExportQrDialogState::new` adopts them into `staged_png` so the
+  `gtk::Picture` paintable is non-empty from init. A defensive
+  open-time render failure rides in `ExportQrDialogInit::render_error`
+  instead, surfaces inline, and leaves `staged_png` empty so the
+  save / copy actions desensitize
+  (`compose_qr_save_buttons_sensitive` /
+  `compose_copy_image_button_sensitive`). The staged values are held
+  in `Zeroizing<Vec<u8>>` / `Zeroizing<String>` so the drop on dialog
+  close or auto-lock zeroes the bytes. The warning text is rendered
+  verbatim from `paladin_core::format_plaintext_qr_export_warning()`
+  as an **informational footer** `gtk::Label` (the `warning` style
+  class, `set_wrap: true`) beneath the QR and its save actions — it
+  informs but does not gate the code behind a click. A pure-logic
+  test
   (`format_export_qr_dialog_warning_body_matches_paladin_core_verbatim`)
   pins the verbatim relationship so future warning rewordings flow
   through one helper.
@@ -1650,8 +1642,8 @@ re-deriving the touch points.
   `gdk::Texture` and the clipboard provider's `glib::Bytes`, so
   the dialog never holds two copies of the secret. The
   `Zeroizing<Vec<u8>>` is dropped (and its bytes zeroized) when
-  the dialog closes, when ack is toggled off, or when auto-lock
-  fires; the clipboard provider's `glib::Bytes` is an independent
+  the dialog closes or when auto-lock fires; the clipboard
+  provider's `glib::Bytes` is an independent
   copy owned by GDK and persists on the clipboard until the user
   replaces or clears it. No auto-clear schedule arms for QR image
   copies — `clipboard.clear_enabled` covers OTP code copies only;
@@ -1996,6 +1988,40 @@ by ticking it.
   the `export::qr_*` free functions +
   `format_plaintext_qr_export_warning` +
   `QR_MODULE_SIZE_PX_*`.
+* [x] **Acknowledgment-gate removal (parity with CLI / TUI).** User
+  testing found the click-to-acknowledge gate needlessly
+  obstructive, so the dialog now opens directly on the rendered QR
+  (DESIGN §4.6). This **supersedes** the *Warning page wiring* and
+  *Page 2 mount on Show-QR press* entries above. Changes:
+    * `AppModel` pre-renders the QR PNG in `decide_export_qr_target`
+      (the read-only `Vault::export_qr_png`) and the bytes ride into
+      the dialog on the new `ExportQrDialogInit::staged_png` /
+      `render_error` fields; `ExportQrDialogState::new` adopts them so
+      the QR shows on mount. The `OpenExportQrDialog` handler is
+      otherwise unchanged.
+    * Removed: the `AdwViewStack` two-page body and its
+      `VIEW_STACK_{WARNING,QR}_PAGE_NAME` constants /
+      `compose_visible_child_name`; `ExportQrDialogState::ack_revealed`
+      and `compose_show_qr_button_sensitive`; the
+      `ExportQrDialogMsg::{AckToggled, ShowQr, ShowQrSucceeded,
+      ShowQrFailed}` variants and `ExportQrDialogOutput::ShowQrRequested`
+      (with `AppModel`'s `ShowQrRequested` render round-trip); the
+      `apply_msg_ack_toggled` / `apply_msg_show_qr*` reducers; and the
+      Page-1 warning `adw::ActionRow`, ack `adw::SwitchRow`, `Cancel`
+      and `Show QR` buttons (with their label helpers).
+    * Added: the single-page `gtk::Box` body; the informational
+      warning footer `gtk::Label`; `compose_qr_save_buttons_sensitive`
+      gating the Save buttons on a successful open-time render. Escape
+      still posts `CancelPressed` → `Cancel`; `Done` / WM-close post
+      `Close`.
+    * Tests: removed the ack / `ShowQr` / visible-child / view-stack
+      pins; added `export_qr_dialog_state_new_stages_png_from_init`,
+      `export_qr_dialog_state_new_surfaces_render_error_from_init`,
+      `compose_qr_save_buttons_sensitive_tracks_staged_png`,
+      `decide_export_qr_target_stages_png_matching_export_qr_png`,
+      `compose_export_qr_caption_text_reads_summary_display_label`, and
+      `render_show_qr_error_message_mentions_failing_field_or_reason`.
+      `MANUAL_TEST_PLAN.md` §12 is rewritten for the single-page flow.
 
 ### Open decisions / non-goals
 
@@ -2027,8 +2053,10 @@ by ticking it.
   `otpauth://` URIs fit inside QR version 10 with M-level ECC
   comfortably, but defensively the dialog renders
   `validation_error` (`field: "qr_render"`, `reason: "..."`)
-  inline with the rejection reason instead of crashing. Pinned
-  by `apply_msg_show_qr_validation_error_renders_inline`.
+  inline with the rejection reason instead of crashing (the
+  open-time render error rides in `ExportQrDialogInit::render_error`
+  and the save / copy actions desensitize). Pinned by
+  `render_show_qr_error_message_mentions_failing_field_or_reason`.
 * **Backward compatibility.** New menu entry on existing vaults;
   no migration. Users see `Show QR…` in the kebab on first
   launch after this lands.
@@ -3494,54 +3522,34 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
   pins that the rendered warning body equals
   `paladin_core::format_plaintext_qr_export_warning()` exactly, so a
   future warning reword in core propagates to the GUI without an edit.
-- [x] `compose_show_qr_button_sensitive_false_until_ack_revealed` and
-  `compose_show_qr_button_sensitive_true_after_ack_toggled_on` pin the
-  Page-1 button gate against `ExportQrDialogState::ack_revealed`.
-- [x] `compose_visible_child_name_warning_before_show_qr` and
-  `apply_msg_show_qr_switches_visible_child_to_qr` pin the
-  `AdwViewStack` page switch: on init and after any
-  ack-toggle-off / Cancel reset the visible child is `"warning"`;
-  only a successful `ShowQr` render switches it to `"qr"`.
-- [x] `apply_msg_ack_toggled_does_not_dispatch_show_qr` pins that
-  the ack `adw::SwitchRow` only mutates `state.ack_revealed` and
-  never causes a `Vault::export_qr_png` call — `ShowQr` is
-  dispatched exclusively by the Show-QR button's `connect_clicked`.
-- [x] `apply_msg_show_qr_button_press_calls_export_qr_png_with_default_options`
-  pins the button-press → render-call wiring: the Show-QR button
-  on Page 1 dispatches `ExportQrDialogMsg::ShowQr` which calls
-  `Vault::export_qr_png(account_id, QrRenderOptions::default())`.
-  In production the `SimpleComponent` emits
-  `ExportQrDialogOutput::ShowQrRequested(account_id)` to `AppModel`
-  which performs the call and forwards bytes back through
-  `ExportQrDialogMsg::ShowQrSucceeded`; the pure helper
-  `apply_msg_show_qr(&mut state, &vault)` exercises the same outcome.
-- [x] `apply_msg_show_qr_renders_picture_paintable_from_png_bytes` pins
-  that the staged PNG `Zeroizing<Vec<u8>>` becomes the `gdk::Texture`
-  bound to the `gtk::Picture` (via
-  `gdk::Texture::from_bytes(&glib::Bytes::from(&bytes))`) and that the
-  matching `state.staged_png` slot is populated. The companion
-  `apply_msg_show_qr_success_clears_prior_inline_error` pins that a
-  successful render clears any stale `state.show_qr_error` from a
-  prior failed Show-QR press.
-- [x] `apply_msg_show_qr_sets_caption_label_text_from_summary_display_label`
-  pins that the `gtk::Label` caption above the Picture has its
-  text set to `paladin_core::summary_display_label(&summary)`
-  exactly on `ShowQr`, so the issuer:label rendering matches CLI /
-  TUI parity and a future change to `summary_display_label`
+- [x] `export_qr_dialog_state_new_stages_png_from_init` and
+  `export_qr_dialog_state_new_surfaces_render_error_from_init` pin
+  open-time staging: a fresh `ExportQrDialogState` adopts
+  `ExportQrDialogInit::staged_png` (so the QR shows on mount) or, on
+  a render failure, `ExportQrDialogInit::render_error` (inline, with
+  `staged_png` left empty). There is no warning-ack gate.
+- [x] `compose_qr_save_buttons_sensitive_tracks_staged_png` pins that
+  the `Save as PNG…` / `Save as SVG…` buttons are live only when the
+  open-time render staged the QR bytes, so a Save-as-PNG dispatch
+  never fires without the bytes its worker `expect`s.
+- [x] `decide_export_qr_target_stages_png_matching_export_qr_png`
+  pins the render wiring: `decide_export_qr_target` renders the QR
+  through the read-only `Vault::export_qr_png(account_id,
+  QrRenderOptions::default())`, the staged bytes are byte-identical
+  to a direct render, and they survive into
+  `ExportQrDialogState::staged_png`.
+- [x] `compose_export_qr_caption_text_reads_summary_display_label`
+  pins that the `gtk::Label` caption reads
+  `paladin_core::summary_display_label(&summary)`, so the
+  issuer:label rendering matches CLI / TUI parity and a future change
   propagates to the GUI through one helper. Companion
   `compose_export_qr_dialog_caption_widget_uses_title_3_style_class`
-  pins that the caption widget carries the `title-3` style class
-  for the heading weight.
-- [x] `apply_msg_ack_toggled_off_clears_staged_png_and_paintable_and_resets_visible_child`
-  pins the reverse: toggling ack off drops `state.staged_png`,
-  `state.staged_svg`, replaces the Picture's paintable with
-  `gdk::Paintable::new_empty`, and calls
-  `AdwViewStack::set_visible_child_name("warning")`.
-- [x] `apply_msg_page_1_cancel_button_emits_cancel_output_and_wipes_staged_buffers`
-  pins that the Page-1 footer Cancel button (distinct from the
-  Escape-key path, though both flow through the same secret-wipe
-  helper) emits `ExportQrDialogOutput::Cancel` with
-  `state.staged_png` / `state.staged_svg` dropped before emit.
+  pins that the caption widget carries the `title-3` style class for
+  the heading weight.
+- [x] The Cancel path pins that a `CancelPressed` (posted by bare
+  Escape — the dialog's only Cancel surface) emits
+  `ExportQrDialogOutput::Cancel` with `state.staged_png` /
+  `state.staged_svg` dropped before emit.
   *Implementation note:* shipped as the pair
   `apply_msg_cancel_pressed_emits_cancel_output` +
   `apply_msg_cancel_pressed_clears_staged_buffers` (Phase 3).
@@ -3549,10 +3557,12 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
   `escape_dismissal_routes_through_cancel_pressed_msg` plus the
   `dispatch_root_dismiss_key_*` truth-table pins, all routing
   through the same `CancelPressed` reducer arm.
-- [x] `apply_msg_show_qr_invalid_state_account_not_found_renders_inline`
-  and `apply_msg_show_qr_validation_error_renders_inline` pin the two
-  typed-error inline-rendering paths (defensive — production payloads
-  fit comfortably inside QR version 10 with M-level ECC).
+- [x] `render_show_qr_error_message_mentions_failing_field_or_reason`
+  pins the open-time render-error rendering path (defensive —
+  production payloads fit comfortably inside QR version 10 with
+  M-level ECC; an account removed before mount makes
+  `decide_export_qr_target` return `None`, so the dialog never
+  opens rather than rendering an inline `account_not_found`).
 - [x] `compose_save_target_overwrite_gate_visible_*` (a quartet
   mirroring `ExportDialog`'s overwrite-gate quartet) pin that the
   save-target overwrite gate becomes visible when
@@ -3669,8 +3679,7 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
   `(Vault, Store)` pair is released, so a lock-after-effect cannot
   leak the rendered bytes.
   *Implementation note (Phase 8):* the paintable-drop assertion is
-  proxied here by the `staged_png.is_none()` ⇒
-  `compose_visible_child_name == warning` invariant — the widget
+  proxied here by the `staged_png.is_none()` invariant — the widget
   tree (including the Picture's `gdk::Paintable`) tears down when
   `AppModel` drops the controller in the same call. Sibling pins
   `clear_for_lock_preserves_account_id_and_summary` and
@@ -3682,8 +3691,9 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
   and assert equality (and that `account.updated_at()` is unchanged).
   Read-only invariant pin.
   *Implementation note (Phase 9):* the test adds a HOTP account
-  with `counter=42`, snapshots `(counter, updated_at)`, runs
-  Show-QR (`apply_msg_show_qr`) + Save-as-PNG via
+  with `counter=42`, snapshots `(counter, updated_at)`, runs the
+  open-time render (`decide_export_qr_target` →
+  `ExportQrDialogState::new`) + Save-as-PNG via
   `run_export_qr_save_worker(ExportQrSaveWorkerInput::Png{..})` +
   `clear_for_lock(&mut state)`, re-opens the vault from disk to
   read what is actually persisted, and asserts both fields are
@@ -3701,7 +3711,6 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
   `escape_dismissal_routes_through_cancel_pressed_msg`. All three
   paths share the same secret-wipe helper.
 - [x] `format_export_qr_dialog_title_is_non_empty`,
-  `format_export_qr_dialog_show_qr_button_label_is_non_empty`,
   `format_export_qr_dialog_save_as_png_label_is_non_empty`,
   `format_export_qr_dialog_save_as_svg_label_is_non_empty`,
   `format_export_qr_dialog_copy_image_label_is_non_empty`,
@@ -6050,6 +6059,11 @@ sign-off.
     (`AdwViewStack::set_visible_child_name`) — no
     `AdwViewSwitcher` is paired with the stack, so the user
     cannot bypass the warning by tab-clicking.
+    *Superseded:* the warning-ack gate and the `AdwViewStack` were
+    later removed (see the "Acknowledgment-gate removal" entry in the
+    §"QR export dialog implementation" Build order) — the dialog now
+    opens directly on the QR with the warning as an informational
+    footer.
   - [x] Wire `Save as PNG…` / `Save as SVG…` through
     `gtk::FileDialog::save` and the same inline overwrite gate
     `ExportDialog` uses; dispatch

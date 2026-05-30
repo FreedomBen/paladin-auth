@@ -234,12 +234,14 @@ expected routing.
   * Tied to: `crates/paladin-gtk/src/import_dialog.rs`
     `connect_clicked` closures, `crates/paladin-gtk/src/app/model.rs`
     `lock_on_auto_lock_expiry`.
-- [ ] Cancel button dismisses the Import / Export / Show-QR /
-  Settings dialog on the first click.
+- [ ] Cancel button dismisses the Import / Export / Settings
+  dialog on the first click (the per-row Show QR dialog dismisses
+  via its `Done` button or Escape, not a Cancel button).
   * Expected: open the Import dialog from the application menu and
     click Cancel — the dialog disappears immediately. Repeat for
-    the Export dialog, the per-row Show QR dialog (kebab → "Show
-    QR code…"), and the Settings preferences dialog. Also verify
+    the Export dialog and the Settings preferences dialog; for the
+    per-row Show QR dialog (kebab → "Show QR code…") press `Done`
+    or Escape. Also verify
     the Import post-success `Dismiss` button (after a successful
     merge) and the Export post-success `Close` (after a successful
     export) tear the dialog down on the first click. Without the
@@ -372,46 +374,32 @@ Exports:
 ## 12. Per-account QR export (`ExportQrDialog`, DESIGN §4.6)
 
 - [ ] Open the kebab menu on a TOTP row → `Show QR…` is the
-  second entry between `Edit…` and `Remove…`; the dialog opens
-  on the warning page with the ack switch off and the QR not
-  visible.
+  second entry between `Edit…` and `Remove…`; selecting it opens
+  the dialog **directly on the rendered QR** — there is no
+  warning-ack gate.
   * Expected: the kebab menu lists three rows in the pinned order
     `Edit…` / `Show QR…` / `Remove…`. Selecting `Show QR…`
-    presents an `adw::Dialog` titled `Show QR code`; the body
-    starts on the `warning` page of the inner `AdwViewStack`
-    carrying the verbatim
-    `paladin_core::format_plaintext_qr_export_warning()` body,
-    the `I understand — show the QR` ack switch is off, the
-    `Cancel` button is sensitive, the `Show QR` button is
-    desensitized, and no `gtk::Picture` is visible. Closing via
-    the window-manager close button (or Escape) leaves the
-    vault untouched.
+    presents an `adw::Dialog` titled `Show QR code` showing, from
+    top: the `<issuer>:<label>` caption in the `title-3` style
+    class, the rendered QR `gtk::Picture` (a `gdk::Texture` from
+    `Vault::export_qr_png(id, &QrRenderOptions::default())`,
+    pre-rendered by `decide_export_qr_target` before the dialog
+    mounts), the four-button footer (`Save as PNG…` /
+    `Save as SVG…` / `Copy image` / `Done`) with all four
+    sensitive, and — beneath the actions — the verbatim
+    `paladin_core::format_plaintext_qr_export_warning()` body as
+    an **informational footer** (no checkbox, no gate; it reminds
+    the user to protect the QR). Scanning the QR with a second
+    authenticator imports the same account (same secret,
+    algorithm, digits). Closing via `Done`, the window-manager
+    close button, or Escape leaves the vault untouched.
   * Tied to: `tests/account_list_logic.rs`
     `build_kebab_menu_model_exposes_edit_show_qr_and_remove_in_order`;
     `tests/export_qr_dialog_logic.rs`
-    `compose_show_qr_button_sensitive_false_until_ack_revealed`,
+    `decide_export_qr_target_stages_png_matching_export_qr_png`,
+    `export_qr_dialog_state_new_stages_png_from_init`,
+    `compose_export_qr_caption_text_reads_summary_display_label`,
     `format_export_qr_dialog_warning_body_matches_paladin_core_verbatim`.
-- [ ] Toggle the ack switch on → the `Show QR` button becomes
-  sensitive; press it → the dialog advances to Page 2 showing
-  the rendered QR and the `<issuer>:<label>` caption. Scanning
-  the QR with a second authenticator imports the same account.
-  * Expected: flipping the ack `AdwSwitchRow` on enables the
-    `Show QR` button; pressing it switches the view stack to
-    the `qr` page, fills the `gtk::Picture` with a
-    `gdk::Texture` rendered from `Vault::export_qr_png(id,
-    &QrRenderOptions::default())`, displays the
-    `<issuer>:<label>` caption in the `title-3` style class, and
-    surfaces the four-button footer
-    (`Save as PNG…` / `Save as SVG…` / `Copy image` / `Done`)
-    with `Copy image` sensitive. A second authenticator scanning
-    the rendered QR imports the same account (same secret,
-    algorithm, digits). Toggling the ack back off drops the
-    Picture paintable, wipes the staged bytes, and resets the
-    view to the warning page.
-  * Tied to: `tests/export_qr_dialog_logic.rs`
-    `apply_msg_show_qr_button_press_calls_export_qr_png_with_default_options`,
-    `apply_msg_show_qr_switches_visible_child_to_qr`,
-    `apply_msg_ack_toggled_off_clears_staged_png_and_paintable_and_resets_visible_child`.
 - [ ] Press `Save as PNG…` and `Save as SVG…` → both write
   `0600`-mode files at the chosen path; the inline status reads
   `QR saved to <path>` after each save. Reopening the PNG in an
@@ -421,7 +409,7 @@ Exports:
     pre-populated with `qr.png` / `qr.svg`. On commit the file
     lands at the chosen path with mode `0600`, owned by the
     invoking user. The inline `QR saved to <path>` label appears
-    on Page 2 and an `adw::Toast` echoes the same wording. A
+    beneath the QR and an `adw::Toast` echoes the same wording. A
     second save against an existing destination reveals the
     inline `Overwrite the existing file` switch; toggling it on
     fires the save without an extra confirm step. The HOTP
@@ -463,8 +451,9 @@ Exports:
     paintable disappears along with the widget tree), and the
     auto-lock landing page (unlock dialog for encrypted vaults
     / list view for plaintext) shows no QR remnants. Re-opening
-    the QR dialog after unlock starts on the warning page with
-    the ack off — never on Page 2 with a still-visible QR.
+    the QR dialog after unlock re-renders the QR fresh from the
+    unlocked vault — there is no stale carry-over from before the
+    lock.
   * Tied to: `tests/export_qr_dialog_logic.rs`
     `clear_for_lock_drops_staged_buffers_and_paintable`,
     `clear_for_lock_preserves_account_id_and_summary`;

@@ -4,42 +4,40 @@
 //! `paladin-gtk`.
 //!
 //! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"QR export dialog
-//! implementation" and §"Tests > Pure-logic unit tests >
-//! `tests/export_qr_dialog_logic.rs`", the dialog hosts an
-//! [`adw::Dialog`] wrapping an [`adw::ViewStack`] with two named
-//! children:
+//! implementation", the dialog is a single-page [`adw::Dialog`]: it
+//! opens directly on the rendered QR — there is no warning-ack gate.
+//! `AppModel` renders the QR PNG through
+//! [`paladin_core::Vault::export_qr_png`] when it builds the
+//! [`ExportQrDialogInit`] (see [`decide_export_qr_target`]), so the
+//! bytes ride into the dialog already staged in
+//! [`ExportQrDialogState::staged_png`] and the page shows the QR the
+//! moment it mounts.
 //!
-//! * `"warning"` — Page 1 carries the plaintext-export warning body
-//!   pulled verbatim from [`paladin_core::format_plaintext_qr_export_warning`],
-//!   an `adw::SwitchRow` ack ("I understand — show the QR") that
-//!   only mutates [`ExportQrDialogState::ack_revealed`] (it never
-//!   auto-renders the QR), and a Page-1 footer with two
-//!   `gtk::Button`s — a `Cancel` (always sensitive) and a
-//!   `Show QR` whose sensitivity is bound from
-//!   [`compose_show_qr_button_sensitive`].
-//! * `"qr"` — Page 2 carries an on-screen `gtk::Picture` whose
-//!   paintable is bound from the staged PNG bytes in
-//!   [`ExportQrDialogState::staged_png`], a `<issuer>:<label>`
-//!   caption `gtk::Label` styled with the `title-3` class, and a
-//!   four-button footer (`Save as PNG…` / `Save as SVG…` /
-//!   `Copy image` / `Done`).
+//! The page carries, top to bottom: an `<issuer>:<label>` caption
+//! `gtk::Label` styled with the `title-3` class, the on-screen
+//! `gtk::Picture` whose paintable is built from the staged PNG bytes,
+//! the inline save / copy status labels and the overwrite gate, a
+//! four-button footer (`Save as PNG…` / `Save as SVG…` /
+//! `Copy image` / `Done`), and — beneath the actions — an
+//! informational warning footer rendering
+//! [`paladin_core::format_plaintext_qr_export_warning`] verbatim. The
+//! warning informs; it does **not** gate the code behind a
+//! click-to-acknowledge step (parity with the CLI and TUI per
+//! `docs/DESIGN.md` §4.6).
 //!
 //! Read-only — the dialog never enters [`paladin_core::Vault::mutate_and_save`],
 //! never advances a HOTP counter, and never bumps `updated_at`.
-//! Every render call goes through the new `&self` methods
+//! Every render call goes through the `&self` methods
 //! [`paladin_core::Vault::export_qr_png`] /
 //! [`paladin_core::Vault::export_qr_svg`].
 //!
 //! This file owns the widget-free value types
 //! ([`ExportQrDialogInit`], [`ExportQrDialogMsg`],
 //! [`ExportQrDialogOutput`], [`ExportQrDialogState`], [`SaveKind`],
-//! [`SaveTarget`]) and the pure helpers the `SimpleComponent` will
-//! bind. The `relm4::SimpleComponent` impl (with the
-//! `adw::Dialog` / `adw::ViewStack` widget tree, the
-//! `gio::spawn_blocking` save worker, and the `gdk::Clipboard`
-//! copy path) lands in the follow-up "Warning page wiring" /
-//! "Page 2 mount" / "Save-as-* actions" / "Copy image action"
-//! commits of the §"QR export dialog implementation" build order.
+//! [`SaveTarget`]) and the pure helpers the
+//! `relm4::SimpleComponent` impl binds — the `adw::Dialog` widget
+//! tree, the `gio::spawn_blocking` save worker, and the
+//! `gdk::Clipboard` copy path all live below.
 
 use std::path::{Path, PathBuf};
 
@@ -58,32 +56,14 @@ use zeroize::Zeroizing;
 
 use crate::export_dialog::{InlineError, InlineWarning};
 
-/// Name of the [`adw::ViewStack`] child carrying the warning page
-/// (Page 1).
-///
-/// Pinned here so the runtime
-/// [`view_stack.set_visible_child_name(...)`] calls and the
-/// pure-logic [`compose_visible_child_name`] reducer share one
-/// source of truth.
-pub const VIEW_STACK_WARNING_PAGE_NAME: &str = "warning";
-
-/// Name of the [`adw::ViewStack`] child carrying the QR-render page
-/// (Page 2).
-///
-/// Pinned here so the runtime
-/// [`view_stack.set_visible_child_name(...)`] calls and the
-/// pure-logic [`compose_visible_child_name`] reducer share one
-/// source of truth.
-pub const VIEW_STACK_QR_PAGE_NAME: &str = "qr";
-
-/// CSS style class applied to the Page-2 `<issuer>:<label>` caption
+/// CSS style class applied to the `<issuer>:<label>` caption
 /// `gtk::Label` so it renders at libadwaita's display-3 weight.
 ///
 /// Pinned by
 /// [`compose_export_qr_dialog_caption_widget_uses_title_3_style_class`].
 pub const CAPTION_STYLE_CLASS: &str = "title-3";
 
-/// MIME type the Page-2 `Copy image` button publishes the staged
+/// MIME type the `Copy image` button publishes the staged
 /// PNG bytes under via [`gdk::ContentProvider`] +
 /// [`gdk::Clipboard::set_content`].
 ///
@@ -94,12 +74,12 @@ pub const CAPTION_STYLE_CLASS: &str = "title-3";
 /// image-paste surfaces that key off this mime string.
 pub const COPY_IMAGE_CLIPBOARD_MIME_TYPE: &str = "image/png";
 
-/// Selector identifying which QR render format a Page-2 save target
-/// is committing.
+/// Selector identifying which QR render format a save target is
+/// committing.
 ///
 /// PNG saves reuse the already-staged
-/// [`ExportQrDialogState::staged_png`] bytes (populated when the
-/// user pressed Show-QR), so on-screen Picture bytes and on-disk
+/// [`ExportQrDialogState::staged_png`] bytes (staged at open time),
+/// so on-screen Picture bytes and on-disk
 /// bytes are byte-identical by construction. SVG saves are
 /// lazy — [`ExportQrDialogState::staged_svg`] is empty until the
 /// first SVG save fires, then cached so subsequent SVG saves to a
@@ -112,7 +92,7 @@ pub enum SaveKind {
     Svg,
 }
 
-/// A user-picked Page-2 save destination: the format the user chose
+/// A user-picked save destination: the format the user chose
 /// (PNG / SVG) plus the absolute path the `gtk::FileDialog::save`
 /// returned.
 ///
@@ -186,7 +166,7 @@ pub enum ExportQrSaveOutcome {
 /// `gio::spawn_blocking` → [`ExportQrDialogMsg::SaveCompleted`].
 ///
 /// On the PNG path, [`Self::staged_png`] is guaranteed `Some` (the
-/// Page-2 "Save as PNG…" button is sensitive only after Show-QR
+/// "Save as PNG…" button is sensitive only when the open-time render
 /// staged the bytes). On the SVG path, [`Self::staged_svg`] may be
 /// `None` (first SVG save) — the worker calls
 /// [`paladin_core::Vault::export_qr_svg`] once and stashes the
@@ -318,64 +298,49 @@ pub struct ExportQrSaveCompletion {
 /// Initialisation payload handed to `ExportQrDialogComponent::init`
 /// when `AppModel` mounts the dialog.
 ///
-/// `AppModel` resolves the matching [`AccountSummary`] from the
-/// live vault before the launch so the dialog never reaches into
-/// `(Vault, Store)` for its own caption rendering (the live vault
-/// is still consulted by the `SimpleComponent` for the actual QR
-/// render through [`paladin_core::Vault::export_qr_png`] /
-/// [`paladin_core::Vault::export_qr_svg`]).
+/// `AppModel` resolves the matching [`AccountSummary`] **and**
+/// renders the QR PNG from the live vault before the launch (see
+/// [`decide_export_qr_target`]), so the dialog opens directly on the
+/// staged QR without ever reaching into `(Vault, Store)` itself. SVG
+/// is still rendered lazily on the first Save-as-SVG through
+/// [`paladin_core::Vault::export_qr_svg`].
 #[derive(Debug, Clone)]
 pub struct ExportQrDialogInit {
-    /// Account whose `otpauth://` URI the dialog will render as a
-    /// QR.
+    /// Account whose `otpauth://` URI the dialog renders as a QR.
     pub account_id: AccountId,
     /// Snapshot of the account's display metadata used by the
-    /// Page-2 caption ([`paladin_core::summary_display_label`]) and
-    /// by `format_export_qr_dialog_title` to render dialog chrome
+    /// `<issuer>:<label>` caption ([`paladin_core::summary_display_label`])
+    /// and by `format_export_qr_dialog_title` to render dialog chrome
     /// without re-reading the live vault.
     pub account_summary: AccountSummary,
+    /// QR PNG bytes pre-rendered by `AppModel` through
+    /// [`paladin_core::Vault::export_qr_png`]. `Some` on a successful
+    /// render (the common case) — the dialog stages these into
+    /// [`ExportQrDialogState::staged_png`] so the QR shows the moment
+    /// the page mounts. `None` only when the render failed, paired
+    /// with a `Some` [`Self::render_error`]. Wrapped in
+    /// [`Zeroizing`](zeroize::Zeroizing) so the buffer zeroes on
+    /// drop.
+    pub staged_png: Option<Zeroizing<Vec<u8>>>,
+    /// Inline render-error wording when the open-time
+    /// [`paladin_core::Vault::export_qr_png`] render failed (mutually
+    /// exclusive with a `Some` [`Self::staged_png`]). Rendered through
+    /// [`render_show_qr_error_message`]; non-secret (names the failing
+    /// field / reason, never the secret bytes).
+    pub render_error: Option<String>,
 }
 
 /// Input messages dispatched into the `ExportQrDialogComponent`
 /// reducer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExportQrDialogMsg {
-    /// Page-1 ack `adw::SwitchRow` flipped. The wrapped `bool` is
-    /// the switch's new active state. Toggling the switch never
-    /// auto-dispatches [`Self::ShowQr`] (the no-auto-render
-    /// contract is pinned by
-    /// `apply_msg_ack_toggled_does_not_dispatch_show_qr`); the
-    /// reducer only mutates [`ExportQrDialogState::ack_revealed`]
-    /// and, when toggled off, wipes the staged PNG / SVG buffers
-    /// and resets the view stack to the warning page.
-    AckToggled(bool),
-    /// Page-1 `Show QR` button activated. The reducer is a no-op
-    /// at this layer; the `SimpleComponent`'s `update` arm forwards
-    /// [`ExportQrDialogOutput::ShowQrRequested`] to `AppModel`
-    /// (which owns the live `(Vault, Store)` pair) so the render
-    /// can happen on the main loop with vault access. `AppModel`
-    /// completes the round trip by emitting
-    /// [`Self::ShowQrSucceeded`] or [`Self::ShowQrFailed`] back to
-    /// the dialog.
-    ShowQr,
-    /// `AppModel` returned PNG bytes from `vault.export_qr_png` for
-    /// the pending Show-QR press. The reducer moves them into
-    /// [`ExportQrDialogState::staged_png`] (a
-    /// [`Zeroizing<Vec<u8>>`] so a later drop zeroes the buffer),
-    /// clears any prior inline error, and flips the visible child
-    /// to the QR page via the `staged_png.is_some()` reducer in
-    /// [`compose_visible_child_name`].
-    ShowQrSucceeded(Zeroizing<Vec<u8>>),
-    /// `AppModel` reported a `vault.export_qr_png` error for the
-    /// pending Show-QR press. The reducer parks the rendered
-    /// message in [`ExportQrDialogState::show_qr_error`] for
-    /// inline rendering on Page 1; `staged_png` stays empty so the
-    /// visible child stays on the warning page and no HOTP counter
-    /// is touched.
-    ShowQrFailed(String),
-    /// Page-1 `Cancel` button activated. The handler emits
-    /// [`ExportQrDialogOutput::Cancel`] after wiping the staged
-    /// PNG / SVG buffers.
+    /// Dialog dismissed via a bare Escape press (routed from the
+    /// root [`gtk::EventControllerKey`] in [`wire_dismiss_controller`]).
+    /// The handler emits [`ExportQrDialogOutput::Cancel`] after
+    /// wiping the staged PNG / SVG buffers. Kept distinct from
+    /// [`Self::Close`] so a future telemetry / undo surface can
+    /// differentiate an explicit Escape dismissal from a
+    /// window-manager close.
     CancelPressed,
     /// User dismissed the dialog via the [`adw::Dialog`]
     /// `closed` signal (window-manager close, swipe-down on
@@ -384,14 +349,14 @@ pub enum ExportQrDialogMsg {
     /// [`ExportQrDialogOutput`] variant; both paths wipe staged
     /// buffers before emitting.
     Close,
-    /// User clicked the Page-2 `Save as PNG…` footer button. The
+    /// User clicked the `Save as PNG…` footer button. The
     /// `SimpleComponent`'s view binding opens a
     /// `gtk::FileDialog::save` configured for `*.png` and
     /// dispatches [`Self::SaveDestinationPicked`] on completion;
     /// the reducer arm itself is a no-op so the message survives
     /// the dispatch table without mutating state.
     SaveAsPngPressed,
-    /// User clicked the Page-2 `Save as SVG…` footer button.
+    /// User clicked the `Save as SVG…` footer button.
     /// Mirrors [`Self::SaveAsPngPressed`].
     SaveAsSvgPressed,
     /// `gtk::FileDialog::save` returned a path. The reducer parks
@@ -431,7 +396,7 @@ pub enum ExportQrDialogMsg {
     /// [`ExportQrDialogState::staged_svg`] so a subsequent SVG
     /// save reuses it without re-rendering.
     SaveCompleted(ExportQrSaveCompletion),
-    /// User clicked the Page-2 `Copy image` footer button. The
+    /// User clicked the `Copy image` footer button. The
     /// reducer is a no-op at this layer; the `SimpleComponent`'s
     /// `update` arm emits [`ExportQrDialogOutput::CopyImageRequested`]
     /// (carrying a clone of [`ExportQrDialogState::staged_png`])
@@ -452,8 +417,8 @@ pub enum ExportQrDialogMsg {
     /// `AppModel` reported that `gdk::Clipboard::set_content`
     /// returned an error. The reducer parks the message in
     /// [`ExportQrDialogState::copy_image_error`] for inline
-    /// rendering on Page 2; `staged_png` is left untouched so the
-    /// user can retry without a fresh Show-QR press. The reducer
+    /// rendering beneath the QR; `staged_png` is left untouched so
+    /// the user can retry the copy. The reducer
     /// arm returns `None` so no output ever lands on `AppModel`
     /// that would route into `clipboard_clear::schedule_copy` —
     /// image copies are not OTP codes and must not arm the
@@ -471,30 +436,21 @@ pub enum ExportQrDialogMsg {
 /// mirrors [`crate::export_dialog::ExportDialogOutput`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExportQrDialogOutput {
-    /// User clicked the Page-1 `Cancel` button.
+    /// User dismissed the dialog with a bare Escape press.
     Cancel,
-    /// User dismissed the dialog via the `closed` signal (Escape,
-    /// window-manager close, …).
+    /// User dismissed the dialog via the `closed` signal (the
+    /// `Done` button, window-manager close, …).
     Close,
-    /// Page-1 `Show QR` button activated. `AppModel` owns the live
-    /// `(Vault, Store)` pair, so the dialog hands the account id
-    /// back through the output channel; `AppModel` runs the
-    /// `vault.export_qr_png(id, &QrRenderOptions::default())` call
-    /// on the main loop and forwards the result via
-    /// [`ExportQrDialogMsg::ShowQrSucceeded`] /
-    /// [`ExportQrDialogMsg::ShowQrFailed`]. This `Output`-then-Input
-    /// round trip keeps the dialog free of a shared vault handle.
-    ShowQrRequested(AccountId),
     /// User confirmed a Save (either a non-existing destination or
     /// an existing destination plus overwrite-ack). `AppModel`
     /// attaches the live `(Vault, Store)` pair, calls
     /// [`run_export_qr_save_worker`] on `gio::spawn_blocking`, and
     /// forwards the completion back via
     /// [`ExportQrDialogMsg::SaveCompleted`]. The same
-    /// `Output`-then-Input round trip the Show-QR path uses keeps
+    /// `Output`-then-Input round trip the Save path uses keeps
     /// the dialog vault-handle-free.
     SaveRequested(ExportQrSaveRequest),
-    /// User clicked the Page-2 `Copy image` footer button. The
+    /// User clicked the `Copy image` footer button. The
     /// dialog cannot reach the live `gdk::Clipboard` handle, so
     /// it hands the staged PNG bytes to `AppModel` through this
     /// variant; `AppModel` wraps them in `glib::Bytes` +
@@ -506,7 +462,7 @@ pub enum ExportQrDialogOutput {
     /// [`Zeroizing<Vec<u8>>`] so the payload buffer zeroes on
     /// drop. The staged bytes stay parked on
     /// [`ExportQrDialogState::staged_png`] so a follow-up copy
-    /// reuses them without a fresh Show-QR press.
+    /// reuses them without re-rendering.
     CopyImageRequested(Zeroizing<Vec<u8>>),
 }
 
@@ -515,9 +471,9 @@ pub enum ExportQrDialogOutput {
 /// All secret bytes (the on-screen PNG bytes, the staged SVG
 /// document) live in
 /// [`Zeroizing`](zeroize::Zeroizing)-wrapped containers so a drop
-/// — whether through the dialog close, an ack-toggled-off reset,
-/// or an auto-lock fire ([`clear_for_lock`]) — wipes them before
-/// the memory returns to the allocator.
+/// — whether through the dialog close or an auto-lock fire
+/// ([`clear_for_lock`]) — wipes them before the memory returns to
+/// the allocator.
 #[derive(Debug)]
 pub struct ExportQrDialogState {
     /// Account the dialog is rendering. Pinned here so the
@@ -526,27 +482,24 @@ pub struct ExportQrDialogState {
     /// closing over the init payload separately.
     pub account_id: AccountId,
     /// Snapshot of the account's display metadata used by the
-    /// Page-2 caption. Carried for the lifetime of the dialog so
+    /// caption. Carried for the lifetime of the dialog so
     /// the caption stays stable even if a parallel mutate retargets
     /// the live vault.
     pub account_summary: AccountSummary,
-    /// Page-1 warning-ack `adw::SwitchRow` state. Starts `false`
-    /// and only flips to `true` on an explicit user toggle. Gates
-    /// the Page-1 `Show QR` button's sensitivity via
-    /// [`compose_show_qr_button_sensitive`].
-    pub ack_revealed: bool,
-    /// On-screen QR render bytes (PNG). Populated when the user
-    /// presses Show-QR and dropped (the
-    /// [`Zeroizing`](zeroize::Zeroizing) wrapper zeroes them) when
-    /// the dialog closes, when ack is toggled off, or when
-    /// auto-lock fires.
+    /// On-screen QR render bytes (PNG). Staged at open time from
+    /// [`ExportQrDialogInit::staged_png`] (`AppModel` renders the QR
+    /// through [`Vault::export_qr_png`] before the dialog mounts) and
+    /// dropped (the [`Zeroizing`](zeroize::Zeroizing) wrapper zeroes
+    /// them) when the dialog closes or when auto-lock fires. `None`
+    /// only when the open-time render failed — in that case
+    /// [`Self::show_qr_error`] carries the inline message.
     pub staged_png: Option<Zeroizing<Vec<u8>>>,
     /// Lazily-rendered SVG document. Empty until the first
     /// Save-as-SVG fires; then cached so a subsequent SVG save to
     /// a different path reuses it without re-rendering through
     /// `vault.export_qr_svg`.
     pub staged_svg: Option<Zeroizing<String>>,
-    /// User-picked Page-2 save destination, if any.
+    /// User-picked save destination, if any.
     /// `destination_exists` + `overwrite_acknowledged` are paired
     /// to this slot the same way
     /// [`crate::export_dialog::ExportDialogState`] pairs its
@@ -564,27 +517,27 @@ pub struct ExportQrDialogState {
     /// the save target changes.
     pub overwrite_acknowledged: bool,
     /// Path of the most recent successful save. Drives the
-    /// "QR saved to …" status-line label on Page 2. `None` until
+    /// "QR saved to …" status-line label. `None` until
     /// the first successful save fires.
     pub last_save_path: Option<PathBuf>,
-    /// Inline error rendered on Page 1 when the last
-    /// [`apply_msg_show_qr`] call failed (e.g.
-    /// `invalid_state { state: "account_not_found" }` from a
-    /// concurrent remove, or a `validation_error` from `qrcode`
-    /// rejecting an over-long payload). Cleared on the next
-    /// successful render and on every ack-toggled-off /
-    /// `drop_staged_buffers` path so a stale error never survives a
-    /// re-acked retry. Stored as a plain `String` because the
-    /// message wording is non-secret (it names the failing field /
-    /// reason, never the secret bytes).
+    /// Inline render error shown beneath the (empty) picture when
+    /// the open-time [`Vault::export_qr_png`] render failed — e.g. a
+    /// `validation_error` from `qrcode` rejecting an over-long
+    /// payload. Populated at open from
+    /// [`ExportQrDialogInit::render_error`] and cleared on every
+    /// `drop_staged_buffers` path. With the render failed,
+    /// [`Self::staged_png`] is `None` so the save / copy actions
+    /// stay desensitized; only `Done` remains. Stored as a plain
+    /// `String` because the message wording is non-secret (it names
+    /// the failing field / reason, never the secret bytes).
     pub show_qr_error: Option<String>,
-    /// Inline save-error body rendered on Page 2 after a failed
+    /// Inline save-error body rendered inline after a failed
     /// Save-as-* worker run. Carries the §5 typed error wording
     /// verbatim ([`paladin_core::PaladinError::to_string`]). Cleared
     /// on the next successful save and on every `SaveDestinationPicked`
     /// reducer arm so a stale error never survives a re-pick.
     pub save_error: Option<String>,
-    /// Inline save-warning body rendered on Page 2 after a
+    /// Inline save-warning body rendered inline after a
     /// [`paladin_core::ErrorKind::SaveDurabilityUnconfirmed`]
     /// outcome (the file exists on disk but the parent-directory
     /// `fsync` failed). Split out from [`Self::save_error`] so the
@@ -594,37 +547,36 @@ pub struct ExportQrDialogState {
     /// crash"). Cleared on the next successful save and on every
     /// `SaveDestinationPicked` reducer arm.
     pub save_warning: Option<String>,
-    /// Inline `Copy image` error body rendered on Page 2 after a
+    /// Inline `Copy image` error body rendered inline after a
     /// failed [`gdk::Clipboard::set_content`] round-trip. The body
     /// is a plain `String` because the failure path stays in GDK
     /// (the message wording is non-secret — it names the failing
     /// surface, never the staged PNG bytes). Cleared on the next
-    /// successful copy, on every `drop_staged_buffers` reset, and
-    /// on every ack-toggled-off transition so a stale error never
-    /// survives a re-acked retry.
+    /// successful copy and on every `drop_staged_buffers` reset so
+    /// a stale error never survives a retry.
     pub copy_image_error: Option<String>,
 }
 
 impl ExportQrDialogState {
     /// Build a fresh state from an [`ExportQrDialogInit`].
     ///
-    /// `ack_revealed` starts `false` so the Page-1 `Show QR`
-    /// button is desensitized until the user explicitly toggles
-    /// the ack; both staged-byte slots, the save target, and the
-    /// last-save path are empty.
+    /// The QR is staged at open time: [`Self::staged_png`] adopts the
+    /// pre-rendered bytes in [`ExportQrDialogInit::staged_png`] and
+    /// [`Self::show_qr_error`] adopts [`ExportQrDialogInit::render_error`]
+    /// (the two are mutually exclusive). The SVG slot, the save
+    /// target, and the last-save path all start empty.
     #[must_use]
     pub fn new(init: ExportQrDialogInit) -> Self {
         Self {
             account_id: init.account_id,
             account_summary: init.account_summary,
-            ack_revealed: false,
-            staged_png: None,
+            staged_png: init.staged_png,
             staged_svg: None,
             save_target: None,
             destination_exists: false,
             overwrite_acknowledged: false,
             last_save_path: None,
-            show_qr_error: None,
+            show_qr_error: init.render_error,
             save_error: None,
             save_warning: None,
             copy_image_error: None,
@@ -632,52 +584,36 @@ impl ExportQrDialogState {
     }
 }
 
-/// Compose the Page-1 warning body text shown in the
-/// `adw::ActionRow` subtitle.
+/// Compose the informational warning-footer body text shown beneath
+/// the QR and its save actions.
 ///
 /// Returns the verbatim output of
 /// [`paladin_core::format_plaintext_qr_export_warning`] so the
 /// per-front-end warnings (CLI / TUI / GTK) share one source of
-/// truth. Pinned by
+/// truth. The footer informs but does not gate — there is no
+/// click-to-acknowledge step. Pinned by
 /// `format_export_qr_dialog_warning_body_matches_paladin_core_verbatim`.
 #[must_use]
 pub fn compose_export_qr_warning_body() -> String {
     format_plaintext_qr_export_warning()
 }
 
-/// Compose the Page-1 `Show QR` button's sensitivity.
+/// Compose whether the `Save as PNG…` / `Save as SVG…` footer
+/// buttons are sensitive.
 ///
-/// Returns `true` only when the user has explicitly toggled the
-/// ack switch on (`state.ack_revealed == true`). The Page-1
-/// `Cancel` button is always sensitive and does not flow through
-/// this helper.
+/// Both gate on a successful open-time QR render
+/// ([`ExportQrDialogState::staged_png`] is `Some`). On a render
+/// failure the single page shows the inline error and only the
+/// `Done` button stays sensitive — keeping the save buttons
+/// desensitized prevents a Save-as-PNG dispatch with no staged
+/// bytes (which `AppModel`'s PNG worker branch `expect`s). Pinned by
+/// `compose_qr_save_buttons_sensitive_tracks_staged_png`.
 #[must_use]
-pub fn compose_show_qr_button_sensitive(state: &ExportQrDialogState) -> bool {
-    state.ack_revealed
+pub fn compose_qr_save_buttons_sensitive(state: &ExportQrDialogState) -> bool {
+    state.staged_png.is_some()
 }
 
-/// Compose the [`adw::ViewStack`] visible-child name for the
-/// current state.
-///
-/// The QR page is shown only when [`ExportQrDialogState::staged_png`]
-/// is populated (the user pressed Show-QR and the render
-/// succeeded); every other state — including ack-toggled-off,
-/// Cancel-in-flight, and the initial render — shows the warning
-/// page. Pairs with
-/// [`VIEW_STACK_WARNING_PAGE_NAME`] / [`VIEW_STACK_QR_PAGE_NAME`]
-/// so the `SimpleComponent`'s
-/// `view_stack.set_visible_child_name(...)` call site has a
-/// single source of truth.
-#[must_use]
-pub fn compose_visible_child_name(state: &ExportQrDialogState) -> &'static str {
-    if state.staged_png.is_some() {
-        VIEW_STACK_QR_PAGE_NAME
-    } else {
-        VIEW_STACK_WARNING_PAGE_NAME
-    }
-}
-
-/// Compose the Page-2 `<issuer>:<label>` caption text from the
+/// Compose the `<issuer>:<label>` caption text from the
 /// dialog's [`AccountSummary`] snapshot.
 ///
 /// Routes through [`paladin_core::summary_display_label`] so the
@@ -687,13 +623,13 @@ pub fn compose_visible_child_name(state: &ExportQrDialogState) -> &'static str {
 /// `paladin-core` once and every front-end picks it up.
 ///
 /// Pinned by
-/// `apply_msg_show_qr_sets_caption_label_text_from_summary_display_label`.
+/// `compose_export_qr_caption_text_reads_summary_display_label`.
 #[must_use]
 pub fn compose_export_qr_caption_text(state: &ExportQrDialogState) -> String {
     summary_display_label(&state.account_summary)
 }
 
-/// Compose the GTK CSS style class applied to the Page-2 caption
+/// Compose the GTK CSS style class applied to the caption
 /// `gtk::Label`.
 ///
 /// Returns [`CAPTION_STYLE_CLASS`] (`"title-3"`) so the
@@ -705,92 +641,7 @@ pub fn compose_export_qr_caption_style_class() -> &'static str {
     CAPTION_STYLE_CLASS
 }
 
-/// Apply an [`ExportQrDialogMsg::AckToggled`] message to
-/// `state`.
-///
-/// * `active == true`: flip [`ExportQrDialogState::ack_revealed`]
-///   on. **Does not** dispatch a Show-QR render — the
-///   no-auto-render contract is pinned by
-///   `apply_msg_ack_toggled_does_not_dispatch_show_qr`. The
-///   widget binding wires the
-///   `adw::SwitchRow::connect_active_notify` signal to dispatch
-///   this message only; the actual Show-QR render runs from the
-///   Page-1 `Show QR` button's `connect_clicked`.
-/// * `active == false`: flip [`ExportQrDialogState::ack_revealed`]
-///   off, wipe both staged-byte slots (the
-///   [`Zeroizing`](zeroize::Zeroizing) wrappers zero the bytes on
-///   drop), and clear [`ExportQrDialogState::save_target`] /
-///   [`ExportQrDialogState::overwrite_acknowledged`] /
-///   [`ExportQrDialogState::destination_exists`] so a re-open
-///   does not inherit stale Page-2 picks. The `SimpleComponent`'s
-///   view binding restores the Picture's paintable to
-///   `gdk::Paintable::new_empty` and flips the view stack back to
-///   the warning page via [`compose_visible_child_name`].
-pub fn apply_msg_ack_toggled(state: &mut ExportQrDialogState, active: bool) {
-    state.ack_revealed = active;
-    if !active {
-        state.staged_png = None;
-        state.staged_svg = None;
-        state.save_target = None;
-        state.destination_exists = false;
-        state.overwrite_acknowledged = false;
-        state.show_qr_error = None;
-        state.copy_image_error = None;
-    }
-}
-
-/// Apply a Page-1 `Show QR` button press against the live `vault`.
-///
-/// Calls [`paladin_core::Vault::export_qr_png`] with
-/// [`QrRenderOptions::default()`] on the main loop (the encoder is
-/// sub-millisecond on realistic `otpauth://` URI lengths — see the
-/// "Thread isolation" callout in `docs/IMPLEMENTATION_PLAN_04_GTK.md`
-/// §"QR export dialog implementation") and routes the result onto
-/// `state` through [`apply_msg_show_qr_succeeded`] /
-/// [`apply_msg_show_qr_failed`].
-///
-/// This convenience helper is the test-side equivalent of the
-/// production message chain — the live dialog cannot reach `Vault`
-/// directly, so the `SimpleComponent` emits
-/// [`ExportQrDialogOutput::ShowQrRequested`] and `AppModel`
-/// forwards the result through
-/// [`ExportQrDialogMsg::ShowQrSucceeded`] /
-/// [`ExportQrDialogMsg::ShowQrFailed`]. Both paths converge on the
-/// same `apply_msg_show_qr_*` reducers, so the pure-logic tests
-/// pin the behaviour without spinning up the message channel.
-pub fn apply_msg_show_qr(state: &mut ExportQrDialogState, vault: &Vault) {
-    match vault.export_qr_png(state.account_id, &QrRenderOptions::default()) {
-        Ok(bytes) => apply_msg_show_qr_succeeded(state, bytes),
-        Err(err) => apply_msg_show_qr_failed(state, render_show_qr_error_message(&err)),
-    }
-}
-
-/// Apply an [`ExportQrDialogMsg::ShowQrSucceeded`] message: move
-/// the rendered PNG bytes into [`ExportQrDialogState::staged_png`]
-/// (a [`Zeroizing<Vec<u8>>`] so a later drop zeroes the buffer)
-/// and clear any prior inline error.
-///
-/// The visible-child reducer ([`compose_visible_child_name`]) keys
-/// off `staged_png.is_some()`, so the next view tick switches the
-/// `AdwViewStack` from the warning page to the QR page.
-pub fn apply_msg_show_qr_succeeded(state: &mut ExportQrDialogState, bytes: Zeroizing<Vec<u8>>) {
-    state.staged_png = Some(bytes);
-    state.show_qr_error = None;
-}
-
-/// Apply an [`ExportQrDialogMsg::ShowQrFailed`] message: park the
-/// renderer's error string in [`ExportQrDialogState::show_qr_error`]
-/// for inline rendering on Page 1.
-///
-/// `staged_png` is left untouched (it stays `None`, so the view
-/// stack stays on the warning page) and the failed render never
-/// advances the HOTP counter or bumps `updated_at` — the
-/// `Vault::export_qr_png` call is `&self` by construction.
-pub fn apply_msg_show_qr_failed(state: &mut ExportQrDialogState, message: String) {
-    state.show_qr_error = Some(message);
-}
-
-/// Render a [`PaladinError`] into the inline Page-1 error string.
+/// Render a [`PaladinError`] into the inline QR-render error string.
 ///
 /// The wording flows through the error's `Display` impl so the
 /// CLI / TUI / GTK surfaces stay aligned with the §5 stable error
@@ -816,25 +667,19 @@ pub fn format_export_qr_dialog_title() -> &'static str {
     "Show QR code"
 }
 
-/// Page-1 primary-action button label.
-#[must_use]
-pub fn format_export_qr_dialog_show_qr_button_label() -> &'static str {
-    "Show QR"
-}
-
-/// Page-2 footer "Save as PNG…" button label.
+/// Footer "Save as PNG…" button label.
 #[must_use]
 pub fn format_export_qr_dialog_save_as_png_label() -> &'static str {
     "Save as PNG\u{2026}"
 }
 
-/// Page-2 footer "Save as SVG…" button label.
+/// Footer "Save as SVG…" button label.
 #[must_use]
 pub fn format_export_qr_dialog_save_as_svg_label() -> &'static str {
     "Save as SVG\u{2026}"
 }
 
-/// Page-2 footer "Copy image" button label.
+/// Footer "Copy image" button label.
 //
 // The literal is split across `concat!` arguments so the thinness
 // contract scanner (`tests/thinness.rs`) does not match the
@@ -846,7 +691,7 @@ pub fn format_export_qr_dialog_copy_image_label() -> &'static str {
     concat!("Copy ", "imag", "e")
 }
 
-/// Page-2 footer "Done" button label.
+/// Footer "Done" button label.
 #[must_use]
 pub fn format_export_qr_dialog_done_label() -> &'static str {
     "Done"
@@ -875,16 +720,13 @@ pub fn format_export_qr_dialog_copy_image_success_toast() -> &'static str {
     "Image copied"
 }
 
-/// Returns `true` when the Page-2 `Copy image` footer button is
-/// sensitive.
+/// Returns `true` when the `Copy image` footer button is sensitive.
 ///
-/// The button is mounted on Page 2 only, and Page 2 is only mounted
-/// after a successful Show-QR render — so in practice
-/// [`ExportQrDialogState::staged_png`] is always `Some(_)` when the
-/// button is reachable. The helper still guards against the
-/// reverse — a future state machine drift that leaves the button
-/// reachable without staged bytes desensitizes it rather than
-/// dispatches a doomed `set_content` round-trip.
+/// In the common case the open-time render staged the PNG, so
+/// [`ExportQrDialogState::staged_png`] is `Some(_)` and the button is
+/// live. On an open-time render failure (or an auto-lock reset)
+/// `staged_png` is empty, and this helper desensitizes the button
+/// rather than dispatching a doomed `set_content` round-trip.
 #[must_use]
 pub fn compose_copy_image_button_sensitive(state: &ExportQrDialogState) -> bool {
     state.staged_png.is_some()
@@ -895,9 +737,8 @@ pub fn compose_copy_image_button_sensitive(state: &ExportQrDialogState) -> bool 
 /// for a `Copy image` press.
 ///
 /// Returns `None` when [`ExportQrDialogState::staged_png`] is empty
-/// (the dialog has not yet rendered the QR, or an ack-off /
-/// auto-lock reset has dropped the bytes); the view-layer button is
-/// desensitized in this state via
+/// (an open-time render failure, or an auto-lock reset dropped the
+/// bytes); the view-layer button is desensitized in this state via
 /// [`compose_copy_image_button_sensitive`].
 ///
 /// The PNG bytes are cloned into a fresh [`Zeroizing<Vec<u8>>`] so
@@ -929,8 +770,8 @@ pub fn apply_msg_copy_image_succeeded(state: &mut ExportQrDialogState) {
 
 /// Apply [`ExportQrDialogMsg::CopyImageFailed`] — park `message`
 /// in [`ExportQrDialogState::copy_image_error`] for inline
-/// rendering on Page 2. `staged_png` is left untouched so the user
-/// can retry without a fresh Show-QR press.
+/// rendering beneath the QR. `staged_png` is left untouched so the
+/// user can retry the copy.
 ///
 /// The reducer **does not** emit any output: image copies are
 /// user-initiated paste-ables, not OTP codes, and must never arm
@@ -940,16 +781,6 @@ pub fn apply_msg_copy_image_failed(state: &mut ExportQrDialogState, message: Str
     state.copy_image_error = Some(message);
 }
 
-/// Drop the staged Page-2 buffers and reset the visible page back
-/// to the warning page.
-///
-/// Shared between [`apply_msg`] (`CancelPressed` / `Close` arms) and
-/// [`apply_msg_ack_toggled`]'s ack-off branch so the buffer-wipe
-/// contract has a single source of truth. The widget layer still
-/// has to swap the `gtk::Picture` paintable back to
-/// `gdk::Paintable::new_empty` — that lives in the `view!` binding
-/// rather than this state-side helper because it requires a
-/// `gdk::Paintable`.
 /// Compose the visibility of the inline overwrite gate.
 ///
 /// Mirrors [`crate::export_dialog::compose_overwrite_gate_visible`]:
@@ -972,7 +803,7 @@ pub fn compose_save_target_overwrite_gate_visible(state: &ExportQrDialogState) -
 /// it. Mirrors the gating
 /// [`crate::export_dialog::compose_submit_button_sensitive`] applies
 /// to the `ExportDialog`'s Submit button, except the QR dialog
-/// auto-fires from the reducer (no separate Submit button on Page 2)
+/// auto-fires from the reducer (it has no separate Submit button)
 /// once the gate is satisfied.
 #[must_use]
 pub fn compose_save_can_fire(state: &ExportQrDialogState) -> bool {
@@ -986,9 +817,8 @@ pub fn compose_save_can_fire(state: &ExportQrDialogState) -> bool {
 /// previously-acked stale target cannot cross-stomp.
 ///
 /// Also clears any prior inline save error / warning so a fresh
-/// pick presents a clean Page-2 surface; the dialog only
-/// re-surfaces an error after the worker reports a failure for the
-/// new target.
+/// pick presents a clean surface; the dialog only re-surfaces an
+/// error after the worker reports a failure for the new target.
 pub fn apply_msg_save_destination_picked(
     state: &mut ExportQrDialogState,
     kind: SaveKind,
@@ -1017,11 +847,11 @@ pub fn apply_msg_overwrite_acknowledged(state: &mut ExportQrDialogState, acknowl
 ///   the committed path in [`ExportQrDialogState::last_save_path`],
 ///   and clears any prior inline error / warning.
 /// * [`ExportQrSaveOutcome::DurabilityWarning`] — records the
-///   warning body so Page 2 surfaces it; the file is on disk, so
+///   warning body so the page surfaces it; the file is on disk, so
 ///   `last_save_path` is still set. The save target stays so the
 ///   user can retry the save.
 /// * [`ExportQrSaveOutcome::Inline`] — records the error body so
-///   Page 2 surfaces it; the save target stays so the user can
+///   the page surfaces it; the save target stays so the user can
 ///   retry the save without re-picking.
 ///
 /// Always re-stashes any worker-rendered SVG document on
@@ -1208,6 +1038,15 @@ fn open_save_file_dialog(sender: &relm4::ComponentSender<ExportQrDialogComponent
     );
 }
 
+/// Wipe every transient slot — the staged PNG / SVG buffers (their
+/// [`Zeroizing`](zeroize::Zeroizing) wrappers zero the bytes on
+/// drop), the save target, and the inline error / warning bodies.
+///
+/// Shared between [`apply_msg`]'s `CancelPressed` / `Close` arms and
+/// [`clear_for_lock`] so the buffer-wipe contract has a single
+/// source of truth. The widget layer still swaps the `gtk::Picture`
+/// paintable back to `gdk::Paintable::new_empty` — that lives in the
+/// `view!` binding because it needs a `gdk::Paintable`.
 fn drop_staged_buffers(state: &mut ExportQrDialogState) {
     state.staged_png = None;
     state.staged_svg = None;
@@ -1223,12 +1062,11 @@ fn drop_staged_buffers(state: &mut ExportQrDialogState) {
 /// Pure-logic helper invoked by `AppModel`'s auto-lock pruning
 /// before the live `(Vault, Store)` pair is destroyed.
 ///
-/// Resets [`ExportQrDialogState::ack_revealed`] to `false`, wipes
-/// every transient slot via [`drop_staged_buffers`] (the
+/// Wipes every transient slot via [`drop_staged_buffers`] (the
 /// [`Zeroizing`](zeroize::Zeroizing)-wrapped staged PNG and SVG
-/// buffers zero on drop), and additionally clears
+/// buffers zero on drop) and additionally clears
 /// [`ExportQrDialogState::last_save_path`] so the post-lock
-/// re-mount lands on a clean Page 1 with no inline-status carry-over.
+/// re-mount lands on a clean page with no inline-status carry-over.
 ///
 /// `account_id` / `account_summary` are intentionally **not**
 /// cleared — they identify the dialog's target account and a
@@ -1243,7 +1081,6 @@ fn drop_staged_buffers(state: &mut ExportQrDialogState) {
 /// retains the controller across lock (e.g. a "stays-mounted"
 /// UX), the buffers are zeroed first.
 pub fn clear_for_lock(state: &mut ExportQrDialogState) {
-    state.ack_revealed = false;
     state.last_save_path = None;
     drop_staged_buffers(state);
 }
@@ -1258,46 +1095,27 @@ pub fn clear_for_lock(state: &mut ExportQrDialogState) {
 /// output through the
 /// [`crate::app::model::AppMsg::ExportQrDialogAction`] dispatch arm.
 ///
-/// `ShowQr` is intentionally a no-op at this layer — the
-/// `SimpleComponent`'s `update` arm emits
-/// [`ExportQrDialogOutput::ShowQrRequested`] so `AppModel` can run
-/// the `vault.export_qr_png(account_id, ...)` render with vault
-/// access, then forwards the result through
-/// [`ExportQrDialogMsg::ShowQrSucceeded`] /
-/// [`ExportQrDialogMsg::ShowQrFailed`]. The reducer still receives
-/// `ShowQr` so the dispatch table is exhaustive.
+/// The QR is staged at open time (see [`decide_export_qr_target`]),
+/// so there is no in-dialog render message — the
+/// `SaveAsPngPressed` / `SaveAsSvgPressed` / `CopyImage` triggers
+/// are the only pure view-layer no-ops left in the table.
 pub fn apply_msg(
     state: &mut ExportQrDialogState,
     msg: ExportQrDialogMsg,
 ) -> Option<ExportQrDialogOutput> {
     match msg {
-        ExportQrDialogMsg::AckToggled(active) => {
-            apply_msg_ack_toggled(state, active);
-            None
-        }
-        // `ShowQr`, the two `SaveAs*Pressed` variants, and
-        // `CopyImage` are pure view-layer triggers — the
-        // `SimpleComponent` opens a `gtk::FileDialog::save` from
-        // the `connect_clicked` handler (for the Save variants),
-        // emits [`ExportQrDialogOutput::ShowQrRequested`] (for
-        // `ShowQr`), or emits
+        // The two `SaveAs*Pressed` variants and `CopyImage` are
+        // pure view-layer triggers — the `SimpleComponent` opens a
+        // `gtk::FileDialog::save` from the `connect_clicked` handler
+        // (for the Save variants) or emits
         // [`ExportQrDialogOutput::CopyImageRequested`] (for
         // `CopyImage`, via [`compose_copy_image_request_output`]).
-        // All four reducer arms collapse onto `None` so the
+        // All three reducer arms collapse onto `None` so the
         // dispatch table stays exhaustive without spurious state
         // churn.
-        ExportQrDialogMsg::ShowQr
-        | ExportQrDialogMsg::SaveAsPngPressed
+        ExportQrDialogMsg::SaveAsPngPressed
         | ExportQrDialogMsg::SaveAsSvgPressed
         | ExportQrDialogMsg::CopyImage => None,
-        ExportQrDialogMsg::ShowQrSucceeded(bytes) => {
-            apply_msg_show_qr_succeeded(state, bytes);
-            None
-        }
-        ExportQrDialogMsg::ShowQrFailed(message) => {
-            apply_msg_show_qr_failed(state, message);
-            None
-        }
         ExportQrDialogMsg::CancelPressed => {
             drop_staged_buffers(state);
             Some(ExportQrDialogOutput::Cancel)
@@ -1359,33 +1177,48 @@ fn build_save_request_when_armed(state: &ExportQrDialogState) -> Option<ExportQr
     }))
 }
 
-/// Resolve the targeted account in `vault` and project it into an
-/// [`ExportQrDialogInit`] payload `AppModel` hands to
-/// `ExportQrDialogComponent::builder().launch(...)`.
+/// Resolve the targeted account in `vault`, render its QR PNG, and
+/// project both into an [`ExportQrDialogInit`] payload `AppModel`
+/// hands to `ExportQrDialogComponent::builder().launch(...)`.
 ///
 /// Returns `None` when the account is no longer present (the user
 /// removed it between the kebab activation and this dispatch — a
 /// benign race that the caller drops silently, mirroring
 /// [`crate::edit_dialog::decide_edit_target`] /
 /// [`crate::remove_dialog::decide_remove_target`]).
+///
+/// The QR is rendered here — on the main loop, before the dialog
+/// mounts — through the read-only [`paladin_core::Vault::export_qr_png`]
+/// (`&self`, so no HOTP counter advances and `updated_at` is
+/// untouched). The encoder is sub-millisecond on realistic
+/// `otpauth://` URI lengths. A successful render rides in
+/// [`ExportQrDialogInit::staged_png`] so the dialog opens directly
+/// on the QR; a render failure (e.g. `qrcode` rejecting an
+/// over-long payload) rides in [`ExportQrDialogInit::render_error`]
+/// instead and the dialog opens showing that inline message with
+/// the save / copy actions desensitized.
 #[must_use]
 pub fn decide_export_qr_target(vault: &Vault, id: AccountId) -> Option<ExportQrDialogInit> {
-    vault
-        .summaries()
-        .find(|summary| summary.id == id)
-        .map(|summary| ExportQrDialogInit {
-            account_id: summary.id,
-            account_summary: summary,
-        })
+    let account_summary = vault.summaries().find(|summary| summary.id == id)?;
+    let (staged_png, render_error) = match vault.export_qr_png(id, &QrRenderOptions::default()) {
+        Ok(bytes) => (Some(bytes), None),
+        Err(err) => (None, Some(render_show_qr_error_message(&err))),
+    };
+    Some(ExportQrDialogInit {
+        account_id: id,
+        account_summary,
+        staged_png,
+        render_error,
+    })
 }
 
 /// Build a [`gdk::Texture`] from the staged PNG bytes in `state`,
-/// suitable for binding onto the Page-2 `gtk::Picture`'s paintable
-/// via `set_paintable`.
+/// suitable for binding onto the `gtk::Picture`'s paintable via
+/// `set_paintable`.
 ///
 /// Returns `None` when [`ExportQrDialogState::staged_png`] is empty
-/// (the user has not yet pressed Show-QR, or an ack-off / Cancel /
-/// auto-lock reset has dropped the bytes) or when
+/// (an open-time render failure, or a Cancel / auto-lock reset
+/// dropped the bytes) or when
 /// `gdk::Texture::from_bytes` rejects the buffer (defensive — a
 /// successful `Vault::export_qr_png` always yields a valid PNG, but
 /// the loader can in principle fail and we fall back to an empty
@@ -1413,12 +1246,12 @@ fn build_staged_png_texture(state: &ExportQrDialogState) -> Option<gdk::Texture>
 /// (e.g. the inline overwrite-ack `SwitchRow`) while still making
 /// the dialog dismissable from any focused widget.
 ///
-/// Routing `ExportQrDialogMsg::CancelPressed` matches the Page-1
-/// Cancel button (`cancel_button.connect_clicked` in the view!
-/// macro), so the staged-buffer wipe and
+/// Escape is the only surface that posts
+/// `ExportQrDialogMsg::CancelPressed`, so the staged-buffer wipe and
 /// `ExportQrDialogOutput::Cancel` forwarding flow through
-/// `apply_msg`'s single Cancel arm regardless of dismissal
-/// source.
+/// `apply_msg`'s single Cancel arm; the `Done` button and the
+/// window-manager close route through `ExportQrDialogMsg::Close`
+/// instead.
 ///
 /// Reuses [`crate::add_account::dispatch_root_dismiss_key`] for
 /// the bare-Escape truth table so the chord-modifier / other-key
@@ -1445,13 +1278,14 @@ fn wire_dismiss_controller(root: &adw::Dialog, sender: &ComponentSender<ExportQr
 /// Per-account QR export dialog component.
 ///
 /// Wraps the [`ExportQrDialogState`] reducer in a relm4
-/// [`SimpleComponent`] backed by an [`adw::Dialog`] whose body is an
-/// [`adw::ViewStack`] with two named children
-/// ([`VIEW_STACK_WARNING_PAGE_NAME`] and [`VIEW_STACK_QR_PAGE_NAME`]).
-/// The warning page carries the plaintext-export warning body, the
-/// ack `adw::SwitchRow`, and a Cancel / Show QR footer; the QR page
-/// is mounted as a placeholder until the "Page 2 mount on Show-QR
-/// press" commit lands the Picture + caption + save / copy buttons.
+/// [`SimpleComponent`] backed by a single-page [`adw::Dialog`]: a
+/// caption `gtk::Label`, the on-screen QR `gtk::Picture` (its
+/// paintable built from the staged PNG bytes), the inline
+/// save / copy status labels and overwrite gate, a four-button
+/// footer (`Save as PNG…` / `Save as SVG…` / `Copy image` / `Done`),
+/// and an informational warning-footer `gtk::Label`. The QR is
+/// staged at open time (see [`decide_export_qr_target`]); there is no
+/// warning-ack gate.
 pub struct ExportQrDialogComponent {
     state: ExportQrDialogState,
 }
@@ -1502,271 +1336,211 @@ impl SimpleComponent for ExportQrDialogComponent {
                 add_top_bar = &adw::HeaderBar {},
 
                 #[wrap(Some)]
-                #[name = "view_stack"]
-                set_content = &adw::ViewStack {
-                    #[watch]
-                    set_visible_child_name: compose_visible_child_name(&model.state),
+                set_content = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 12,
+                    set_margin_top: 12,
+                    set_margin_bottom: 12,
+                    set_margin_start: 12,
+                    set_margin_end: 12,
 
-                    add_named[Some(VIEW_STACK_WARNING_PAGE_NAME)] = &gtk::Box {
-                        set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 12,
-                        set_margin_top: 12,
-                        set_margin_bottom: 12,
-                        set_margin_start: 12,
-                        set_margin_end: 12,
+                    #[name = "qr_caption"]
+                    gtk::Label {
+                        set_label: &compose_export_qr_caption_text(&model.state),
+                        set_xalign: 0.5,
+                        add_css_class: compose_export_qr_caption_style_class(),
+                    },
 
-                        #[name = "warning_group"]
-                        adw::PreferencesGroup {
-                            #[name = "warning_body_row"]
-                            add = &adw::ActionRow {
-                                set_title: &compose_export_qr_warning_body(),
-                                set_title_lines: 0,
-                                set_subtitle_lines: 0,
-                                add_css_class: "warning",
-                            },
+                    #[name = "qr_picture"]
+                    gtk::Picture {
+                        set_can_shrink: false,
+                        set_hexpand: true,
+                        set_vexpand: true,
+                        #[watch]
+                        set_paintable: build_staged_png_texture(&model.state).as_ref(),
+                    },
 
-                            #[name = "warning_ack_row"]
-                            add = &adw::SwitchRow {
-                                set_title: format_export_qr_dialog_ack_row_title(),
-                                set_subtitle: format_export_qr_dialog_ack_row_subtitle(),
-                                #[watch]
-                                set_active: model.state.ack_revealed,
-                                // See the `connect_closed` comment.
-                                connect_active_notify[sender] => move |row| {
-                                    let _ = sender.input_sender().send(
-                                        ExportQrDialogMsg::AckToggled(row.is_active()),
-                                    );
-                                },
-                            },
-                        },
+                    // Inline render error shown beneath the (empty)
+                    // picture when the open-time `Vault::export_qr_png`
+                    // render failed — e.g. a `validation_error` from
+                    // `qrcode` rejecting an oversized payload. Hidden
+                    // in the common case; when visible `staged_png` is
+                    // empty so the save / copy actions are
+                    // desensitized and only `Done` works.
+                    #[name = "show_qr_error_label"]
+                    gtk::Label {
+                        set_wrap: true,
+                        set_xalign: 0.0,
+                        add_css_class: "error",
+                        #[watch]
+                        set_visible: model.state.show_qr_error.is_some(),
+                        #[watch]
+                        set_label: model.state.show_qr_error.as_deref().unwrap_or(""),
+                    },
 
-                        // Inline error rendered when a prior Show-QR press
-                        // returned a `Vault::export_qr_png` error
-                        // (e.g. `invalid_state { state: "account_not_found" }`
-                        // from a concurrent remove or a `validation_error`
-                        // from `qrcode` rejecting an oversized payload).
-                        // Stays hidden in the common case.
-                        #[name = "show_qr_error_label"]
-                        gtk::Label {
-                            set_wrap: true,
-                            set_xalign: 0.0,
-                            add_css_class: "error",
+                    // Inline post-save status: "QR saved to <path>"
+                    // after a successful save and no fresher
+                    // error / warning has overwritten it.
+                    #[name = "save_success_label"]
+                    gtk::Label {
+                        set_wrap: true,
+                        set_xalign: 0.0,
+                        #[watch]
+                        set_visible: compose_save_success_label_visible(&model.state),
+                        #[watch]
+                        set_label: &compose_save_success_status_text(&model.state),
+                    },
+
+                    // Inline save error rendered when a save worker
+                    // returned an `Inline`-class typed failure
+                    // (`io_error`, `save_not_committed`,
+                    // `validation_error`, `invalid_state`).
+                    #[name = "save_error_label"]
+                    gtk::Label {
+                        set_wrap: true,
+                        set_xalign: 0.0,
+                        add_css_class: "error",
+                        #[watch]
+                        set_visible: model.state.save_error.is_some(),
+                        #[watch]
+                        set_label: model.state.save_error.as_deref().unwrap_or(""),
+                    },
+
+                    // Inline save warning rendered when a save worker
+                    // returned `save_durability_unconfirmed` (the file
+                    // is on disk but the parent-directory `fsync`
+                    // failed).
+                    #[name = "save_warning_label"]
+                    gtk::Label {
+                        set_wrap: true,
+                        set_xalign: 0.0,
+                        add_css_class: "warning",
+                        #[watch]
+                        set_visible: model.state.save_warning.is_some(),
+                        #[watch]
+                        set_label: model.state.save_warning.as_deref().unwrap_or(""),
+                    },
+
+                    // Inline `Copy image` error rendered when
+                    // `gdk::Clipboard::set_content` returned an error
+                    // for a prior `Copy image` press.
+                    #[name = "copy_image_error_label"]
+                    gtk::Label {
+                        set_wrap: true,
+                        set_xalign: 0.0,
+                        add_css_class: "error",
+                        #[watch]
+                        set_visible: model.state.copy_image_error.is_some(),
+                        #[watch]
+                        set_label: model.state.copy_image_error.as_deref().unwrap_or(""),
+                    },
+
+                    // Inline overwrite gate — visible only when the
+                    // picked destination already exists on disk per
+                    // `Path::try_exists`. Mirrors the `ExportDialog`'s
+                    // overwrite-gate Switch row.
+                    #[name = "save_overwrite_group"]
+                    adw::PreferencesGroup {
+                        #[watch]
+                        set_visible: compose_save_target_overwrite_gate_visible(&model.state),
+
+                        #[name = "save_overwrite_row"]
+                        add = &adw::SwitchRow {
+                            set_title: format_export_qr_dialog_overwrite_row_title(),
+                            set_subtitle: format_export_qr_dialog_overwrite_row_subtitle(),
                             #[watch]
-                            set_visible: model.state.show_qr_error.is_some(),
-                            #[watch]
-                            set_label: model.state.show_qr_error.as_deref().unwrap_or(""),
-                        },
-
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Horizontal,
-                            set_spacing: 6,
-                            set_halign: gtk::Align::End,
-
-                            #[name = "cancel_button"]
-                            gtk::Button {
-                                set_label: format_export_qr_dialog_cancel_label(),
-                                // See the `connect_closed` comment.
-                                connect_clicked[sender] => move |_| {
-                                    let _ = sender
-                                        .input_sender()
-                                        .send(ExportQrDialogMsg::CancelPressed);
-                                },
-                            },
-
-                            #[name = "show_qr_button"]
-                            gtk::Button {
-                                set_label: format_export_qr_dialog_show_qr_button_label(),
-                                add_css_class: "suggested-action",
-                                #[watch]
-                                set_sensitive: compose_show_qr_button_sensitive(&model.state),
-                                // See the `connect_closed` comment.
-                                connect_clicked[sender] => move |_| {
-                                    let _ = sender.input_sender().send(ExportQrDialogMsg::ShowQr);
-                                },
+                            set_active: model.state.overwrite_acknowledged,
+                            // See the `connect_closed` comment.
+                            connect_active_notify[sender] => move |row| {
+                                let _ = sender.input_sender().send(
+                                    ExportQrDialogMsg::OverwriteAcknowledged(row.is_active()),
+                                );
                             },
                         },
                     },
 
-                    // Page 2 — Picture + `<issuer>:<label>` caption +
-                    // inline save status / error / warning + inline
-                    // overwrite-ack gate + four-button footer
-                    // (`Save as PNG\u{2026}` / `Save as SVG\u{2026}` /
-                    // `Copy image` / `Done`). The `Copy image` button
-                    // lands wired in the subsequent "Copy image
-                    // action" commit; the button itself ships now so
-                    // the four-button footer layout is stable across
-                    // the Phase 5 / Phase 6 split.
-                    add_named[Some(VIEW_STACK_QR_PAGE_NAME)] = &gtk::Box {
-                        set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 12,
-                        set_margin_top: 12,
-                        set_margin_bottom: 12,
-                        set_margin_start: 12,
-                        set_margin_end: 12,
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 6,
+                        set_halign: gtk::Align::End,
 
-                        #[name = "qr_caption"]
-                        gtk::Label {
-                            set_label: &compose_export_qr_caption_text(&model.state),
-                            set_xalign: 0.5,
-                            add_css_class: compose_export_qr_caption_style_class(),
-                        },
-
-                        #[name = "qr_picture"]
-                        gtk::Picture {
-                            set_can_shrink: false,
-                            set_hexpand: true,
-                            set_vexpand: true,
+                        #[name = "save_as_png_button"]
+                        gtk::Button {
+                            set_label: format_export_qr_dialog_save_as_png_label(),
                             #[watch]
-                            set_paintable: build_staged_png_texture(&model.state).as_ref(),
-                        },
-
-                        // Inline post-save status: "QR saved to <path>"
-                        // after a successful save and no fresher
-                        // error / warning has overwritten it.
-                        #[name = "save_success_label"]
-                        gtk::Label {
-                            set_wrap: true,
-                            set_xalign: 0.0,
-                            #[watch]
-                            set_visible: compose_save_success_label_visible(&model.state),
-                            #[watch]
-                            set_label: &compose_save_success_status_text(&model.state),
-                        },
-
-                        // Inline save error rendered when a save
-                        // worker returned an `Inline`-class typed
-                        // failure (`io_error`, `save_not_committed`,
-                        // `validation_error`, `invalid_state`).
-                        #[name = "save_error_label"]
-                        gtk::Label {
-                            set_wrap: true,
-                            set_xalign: 0.0,
-                            add_css_class: "error",
-                            #[watch]
-                            set_visible: model.state.save_error.is_some(),
-                            #[watch]
-                            set_label: model.state.save_error.as_deref().unwrap_or(""),
-                        },
-
-                        // Inline save warning rendered when a save
-                        // worker returned `save_durability_unconfirmed`
-                        // (the file is on disk but the parent-directory
-                        // `fsync` failed).
-                        #[name = "save_warning_label"]
-                        gtk::Label {
-                            set_wrap: true,
-                            set_xalign: 0.0,
-                            add_css_class: "warning",
-                            #[watch]
-                            set_visible: model.state.save_warning.is_some(),
-                            #[watch]
-                            set_label: model.state.save_warning.as_deref().unwrap_or(""),
-                        },
-
-                        // Inline `Copy image` error rendered when
-                        // `gdk::Clipboard::set_content` returned an
-                        // error for a prior `Copy image` press.
-                        #[name = "copy_image_error_label"]
-                        gtk::Label {
-                            set_wrap: true,
-                            set_xalign: 0.0,
-                            add_css_class: "error",
-                            #[watch]
-                            set_visible: model.state.copy_image_error.is_some(),
-                            #[watch]
-                            set_label: model.state.copy_image_error.as_deref().unwrap_or(""),
-                        },
-
-                        // Inline overwrite gate — visible only when
-                        // the picked destination already exists on
-                        // disk per `Path::try_exists`. Mirrors the
-                        // `ExportDialog`'s overwrite-gate Switch row.
-                        #[name = "save_overwrite_group"]
-                        adw::PreferencesGroup {
-                            #[watch]
-                            set_visible: compose_save_target_overwrite_gate_visible(&model.state),
-
-                            #[name = "save_overwrite_row"]
-                            add = &adw::SwitchRow {
-                                set_title: format_export_qr_dialog_overwrite_row_title(),
-                                set_subtitle: format_export_qr_dialog_overwrite_row_subtitle(),
-                                #[watch]
-                                set_active: model.state.overwrite_acknowledged,
-                                // See the `connect_closed` comment.
-                                connect_active_notify[sender] => move |row| {
-                                    let _ = sender.input_sender().send(
-                                        ExportQrDialogMsg::OverwriteAcknowledged(row.is_active()),
-                                    );
-                                },
+                            set_sensitive: compose_qr_save_buttons_sensitive(&model.state),
+                            // See the `connect_closed` comment.
+                            connect_clicked[sender] => move |_| {
+                                let _ = sender
+                                    .input_sender()
+                                    .send(ExportQrDialogMsg::SaveAsPngPressed);
+                                open_save_file_dialog(&sender, SaveKind::Png);
                             },
                         },
 
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Horizontal,
-                            set_spacing: 6,
-                            set_halign: gtk::Align::End,
-
-                            #[name = "save_as_png_button"]
-                            gtk::Button {
-                                set_label: format_export_qr_dialog_save_as_png_label(),
-                                // See the `connect_closed` comment.
-                                connect_clicked[sender] => move |_| {
-                                    let _ = sender
-                                        .input_sender()
-                                        .send(ExportQrDialogMsg::SaveAsPngPressed);
-                                    open_save_file_dialog(&sender, SaveKind::Png);
-                                },
-                            },
-
-                            #[name = "save_as_svg_button"]
-                            gtk::Button {
-                                set_label: format_export_qr_dialog_save_as_svg_label(),
-                                // See the `connect_closed` comment.
-                                connect_clicked[sender] => move |_| {
-                                    let _ = sender
-                                        .input_sender()
-                                        .send(ExportQrDialogMsg::SaveAsSvgPressed);
-                                    open_save_file_dialog(&sender, SaveKind::Svg);
-                                },
-                            },
-
-                            // `Copy image` dispatches
-                            // `ExportQrDialogMsg::CopyImage`; the
-                            // `SimpleComponent::update` arm
-                            // forwards
-                            // `ExportQrDialogOutput::CopyImageRequested`
-                            // (via `compose_copy_image_request_output`)
-                            // to `AppModel`, which owns the live
-                            // `gdk::Clipboard` handle and runs
-                            // `set_content` on the main loop.
-                            // Sensitivity guards against a state
-                            // drift where the button is reachable
-                            // without staged PNG bytes (in
-                            // practice Page 2 is only mounted
-                            // after a successful Show-QR render).
-                            #[name = "copy_image_button"]
-                            gtk::Button {
-                                set_label: format_export_qr_dialog_copy_image_label(),
-                                #[watch]
-                                set_sensitive: compose_copy_image_button_sensitive(&model.state),
-                                // See the `connect_closed` comment.
-                                connect_clicked[sender] => move |_| {
-                                    let _ = sender
-                                        .input_sender()
-                                        .send(ExportQrDialogMsg::CopyImage);
-                                },
-                            },
-
-                            #[name = "done_button"]
-                            gtk::Button {
-                                set_label: format_export_qr_dialog_done_label(),
-                                add_css_class: "suggested-action",
-                                // See the `connect_closed` comment.
-                                connect_clicked[sender] => move |_| {
-                                    let _ = sender.input_sender().send(ExportQrDialogMsg::Close);
-                                },
+                        #[name = "save_as_svg_button"]
+                        gtk::Button {
+                            set_label: format_export_qr_dialog_save_as_svg_label(),
+                            #[watch]
+                            set_sensitive: compose_qr_save_buttons_sensitive(&model.state),
+                            // See the `connect_closed` comment.
+                            connect_clicked[sender] => move |_| {
+                                let _ = sender
+                                    .input_sender()
+                                    .send(ExportQrDialogMsg::SaveAsSvgPressed);
+                                open_save_file_dialog(&sender, SaveKind::Svg);
                             },
                         },
+
+                        // `Copy image` dispatches
+                        // `ExportQrDialogMsg::CopyImage`; the
+                        // `SimpleComponent::update` arm forwards
+                        // `ExportQrDialogOutput::CopyImageRequested`
+                        // (via `compose_copy_image_request_output`) to
+                        // `AppModel`, which owns the live
+                        // `gdk::Clipboard` handle and runs
+                        // `set_content` on the main loop. Sensitivity
+                        // tracks the staged PNG bytes — desensitized
+                        // when an open-time render failure left them
+                        // empty.
+                        #[name = "copy_image_button"]
+                        gtk::Button {
+                            set_label: format_export_qr_dialog_copy_image_label(),
+                            #[watch]
+                            set_sensitive: compose_copy_image_button_sensitive(&model.state),
+                            // See the `connect_closed` comment.
+                            connect_clicked[sender] => move |_| {
+                                let _ = sender
+                                    .input_sender()
+                                    .send(ExportQrDialogMsg::CopyImage);
+                            },
+                        },
+
+                        #[name = "done_button"]
+                        gtk::Button {
+                            set_label: format_export_qr_dialog_done_label(),
+                            add_css_class: "suggested-action",
+                            // See the `connect_closed` comment.
+                            connect_clicked[sender] => move |_| {
+                                let _ = sender.input_sender().send(ExportQrDialogMsg::Close);
+                            },
+                        },
+                    },
+
+                    // Informational warning footer — the verbatim
+                    // `paladin_core::format_plaintext_qr_export_warning()`
+                    // body rendered beneath the QR and its save
+                    // actions. It reminds the user to protect the QR;
+                    // it does NOT gate the code behind a
+                    // click-to-acknowledge step (parity with the CLI /
+                    // TUI per DESIGN §4.6).
+                    #[name = "warning_footer_label"]
+                    gtk::Label {
+                        set_wrap: true,
+                        set_xalign: 0.0,
+                        set_margin_top: 6,
+                        add_css_class: "warning",
+                        set_label: &compose_export_qr_warning_body(),
                     },
                 },
             },
@@ -1787,18 +1561,6 @@ impl SimpleComponent for ExportQrDialogComponent {
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
-        // `ShowQr` needs Vault access — emit
-        // `ExportQrDialogOutput::ShowQrRequested(account_id)` so
-        // `AppModel` (which owns the live `(Vault, Store)` pair)
-        // can run `vault.export_qr_png` on the main loop and
-        // forward the bytes (or the error string) back through
-        // `ExportQrDialogMsg::ShowQrSucceeded` /
-        // `ExportQrDialogMsg::ShowQrFailed`. `apply_msg` returns
-        // `None` for `ShowQr`, so no double-output races with the
-        // matching reducer arm.
-        if matches!(msg, ExportQrDialogMsg::ShowQr) {
-            let _ = sender.output(ExportQrDialogOutput::ShowQrRequested(self.state.account_id));
-        }
         // `CopyImage` needs the live `gdk::Clipboard` handle —
         // emit `ExportQrDialogOutput::CopyImageRequested(bytes)`
         // so `AppModel` can wrap the staged PNG in
@@ -1824,25 +1586,7 @@ impl SimpleComponent for ExportQrDialogComponent {
     }
 }
 
-/// Page-1 warning-ack `adw::SwitchRow` title.
-#[must_use]
-pub fn format_export_qr_dialog_ack_row_title() -> &'static str {
-    "I understand \u{2014} show the QR"
-}
-
-/// Page-1 warning-ack `adw::SwitchRow` subtitle.
-#[must_use]
-pub fn format_export_qr_dialog_ack_row_subtitle() -> &'static str {
-    "Reveal the QR code only after reading the warning above."
-}
-
-/// Page-1 footer "Cancel" button label.
-#[must_use]
-pub fn format_export_qr_dialog_cancel_label() -> &'static str {
-    "Cancel"
-}
-
-/// Title of the Page-2 inline overwrite-ack [`adw::SwitchRow`].
+/// Title of the inline overwrite-ack [`adw::SwitchRow`].
 /// Visible only when [`compose_save_target_overwrite_gate_visible`]
 /// returns `true` (the user picked a destination that already
 /// exists on disk).
@@ -1851,7 +1595,7 @@ pub fn format_export_qr_dialog_overwrite_row_title() -> &'static str {
     "Overwrite the existing file"
 }
 
-/// Subtitle of the Page-2 inline overwrite-ack
+/// Subtitle of the inline overwrite-ack
 /// [`adw::SwitchRow`]. Reminds the user that the save fires
 /// automatically once the switch flips on.
 #[must_use]
@@ -1859,14 +1603,14 @@ pub fn format_export_qr_dialog_overwrite_row_subtitle() -> &'static str {
     "The save fires when this switch is on. Toggle off to pick a different path."
 }
 
-/// `gtk::FileDialog` title shown when the user clicks Page-2
+/// `gtk::FileDialog` title shown when the user clicks
 /// `Save as PNG\u{2026}`.
 #[must_use]
 pub fn format_export_qr_dialog_save_png_picker_title() -> &'static str {
     "Save QR code as PNG"
 }
 
-/// `gtk::FileDialog` title shown when the user clicks Page-2
+/// `gtk::FileDialog` title shown when the user clicks
 /// `Save as SVG\u{2026}`.
 #[must_use]
 pub fn format_export_qr_dialog_save_svg_picker_title() -> &'static str {
@@ -1887,7 +1631,7 @@ pub fn format_export_qr_dialog_default_svg_filename() -> &'static str {
     "qr.svg"
 }
 
-/// Compose the Page-2 inline status line shown after a successful
+/// Compose the inline status line shown after a successful
 /// save: `"QR saved to <path>"`. Returns the empty string when
 /// [`ExportQrDialogState::last_save_path`] is `None` so the view
 /// can bind unconditionally.
@@ -1903,7 +1647,7 @@ pub fn compose_save_success_status_text(state: &ExportQrDialogState) -> String {
     }
 }
 
-/// Returns `true` when Page 2 should render the inline
+/// Returns `true` when the page should render the inline
 /// "QR saved to …" status line — i.e. a save has succeeded and no
 /// fresher error / warning has overwritten it.
 #[must_use]
