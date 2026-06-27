@@ -1,4 +1,4 @@
-# Paladin — Design Document
+# Paladin Auth — Design Document
 
 A Rust OTP authenticator (TOTP + HOTP) with CLI and TUI front-ends in v0.1,
 plus a GTK4 GUI planned for v0.2, all sharing a common core. Status:
@@ -33,22 +33,22 @@ plus a GTK4 GUI planned for v0.2, all sharing a common core. Status:
 ## 3. Workspace layout
 
 ```
-paladin/
+paladin-auth/
 ├── Cargo.toml                # virtual workspace
 ├── DESIGN.md
 ├── README.md
 ├── crates/
-│   ├── paladin-core/         # lib: domain, OTP, storage, crypto, import/export
-│   ├── paladin-cli/          # bin: `paladin`
-│   ├── paladin-tui/          # bin: `paladin-tui`
-│   └── paladin-gtk/          # planned v0.2 bin: `paladin-gtk`
+│   ├── paladin-auth-core/         # lib: domain, OTP, storage, crypto, import/export
+│   ├── paladin-auth-cli/          # bin: `paladin-auth`
+│   ├── paladin-auth-tui/          # bin: `paladin-auth-tui`
+│   └── paladin-auth-gtk/          # planned v0.2 bin: `paladin-auth-gtk`
 ├── packaging/                # .deb / .rpm / Flatpak / AppImage metadata (§11)
 └── xtask/                    # build/release helpers, incl. `cargo xtask package` (§11)
 ```
 
-Binaries depend only on `paladin-core`. They never reach into each other.
+Binaries depend only on `paladin-auth-core`. They never reach into each other.
 
-## 4. Core crate (`paladin-core`)
+## 4. Core crate (`paladin-auth-core`)
 
 ### 4.1 Domain model
 
@@ -77,8 +77,8 @@ single `-`, then trimming leading/trailing `-` (e.g. `"GitHub"` →
 empty, exceeds 64 bytes, or if the issuer is `None`, the field stays
 `None`. `Slug(value)` validates and stores the supplied slug. `Clear`
 stores `None` even when the issuer could have produced a default. Importers
-that do not carry a Paladin-native `icon_hint` use the defaulting rule;
-Paladin bundle imports preserve the stored value. The slug is a hint, not
+that do not carry a Paladin Auth-native `icon_hint` use the defaulting rule;
+Paladin Auth bundle imports preserve the stored value. The slug is a hint, not
 a guarantee: GUIs resolve it (§7); the CLI and TUI ignore the field. We
 deliberately do not store icon bytes — that would inflate the vault and
 complicate the bincode payload without offering meaningful benefit over
@@ -186,7 +186,7 @@ secrets between 10 and 15 bytes inclusive.
 #### File format
 
 ```
-[magic:        "PALADIN\0"   (8 bytes)]
+[magic:        "PALAUTH\0"   (8 bytes)]
 [format_ver:   u8            ]
 [mode:         u8            ]   // 0 = plaintext, 1 = encrypted
 if mode == 1:
@@ -212,7 +212,7 @@ bincode::config::standard()
 
 Decode requires full input consumption: trailing bytes after the
 `VaultPayload` are an `invalid_payload` error. The 16 MiB limit applies to the
-serialized `VaultPayload` bytes, excluding the Paladin header and AEAD tag;
+serialized `VaultPayload` bytes, excluding the Paladin Auth header and AEAD tag;
 `open` rejects plaintext payloads and decrypted encrypted payloads that exceed
 that limit before constructing a `Vault`. To bound resource use before
 authentication, `open` also rejects vault files whose on-disk size exceeds
@@ -223,9 +223,9 @@ decoding or KDF/AEAD work. `header_size` is **10 bytes** in plaintext mode
 (the plaintext header plus `kdf_id`, 12 bytes of Argon2 params, 16-byte
 salt, `aead_id`, and 24-byte nonce).
 
-- **Location.** Resolved by `paladin-core` through
+- **Location.** Resolved by `paladin-auth-core` through
   `default_vault_path()`, which uses
-  `directories::ProjectDirs::from("", "", "paladin")` and then
+  `directories::ProjectDirs::from("", "", "paladin-auth")` and then
   `ProjectDirs::data_dir()`. On Linux this follows the XDG Base Directory
   spec; on macOS / Windows it follows the platform conventions baked into
   the `directories` crate. The vault is
@@ -234,9 +234,9 @@ salt, `aead_id`, and 24-byte nonce).
   latter is reserved for any future preferences file that ships
   separately from the vault.
   - Linux (v0.1 target):
-    `${XDG_DATA_HOME:-~/.local/share}/paladin/vault.bin`.
+    `${XDG_DATA_HOME:-~/.local/share}/paladin-auth/vault.bin`.
   - macOS / Windows: whatever
-    `ProjectDirs::from("", "", "paladin").data_dir()` returns under
+    `ProjectDirs::from("", "", "paladin-auth").data_dir()` returns under
     the platform conventions; those targets are exercised once v0.2
     adds them (§2).
 
@@ -262,7 +262,7 @@ salt, `aead_id`, and 24-byte nonce).
   work, then apply the same symlink + perms gate as `open` to confirm
   the result. An existing parent is checked but never silently
   tightened: a loose parent is rejected with `unsafe_permissions` and a
-  `0700` parent is left at `0700`. This invariant means `paladin init`
+  `0700` parent is left at `0700`. This invariant means `paladin-auth init`
   needn't pre-create the data dir and cannot leave a freshly-created
   vault in a directory that the next `open` would refuse. `open` does
   **not** auto-create a missing parent — a missing parent on `open`
@@ -323,12 +323,12 @@ salt, `aead_id`, and 24-byte nonce).
   transitions (§4.5) the rotated `.bak` is rewritten so it never preserves a
   superseded encryption state — re-encrypted under the new key for
   `set_passphrase` and `change_passphrase`, or written as plaintext for
-  `remove_passphrase`. The explicit `paladin init --force` clobber path is
+  `remove_passphrase`. The explicit `paladin-auth init --force` clobber path is
   the exception: it stages the new vault first, then rotates the old
   primary verbatim during its clobber commit sequence (§5), so it never
   rewrites the old payload under the new mode/key.
-- **Destroy.** `paladin_core::destroy_vault(path)` is the file-level wipe
-  used by `paladin destroy` (§5), the TUI Destroy modal (§6), and the GTK
+- **Destroy.** `paladin_auth_core::destroy_vault(path)` is the file-level wipe
+  used by `paladin-auth destroy` (§5), the TUI Destroy modal (§6), and the GTK
   `DestroyDialog` (§7). It operates on `path` directly — the vault need
   not be open, and a forgotten passphrase does not block the operation,
   because file access already lets any local actor `rm` the bytes. The
@@ -389,7 +389,7 @@ salt, `aead_id`, and 24-byte nonce).
   raising costs requires an explicit encrypted-write operation that supplies
   custom `Argon2Params`: vault creation, `set_passphrase`,
   `change_passphrase`, or encrypted export. v0.1 exposes these knobs in
-  `paladin-core`, and the CLI exposes them as advanced flags on those
+  `paladin-auth-core`, and the CLI exposes them as advanced flags on those
   encrypted-write commands. To avoid attacker-controlled resource exhaustion
   before authentication, `open` rejects encrypted vaults whose header
   parameters are outside these bounds before running Argon2id:
@@ -469,7 +469,7 @@ Three formats, user picks per invocation:
   newline — the exact shape Gnome Authenticator's
   *Backup → Save in plain text* writes. HOTP entries carry their
   counter via the standard `counter` URI parameter, per the Google
-  Authenticator key-URI format. There is no Paladin-specific
+  Authenticator key-URI format. There is no Paladin Auth-specific
   plaintext envelope, and on import these files are read via the
   otpauth path. An empty vault writes an empty (zero-byte) file.
   Cross-compatible with Gnome Authenticator, FreeOTP+, and other
@@ -479,9 +479,9 @@ Three formats, user picks per invocation:
   is given. The output file is written with
   `write_secret_file_atomic`, so it is created `0600` via a
   same-directory tempfile, rename, and parent-directory `fsync`.
-- **Encrypted (Paladin bundle).** The same accounts encoded as
+- **Encrypted (Paladin Auth bundle).** The same accounts encoded as
   `VaultPayload { accounts, settings: VaultSettings::default() }` and
-  wrapped in Paladin's encrypted file format (§4.3) under a passphrase
+  wrapped in Paladin Auth's encrypted file format (§4.3) under a passphrase
   the user supplies at export time (independent of the vault's own
   passphrase). Empty passphrases are rejected: `export::encrypted`
   takes `EncryptionOptions` and returns an error rather than silently
@@ -495,7 +495,7 @@ Three formats, user picks per invocation:
   URI as a QR code, the same URI that would land in a plaintext URI
   list export but for one row. The QR encoding is standard
   `otpauth://` per the Google Authenticator key-URI format, so any
-  scanner that imports otpauth URIs can consume it; Paladin does not
+  scanner that imports otpauth URIs can consume it; Paladin Auth does not
   define its own QR payload. Multi-account / vault-migration QR
   payloads (e.g. the Google Authenticator `otpauth-migration://`
   protobuf) are explicitly out of scope. HOTP exports encode the
@@ -504,7 +504,7 @@ Three formats, user picks per invocation:
   `show`, so a user who scans the QR into a second device and then
   continues using the original loses no codes to a phantom advance.
   The CLI / TUI / GUI all render this warning verbatim, sourced from
-  `paladin_core::format_plaintext_qr_export_warning()`, alongside the
+  `paladin_auth_core::format_plaintext_qr_export_warning()`, alongside the
   QR: the QR encodes the account secret, anyone who sees or
   photographs it can clone the OTP, and the user should treat it like
   the plaintext URI list above. The warning is informational and does
@@ -512,7 +512,7 @@ Three formats, user picks per invocation:
   CLI prints it ahead of the rendered QR, and the TUI and GTK GUI
   show it as a footer beneath the on-screen QR and its save actions.
   Three render targets are supported and all three live in
-  `paladin-core` so the front ends stay thin:
+  `paladin-auth-core` so the front ends stay thin:
     * **PNG bytes** — written to disk through `write_secret_file_atomic`
       (CLI, TUI save action, GUI save action) or pushed to the GDK
       clipboard (GUI only). The CLI / TUI refuse to overwrite a target
@@ -568,9 +568,9 @@ Auto-detect format by content sniffing, with `--format` to override:
   mode, and ignores blank lines. Inputs that decode to zero accounts
   (empty JSON array, blank file, whitespace-only) are rejected with the
   same "no entries to import" error as a QR image with no decoded QRs.
-- **Paladin encrypted bundle** — round-trips with our encrypted exporter.
-  Files with `PALADIN\0` magic but plaintext mode are rejected by the
-  Paladin importer in v0.1; users should use `export --plaintext` to
+- **Paladin Auth encrypted bundle** — round-trips with our encrypted exporter.
+  Files with `PALAUTH\0` magic but plaintext mode are rejected by the
+  Paladin Auth importer in v0.1; users should use `export --plaintext` to
   produce a portable `otpauth://` URI list instead. Plaintext exports are
   detected and read as `otpauth://` URI lists above (they share the same
   on-disk format).
@@ -612,7 +612,7 @@ Auto-detect format by content sniffing, with `--format` to override:
   image pasted from the clipboard, decoded via the raw-RGBA path.
 
 `detect` resolves the format in this fixed order, returning the first
-match: file starts with the `PALADIN\0` magic → `Paladin`; image-format
+match: file starts with the `PALAUTH\0` magic → `Paladin Auth`; image-format
 magic bytes (PNG, JPEG, GIF, BMP, WebP) → `Qr`; UTF-8 text that parses
 as JSON with Aegis's top-level `version` / `header` / `db` shape →
 `Aegis`; UTF-8 that, after outer whitespace trim, either (a) starts with
@@ -624,7 +624,7 @@ Plaintext exports land in the `Otpauth` branch by design — they share
 the same on-disk format as a JSON `otpauth://` array.
 
 Each importer is tested with sample fixture files committed under
-`crates/paladin-core/tests/fixtures/`. Presentation crates normally call
+`crates/paladin-auth-core/tests/fixtures/`. Presentation crates normally call
 the import facade, `import::from_file` for path-backed imports or
 `import::from_bytes` for already-loaded encoded content. The facade
 accepts an optional `ImportFormat`: `None` auto-detects with `detect`,
@@ -632,31 +632,31 @@ while `Some(format)` forces the dispatch. An unknown detected format or
 an invalid forced/source combination returns `unsupported_import_format`
 with a single `format` field: for auto-detect failures it is the detected
 format (`"unknown"`), and for forced-format failures it is the requested
-forced format. When dispatch selects `Paladin`, callers must supply the
+forced format. When dispatch selects `Paladin Auth`, callers must supply the
 encrypted bundle passphrase in `ImportOptions`; omitting it returns
-`invalid_state` (`operation: "import_paladin"`,
+`invalid_state` (`operation: "import_paladin_auth"`,
 `state: "missing_passphrase"`). Front ends that need to decide whether to
-prompt before calling the facade use `classify_paladin_import_precheck(path,
-forced_format)`. That helper owns the shared Paladin-header decision table:
-encrypted Paladin headers prompt, plaintext Paladin headers reject with
-`unsupported_plaintext_vault`, malformed Paladin headers reject with the
-typed header/version error, and non-Paladin or unreadable files fall through
+prompt before calling the facade use `classify_paladin_auth_import_precheck(path,
+forced_format)`. That helper owns the shared Paladin Auth-header decision table:
+encrypted Paladin Auth headers prompt, plaintext Paladin Auth headers reject with
+`unsupported_plaintext_vault`, malformed Paladin Auth headers reject with the
+typed header/version error, and non-Paladin Auth or unreadable files fall through
 so `import::from_file` owns the final read/dispatch error. The lower-level
 byte-oriented importers (`aegis_plaintext`, `otpauth`) remain available for
 tests and specialized callers; they take `&[u8]` plus `import_time` when the
-source format does not carry timestamps. The encrypted Paladin importer
+source format does not carry timestamps. The encrypted Paladin Auth importer
 additionally takes a passphrase (`SecretString`). QR import exposes path,
 encoded-image bytes through the facade, and a raw-RGBA byte form for
 clipboard/image buffers; all decode every QR via `rqrr` and feed each
-resulting URI through `parse_otpauth`. When `import::paladin` sees a valid
-Paladin header with `mode == 0`, it returns a typed
+resulting URI through `parse_otpauth`. When `import::paladin_auth` sees a valid
+Paladin Auth header with `mode == 0`, it returns a typed
 unsupported-plaintext-vault error without importing accounts.
 
 Importer timestamps are deterministic by source format. `otpauth`, QR,
 and Aegis imports set `created_at = updated_at = import_time` for each
-new parsed account because those formats do not carry Paladin timestamps.
-Paladin encrypted bundles preserve each account's stored timestamps for
-inserted/appended rows. Source `AccountId`s from Paladin bundles are never
+new parsed account because those formats do not carry Paladin Auth timestamps.
+Paladin Auth encrypted bundles preserve each account's stored timestamps for
+inserted/appended rows. Source `AccountId`s from Paladin Auth bundles are never
 inserted into the destination vault: non-colliding rows and
 `--on-conflict=append` rows receive fresh UUIDv4 IDs at merge time. Under
 `--on-conflict=replace`, the existing entry keeps its `id` and
@@ -668,12 +668,12 @@ policy).
 ### 4.7 Public API sketch
 
 ```rust
-pub enum PaladinError { /* core-returnable §5 error kinds */ }
-pub enum ErrorKind { /* stable §5 `error_kind` discriminator (1:1 with PaladinError) */ }
+pub enum PaladinAuthError { /* core-returnable §5 error kinds */ }
+pub enum ErrorKind { /* stable §5 `error_kind` discriminator (1:1 with PaladinAuthError) */ }
 pub enum PermissionSubject { VaultDir, VaultFile, BackupFile } // §5 unsafe_permissions field
 pub enum TimeRangeKind { PreEpoch, Overflow, OutOfRange }      // §5 time_range field
 pub enum VaultMode { Plaintext, Encrypted }                    // §5 wrong_vault_lock fields
-pub type Result<T> = std::result::Result<T, PaladinError>;
+pub type Result<T> = std::result::Result<T, PaladinAuthError>;
 pub enum VaultLock { Plaintext, Encrypted(SecretString) }
 pub enum VaultInit { Plaintext, Encrypted(EncryptionOptions) }
 pub enum VaultStatus { Plaintext, Encrypted, Missing }
@@ -687,8 +687,8 @@ pub struct ImportWarning { pub source_index: usize, pub warning: ValidationWarni
 pub enum AccountKindInput { Totp, Hotp }
 pub enum AccountKindSummary { Totp, Hotp }
 pub enum IconHintInput { Default, Clear, Slug(String) }
-pub enum InitPrecheck { Clear, Existing, Propagate(PaladinError) }
-pub enum PaladinImportPrecheck { NoPrompt, PromptForPassphrase, Reject(PaladinError) }
+pub enum InitPrecheck { Clear, Existing, Propagate(PaladinAuthError) }
+pub enum PaladinAuthImportPrecheck { NoPrompt, PromptForPassphrase, Reject(PaladinAuthError) }
 pub const HOTP_REVEAL_SECS: u64 = 120;
 pub const QR_RGBA_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// QR-export render bounds, mirrored on the CLI `--module-size-px` flag and
@@ -806,34 +806,34 @@ impl VaultSettings {
     pub fn clipboard_clear_secs(&self) -> u32;
 }
 
-pub fn default_vault_path() -> Result<PathBuf>;                           // shared §4.3 path resolver; appends vault.bin under ProjectDirs::from("", "", "paladin").data_dir()
+pub fn default_vault_path() -> Result<PathBuf>;                           // shared §4.3 path resolver; appends vault.bin under ProjectDirs::from("", "", "paladin-auth").data_dir()
 pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // header probe; no decryption. Ok(Missing) iff the file does not exist; other I/O errors and unrecognized magic are Err. Deliberately does **not** enforce the §4.3 permissions check — only `open`, `create`, and `create_force` do — so callers can probe a vault's mode before fixing perms.
 pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;      // errors if `lock` doesn't match the file mode
 pub fn create(path: &Path, init: VaultInit) -> Result<(Vault, Store)>;    // errors if `path` already exists; encrypted init uses `EncryptionOptions` default or custom Argon2 params; for the `init --force` clobber semantics use `create_force`
 pub fn create_force(path: &Path, init: VaultInit) -> Result<(Vault, Store)>;  // §5 `init --force` staged clobber: stages the new vault to `vault.bin.tmp` and `fsync`s it; if staging succeeds and a primary already exists, renames `vault.bin` → `vault.bin.bak` verbatim (overwriting any existing backup) without re-encryption; renames `vault.bin.tmp` → `vault.bin`; `fsync`s the parent directory. Pre-rename failures leave the previous primary recoverable — when failure occurs after backup rotation, the old vault is at `vault.bin.bak` and the error is `save_not_committed` with `backup_path` set. Post-commit failures surface as `save_durability_unconfirmed`. Identical to `create` when no primary exists at `path`.
-pub fn destroy_vault(path: &Path) -> Result<DestroyReport>;                   // §4.3 file-level wipe used by `paladin destroy` (§5) and its TUI / GUI mirrors. Returns `vault_missing` when `path` does not exist (no `.bak` is touched). Rejects symlinked primary or backup with `io_error` (`vault_file_is_symlink` / `backup_file_is_symlink`) before unlinking anything. Unlinks the primary, then the sibling `vault.bin.bak` if present, then `fsync`s the parent directory; the `DestroyReport` fields reflect what completed. Backup-unlink and parent-`fsync` failures after the primary has already been unlinked surface as `io_error` with `primary_deleted` / `backup_deleted` populated. Plain unlink, **not** secure-erase; §4.4 encryption is the at-rest protection.
+pub fn destroy_vault(path: &Path) -> Result<DestroyReport>;                   // §4.3 file-level wipe used by `paladin-auth destroy` (§5) and its TUI / GUI mirrors. Returns `vault_missing` when `path` does not exist (no `.bak` is touched). Rejects symlinked primary or backup with `io_error` (`vault_file_is_symlink` / `backup_file_is_symlink`) before unlinking anything. Unlinks the primary, then the sibling `vault.bin.bak` if present, then `fsync`s the parent directory; the `DestroyReport` fields reflect what completed. Backup-unlink and parent-`fsync` failures after the primary has already been unlinked surface as `io_error` with `primary_deleted` / `backup_deleted` populated. Plain unlink, **not** secure-erase; §4.4 encryption is the at-rest protection.
 
 /// Format the human-readable §4.3 `unsafe_permissions` text — failing
 /// path, `subject`, `actual_mode`, `expected_mode`, and the `chmod`
 /// repair command. Returns `None` for any other error kind. Lives in
-/// `paladin-core` so the CLI, TUI, and GUI render identical wording
+/// `paladin-auth-core` so the CLI, TUI, and GUI render identical wording
 /// without re-implementing it.
-pub fn format_unsafe_permissions(err: &PaladinError) -> Option<String>;
+pub fn format_unsafe_permissions(err: &PaladinAuthError) -> Option<String>;
 
 /// Format the `init --force` / `vault_exists` clobber warning text —
 /// names the existing vault path, calls out the `vault.bin.bak` rotation,
 /// and warns that any prior backup is overwritten. Lives in
-/// `paladin-core` so the CLI confirmation prompt and the GUI
+/// `paladin-auth-core` so the CLI confirmation prompt and the GUI
 /// `InitDialog` destructive gate render identical wording.
 pub fn format_init_force_warning(existing_vault: &Path) -> String;
 
-/// Format the destructive-confirmation text shown by `paladin destroy`
+/// Format the destructive-confirmation text shown by `paladin-auth destroy`
 /// (§5 text mode), the TUI Destroy modal (§6), and the GTK
 /// `DestroyDialog` (§7). Names the resolved primary path and — when
 /// `backup_present` is `true` — the `vault.bin.bak` path, states the
 /// operation is irreversible, and notes that the unlink is **not** a
 /// secure-erase (encryption is the at-rest protection, per §4.4). Lives
-/// in `paladin-core` so the three front ends render identical wording.
+/// in `paladin-auth-core` so the three front ends render identical wording.
 /// `backup_present` is supplied by callers from `path.with_extension("bin.bak")`
 /// + `try_exists`; passing `false` when no backup is on disk keeps the
 /// warning text honest.
@@ -857,7 +857,7 @@ pub fn format_plaintext_export_warning() -> String;
 /// the QR is rendered, written, or copied. Static text — calls out
 /// that the QR encodes the account secret, anyone who sees or
 /// photographs it can clone the OTP, and saved QR files should be
-/// treated like a plaintext export. Lives in `paladin-core` so all
+/// treated like a plaintext export. Lives in `paladin-auth-core` so all
 /// three front ends share one source.
 pub fn format_plaintext_qr_export_warning() -> String;
 
@@ -886,7 +886,7 @@ pub fn account_matches_search(account: &Account, query: &str) -> bool;
 /// `issuer` is `Some(s)` and `s.trim().is_empty()` is false; renders
 /// the bare label otherwise (so accounts without an issuer, or with
 /// an empty or whitespace-only issuer, display as just the label —
-/// not a stray leading colon). Lives in `paladin-core` so CLI, TUI,
+/// not a stray leading colon). Lives in `paladin-auth-core` so CLI, TUI,
 /// and GUI render identical wording without re-implementing it.
 pub fn summary_display_label(s: &AccountSummary) -> String;
 
@@ -944,20 +944,20 @@ pub fn validate_icon_hint_slug(slug: &str) -> Result<IconHintInput>;
 /// underlying cause without misclassifying it as "vault exists."
 pub fn classify_init_precheck(probe: Result<VaultStatus>) -> InitPrecheck;
 
-/// Shared pre-prompt classifier for imports that may be Paladin bundles.
+/// Shared pre-prompt classifier for imports that may be Paladin Auth bundles.
 /// Front ends call this before asking for an encrypted-bundle passphrase.
-/// Forced non-Paladin formats return `NoPrompt`; auto-detect or forced
-/// Paladin probes read only enough of the file to classify a Paladin header.
-/// Encrypted Paladin headers return `PromptForPassphrase`; plaintext Paladin
-/// headers, malformed Paladin headers, and unsupported Paladin format
+/// Forced non-Paladin Auth formats return `NoPrompt`; auto-detect or forced
+/// Paladin Auth probes read only enough of the file to classify a Paladin Auth header.
+/// Encrypted Paladin Auth headers return `PromptForPassphrase`; plaintext Paladin Auth
+/// headers, malformed Paladin Auth headers, and unsupported Paladin Auth format
 /// versions return `Reject(err)` with the exact core error the front end should
-/// surface. Missing files, unreadable files, and non-Paladin magic return
+/// surface. Missing files, unreadable files, and non-Paladin Auth magic return
 /// `NoPrompt` so `import::from_file` remains the owner of
 /// `read_import_file`, auto-detect, and `unsupported_import_format` errors.
-pub fn classify_paladin_import_precheck(
+pub fn classify_paladin_auth_import_precheck(
     path: &Path,
     forced_format: Option<import::ImportFormat>,
-) -> PaladinImportPrecheck;
+) -> PaladinAuthImportPrecheck;
 
 /// Decide which account should be selected after a TUI / GUI search
 /// filter narrows the visible list. Returns `prev` when it appears in
@@ -1015,7 +1015,7 @@ impl Vault {
     pub fn rename(&mut self, id: AccountId, label: &str, now: SystemTime) -> Result<()>;  // Retained for source compatibility post-M9; reimplemented as a thin forwarder that builds `AccountEdit { label: Some(label.into()), ..Default::default() }` and delegates to `edit_account_metadata`. Error envelopes are byte-identical to the pre-M9 implementation (the in-mutator empty-`AccountEdit` check can never fire on this path because the constructed edit always carries `Some(label)`).
     pub fn edit_account_metadata(&mut self, id: AccountId, edit: AccountEdit, now: SystemTime) -> Result<()>;  // Multi-field non-cryptographic edit (label / issuer / icon_hint). See `AccountEdit` below. Reuses §4.1 validation per supplied field. `rename` is the label-only shorthand; both bump `updated_at` and route through `mutate_and_save`.
     pub fn find_duplicate(&self, account: &ValidatedAccount) -> Option<&Account>;  // exact (secret, issuer, label) collision helper for single-entry add flows
-    pub fn find_duplicate_after_edit(&self, id: AccountId, edit: &AccountEdit) -> Option<&Account>;  // companion to `find_duplicate` for edit flows: projects the would-be post-edit (secret, issuer, label) for `id` (secret is never edited) and runs the same byte-for-byte / case-sensitive comparison, skipping the account at `id` so an unchanged self-comparison never reports a collision. Returns `None` for unknown `id`. Used by CLI `paladin edit`, TUI Edit modal, and GUI `EditDialog` to render `duplicate_account` before submission.
+    pub fn find_duplicate_after_edit(&self, id: AccountId, edit: &AccountEdit) -> Option<&Account>;  // companion to `find_duplicate` for edit flows: projects the would-be post-edit (secret, issuer, label) for `id` (secret is never edited) and runs the same byte-for-byte / case-sensitive comparison, skipping the account at `id` so an unchanged self-comparison never reports a collision. Returns `None` for unknown `id`. Used by CLI `paladin-auth edit`, TUI Edit modal, and GUI `EditDialog` to render `duplicate_account` before submission.
     pub fn import_accounts(&mut self, accounts: Vec<ValidatedAccount>, policy: ImportConflict, now: SystemTime) -> Result<ImportReport>;  // applies the §5 merge policy
     pub fn totp_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;       // TOTP only; errors on HOTP entries
     pub fn totp_next_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;  // TOTP only; code for the next window (`((now/period)+1)*period`); errors on HOTP entries
@@ -1095,20 +1095,20 @@ pub struct AccountEdit {
 
 pub fn validate_account_edit(edit: &AccountEdit, prior: &Account, now: SystemTime) -> Result<()>;  // pure-logic pre-flight validator routing the present fields through `validate_label`, `validate_issuer`, and the §4.1 slug-shape check (the same `[a-z0-9_-]+` rule `validate_icon_hint_slug` enforces) on the `IconHintInput::Slug(_)` arm; `IconHintInput::Default` / `Clear` carry no slug text so they need no validator. Deliberately does **not** reject an entirely empty `AccountEdit` — that rejection lives on `Vault::edit_account_metadata` so the front ends can use the validator for per-field rendering without it short-circuiting on a draft the user is mid-way through filling. The `prior` and `now` parameters are accepted for forward compatibility with cross-field invariants (none today); callers may pass a snapshot read just before the call without worrying about staleness because the v0.2 implementation ignores them. No mutation. Returns `validation_error` with the offending field on first failure. `Vault::edit_account_metadata` calls this internally; the front ends may also call it directly to drive inline per-field error rendering before the user submits.
 
-Each front end additionally owns its own *draft-classification* helpers — the TUI Edit modal reducer and the GTK `EditDialog`'s `classify_edit_draft` / `classify_submit` pair — that project raw widget buffers onto an `AccountEdit`, decide Save sensitivity, and route the submit/reject/show-error decision. These are pure functions local to each front-end crate; the core's public contract for edit is `validate_account_edit` + `Vault::find_duplicate_after_edit` + `Vault::edit_account_metadata`. Promoting the classifiers into `paladin-core` is deferred until a third caller justifies the shared surface.
+Each front end additionally owns its own *draft-classification* helpers — the TUI Edit modal reducer and the GTK `EditDialog`'s `classify_edit_draft` / `classify_submit` pair — that project raw widget buffers onto an `AccountEdit`, decide Save sensitivity, and route the submit/reject/show-error decision. These are pure functions local to each front-end crate; the core's public contract for edit is `validate_account_edit` + `Vault::find_duplicate_after_edit` + `Vault::edit_account_metadata`. Promoting the classifiers into `paladin-auth-core` is deferred until a third caller justifies the shared surface.
 
 pub mod import {
-    pub enum ImportFormat { Otpauth, Aegis, Paladin, Qr, Unknown }
+    pub enum ImportFormat { Otpauth, Aegis, Paladin Auth, Qr, Unknown }
     pub struct ImportOptions<'a> {
         pub format: Option<ImportFormat>,  // None = auto-detect
         pub import_time: SystemTime,
-        pub paladin_passphrase: Option<&'a SecretString>,
+        pub paladin_auth_passphrase: Option<&'a SecretString>,
     }
     pub fn from_file(path: &Path, options: ImportOptions<'_>) -> Result<Vec<ValidatedAccount>>;  // facade: reads/detects path content, dispatches to the matching importer, and supports QR image files
     pub fn from_bytes(bytes: &[u8], options: ImportOptions<'_>) -> Result<Vec<ValidatedAccount>>;  // facade for already-loaded encoded content; image-format bytes are decoded and treated as QR input
     pub fn otpauth(bytes: &[u8], import_time: SystemTime) -> Result<Vec<ValidatedAccount>>;  // single URI, line-list, or JSON array of URIs; errors when the input decodes to zero accounts (empty array, blank file, etc.)
     pub fn aegis_plaintext(bytes: &[u8], import_time: SystemTime) -> Result<Vec<ValidatedAccount>>;
-    pub fn paladin(bytes: &[u8], passphrase: &SecretString) -> Result<Vec<ValidatedAccount>>;  // encrypted Paladin bundle only
+    pub fn paladin_auth(bytes: &[u8], passphrase: &SecretString) -> Result<Vec<ValidatedAccount>>;  // encrypted Paladin Auth bundle only
     pub fn qr_image(path: &Path, import_time: SystemTime) -> Result<Vec<ValidatedAccount>>;
     pub fn qr_image_bytes(width: u32, height: u32, rgba: &[u8], import_time: SystemTime) -> Result<Vec<ValidatedAccount>>;
     pub fn detect(bytes: &[u8]) -> ImportFormat;
@@ -1116,7 +1116,7 @@ pub mod import {
 
 pub mod export {
     pub fn otpauth_list(vault: &Vault) -> String;                               // newline-separated `otpauth://` URIs, one per line with trailing newline; empty vault → empty string. Infallible.
-    pub fn encrypted(vault: &Vault, options: EncryptionOptions) -> Result<Vec<u8>>;  // Paladin encrypted bundle. Wraps `VaultPayload { accounts, settings: VaultSettings::default() }`; uses default or custom Argon2 params from `options`; `import::paladin` discards the settings field.
+    pub fn encrypted(vault: &Vault, options: EncryptionOptions) -> Result<Vec<u8>>;  // Paladin Auth encrypted bundle. Wraps `VaultPayload { accounts, settings: VaultSettings::default() }`; uses default or custom Argon2 params from `options`; `import::paladin_auth` discards the settings field.
     pub fn qr_png(account: &Account, options: QrRenderOptions) -> Result<Zeroizing<Vec<u8>>>;  // §4.6 QR PNG bytes for one account's `otpauth://` URI. Validates `options`; encoder failures return `validation_error` (`field: "qr_render"`).
     pub fn qr_svg(account: &Account, options: QrRenderOptions) -> Result<Zeroizing<String>>;   // §4.6 QR SVG text for one account's `otpauth://` URI. Same validation contract as `qr_png`.
     pub fn qr_ansi(account: &Account) -> Result<Zeroizing<String>>;                            // §4.6 Unicode half-block QR for one account's `otpauth://` URI. Terminal output; no options because cell size is fixed by the renderer.
@@ -1139,11 +1139,11 @@ is `Send`. The CI-gated `Send` set covers `Vault`, `Store`, `Account`,
 `EncryptionOptions`, `Argon2Params`, `QrRenderOptions`, `VaultLock`,
 `VaultInit`, `VaultStatus`, `VaultSettings`, `SettingKey`,
 `SettingPatch`, `AccountKindInput`, `IconHintInput`, `AccountInput`,
-`AccountEdit`, `AccountQuery`, `InitPrecheck`, `PaladinImportPrecheck`,
-and `PaladinError` — so
-`paladin-gtk` can drive
+`AccountEdit`, `AccountQuery`, `InitPrecheck`, `PaladinAuthImportPrecheck`,
+and `PaladinAuthError` — so
+`paladin-auth-gtk` can drive
 encrypted `open` / `create` / `create_force` and any save-bearing
-operation inside `gio::spawn_blocking`, and `paladin-tui` can drive
+operation inside `gio::spawn_blocking`, and `paladin-auth-tui` can drive
 QR / image import on a worker thread. Static assertions in CI gate
 the full set so a future change introducing a non-`Send` field fails
 the build instead of silently breaking either front end.
@@ -1158,7 +1158,7 @@ The non-secret projection types (`AccountSummary`, `Code`,
 projection types here. Secret-bearing types
 (`Vault`, `Store`, `Account`, `Secret`, `EncryptionOptions`,
 `AccountInput`, `ValidatedAccount`, `VaultLock`, `VaultInit`,
-`PaladinError`) are deliberately *not* asserted `Sync` — `SecretString`
+`PaladinAuthError`) are deliberately *not* asserted `Sync` — `SecretString`
 is `!Sync` in `secrecy` and core does not promote any secret-bearing
 type past that posture. CI also pins this decision so a future change
 cannot accidentally promote a secret-bearing type to `Sync` without
@@ -1197,7 +1197,7 @@ the CLI, while TUI / GUI controls may call the typed setters directly.
 settings changes go through validated setters or patches so timeout
 minimums cannot be bypassed.
 
-Add-account input, init-precheck logic, and Paladin-bundle import prompt
+Add-account input, init-precheck logic, and Paladin Auth-bundle import prompt
 classification are shared too.
 `parse_icon_hint_token` is the single source for the empty-default /
 case-insensitive `none` / slug grammar that CLI prompts and TUI / GUI
@@ -1206,10 +1206,10 @@ that maps `inspect()` results onto the §5 init flow: `Missing`
 clears, `Plaintext` / `Encrypted` / `invalid_header` /
 `unsupported_format_version` are existing-vault decisions requiring
 the `init --force` confirmation gate, and any other error propagates
-verbatim. `classify_paladin_import_precheck` is the shared pre-prompt
-truth table for path-backed Paladin imports: it decides whether an
+verbatim. `classify_paladin_auth_import_precheck` is the shared pre-prompt
+truth table for path-backed Paladin Auth imports: it decides whether an
 encrypted-bundle passphrase is needed, whether a plaintext or malformed
-Paladin header should be rejected immediately, or whether the import
+Paladin Auth header should be rejected immediately, or whether the import
 facade should handle the file normally. Front ends never reimplement
 these grammars or header-probe decisions.
 
@@ -1254,41 +1254,41 @@ Other core-owned `invalid_state` operation/state pairs are also stable:
 | `set_passphrase`    | `already_encrypted`   | The vault is already encrypted. |
 | `change_passphrase` | `not_encrypted`       | The vault is plaintext.         |
 | `remove_passphrase` | `not_encrypted`       | The vault is plaintext.         |
-| `import_paladin`    | `missing_passphrase`  | No bundle passphrase supplied.  |
+| `import_paladin_auth`    | `missing_passphrase`  | No bundle passphrase supplied.  |
 
-## 5. CLI (`paladin`)
+## 5. CLI (`paladin-auth`)
 
 Built with `clap` (derive). Commands:
 
 | Command                                     | Behavior                                                         |
 | ------------------------------------------- | ---------------------------------------------------------------- |
-| `paladin init [--force]`                    | Create a new vault. Without `--force`, checks for an existing primary and returns `vault_exists` before prompting for a new-vault passphrase. Prompts: passphrase? (empty = plaintext; text mode prints the plaintext-storage warning). Refuses to clobber an existing vault unless `--force` (which stages the new vault first, then rotates the old file to `vault.bin.bak`, overwriting any existing backup). The rotated `.bak` is preserved verbatim — a plaintext-to-encrypted clobber leaves plaintext secrets in `.bak` until the user removes it manually. |
-| `paladin destroy [--yes]`                   | Permanently delete `vault.bin` and `vault.bin.bak` (if present). Loud destructive confirmation: text mode prints the §4.3 destroy warning (sourced from `paladin_core::format_destroy_warning(path, backup_present)`) and prompts for `yes`; `--yes` skips the prompt and is **required under `--json`** (no confirmation prompt available). Does **not** require the current passphrase for an encrypted vault — file access is already the actual security boundary, and this path is the in-app escape hatch for a forgotten passphrase. Operates on the resolved vault path directly: never opens, decrypts, or loads the vault payload, never runs the §4.4 KDF, and never enforces the §4.3 `unsafe_permissions` gate (a vault the user can no longer open is still a vault they can decide to delete). |
-| `paladin add`                               | Add an account interactively (or via flags / URI).               |
-| `paladin add --qr <path>`                   | Add by scanning a QR image file. Every decoded QR in the image is added (errors if none decode); collisions use the default `import` merge policy (`skip`). For other policies, use `import --format=qr`. |
-| `paladin list`                              | List accounts with the current TOTP code, seconds remaining in the current TOTP window, and the next TOTP code (matching the TUI/GTK list view). HOTP rows render the code columns as dashes in text mode and `null` under `--json` — `list` never advances or peeks an HOTP counter. |
-| `paladin show <query>`                      | Print the current code. **Advances HOTP counter.**               |
-| `paladin peek <query>`                      | Print the current code without advancing the HOTP counter; for TOTP, identical to `show`. |
-| `paladin copy <query>`                      | Copy code to clipboard. For HOTP, advances and saves before attempting the clipboard write. (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see security consideration 6.) |
-| `paladin remove <query>`                    | Remove an account. Prompts for confirmation; `--yes` skips the prompt. Required under `--json` (no confirmation prompt available). |
-| `paladin rename <query> <label>`            | Rename an account.                                               |
-| `paladin edit <query> [--label <label>] [--issuer <issuer> \| --no-issuer] [--icon-hint <slug> \| --no-icon-hint] [--allow-duplicate] [--dry-run]` | Edit an account's non-cryptographic metadata: label, issuer, and/or icon hint. Requires at least one of `--label` / `--issuer` / `--no-issuer` / `--icon-hint` / `--no-icon-hint`; a no-flag invocation is rejected at parse time as `validation_error` (`field: "argv"`, `reason: "no_edit_fields"`). `--allow-duplicate` is an override modifier and does **not** satisfy that requirement. `--issuer` and `--no-issuer` are mutually exclusive; `--icon-hint` and `--no-icon-hint` are mutually exclusive. Single-match cardinality (like `copy` / `remove` / `rename` / `qr`). After per-field validation, calls `Vault::find_duplicate_after_edit(id, &edit)` and rejects a `(secret, issuer, label)` collision with `duplicate_account` (the existing collision's `account` summary in the envelope) unless `--allow-duplicate` is supplied — mirroring `paladin add`'s collision path. Routes through `Vault::edit_account_metadata` inside `Vault::mutate_and_save`; bumps `updated_at` (even on no-op-but-non-empty edits where every field matches the prior summary). Read-only on the secret bytes — never advances HOTP counters and never re-derives a slug from secret content. Text mode prints nothing on success; under `--json` the shape is `{ "account": AccountSummary }`. `--dry-run` runs the full pre-flight read-only and emits the projected post-edit summary with `committed: false` under `--json`; text mode stays silent. The narrower `paladin rename <query> <label>` stays as the label-only positional shorthand. |
-| `paladin passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
-| `paladin passphrase change`                 | Re-encrypt under a new passphrase.                               |
-| `paladin passphrase remove`                 | Decrypt to plaintext. Warns and prompts for destructive confirmation unless `--yes` is passed. Required under `--json` (no confirmation prompt available). |
-| `paladin export --plaintext <out>`          | Write a newline-separated list of `otpauth://` URIs, one per line (Gnome Authenticator–compatible). Warns; refuses overwrite without `--force`; creates output `0600`. |
-| `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle. Refuses overwrite without `--force`; creates output `0600`. |
-| `paladin qr <query>`                        | Render one account's `otpauth://` URI as a QR code (§4.6). Resolves `<query>` with the same single-match cardinality as `copy`/`remove`/`rename`. Prints the QR-export warning (sourced from `paladin_core::format_plaintext_qr_export_warning()`) before any pixel is rendered or written. With `--out <path>`, writes the QR to disk through `write_secret_file_atomic` (0600, refuses overwrite without `--force`); without `--out`, renders ANSI Unicode half-blocks to stdout. `--format png\|svg\|ansi` selects the encoding (default `png` when `--out` is set, `ansi` when it is not). `--module-size-px <n>` (default 8) sets PNG/SVG pixels per QR module within `QR_MODULE_SIZE_PX_MIN..=QR_MODULE_SIZE_PX_MAX`. Read-only: never advances a HOTP counter, never mutates `updated_at`. |
-| `paladin import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
-| `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `paladin` (encrypted bundle only), `qr`.               |
-| `paladin settings get [key]`                | Show vault settings (auto-lock, clipboard-clear).                |
-| `paladin settings set <key> <value>`        | Edit vault settings.                                             |
-| `paladin tui`                               | Convenience wrapper: execs `paladin-tui` (resolved via `PATH`), forwarding all global flags (e.g. `--vault`, `--no-color`) verbatim. `--json` is rejected at parse time because the TUI has no JSON mode. If `paladin-tui` is not on `PATH`, exits non-zero with `io_error` (`operation: "exec_paladin_tui"`). Keeps the §3 "binaries don't reach into each other" rule intact. |
+| `paladin-auth init [--force]`                    | Create a new vault. Without `--force`, checks for an existing primary and returns `vault_exists` before prompting for a new-vault passphrase. Prompts: passphrase? (empty = plaintext; text mode prints the plaintext-storage warning). Refuses to clobber an existing vault unless `--force` (which stages the new vault first, then rotates the old file to `vault.bin.bak`, overwriting any existing backup). The rotated `.bak` is preserved verbatim — a plaintext-to-encrypted clobber leaves plaintext secrets in `.bak` until the user removes it manually. |
+| `paladin-auth destroy [--yes]`                   | Permanently delete `vault.bin` and `vault.bin.bak` (if present). Loud destructive confirmation: text mode prints the §4.3 destroy warning (sourced from `paladin_auth_core::format_destroy_warning(path, backup_present)`) and prompts for `yes`; `--yes` skips the prompt and is **required under `--json`** (no confirmation prompt available). Does **not** require the current passphrase for an encrypted vault — file access is already the actual security boundary, and this path is the in-app escape hatch for a forgotten passphrase. Operates on the resolved vault path directly: never opens, decrypts, or loads the vault payload, never runs the §4.4 KDF, and never enforces the §4.3 `unsafe_permissions` gate (a vault the user can no longer open is still a vault they can decide to delete). |
+| `paladin-auth add`                               | Add an account interactively (or via flags / URI).               |
+| `paladin-auth add --qr <path>`                   | Add by scanning a QR image file. Every decoded QR in the image is added (errors if none decode); collisions use the default `import` merge policy (`skip`). For other policies, use `import --format=qr`. |
+| `paladin-auth list`                              | List accounts with the current TOTP code, seconds remaining in the current TOTP window, and the next TOTP code (matching the TUI/GTK list view). HOTP rows render the code columns as dashes in text mode and `null` under `--json` — `list` never advances or peeks an HOTP counter. |
+| `paladin-auth show <query>`                      | Print the current code. **Advances HOTP counter.**               |
+| `paladin-auth peek <query>`                      | Print the current code without advancing the HOTP counter; for TOTP, identical to `show`. |
+| `paladin-auth copy <query>`                      | Copy code to clipboard. For HOTP, advances and saves before attempting the clipboard write. (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see security consideration 6.) |
+| `paladin-auth remove <query>`                    | Remove an account. Prompts for confirmation; `--yes` skips the prompt. Required under `--json` (no confirmation prompt available). |
+| `paladin-auth rename <query> <label>`            | Rename an account.                                               |
+| `paladin-auth edit <query> [--label <label>] [--issuer <issuer> \| --no-issuer] [--icon-hint <slug> \| --no-icon-hint] [--allow-duplicate] [--dry-run]` | Edit an account's non-cryptographic metadata: label, issuer, and/or icon hint. Requires at least one of `--label` / `--issuer` / `--no-issuer` / `--icon-hint` / `--no-icon-hint`; a no-flag invocation is rejected at parse time as `validation_error` (`field: "argv"`, `reason: "no_edit_fields"`). `--allow-duplicate` is an override modifier and does **not** satisfy that requirement. `--issuer` and `--no-issuer` are mutually exclusive; `--icon-hint` and `--no-icon-hint` are mutually exclusive. Single-match cardinality (like `copy` / `remove` / `rename` / `qr`). After per-field validation, calls `Vault::find_duplicate_after_edit(id, &edit)` and rejects a `(secret, issuer, label)` collision with `duplicate_account` (the existing collision's `account` summary in the envelope) unless `--allow-duplicate` is supplied — mirroring `paladin-auth add`'s collision path. Routes through `Vault::edit_account_metadata` inside `Vault::mutate_and_save`; bumps `updated_at` (even on no-op-but-non-empty edits where every field matches the prior summary). Read-only on the secret bytes — never advances HOTP counters and never re-derives a slug from secret content. Text mode prints nothing on success; under `--json` the shape is `{ "account": AccountSummary }`. `--dry-run` runs the full pre-flight read-only and emits the projected post-edit summary with `committed: false` under `--json`; text mode stays silent. The narrower `paladin-auth rename <query> <label>` stays as the label-only positional shorthand. |
+| `paladin-auth passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
+| `paladin-auth passphrase change`                 | Re-encrypt under a new passphrase.                               |
+| `paladin-auth passphrase remove`                 | Decrypt to plaintext. Warns and prompts for destructive confirmation unless `--yes` is passed. Required under `--json` (no confirmation prompt available). |
+| `paladin-auth export --plaintext <out>`          | Write a newline-separated list of `otpauth://` URIs, one per line (Gnome Authenticator–compatible). Warns; refuses overwrite without `--force`; creates output `0600`. |
+| `paladin-auth export --encrypted <out>`          | Write Paladin Auth-format encrypted bundle. Refuses overwrite without `--force`; creates output `0600`. |
+| `paladin-auth qr <query>`                        | Render one account's `otpauth://` URI as a QR code (§4.6). Resolves `<query>` with the same single-match cardinality as `copy`/`remove`/`rename`. Prints the QR-export warning (sourced from `paladin_auth_core::format_plaintext_qr_export_warning()`) before any pixel is rendered or written. With `--out <path>`, writes the QR to disk through `write_secret_file_atomic` (0600, refuses overwrite without `--force`); without `--out`, renders ANSI Unicode half-blocks to stdout. `--format png\|svg\|ansi` selects the encoding (default `png` when `--out` is set, `ansi` when it is not). `--module-size-px <n>` (default 8) sets PNG/SVG pixels per QR module within `QR_MODULE_SIZE_PX_MIN..=QR_MODULE_SIZE_PX_MAX`. Read-only: never advances a HOTP counter, never mutates `updated_at`. |
+| `paladin-auth import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
+| `paladin-auth import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `paladin-auth` (encrypted bundle only), `qr`.               |
+| `paladin-auth settings get [key]`                | Show vault settings (auto-lock, clipboard-clear).                |
+| `paladin-auth settings set <key> <value>`        | Edit vault settings.                                             |
+| `paladin-auth tui`                               | Convenience wrapper: execs `paladin-auth-tui` (resolved via `PATH`), forwarding all global flags (e.g. `--vault`, `--no-color`) verbatim. `--json` is rejected at parse time because the TUI has no JSON mode. If `paladin-auth-tui` is not on `PATH`, exits non-zero with `io_error` (`operation: "exec_paladin_auth_tui"`). Keeps the §3 "binaries don't reach into each other" rule intact. |
 
 Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
 `--vault` and `--no-color` are accepted by every binary in the workspace
-(`paladin`, `paladin-tui`, and the v0.2 `paladin-gtk`); `--json` is
-`paladin`-only — `paladin-tui` and `paladin-gtk` reject it at parse time.
+(`paladin-auth`, `paladin-auth-tui`, and the v0.2 `paladin-auth-gtk`); `--json` is
+`paladin-auth`-only — `paladin-auth-tui` and `paladin-auth-gtk` reject it at parse time.
 For terminal front ends, `--no-color` disables ANSI/styled output. The CLI
 also disables ANSI when stdout is not a TTY, and both the CLI and TUI honor
 the `NO_COLOR` environment variable.
@@ -1312,7 +1312,7 @@ are accepted but unused.
 
 All interactive CLI prompts read from `/dev/tty`, never from stdin/stdout, in
 both text and `--json` modes. Passphrase prompts use `rpassword`. Existing
-vault passphrases and encrypted Paladin bundle import passphrases are prompted
+vault passphrases and encrypted Paladin Auth bundle import passphrases are prompted
 once. New passphrases (`init` when the first entry is non-empty,
 `passphrase set`, `passphrase change`, and `export --encrypted`) are prompted
 twice and must match. For `init`, an empty first entry selects plaintext
@@ -1330,7 +1330,7 @@ require the exact string `yes` after trimming surrounding Unicode whitespace;
 any other response exits before mutation with `validation_error`
 (`field: "confirmation"`, `reason: "declined"`). The CLI does not reprompt.
 
-`paladin add` supports exactly one input mode per invocation:
+`paladin-auth add` supports exactly one input mode per invocation:
 interactive prompts (no account-definition flags), `--uri <otpauth-uri>`,
 manual flags, or `--qr <path>`. Combining input modes (e.g. `--uri`
 together with manual flags or `--qr`, or `--qr` together with manual
@@ -1340,7 +1340,7 @@ Interactive mode prompts once for the same fields as manual mode, with
 required label and hidden secret entry, optional issuer, and the same defaults
 and constraints for algorithm, digits, kind, period, counter, and icon-hint.
 After collecting the form once, the CLI builds `AccountInput` and calls
-`paladin_core::validate_manual(input, now)`. Any validation error exits with
+`paladin_auth_core::validate_manual(input, now)`. Any validation error exits with
 that `validation_error`; the CLI does not loop, reprompt, or partially save.
 Manual mode requires `--label` and `--secret`; optional
 fields are `--issuer`, `--algorithm sha1|sha256|sha512`, `--digits 6|7|8`,
@@ -1353,8 +1353,8 @@ pass the §4.1 secret validation. `--period` is TOTP-only, `--counter` is
 HOTP-only. `--icon-hint` and `--no-icon-hint` are mutually exclusive. When
 neither is present, `AccountInput.icon_hint = IconHintInput::Default` derives
 from the issuer using the §4.1 defaulting rule. `--icon-hint <slug>` routes
-through `paladin_core::parse_icon_hint_token` so flag-mode and
-interactive-mode `add` share one grammar with `paladin edit --icon-hint`:
+through `paladin_auth_core::parse_icon_hint_token` so flag-mode and
+interactive-mode `add` share one grammar with `paladin-auth edit --icon-hint`:
 an empty token (after Unicode-whitespace trim) maps to
 `IconHintInput::Default`; a case-insensitive `none` maps to
 `IconHintInput::Clear`; any other token validates as a §4.1 slug
@@ -1389,7 +1389,7 @@ durability-unconfirmed, matching the normal save semantics.
 decrypts the vault: it resolves the vault path (the same `--vault <path>`
 or `default_vault_path()` resolution every other command uses), checks
 the sibling `vault.bin.bak` with `std::fs::try_exists` to populate the
-warning text, and calls `paladin_core::destroy_vault(path)` (§4.3). Text
+warning text, and calls `paladin_auth_core::destroy_vault(path)` (§4.3). Text
 mode renders `format_destroy_warning(path, backup_present)` before the
 confirmation prompt; `--yes` skips the prompt and is required under
 `--json` so the JSON envelope is the only thing on stdout. Confirmation
@@ -1410,7 +1410,7 @@ exit code is 0; under `--json` the envelope is
 `{ "destroyed": { "vault_path": "<path>", "primary_deleted": true,
 "backup_deleted": <bool> } }`. On `vault_missing` the command exits
 non-zero with the standard envelope (no `.bak` is touched), so a
-script that runs `paladin destroy` twice sees `0`, then `vault_missing`
+script that runs `paladin-auth destroy` twice sees `0`, then `vault_missing`
 — idempotent enough for a `|| true` pattern without silently
 masking other errors. Partial outcomes (primary unlinked but backup
 unlink or parent `fsync` failed) surface as `io_error` with the
@@ -1424,20 +1424,20 @@ primary authoritative, while a durability-unconfirmed failure after the
 primary-file commit point may leave the new primary in place. In both
 cases `.bak` may have rotated as described in §4.3, so CLI error text and
 JSON include whether the primary commit point was reached. Imports of
-encrypted Paladin bundles prompt for the bundle passphrase, which is
+encrypted Paladin Auth bundles prompt for the bundle passphrase, which is
 independent of the vault passphrase. Before prompting, the CLI calls
-`paladin_core::classify_paladin_import_precheck(path, forced_format)` so the
-shared core classifier owns the Paladin-header decision: encrypted bundles
-prompt, plaintext Paladin vaults return `unsupported_plaintext_vault` without
-a passphrase prompt, malformed Paladin headers return the typed
-header/version error, and non-Paladin or unreadable files continue through
+`paladin_auth_core::classify_paladin_auth_import_precheck(path, forced_format)` so the
+shared core classifier owns the Paladin Auth-header decision: encrypted bundles
+prompt, plaintext Paladin Auth vaults return `unsupported_plaintext_vault` without
+a passphrase prompt, malformed Paladin Auth headers return the typed
+header/version error, and non-Paladin Auth or unreadable files continue through
 `import::from_file` so the import facade owns the final read/dispatch error.
 
 `copy` has a deliberate HOTP side-effect order: resolve account, generate
 code, call `hotp_advance` (which saves), then write to the clipboard. If
 the HOTP save fails before the primary commit point, no clipboard write is
 attempted and the counter is not advanced. If the clipboard write fails
-after a committed HOTP advance, Paladin does **not** roll the counter back
+after a committed HOTP advance, Paladin Auth does **not** roll the counter back
 because the code may already have been exposed to the clipboard provider;
 the command exits non-zero with `clipboard_write_failed`, `account`, and
 `counter_used` in the error payload; for HOTP, the `account` summary
@@ -1476,24 +1476,24 @@ in text mode and suppressed in `--json` mode (parallel to the
 advisories), since the user opting into `--out <path>` plus
 `--json` has already opted into machine-readable output.
 
-`paladin edit <query>` is the multi-field metadata edit. It requires
+`paladin-auth edit <query>` is the multi-field metadata edit. It requires
 at least one of `--label <label>`, `--issuer <issuer>`, `--no-issuer`,
 `--icon-hint <slug>`, or `--no-icon-hint`; a no-flag invocation is
 rejected at parse time as `validation_error` (`field: "argv"`,
 `reason: "no_edit_fields"`) before the query is resolved.
 `--allow-duplicate` is a collision *override* — it does **not** satisfy
-the at-least-one requirement; `paladin edit foo --allow-duplicate`
+the at-least-one requirement; `paladin-auth edit foo --allow-duplicate`
 with no edit flags still rejects as `no_edit_fields`. `--issuer`
 and `--no-issuer` are mutually exclusive, as are `--icon-hint` and
 `--no-icon-hint`; either collision is rejected at parse time as
 `validation_error` (`field: "argv"`, `reason: "mutually_exclusive"`).
-Supplied values map onto `paladin_core::AccountEdit`: `--label`
+Supplied values map onto `paladin_auth_core::AccountEdit`: `--label`
 populates `label = Some(value)`, `--issuer` populates
 `issuer = Some(Some(value))` after the §4.1 issuer normalization (so
 `--issuer ""` normalizes to `Some(None)` and is functionally
 equivalent to `--no-issuer`),
 `--no-issuer` populates `issuer = Some(None)`, `--icon-hint <slug>`
-parses through `paladin_core::parse_icon_hint_token(slug)` (so the
+parses through `paladin_auth_core::parse_icon_hint_token(slug)` (so the
 empty / case-insensitive `none` / explicit-slug grammar matches
 `add`) and populates `icon_hint`, and `--no-icon-hint` populates
 `icon_hint = Some(IconHintInput::Clear)`. The CLI resolves the
@@ -1503,14 +1503,14 @@ mutator runs, the CLI calls `Vault::find_duplicate_after_edit(id,
 &edit)` and rejects a non-`None` result with `duplicate_account`
 (the existing collision's `AccountSummary` in the envelope's
 `account` field) unless `--allow-duplicate` is supplied — mirroring
-the `paladin add` collision path. The helper projects the would-be
+the `paladin-auth add` collision path. The helper projects the would-be
 post-edit `(secret, issuer, label)` triple — applying §4.1
 normalization to issuer and label — and skips the account at `id`
 so an unchanged self-edit never reports a collision. The mutation
 itself runs inside `Vault::mutate_and_save` so pre-commit failures
 restore the pre-edit account state; `save_durability_unconfirmed`
 leaves the edit visible with the standard durability warning.
-`paladin edit` is read-only on the secret bytes — it never advances
+`paladin-auth edit` is read-only on the secret bytes — it never advances
 HOTP counters, never decodes the stored secret, and never re-derives
 a slug from secret content. Text mode prints nothing to stdout on
 success (parity with `rename` / `remove --yes`); under `--json` the
@@ -1524,14 +1524,14 @@ post-edit summary and an additional `committed: false` field
 disambiguates it from a real save; text mode prints nothing. CLI is
 stateless and ignores `clipboard.clear_*` / `auto_lock.*` settings.
 The duplicate check is independent of the §"Import merge details"
-policy. `paladin rename <query> <label>` stays as the
+policy. `paladin-auth rename <query> <label>` stays as the
 single-positional shorthand for the label-only path and is
 implemented on top of the same `Vault::edit_account_metadata`
 mutator.
 
 With `--json`, commands write one JSON document to stdout on success and
 one JSON document to stderr on failure. To keep the CLI scriptable,
-`paladin` pre-scans argv for an exact `--json` token before clap parsing;
+`paladin-auth` pre-scans argv for an exact `--json` token before clap parsing;
 when present, syntax/usage failures also render the JSON error envelope
 to stderr instead of clap's text diagnostics. Those parse failures keep
 clap's normal syntax-error exit code and use `kind: "validation_error"`;
@@ -1541,12 +1541,12 @@ terminal requests, not syntax failures: when `--json` is present, `--help`
 / `-h` / subcommand help write the JSON help shape to stdout with exit code
 0, and `--version` / `-V` writes the JSON version shape to stdout with exit
 code 0. Text mode keeps clap's normal help/version rendering. This JSON
-parse-error and help/version behavior is only for the `paladin` binary;
-`paladin-tui` and `paladin-gtk` reject `--json` without implementing JSON
+parse-error and help/version behavior is only for the `paladin-auth` binary;
+`paladin-auth-tui` and `paladin-auth-gtk` reject `--json` without implementing JSON
 output (their rejection is plain text — there is no JSON envelope). `code`
 values are strings so leading zeroes are preserved.
 
-Under `--json`, `paladin` writes **only** the JSON envelope: the success
+Under `--json`, `paladin-auth` writes **only** the JSON envelope: the success
 document to stdout, the failure document to stderr, and no other bytes
 on either stream. The strict-mode rule covers every output path: text-
 mode validation warnings (`short_secret`) flow into the success envelope's
@@ -1568,7 +1568,7 @@ streams sees only the JSON envelope. This rule is the script contract — JSON
 consumers can `parse(stdout)` on exit 0 and `parse(stderr)` on non-zero exit
 without filtering.
 
-The common account shape is `paladin_core::AccountSummary` serialized by the
+The common account shape is `paladin_auth_core::AccountSummary` serialized by the
 CLI's `error-serde` build. It is also the read-only projection used by TUI and
 GUI list rows:
 
@@ -1607,18 +1607,18 @@ Success shapes:
 | `add --qr`                    | Same shape as `import` (a `--qr` add can decode multiple URIs and uses a fixed `--on-conflict=skip`). |
 | `remove`                      | `{ "removed": AccountSummary }`                                                 |
 | `import`                      | `{ "imported": n, "skipped": n, "replaced": n, "appended": n, "accounts": [AccountSummary], "warnings": [Warning] }` |
-| `export`                      | `{ "written": "/path/to/out", "format": "otpauth_or_paladin" }`                |
+| `export`                      | `{ "written": "/path/to/out", "format": "otpauth_or_paladin_auth" }`                |
 | `qr`                          | With `--out`: `{ "written": "/path/to/out", "format": "qr_png_or_qr_svg", "account": AccountSummary }`. Without `--out`: rejected at parse time under `--json` because ANSI stdout output cannot share the JSON envelope; `--json` callers must pass `--out`. |
 | `settings get`, `settings set` | `{ "settings": VaultSettings }` (always full settings; `[key]` on `get` only filters text-mode display, never the JSON shape) |
 | `init`, `passphrase *`        | `{ "ok": true, "status": "plaintext_or_encrypted" }`                           |
 | `destroy`                     | `{ "destroyed": { "vault_path": "/path/to/vault.bin", "primary_deleted": true, "backup_deleted": bool } }` — `vault_path` is the resolved primary path; `backup_deleted` is `true` when a sibling `vault.bin.bak` was present and unlinked, `false` when no backup was present. `primary_deleted` is always `true` on success (a primary that could not be unlinked surfaces as `io_error` instead). |
-| `--help` / subcommand help    | `{ "help": { "command": "paladin ...", "text": "..." } }`                      |
-| `--version`                   | `{ "version": { "name": "paladin", "version": "x.y.z" } }`                     |
+| `--help` / subcommand help    | `{ "help": { "command": "paladin-auth ...", "text": "..." } }`                      |
+| `--version`                   | `{ "version": { "name": "paladin-auth", "version": "x.y.z" } }`                     |
 
 Pseudo-values such as `number_or_null` and `plaintext_or_encrypted`
 document allowed values; concrete output uses actual numbers, `null`, or
 enum strings. For help requests, `command` is the clap command path whose help
-was requested (for example `"paladin"` or `"paladin add"`) and `text` is the
+was requested (for example `"paladin-auth"` or `"paladin-auth add"`) and `text` is the
 same generated help text that text mode would print for that command. For
 version requests, `name` and `version` come from Cargo package metadata. For
 `import`, every input row falls into exactly one of four buckets:
@@ -1647,7 +1647,7 @@ duration, and have `counter_used: null`; HOTP entries have `valid_from`,
 shape is `{ "kind": "short_secret", "message": "...", "source_index": 0,
 "decoded_len": 10, "recommended_min": 16 }`; `source_index` is zero-based
 and omitted for single-entry `add`. The `message` string is produced by
-`paladin_core::format_validation_warning`, and text-mode commands / UI
+`paladin_auth_core::format_validation_warning`, and text-mode commands / UI
 surfaces use the same helper. Text-mode commands print warnings to stderr
 while still exiting zero on success.
 `VaultSettings` JSON is nested by category: `{ "auto_lock": { "enabled":
@@ -1719,12 +1719,12 @@ v0.1 error kinds and stable fields:
 | `unsafe_permissions`            | Vault path permissions are too broad.        | `path`, `subject`, `actual_mode`, `expected_mode` |
 | `wrong_vault_lock`              | Supplied lock mode does not match file.      | `expected`, `actual`                       |
 | `decrypt_failed`                | Encrypted vault/bundle failed auth.          | none                                       |
-| `invalid_header`                | Paladin header is malformed/unknown.         | optional `path`                            |
+| `invalid_header`                | Paladin Auth header is malformed/unknown.         | optional `path`                            |
 | `invalid_payload`               | Bincode payload is invalid or too large.     | `reason`, optional `path`                  |
-| `unsupported_format_version`    | Paladin `format_ver` has no migration.       | `format_ver`                               |
+| `unsupported_format_version`    | Paladin Auth `format_ver` has no migration.       | `format_ver`                               |
 | `kdf_params_out_of_bounds`      | Argon2 params exceed policy.                 | `m_kib`, `t`, `p`                          |
 | `unsupported_import_format`     | Detected/forced import format is invalid.    | `format`                                   |
-| `unsupported_plaintext_vault`   | Import saw a plaintext Paladin vault.        | none                                       |
+| `unsupported_plaintext_vault`   | Import saw a plaintext Paladin Auth vault.        | none                                       |
 | `unsupported_encrypted_aegis`   | Aegis import saw an encrypted backup.        | none                                       |
 | `unsupported_aegis_entry_type`  | Aegis entry is not `totp` or `hotp`.         | `source_index`, `entry_type`               |
 | `no_entries_to_import`          | Import/QR input decoded zero accounts.       | none                                       |
@@ -1777,14 +1777,14 @@ Core-returned `io_error.operation` values are stable strings:
 
 Binary crates may add presentation-specific operations such as
 `passphrase_prompt`, `account_prompt`, `confirmation_prompt`, and
-`exec_paladin_tui`, but they do not rename core operations.
+`exec_paladin_auth_tui`, but they do not rename core operations.
 
-The CLI owns JSON envelope rendering, but `paladin-core` exposes
-`serde::Serialize` for `PaladinError` only behind an off-by-default
+The CLI owns JSON envelope rendering, but `paladin-auth-core` exposes
+`serde::Serialize` for `PaladinAuthError` only behind an off-by-default
 `error-serde` cargo feature so the CLI can serialize the shared
 `error_kind` taxonomy without a mapping layer. The same feature may serialize
 non-secret view types such as `AccountSummary`, `Code`, warnings, reports, and
-settings, but never secret-bearing `Account` / `Secret`. `paladin-core` itself
+settings, but never secret-bearing `Account` / `Secret`. `paladin-auth-core` itself
 has no JSON output paths, and the feature-gated serialization impl is not part
 of the stable §4.7 API surface.
 
@@ -1801,7 +1801,7 @@ Bounds: `30 <= auto_lock.timeout_secs <= 86_400` (24 h),
 `5 <= clipboard.clear_secs <= 600` (10 min). `VaultSettings` fields are private;
 `settings set` and the core settings setters reject out-of-range values with a
 validation error. The CLI's
-dotted key/value grammar is parsed by `paladin_core::parse_setting_patch`
+dotted key/value grammar is parsed by `paladin_auth_core::parse_setting_patch`
 so key names, lowercase bool parsing, base-10 `u32` parsing, and minimum
 checks stay in core. `parse_setting_key` is the same key-name source for
 `settings get [key]`. TUI and GUI controls may call the typed setters
@@ -1813,9 +1813,9 @@ directly, but they use the same setter validation and persist through
 `<query>` is a case-insensitive substring match against `"{issuer}:{label}"`
 (empty issuer is allowed; the colon is still present in the match key).
 Matching compares `str::to_lowercase()` output for the query and match key;
-Paladin applies no Unicode normalization and no locale-specific casing, so
+Paladin Auth applies no Unicode normalization and no locale-specific casing, so
 visually equivalent but differently normalized strings may not match. The
-substring predicate is `paladin_core::account_matches_search`; CLI query
+substring predicate is `paladin_auth_core::account_matches_search`; CLI query
 resolution, TUI search, and GUI search all use that helper rather than
 reimplementing the comparison.
 
@@ -1828,7 +1828,7 @@ reimplementing the comparison.
   matches they exit non-zero and list the candidates, each prefixed with
   the shortest unique `id:<hex>` form taken from the UUID, with a minimum
   length of 8 hex chars. The user can re-run with that exact-id form
-  (e.g. `paladin copy id:a1b2c3d4`).
+  (e.g. `paladin-auth copy id:a1b2c3d4`).
 - A query with no matches exits non-zero and prints a concise "no matching
   account" error (`--json` error `kind: "no_match"`, parallel to
   `multiple_matches`).
@@ -1840,7 +1840,7 @@ reimplementing the comparison.
   prefix; the prefix after `id:` must be 8 to 32 hex chars, and invalid
   or shorter prefixes are validation errors. An account whose
   `issuer:label` happens to start with `id:` is still reachable by any
-  other substring of that key. `paladin_core::parse_account_query` owns
+  other substring of that key. `paladin_auth_core::parse_account_query` owns
   the `id:` validation, `Vault::matching_accounts` owns the actual match
   collection, and `Vault::shortest_unique_id_prefix` owns candidate
   disambiguator computation. The CLI owns only the command-specific
@@ -1873,14 +1873,14 @@ batch level: if any entry fails validation (see security consideration 9),
 no entries are added. Validation warnings do not break atomicity; they are
 attached to the import report and surfaced to the user.
 
-## 6. TUI (`paladin-tui`)
+## 6. TUI (`paladin-auth-tui`)
 
 Library: **ratatui** + **crossterm**. Helpers: `tui-input` (text fields).
 
 Layout (single-screen MVP):
 
 ```
-┌ Paladin ──────────────────────────────────────────────────────────────┐
+┌ Paladin Auth ──────────────────────────────────────────────────────────────┐
 │ Search: ____________                                                  │
 ├───────────────────────────────────────────────────────────────────────┤
 │ ▶ GitHub (ben@…)        123 456   ████████░░  18s   ↪ 482 913        │
@@ -1898,7 +1898,7 @@ Layout (single-screen MVP):
   `Style::default().add_modifier(Modifier::DIM)`.
   The dim styling plus the `↪` glyph signal "upcoming, not the live one"
   without requiring the user to read the column header. Computed via
-  `paladin_core::Vault::totp_next_code(id, now)` so the boundary math
+  `paladin_auth_core::Vault::totp_next_code(id, now)` so the boundary math
   (next window start = `((now_secs / period) + 1) * period`) lives in
   core. HOTP rows leave this cell blank — HOTP has no time-based "next";
   the next code only exists after a deliberate counter advance. The
@@ -1913,7 +1913,7 @@ Layout (single-screen MVP):
   effect resolves, matching the §6 secret-handling rules for the
   current code.
 - HOTP rows: code is hidden until the user presses `n` (advances counter
-  and saves); after the shared `paladin_core::HOTP_REVEAL_SECS`
+  and saves); after the shared `paladin_auth_core::HOTP_REVEAL_SECS`
   reveal window (120 seconds), returns to the hidden
   state. `n` **always** advances and re-reveals — it is the "give me
   the next code" key — so pressing `n` again during an open reveal
@@ -1928,12 +1928,12 @@ Layout (single-screen MVP):
 - Startup calls `inspect(path)`: plaintext vaults open directly to the
   list; encrypted vaults show the unlock screen; missing vaults open
   the in-app **create-vault** flow described below. The CLI's
-  `paladin init` remains available as an out-of-band alternative
+  `paladin-auth init` remains available as an out-of-band alternative
   (and is the only way to set custom Argon2id `--kdf` cost
   parameters), but a user can now create a vault entirely from
   within the TUI without leaving the terminal.
 - **Create-vault flow** (shown on `VaultStatus::Missing`): a two-step
-  wizard built on the same `paladin_core::create(path, init)` call
+  wizard built on the same `paladin_auth_core::create(path, init)` call
   the CLI uses. Defaults-only — Argon2id cost parameters are taken
   from `Argon2Params::default()` (§4.4); KDF tuning remains a CLI
   feature.
@@ -1946,7 +1946,7 @@ Layout (single-screen MVP):
      unlock screen). `Tab` / arrows switch focus; `Enter` on the
      `passphrase` field moves focus to `confirmation`; `Enter` on
      `confirmation` validates byte-for-byte equality and calls
-     `paladin_core::create(path, VaultInit::Encrypted(
+     `paladin_auth_core::create(path, VaultInit::Encrypted(
      EncryptionOptions::new(passphrase)))`. Empty passphrase or
      mismatch surfaces an inline error and re-focuses the failing
      field with the prior typed bytes zeroized. `Esc` returns to
@@ -1954,12 +1954,12 @@ Layout (single-screen MVP):
   2b. *Plaintext* → **Confirm plaintext** screen rendering the
      plaintext-storage warning from
      `format_plaintext_storage_warning()`; `Enter` confirms and
-     calls `paladin_core::create(path, VaultInit::Plaintext)`,
+     calls `paladin_auth_core::create(path, VaultInit::Plaintext)`,
      `Esc` returns to Choose-mode.
   On success the app transitions straight to `Unlocked` with an
   empty account list — the user lands on the same screen they
-  would after `paladin init` + relaunch. On failure (any
-  `paladin_core::create` / `Vault::save` error, including
+  would after `paladin-auth init` + relaunch. On failure (any
+  `paladin_auth_core::create` / `Vault::save` error, including
   `unsafe_permissions` rendered via
   `format_unsafe_permissions`) the user stays in the
   create-vault flow with an inline error and the typed
@@ -1976,7 +1976,7 @@ Layout (single-screen MVP):
   footer hint of the form `Ctrl+Shift+D delete vault` so the
   forgot-passphrase user discovers the escape hatch without dropping to
   the shell. The modal body renders the warning text from
-  `paladin_core::format_destroy_warning(path, backup_present)` (the same
+  `paladin_auth_core::format_destroy_warning(path, backup_present)` (the same
   helper the CLI text mode uses), names the primary and `.bak` paths
   it will unlink, and gates submission behind a confirmation `tui-input`
   field that must contain the exact string `yes` after trimming Unicode
@@ -1984,7 +1984,7 @@ Layout (single-screen MVP):
   modal has two actions, *Cancel* (`Esc`) and *Delete vault* (`Enter`,
   enabled only when the confirmation field reads `yes`); the loud action
   is never the default focus on open. On confirm the modal calls
-  `paladin_core::destroy_vault(path)` on a worker (the unlink + parent
+  `paladin_auth_core::destroy_vault(path)` on a worker (the unlink + parent
   `fsync` is fast but the model boundary stays consistent with other
   effects). On success the in-memory vault — if any — is dropped and
   zeroized, every open modal closes, secret buffers (search, add, edit,
@@ -2007,13 +2007,13 @@ Layout (single-screen MVP):
   confirmation grammar.
 - Modal dialogs for add / remove / rename / edit / import / export / qr /
   passphrase / settings. Add supports manual entry, paste of an `otpauth://` URI
-  (decoded via `paladin_core::parse_otpauth`), and QR scan from
+  (decoded via `paladin_auth_core::parse_otpauth`), and QR scan from
   clipboard image bytes; manual and URI duplicates use
   `Vault::find_duplicate` and reject with the existing account, while
   QR imports use `ImportConflict::Skip` and report
   imported/skipped/warning counts. Rename calls `Vault::rename(id,
   new_label, now)` inside `Vault::mutate_and_save`; issuer is not
-  editable here (parity with `paladin rename`). Edit (opened with
+  editable here (parity with `paladin-auth rename`). Edit (opened with
   `Shift+E` on the focused account row — always enabled, HOTP and TOTP
   alike, because edit never touches the secret) opens an
   `AccountEdit`-bearing modal pre-populated from the current
@@ -2080,15 +2080,15 @@ Layout (single-screen MVP):
   `period`, `counter`) are intentionally *omitted from the form*
   (no disabled rows displayed) — changing them invalidates
   already-issued codes and the user is directed to remove + re-add. Import takes a file path and
-  optional explicit format, calls `classify_paladin_import_precheck` before
-  any Paladin bundle passphrase prompt, prompts only for encrypted-Paladin
+  optional explicit format, calls `classify_paladin_auth_import_precheck` before
+  any Paladin Auth bundle passphrase prompt, prompts only for encrypted-Paladin Auth
   sources, applies a user-selected on-conflict
   policy (`skip` / `replace` / `append`), and reports
   imported/skipped/replaced/appended/warning counts. Export writes
   either a newline-separated list of plaintext `otpauth://` URIs
   (one per line, Gnome Authenticator–compatible; with an explicit
   unencrypted-secrets warning before the write) or an encrypted
-  Paladin bundle (passphrase prompted twice and matched), refuses
+  Paladin Auth bundle (passphrase prompted twice and matched), refuses
   overwrite without explicit confirmation, and surfaces the resulting
   `0600` output path inline. Mutating modal actions use
   `Vault::mutate_and_save` so pre-commit save failures restore the
@@ -2102,7 +2102,7 @@ Layout (single-screen MVP):
   The **QR modal** (opened with `Q` on the focused account row) renders
   the §4.6 per-account QR via `Vault::export_qr_ansi(id)` after the user
   acknowledges the QR-export warning sourced from
-  `paladin_core::format_plaintext_qr_export_warning()`. The modal body
+  `paladin_auth_core::format_plaintext_qr_export_warning()`. The modal body
   shows the warning + ack gate first; on ack, the same modal switches
   to the Unicode half-block QR plus the account's `summary_display_label`
   caption (CLI / GUI parity) and two save actions, `Save as PNG…` and
@@ -2137,31 +2137,31 @@ Layout (single-screen MVP):
   in the active modal or in the status line.
 - Single event loop: `crossterm` events ↔ tick events via `mpsc`.
 
-## 7. GUI (`paladin-gtk`)
+## 7. GUI (`paladin-auth-gtk`)
 
 Library: **Relm4** on **GTK4**. Component tree:
 
 - `AppModel` — owns the resolved vault path plus the `Missing` /
   `Locked` / `Unlocked` / `StartupError` state. Startup runs
-  `paladin_core::inspect(path)`: plaintext vaults open directly to the
+  `paladin_auth_core::inspect(path)`: plaintext vaults open directly to the
   list, encrypted vaults show `UnlockComponent`, and missing vaults
   open `InitDialog` so the user can create a vault from inside the
   app. Default-path, inspect, or non-authentication open failures render
   a non-mutating startup-error view with retry and quit actions.
 - `InitDialog` — in-app vault initialization for the GUI (v0.2). The
   TUI ships its own §6 create-vault flow with the same defaults-only
-  contract; the CLI continues to use `paladin init`. Two passphrase fields
+  contract; the CLI continues to use `paladin-auth init`. Two passphrase fields
   (twice-confirmed; both fields empty select plaintext, with the same
   unencrypted-storage warning used by `passphrase remove`) plus an
   explicit "create vault" confirmation. Calls
-  `paladin_core::create(path, init)` on `gio::spawn_blocking`
+  `paladin_auth_core::create(path, init)` on `gio::spawn_blocking`
   (encrypted creation runs the §4.4 Argon2id KDF) and on success
   transitions the app to `Unlocked` with the returned `(Vault, Store)`,
   routing to the account list. `vault_exists` (if a vault appeared
   between `inspect` and `create`) opens an in-dialog destructive
   confirmation explaining that the existing vault will be rotated to
   `vault.bin.bak` and a new one created in its place; on confirm the
-  dialog re-runs the create with `paladin_core::create_force(path,
+  dialog re-runs the create with `paladin_auth_core::create_force(path,
   init)` on `gio::spawn_blocking`, applying the §5 staged-clobber
   semantics. `unsafe_permissions`, `invalid_passphrase`
   (`reason: "confirmation_mismatch"`), `save_not_committed`, and
@@ -2171,7 +2171,7 @@ Library: **Relm4** on **GTK4**. Component tree:
   Skipped entirely for plaintext vaults.
 - `AccountListComponent` — `gtk::ListView` with a custom row factory.
   Optional issuer grouping: when the per-user `show-section-headers`
-  GSettings key (schema `org.tamx.Paladin.Gui`, **default `false`**)
+  GSettings key (schema `org.tamx.PaladinAuth.Gui`, **default `false`**)
   is enabled, each run of consecutive rows that share an issuer gets
   a small inline header above its first row (issuer text verbatim;
   the literal `Other` for rows whose issuer is `None` / empty). Vault
@@ -2184,7 +2184,7 @@ Library: **Relm4** on **GTK4**. Component tree:
 - `AccountRowComponent` — label, code, next code (TOTP), progress (TOTP) /
   "next" button (HOTP), copy button. HOTP rows hide their code until the
   user activates "next" (advances counter and saves); after the shared
-  `paladin_core::HOTP_REVEAL_SECS` reveal window (120 seconds) the code
+  `paladin_auth_core::HOTP_REVEAL_SECS` reveal window (120 seconds) the code
   returns to the hidden state, matching the TUI. Hidden rows show the stored
   next counter; revealed rows show the counter that produced the visible
   code until the reveal expires. Copying a hidden HOTP row is disabled;
@@ -2195,12 +2195,12 @@ Library: **Relm4** on **GTK4**. Component tree:
   user's primary urgency cue for the current code, so Next renders
   after it as a quieter "what's coming" affordance). TOTP rows render the
   upcoming 30-second-window code (computed via
-  `paladin_core::Vault::totp_next_code(id, now)`) prefixed with `↪ ` and
+  `paladin_auth_core::Vault::totp_next_code(id, now)`) prefixed with `↪ ` and
   the `.dim-label` CSS class applied to the `gtk::Label`, mirroring the
   TUI's dim styling so the cell visually reads as "upcoming, not live."
   HOTP rows leave the cell empty (the `gtk::Label` text is `""` with no
   glyph). Column visibility is controlled by the per-user
-  `show-next-code-column` GSettings key (schema `org.tamx.Paladin.Gui`,
+  `show-next-code-column` GSettings key (schema `org.tamx.PaladinAuth.Gui`,
   **default `true`**, exposed in the Preferences "Display" group); when
   the key is enabled the column is additionally auto-hidden in
   HOTP-only vaults via the same `column_view::any_totp(&rows)` check that
@@ -2215,7 +2215,7 @@ Library: **Relm4** on **GTK4**. Component tree:
   lifetime of the bind and zeroized when the cell is unbound or the row
   re-renders, matching the §7 secret-handling rules for the current code.
 - `AddAccountComponent` — manual fields + paste of an `otpauth://` URI
-  (decoded via `paladin_core::parse_otpauth`) + "scan from clipboard
+  (decoded via `paladin_auth_core::parse_otpauth`) + "scan from clipboard
   image" decoded through the core raw-RGBA QR import path. URI and
   manual entries share the same validation, duplicate-detection, and
   `Vault::mutate_and_save` paths. Switching input paths clears hidden
@@ -2241,7 +2241,7 @@ Library: **Relm4** on **GTK4**. Component tree:
   maps to `None` (leave untouched), and any other non-empty buffer
   maps to `Some(Some(_))`. The Icon hint row's empty / `none` /
   explicit-slug grammar is parsed through
-  `paladin_core::parse_icon_hint_token` so the GTK editor matches the
+  `paladin_auth_core::parse_icon_hint_token` so the GTK editor matches the
   Add dialog's icon-hint behavior verbatim; the same WYSIWYS layout
   applies (buffer byte-equal to the pre-fill maps to `None`,
   empty-on-prior-`Some` maps to `Some(IconHintInput::Default)` for
@@ -2256,7 +2256,7 @@ Library: **Relm4** on **GTK4**. Component tree:
   (raw buffers → tentative `AccountEdit` projection) and
   `classify_submit` (projection + caller-injected duplicate result →
   submit / reject / show-error decision). Both are GTK-internal
-  (not part of `paladin-core`'s public API surface); the public
+  (not part of `paladin-auth-core`'s public API surface); the public
   contract the front ends share is `validate_account_edit` +
   `Vault::find_duplicate_after_edit`. `Esc` (via `adw::Dialog`'s
   default close binding) discards the draft silently with no
@@ -2294,14 +2294,14 @@ Library: **Relm4** on **GTK4**. Component tree:
   `edit` action and the existing `copy` action becomes menu-visible
   alongside the inline copy button.
 - `ImportDialog` — `gtk::FileDialog` for the source path, format
-  selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
+  selector (auto-detect or explicit `otpauth` / `aegis` / `paladin-auth` /
   `qr`), on-conflict policy (`skip` / `replace` / `append`), and a
-  passphrase prompt for encrypted Paladin bundles gated by
-  `classify_paladin_import_precheck`. Reports
+  passphrase prompt for encrypted Paladin Auth bundles gated by
+  `classify_paladin_auth_import_precheck`. Reports
   imported/skipped/replaced/appended/warning counts on success.
 - `ExportDialog` — format selector (plaintext `otpauth://` URI list
   — newline-separated, Gnome Authenticator–compatible — or encrypted
-  Paladin bundle), `gtk::FileDialog` for the
+  Paladin Auth bundle), `gtk::FileDialog` for the
   destination path, overwrite confirmation, twice-entered passphrase
   for the encrypted variant, and an explicit unencrypted-secrets
   warning before plaintext writes. Writes through
@@ -2311,7 +2311,7 @@ Library: **Relm4** on **GTK4**. Component tree:
   account row's kebab menu via a `Show QR…` entry placed
   between `Edit…` and `Remove…`. The dialog opens on a warning
   page rendered verbatim from
-  `paladin_core::format_plaintext_qr_export_warning()` with an
+  `paladin_auth_core::format_plaintext_qr_export_warning()` with an
   `AdwSwitchRow` ack gate alongside two footer buttons — `Cancel`
   (always sensitive) and `Show QR` (`suggested-action`,
   sensitive only while the ack switch is on). Toggling the ack on
@@ -2355,7 +2355,7 @@ Library: **Relm4** on **GTK4**. Component tree:
   `StartupError` view so a forgot-passphrase or perms-stuck user
   discovers the escape hatch without dropping to the shell. The dialog
   body renders the warning text from
-  `paladin_core::format_destroy_warning(path, backup_present)` (the
+  `paladin_auth_core::format_destroy_warning(path, backup_present)` (the
   shared CLI / TUI / GUI helper), names the primary and `.bak` paths,
   and gates submission behind an `AdwEntryRow` confirmation field that
   must read `yes` after trimming Unicode whitespace — the same grammar
@@ -2363,7 +2363,7 @@ Library: **Relm4** on **GTK4**. Component tree:
   actions are *Cancel* (default focus; `Esc` dismisses) and *Delete
   vault* (`destructive-action` style class for the GNOME red treatment;
   sensitive only while the confirmation field reads `yes`). On confirm
-  the dialog calls `paladin_core::destroy_vault(path)` on
+  the dialog calls `paladin_auth_core::destroy_vault(path)` on
   `gio::spawn_blocking` (the unlink + parent `fsync` is fast, but the
   threading model stays consistent with the rest of the GUI's effect
   path) and the `AppModel` transitions to `Missing` on success,
@@ -2472,7 +2472,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
    refuses to overwrite an existing file without `--force`, and writes the
    output `0600`. Encrypted exports also refuse overwrite and create output
    `0600`. **Per-account QR exports** (§4.6) carry a parallel warning
-   sourced from `paladin_core::format_plaintext_qr_export_warning()` and
+   sourced from `paladin_auth_core::format_plaintext_qr_export_warning()` and
    ride the same `write_secret_file_atomic` + `--force` / inline-gate path,
    because a QR is a plaintext encoding of an account secret — anyone who
    can see or photograph it can clone the OTP. QR export is also
@@ -2489,23 +2489,23 @@ Concrete obligations and explicit user-controlled tradeoffs:
 10. **No telemetry, no network calls.** Enforced by code review and tests;
     `cargo deny` covers dependency license/advisory policy, not runtime
     network behavior. The deny list bans async runtimes and network stacks
-    (`tokio`, `reqwest`, `hyper`, …) from `paladin-core`, `paladin-cli`, and
-    `paladin-tui`, asserted by the lockfile-subtree guard in
-    `crates/paladin-core/tests/no_network.rs`. `paladin-gtk` is granted a
+    (`tokio`, `reqwest`, `hyper`, …) from `paladin-auth-core`, `paladin-auth-cli`, and
+    `paladin-auth-tui`, asserted by the lockfile-subtree guard in
+    `crates/paladin-auth-core/tests/no_network.rs`. `paladin-auth-gtk` is granted a
     single carve-out: `tokio` is permitted when it reaches the lockfile
     transitively through `relm4` (its GUI framework, which uses `tokio`'s
     mpsc channels as a structured-concurrency primitive). GTK's main loop
     remains the executor and `gio::spawn_blocking` runs the long work, so
     no sockets are opened. The carve-out is locked down at three layers:
-    (a) `paladin-core` source / manifest / lockfile-subtree guards keep the
+    (a) `paladin-auth-core` source / manifest / lockfile-subtree guards keep the
     security-sensitive subtree tokio-free; (b) `deny.toml` admits `tokio`
     only when its direct wrapper is `relm4`; and (c) a source-level guard
-    in `paladin-gtk` forbids direct `use tokio` / `tokio::` references so
+    in `paladin-auth-gtk` forbids direct `use tokio` / `tokio::` references so
     the GUI never reaches around `relm4` to use `tokio` as a runtime.
 11. **Reproducible builds.** Pin `rust-toolchain.toml`. Lock all deps.
 12. **Threat model documented separately** in `SECURITY.md` before v1.
 13. **Per-account metadata edit isolates secret material *(v0.2, Milestone 9).*** The
-    Edit modal / `EditDialog` / `paladin edit` surface mutate only
+    Edit modal / `EditDialog` / `paladin-auth edit` surface mutate only
     `AccountEdit { label, issuer, icon_hint }` — none of which are
     secret. The edit path never reads, decodes, displays, or copies the
     stored `Secret`; validation errors render inline without ever
@@ -2519,8 +2519,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
     `period`, `counter`) are omitted from the form entirely so a UI
     regression cannot expose them — verified by widget-contract tests
     in §10.
-14. **`destroy` is unlink, not secure-erase.** `paladin destroy` and its TUI
-    / GUI mirrors call `paladin_core::destroy_vault` (§4.3), which `unlink`s
+14. **`destroy` is unlink, not secure-erase.** `paladin-auth destroy` and its TUI
+    / GUI mirrors call `paladin_auth_core::destroy_vault` (§4.3), which `unlink`s
     `vault.bin` and `vault.bin.bak` and `fsync`s the parent directory. It
     does **not** overwrite the underlying disk blocks. On modern file
     systems (SSD wear-leveling, journaling, copy-on-write snapshots,
@@ -2540,9 +2540,9 @@ Concrete obligations and explicit user-controlled tradeoffs:
 > §4.3, §4.4, §4.5, §4.6, and §8 are locked in for v0.1. The 2026-05-28
 > revision adds the `destroy_vault` storage operation in §4.3, the
 > `DestroyReport` / `destroy_vault` / `format_destroy_warning` API in
-> §4.7, the `paladin destroy` command in §5, the TUI Destroy modal in
+> §4.7, the `paladin-auth destroy` command in §5, the TUI Destroy modal in
 > §6, the GTK `DestroyDialog` in §7, and security note 14 above; no
-> existing locked decision is altered. Tests in `paladin-core` will
+> existing locked decision is altered. Tests in `paladin-auth-core` will
 > assert round-trip properties for both modes, tamper detection,
 > file-permission enforcement, passphrase-transition commit-point
 > behavior, and the destroy contract (missing-vault idempotence, symlink
@@ -2566,15 +2566,15 @@ Concrete obligations and explicit user-controlled tradeoffs:
 | `rpassword`                            | CLI passphrase prompt                                                                                                             |
 | `arboard`                              | CLI / TUI clipboard where needed; GUI uses GDK clipboard                                                                          |
 | `rqrr`, `image`                        | QR decode from files/buffers                                                                                                      |
-| `qrcode`                               | Per-account QR export (§4.6) — PNG / SVG / ANSI rendering inside `paladin-core` so front ends stay thin                          |
+| `qrcode`                               | Per-account QR export (§4.6) — PNG / SVG / ANSI rendering inside `paladin-auth-core` so front ends stay thin                          |
 | `directories`                          | XDG / platform paths                                                                                                              |
 | `thiserror`, `anyhow`                  | Error types                                                                                                                       |
 | `base32`                               | Secret encoding                                                                                                                   |
 | `url`                                  | `otpauth://` URI parsing                                                                                                          |
 | `uuid`                                 | `AccountId` (UUIDv4) generation and display                                                                                       |
-| `getrandom`                            | CSPRNG source for §4.4 salts and nonces; pinned in `paladin-core` so the random source does not drift across transitive minor versions |
+| `getrandom`                            | CSPRNG source for §4.4 salts and nonces; pinned in `paladin-auth-core` so the random source does not drift across transitive minor versions |
 
-`paladin-core` also pulls in dev-only dependencies that are not part of
+`paladin-auth-core` also pulls in dev-only dependencies that are not part of
 the runtime supply chain: `proptest` for property tests against the
 `otpauth://` parser and base32 secret decoding, `trybuild` for `Secret`
 non-`Debug` compile-fail coverage, and `tempfile` for storage and
@@ -2583,7 +2583,7 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
 
 ## 10. Testing strategy
 
-- **Unit tests** in `paladin-core`:
+- **Unit tests** in `paladin-auth-core`:
   - RFC 6238 (TOTP) and RFC 4226 (HOTP) test vectors.
   - TOTP time-window boundaries, including pre-Unix-epoch rejection,
     exact-boundary counter rollover with `seconds_remaining = period`,
@@ -2654,7 +2654,7 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     operations, passphrase transitions, and encrypted exports with identical
     logical inputs produce fresh salts and nonces where §4.4 / §4.5 require
     them, while regular encrypted saves preserve salt and rotate only nonce.
-  - No-network guard: a source-level `paladin-core` test scans the core
+  - No-network guard: a source-level `paladin-auth-core` test scans the core
     production source tree (`src/`) and manifest for direct network API
     spellings such as `std::net`, `TcpStream`, `UdpSocket`,
     `ToSocketAddrs`, `tokio`, `reqwest`, and `hyper`, and a metadata
@@ -2663,7 +2663,7 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
   - File-permission enforcement (`0600` on primary, backup, and temp files;
     `0700` on dir) post-save and during staged writes, plus rejection of
     unsafe existing primary/backup/directory paths with `unsafe_permissions`.
-  - `default_vault_path()` uses `ProjectDirs::from("", "", "paladin")`,
+  - `default_vault_path()` uses `ProjectDirs::from("", "", "paladin-auth")`,
     resolves the §4.3 data path, and reports `io_error` with
     `operation: "resolve_default_vault_path"` if the platform data path
     cannot be resolved.
@@ -2696,7 +2696,7 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
   - Zeroize-on-drop assertions for `Secret` and `SecretString`.
   - Importers: Aegis plaintext TOTP/HOTP mapping, unsupported Aegis entry
     type rejection, our own export round-trip with fresh destination IDs,
-    plaintext Paladin vault rejection, encrypted-Aegis rejection, and QR
+    plaintext Paladin Auth vault rejection, encrypted-Aegis rejection, and QR
     image decode (single-QR and multi-QR image files plus raw RGBA buffers,
     including the `QR_RGBA_MAX_BYTES` rejection path)
     — fixture files in `tests/fixtures/`. Also covers the "zero accounts"
@@ -2704,11 +2704,11 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     `entries`, image with no decodable QRs). The `import::from_file` /
     `from_bytes` facade is tested for auto-detect, forced-format dispatch,
     unknown/invalid dispatch, `unsupported_import_format.format` semantics,
-    missing Paladin bundle passphrases, and encoded-image QR bytes.
-  - `classify_paladin_import_precheck` covers auto-detect and forced-format
+    missing Paladin Auth bundle passphrases, and encoded-image QR bytes.
+  - `classify_paladin_auth_import_precheck` covers auto-detect and forced-format
     cases so CLI / TUI / GUI import dialogs share the same decision about
-    whether to prompt for a Paladin bundle passphrase, reject a plaintext or
-    malformed Paladin header, or continue through `import::from_file`.
+    whether to prompt for a Paladin Auth bundle passphrase, reject a plaintext or
+    malformed Paladin Auth header, or continue through `import::from_file`.
   - QR export (§4.6): `Vault::export_qr_png` / `export_qr_svg` /
     `export_qr_ansi` and the parallel `export::qr_*` free functions
     encode the same `otpauth://` URI that `export::otpauth_list`
@@ -2735,10 +2735,10 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
 - **Integration tests** for each shipped binary using `assert_cmd` (CLI)
   and golden-snapshot tests (`insta`) for TUI rendering.
   Binary integration tests that need process-level filesystem failure
-  coverage enable `paladin-core`'s off-by-default
+  coverage enable `paladin-auth-core`'s off-by-default
   `test-fault-injection` cargo feature. Under that feature, core exposes
   a test-only `Store` constructor and shared atomic-write fault hook that
-  honor `PALADIN_FAULT_INJECT=pre_commit|post_commit`; the two fault modes
+  honor `PALADIN_AUTH_FAULT_INJECT=pre_commit|post_commit`; the two fault modes
   exercise `save_not_committed` before the primary/final rename and
   `save_durability_unconfirmed` after the parent-directory `fsync` fails.
   The hook applies uniformly to regular saves, `create_force`, passphrase
@@ -2788,7 +2788,7 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     `Vault::edit_account_metadata` (post-M9 `Vault::rename` is a thin
     forwarder; pre-M9 milestones may exercise the legacy direct path),
     paste-`otpauth://`-URI Add route through
-    `paladin_core::parse_otpauth` with shared duplicate / validation
+    `paladin_auth_core::parse_otpauth` with shared duplicate / validation
     / `mutate_and_save` rules, and inline rejection of malformed URIs
     and validation failures. v0.2.
   - GUI EditDialog (§7, M9): three pre-populated `AdwEntryRow` widgets
@@ -2803,7 +2803,7 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     a HOTP account's edit fails any pre-flight gate), and rollback to
     the pre-edit on-disk state on `save_not_committed`. v0.2.
   - TUI add-via-URI + rename + Edit (M9): paste-`otpauth://`-URI Add
-    route through `paladin_core::parse_otpauth` with the same
+    route through `paladin_auth_core::parse_otpauth` with the same
     duplicate / validation behavior as manual mode; rename modal
     round-trips through `Vault::edit_account_metadata` (via the
     `Vault::rename` forwarder), including unchanged labels so
@@ -2843,16 +2843,16 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
 
 Linux-only in v0.1, consistent with §2. Each shipped front-end is published in
 four artifact formats: a Debian package (`.deb`), an RPM package (`.rpm`),
-a Flatpak, and an AppImage. v0.1 ships artifacts for `paladin` (CLI) and
-`paladin-tui`; `paladin-gtk` joins the matrix in v0.2 alongside the GUI.
+a Flatpak, and an AppImage. v0.1 ships artifacts for `paladin-auth` (CLI) and
+`paladin-auth-tui`; `paladin-auth-gtk` joins the matrix in v0.2 alongside the GUI.
 
 ### 11.1 Artifact matrix
 
 | Front-end       | `.deb` | `.rpm` | Flatpak | AppImage | Ships in |
 | --------------- | :----: | :----: | :-----: | :------: | -------- |
-| `paladin` (CLI) |   ✓    |   ✓    |    ✓    |    ✓     | v0.1     |
-| `paladin-tui`   |   ✓    |   ✓    |    ✓    |    ✓     | v0.1     |
-| `paladin-gtk`   |   ✓    |   ✓    |    ✓    |    ✓     | v0.2     |
+| `paladin-auth` (CLI) |   ✓    |   ✓    |    ✓    |    ✓     | v0.1     |
+| `paladin-auth-tui`   |   ✓    |   ✓    |    ✓    |    ✓     | v0.1     |
+| `paladin-auth-gtk`   |   ✓    |   ✓    |    ✓    |    ✓     | v0.2     |
 
 All artifacts are `x86_64` in v0.1; `aarch64` is added when CI gains an
 `aarch64` runner. macOS and Windows packaging stays out of scope (§2).
@@ -2862,7 +2862,7 @@ All artifacts are `x86_64` in v0.1; `aarch64` is added when CI gains an
 Packaging metadata lives at the workspace root, parallel to `crates/`:
 
 ```
-paladin/
+paladin-auth/
 ├── crates/
 ├── packaging/
 │   ├── deb/          # nfpm config, one file per front-end
@@ -2882,27 +2882,27 @@ artifacts side by side.
   producer for both formats so per-front-end metadata is written once.
 - **Per-front-end packages.** One package per front-end keeps install size
   small for headless servers (CLI) and minimal desktop installs (TUI):
-  - `paladin` — installs `/usr/bin/paladin` and a man page at
-    `/usr/share/man/man1/paladin.1.gz`.
-  - `paladin-tui` — installs `/usr/bin/paladin-tui` and
-    `/usr/share/man/man1/paladin-tui.1.gz`.
-  - `paladin-gtk` *(v0.2)* — installs `/usr/bin/paladin-gtk`, a desktop
+  - `paladin-auth` — installs `/usr/bin/paladin-auth` and a man page at
+    `/usr/share/man/man1/paladin-auth.1.gz`.
+  - `paladin-auth-tui` — installs `/usr/bin/paladin-auth-tui` and
+    `/usr/share/man/man1/paladin-auth-tui.1.gz`.
+  - `paladin-auth-gtk` *(v0.2)* — installs `/usr/bin/paladin-auth-gtk`, a desktop
     entry at `/usr/share/applications/`, AppStream metadata under
     `/usr/share/metainfo/`, and the hicolor app icon set under
     `/usr/share/icons/hicolor/`.
 - **Dependencies.**
-  - `paladin` and `paladin-tui` depend only on `libc6` (Debian) /
+  - `paladin-auth` and `paladin-auth-tui` depend only on `libc6` (Debian) /
     `glibc` (Fedora). The Rust binaries are otherwise statically linked
     where possible — no OpenSSL, no libsqlite, no libcurl.
-  - `paladin-gtk` declares `libgtk-4-1 (>= 4.16)` and
+  - `paladin-auth-gtk` declares `libgtk-4-1 (>= 4.16)` and
     `libadwaita-1-0 (>= 1.6)` on Debian, with the matching `gtk4` /
     `libadwaita` packages on Fedora. The 1.6 floor is set so the GUI
     uses the current Adwaita widget set (`AdwAlertDialog` from
     libadwaita 1.5; `AdwAboutDialog` from libadwaita 1.6) without a
     deprecated-widget compatibility shim; distributions whose stable
     channel ships older GTK / libadwaita cannot install
-    `paladin-gtk` until their baseline rises.
-- **Maintainer scripts.** Narrowly scoped: `paladin-gtk` ships a
+    `paladin-auth-gtk` until their baseline rises.
+- **Maintainer scripts.** Narrowly scoped: `paladin-auth-gtk` ships a
   `postinstall` and a `postremove` scriptlet that refresh
   `/usr/share/applications/mimeinfo.cache` (via
   `update-desktop-database`) and `/usr/share/icons/hicolor/icon-theme.cache`
@@ -2911,12 +2911,12 @@ artifacts side by side.
   KDE, XFCE, and other freedesktop-aware launchers without requiring
   the user to log out and back in. The scripts touch only
   system-owned caches under `/usr/share`; the vault under
-  `$XDG_DATA_HOME/paladin/` is never created or altered by package
+  `$XDG_DATA_HOME/paladin-auth/` is never created or altered by package
   install or removal. Identical script bodies ship on `.deb` and
   `.rpm` (single source of truth at
-  `packaging/scripts/paladin-gtk-postinstall.sh` and
-  `packaging/scripts/paladin-gtk-postremove.sh`) so cross-format
-  drift is impossible. `paladin` (CLI) and `paladin-tui` ship no
+  `packaging/scripts/paladin-auth-gtk-postinstall.sh` and
+  `packaging/scripts/paladin-auth-gtk-postremove.sh`) so cross-format
+  drift is impossible. `paladin-auth` (CLI) and `paladin-auth-tui` ship no
   maintainer scripts — they install no desktop entries or hicolor
   icons, so no cache rebuild is required.
 - **Conflicts / replaces.** The three packages coexist; they do not
@@ -2928,11 +2928,11 @@ artifacts side by side.
 ### 11.4 Flatpak
 
 - **App IDs** (reverse-DNS):
-  `org.tamx.Paladin.Cli`, `org.tamx.Paladin.Tui`,
-  `org.tamx.Paladin.Gui`. Derived from the project domain
-  `paladin.tamx.org`; the homepage URL `https://paladin.tamx.org`
+  `org.tamx.PaladinAuth.Cli`, `org.tamx.PaladinAuth.Tui`,
+  `org.tamx.PaladinAuth.Gui`. Derived from the project domain
+  `paladin-auth.tamx.org`; the homepage URL `https://paladin-auth.tamx.org`
   is also the value of the `homepage` Cargo workspace metadata field.
-  The repository URL `https://github.com/FreedomBen/paladin` is the value
+  The repository URL `https://github.com/FreedomBen/paladin-auth` is the value
   of the `repository` Cargo workspace metadata field.
 - **Runtimes.**
   - CLI and TUI: `org.freedesktop.Platform` 23.08 (small, no GUI bits).
@@ -2940,10 +2940,10 @@ artifacts side by side.
     GTK 4.16 and libadwaita 1.6, matching the §11.3 packaging
     baseline).
 - **Sandbox permissions.** No `--share=network` for any front-end (§8 / §2).
-  - CLI and TUI: filesystem access scoped to `xdg-data/paladin:create`
-    (vault) and `xdg-config/paladin:create` (settings). Both inherit the
+  - CLI and TUI: filesystem access scoped to `xdg-data/paladin-auth:create`
+    (vault) and `xdg-config/paladin-auth:create` (settings). Both inherit the
     host terminal's stdio when launched via `flatpak run`. Because
-    `paladin copy` and the TUI clipboard copy / QR-from-clipboard flows are
+    `paladin-auth copy` and the TUI clipboard copy / QR-from-clipboard flows are
     in scope for v0.1, both CLI and TUI Flatpaks also grant
     `--socket=wayland`, `--socket=fallback-x11`, and `--share=ipc` for the
     display clipboard path. They do not request `--socket=session-bus` or
@@ -2963,10 +2963,10 @@ artifacts side by side.
 
 - **Tooling.** [`linuxdeploy`](https://github.com/linuxdeploy/linuxdeploy)
   assembles the AppDir; `appimagetool` seals it. The
-  `linuxdeploy-plugin-gtk` is used for `paladin-gtk` only.
-- **Naming.** `paladin-<version>-x86_64.AppImage`,
-  `paladin-tui-<version>-x86_64.AppImage`,
-  `paladin-gtk-<version>-x86_64.AppImage`.
+  `linuxdeploy-plugin-gtk` is used for `paladin-auth-gtk` only.
+- **Naming.** `paladin-auth-<version>-x86_64.AppImage`,
+  `paladin-auth-tui-<version>-x86_64.AppImage`,
+  `paladin-auth-gtk-<version>-x86_64.AppImage`.
 - **Update channel.** Each AppImage embeds `AppImageUpdate` `zsync`
   metadata pointing at the GitHub Releases feed so users update in place
   without reinstalling.
@@ -3002,7 +3002,7 @@ artifacts side by side.
 
 ### Milestone 0 — Skeleton *(v0.1)*
 - [ ] Initialize workspace `Cargo.toml`, `rust-toolchain.toml`, `.gitignore`.
-- [ ] Create the `paladin-core` crate scaffold (binary crates are added in
+- [ ] Create the `paladin-auth-core` crate scaffold (binary crates are added in
   Milestones 4 / 5 / 7 alongside the work that owns them).
 - [ ] CI: fmt + clippy + test on Linux.
 - [ ] `README.md` with build instructions.
@@ -3031,29 +3031,29 @@ artifacts side by side.
 
 ### Milestone 3 — Import / Export *(v0.1)*
 - [ ] Plaintext export (newline-separated `otpauth://` URI list, Gnome Authenticator–compatible) with overwrite guard + `0600`.
-- [ ] Encrypted export bundle (Paladin format) with overwrite guard + `0600`.
+- [ ] Encrypted export bundle (Paladin Auth format) with overwrite guard + `0600`.
 - [ ] Shared `write_secret_file_atomic` export writer used by CLI/TUI/GUI.
 - [ ] Importer: `otpauth://` URIs (single + list).
-- [ ] Importer: Paladin encrypted bundle; plaintext Paladin vault files return an unsupported-format error.
+- [ ] Importer: Paladin Auth encrypted bundle; plaintext Paladin Auth vault files return an unsupported-format error.
 - [ ] Importer: Aegis plaintext export.
 - [ ] Importer: QR image files and raw RGBA clipboard buffers (`rqrr`).
 - [ ] Auto-detect with explicit `--format` override.
 - [ ] Fixture-based tests for each importer.
 
 ### Milestone 4 — CLI *(v0.1)*
-- [ ] Add the `paladin-cli` crate to the workspace.
+- [ ] Add the `paladin-auth-cli` crate to the workspace.
 - [ ] `init` (with optional passphrase), `add`, `list`, `show`, `peek`, `remove`, `rename`.
 - [ ] `copy` (clipboard copy only; no CLI auto-clear).
 - [ ] `passphrase set / change / remove`.
 - [ ] `export --plaintext / --encrypted`, `import [--format]`.
 - [ ] `settings get / set`.
 - [ ] `--json` output for scripting using the schemas in §5, including
-  JSON envelopes for syntax/usage failures when `paladin` receives
+  JSON envelopes for syntax/usage failures when `paladin-auth` receives
   `--json`.
 - [ ] `assert_cmd` integration tests.
 
 ### Milestone 5 — TUI *(v0.1)*
-- [ ] Add the `paladin-tui` crate to the workspace.
+- [ ] Add the `paladin-auth-tui` crate to the workspace.
 - [ ] Single-screen list view with TOTP gauges and HOTP "advance" key.
 - [ ] Search/filter input.
 - [ ] Add / remove / rename / import / export / passphrase / settings modals; Add covers manual fields, `otpauth://` URI paste, and QR scan from clipboard image.
@@ -3073,15 +3073,15 @@ artifacts side by side.
 - [ ] Reproducible release builds; signed checksums (§11.6).
 - [ ] `packaging/` tree (`deb/`, `rpm/`, `flatpak/`, `appimage/`) and
   `cargo xtask package` orchestration per §11.2.
-- [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin` and
-  `paladin-tui`, signed with `minisign` and uploaded to GitHub Releases
+- [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-auth` and
+  `paladin-auth-tui`, signed with `minisign` and uploaded to GitHub Releases
   per §11.3–§11.6.
-- [ ] Flathub submissions filed for the `paladin` and `paladin-tui`
+- [ ] Flathub submissions filed for the `paladin-auth` and `paladin-auth-tui`
   Flatpaks (§11.4).
 - [ ] v0.1.0 tag.
 
 ### Milestone 7 — GUI *(v0.2)*
-- [ ] Add the `paladin-gtk` crate to the workspace (placeholder for v0.2 work).
+- [ ] Add the `paladin-auth-gtk` crate to the workspace (placeholder for v0.2 work).
 - [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
   Rename / Import / Export / ExportQr / Passphrase / Settings /
   StartupError).
@@ -3100,19 +3100,19 @@ artifacts side by side.
   HOTP counters never advance.
 - [ ] Linux desktop file + icon (consumed by the §11.3 native packages
   and the §11.4 Flatpak manifest).
-- [x] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
+- [x] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-auth-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
 - [ ] Manual test plan documented.
 
 ### Milestone 8 — Cross-front-end QR export *(v0.2)*
-- [x] `paladin-core` QR rendering API: `QrRenderOptions`,
+- [x] `paladin-auth-core` QR rendering API: `QrRenderOptions`,
   `Vault::export_qr_png` / `export_qr_svg` / `export_qr_ansi`,
   free functions `export::qr_png` / `qr_svg` / `qr_ansi`,
   `format_plaintext_qr_export_warning`, and the
   `QR_MODULE_SIZE_PX_*` constants. `qrcode` promoted from optional /
-  dev-only to a regular dependency of `paladin-core`; the public-api
+  dev-only to a regular dependency of `paladin-auth-core`; the public-api
   snapshot is updated to match.
-- [x] CLI `paladin qr <query>` command with `--out` / `--format` /
+- [x] CLI `paladin-auth qr <query>` command with `--out` / `--format` /
   `--module-size-px` / `--force` flags, ANSI stdout default,
   parse-time rejection of binary formats without `--out`, and the
   JSON `{ "written", "format", "account" }` success shape gated on
@@ -3127,7 +3127,7 @@ artifacts side by side.
   are unchanged across every render path).
 
 ### Milestone 9 — Per-account metadata edit *(v0.2)*
-- [ ] `paladin-core`: `AccountEdit` struct, `Vault::edit_account_metadata`,
+- [ ] `paladin-auth-core`: `AccountEdit` struct, `Vault::edit_account_metadata`,
   `Vault::find_duplicate_after_edit`, `validate_account_edit`, and
   `validate_icon_hint_slug` per §4.7. The locked in-mutator pre-check
   order is [reject empty `AccountEdit`, per-field validate +
@@ -3148,12 +3148,12 @@ artifacts side by side.
   re-derivation (including the post-edit `issuer = None` →
   `icon_hint = None` arm), and `Vault::rename` retained as a thin
   forwarder with byte-identical error envelopes to the pre-M9
-  implementation. Cross-process races (two `paladin edit`
+  implementation. Cross-process races (two `paladin-auth edit`
   invocations, or CLI + GTK) are resolved by the file-locking
   already inside `Vault::mutate_and_save` — last-writer-wins with
   the same `save_durability_unconfirmed` / `save_not_committed`
   contract as `rename`.
-- [ ] CLI `paladin edit <query>` with the flag grammar per §5 and the
+- [ ] CLI `paladin-auth edit <query>` with the flag grammar per §5 and the
   success / error JSON shapes. Tests in `tests/cli_edit.rs` covering
   each editable field independently, the `--no-issuer` /
   `--no-icon-hint` clear paths, the parse-time
@@ -3161,9 +3161,9 @@ artifacts side by side.
   `--allow-duplicate` alone), the single-match cardinality, text-mode
   silent-on-success rendering, `--dry-run` returning the projected
   post-edit `AccountSummary` with `committed: false` and zero
-  on-disk mutation, and the `paladin rename` shorthand routing
+  on-disk mutation, and the `paladin-auth rename` shorthand routing
   through the same core mutator. A `[PTY]` smoke test exercises
-  `paladin edit --label new` against an encrypted vault to lock the
+  `paladin-auth edit --label new` against an encrypted vault to lock the
   passphrase-then-resolve precedence.
 - [ ] TUI Edit modal opened with `Shift+E`: three pre-populated text
   rows (Label / Issuer / Icon hint via segmented selector + slug
@@ -3211,7 +3211,7 @@ artifacts side by side.
   unlock view appears. Integration tests cover each front end.
 
 ### Milestone 10 — Vault destroy *(v0.1 CLI + TUI, v0.2 GTK)*
-- [ ] `paladin-core`: `DestroyReport`, `destroy_vault(path)`,
+- [ ] `paladin-auth-core`: `DestroyReport`, `destroy_vault(path)`,
   `format_destroy_warning(path, backup_present)`, and the §5 error
   vocabulary additions (`io_error` operations `unlink_vault_file`,
   `unlink_backup_file`, `fsync_vault_dir`; reuse of the existing
@@ -3224,7 +3224,7 @@ artifacts side by side.
   `primary_deleted: true, backup_deleted: false`); parent-`fsync`
   failure after both unlinks; leftover `.tmp` files do not block the
   report; idempotence when called twice in succession.
-- [ ] CLI `paladin destroy [--yes]`: confirmation grammar parity with
+- [ ] CLI `paladin-auth destroy [--yes]`: confirmation grammar parity with
   `passphrase remove` (exact `yes` after trim; `--yes` required under
   `--json`); KDF flags rejected at parse time; `unsafe_permissions`
   is **not** enforced before unlink (a vault the user can no longer
@@ -3278,9 +3278,9 @@ artifacts side by side.
   TOTP period, HOTP counter overflow, timestamp format, and issuer/label
   normalization.
 - Argon2 header parameters are bounded before KDF work (§4.4).
-- Plaintext Paladin vault files are not an import format in v0.1; use
+- Plaintext Paladin Auth vault files are not an import format in v0.1; use
   plaintext export for portable URI-list import/export (§4.6).
-- Paladin encrypted bundle imports preserve timestamps but assign fresh IDs
+- Paladin Auth encrypted bundle imports preserve timestamps but assign fresh IDs
   for inserted/appended rows; replacements keep the destination ID.
 - CLI `add` input modes, duplicate behavior, and `--allow-duplicate` are
   fixed in §5.
@@ -3315,7 +3315,7 @@ artifacts side by side.
 - Core exposes `Vault::find_duplicate(&ValidatedAccount)` so single-entry
   add flows do not duplicate secret-bearing `(secret, issuer, label)`
   collision comparison in presentation crates.
-- Core exposes `format_unsafe_permissions(&PaladinError)` so permission
+- Core exposes `format_unsafe_permissions(&PaladinAuthError)` so permission
   repair wording consumes the concrete shared error type.
 - Core exposes an import facade (`import::from_file` / `from_bytes`) so
   auto-detect and forced-format dispatch, including
@@ -3343,11 +3343,11 @@ artifacts side by side.
 - Core exposes a feature-gated `test-fault-injection` hook for binary
   integration tests to drive pre-commit and post-commit storage failures
   end-to-end without linking fault-injection code into production builds.
-- Core exposes feature-gated `PaladinError` serialization under
+- Core exposes feature-gated `PaladinAuthError` serialization under
   `error-serde`, off by default, so the CLI can serialize shared error
   kinds without renaming or mapping them locally.
 - Core resolves the default vault path with
-  `ProjectDirs::from("", "", "paladin")`, then appends `vault.bin`.
+  `ProjectDirs::from("", "", "paladin-auth")`, then appends `vault.bin`.
 - v0.1 supports custom Argon2id costs for encrypted writes through
   `Argon2Params` / `EncryptionOptions`; CLI advanced flags expose the same
   controls for init, passphrase set/change, and encrypted export.
@@ -3356,19 +3356,19 @@ artifacts side by side.
   §5.
 - Core-owned `invalid_state.operation` / `state` pairs are stable for
   account-ID method failures, passphrase wrong-state failures, and missing
-  Paladin import passphrases.
+  Paladin Auth import passphrases.
 
 **Decided during core plan follow-up (2026-05-06):**
 - `VaultSettings` keeps private fields but exposes read-only getters for
   each persisted setting.
 - Cargo workspace metadata uses `repository =
-  "https://github.com/FreedomBen/paladin"` and `homepage =
-  "https://paladin.tamx.org"`.
+  "https://github.com/FreedomBen/paladin-auth"` and `homepage =
+  "https://paladin-auth.tamx.org"`.
 - CI-installed cargo subcommands are pinned in `xtask/dev-tools.toml`;
   v0.1 pins `cargo-public-api` there for the public API snapshot gate.
 
 **Decided during CLI plan review (2026-05-06):**
-- Interactive `paladin add` prompts mirror manual flags, collect the form once,
+- Interactive `paladin-auth add` prompts mirror manual flags, collect the form once,
   and return validation errors without reprompt loops.
 - Text-mode destructive confirmations accept only exact `yes` after trimming
   surrounding Unicode whitespace; any other response exits before mutation.
@@ -3379,8 +3379,8 @@ artifacts side by side.
 - Per-account QR export is the v0.2 scope; multi-account / vault-
   migration QR formats (Google Authenticator `otpauth-migration://`
   protobuf) are explicitly out of scope.
-- QR rendering lives in `paladin-core` (`Vault::export_qr_*` plus
-  `export::qr_*`) so the thinness contract on `paladin-gtk` (no
+- QR rendering lives in `paladin-auth-core` (`Vault::export_qr_*` plus
+  `export::qr_*`) so the thinness contract on `paladin-auth-gtk` (no
   direct `image` / `rqrr` / `qrcode` use) stays intact. The CLI
   and TUI also call core's renderers, even though they could pull
   `qrcode` themselves, so render parameters, secret-handling, and
@@ -3398,11 +3398,11 @@ artifacts side by side.
   the half-block renderer takes no options and always emits the quiet
   zone.
 - Warning text is shared via
-  `paladin_core::format_plaintext_qr_export_warning()`. CLI / TUI /
+  `paladin_auth_core::format_plaintext_qr_export_warning()`. CLI / TUI /
   GUI all render it verbatim before any pixel of the QR is shown,
   written, or copied.
 - The CLI surfaces the feature as a new top-level command
-  `paladin qr <query>` rather than overloading `paladin export`,
+  `paladin-auth qr <query>` rather than overloading `paladin-auth export`,
   so the dual-positional `<query> + <out>` shape stays parseable
   and the `--out` / `--format` / `--module-size-px` / `--force`
   flags read naturally.
@@ -3432,7 +3432,7 @@ artifacts side by side.
   no-primary recoverable state is specific to the `create_force` clobber
   sequence after verbatim backup rotation.
 - The no-network hardening test is a concrete source / metadata guard over
-  production `paladin-core`, complementing `cargo deny` instead of relying
+  production `paladin-auth-core`, complementing `cargo deny` instead of relying
   on a missing-symbol compile-fail.
 
 **Decided during row context menu and EditDialog planning (2026-05-26):**
@@ -3456,14 +3456,14 @@ artifacts side by side.
   core boundary as `validation_error` (`field: "edit"`,
   `reason: "empty"`) rather than silently no-op'd. Same-as-prior
   submits bump `updated_at` to match `rename`'s same-label contract.
-- CLI `paladin rename <query> <label>` stays available as the
+- CLI `paladin-auth rename <query> <label>` stays available as the
   label-only positional shorthand and is reimplemented on top of
-  `Vault::edit_account_metadata`. CLI `paladin edit <query>` covers
+  `Vault::edit_account_metadata`. CLI `paladin-auth edit <query>` covers
   the multi-field grammar (`--label` / `--issuer` / `--no-issuer` /
   `--icon-hint` / `--no-icon-hint`) and rejects the no-flag /
   mutually-exclusive cases at parse time.
-- `paladin edit` enforces the same `(secret, issuer, label)`
-  collision rejection as `paladin add`: after per-field validation,
+- `paladin-auth edit` enforces the same `(secret, issuer, label)`
+  collision rejection as `paladin-auth add`: after per-field validation,
   the CLI calls `Vault::find_duplicate_after_edit(id, &edit)` and
   rejects a non-`None` result with `duplicate_account` (carrying
   the existing collision's `AccountSummary`) unless
@@ -3471,14 +3471,14 @@ artifacts side by side.
   surface for symmetry. The TUI Edit modal and GTK `EditDialog`
   call the same helper before submission so all three front ends
   surface `duplicate_account` consistently.
-- `paladin add --icon-hint <slug>` flag mode routes through
-  `paladin_core::parse_icon_hint_token`, matching the interactive
-  `add` prompt and the new `paladin edit --icon-hint <slug>` flag —
+- `paladin-auth add --icon-hint <slug>` flag mode routes through
+  `paladin_auth_core::parse_icon_hint_token`, matching the interactive
+  `add` prompt and the new `paladin-auth edit --icon-hint <slug>` flag —
   one grammar across every CLI icon-hint surface (empty token →
   `IconHintInput::Default`; case-insensitive `none` →
   `IconHintInput::Clear`; otherwise a §4.1 slug →
   `IconHintInput::Slug`).
-- `paladin edit --issuer ""` normalizes through §4.1 issuer
+- `paladin-auth edit --issuer ""` normalizes through §4.1 issuer
   normalization (Unicode whitespace trim; empty becomes `None`) and
   is therefore functionally equivalent to `--no-issuer`. The CLI
   does not special-case it at parse time; core's
@@ -3523,7 +3523,7 @@ lives in [`LICENSE`](LICENSE) at the repo root.
   with AGPL-3.0-or-later. Earlier-GPL-only code is not compatible.
 
 Practical note for an OTP authenticator: the AGPL §13 "remote network
-interaction" clause is largely inert for v0.1 since Paladin runs locally
+interaction" clause is largely inert for v0.1 since Paladin Auth runs locally
 and offers no network service. The clause becomes load-bearing only if a
-downstream user wraps Paladin into a hosted service, in which case they
+downstream user wraps Paladin Auth into a hosted service, in which case they
 must offer source to network users.

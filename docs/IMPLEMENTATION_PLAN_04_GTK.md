@@ -1,4 +1,4 @@
-# Implementation Plan 04 — `paladin-gtk`
+# Implementation Plan 04 — `paladin-auth-gtk`
 
 Source of truth: [DESIGN.md](DESIGN.md) §3, §4.1–§4.7, §5–§14.
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
@@ -6,37 +6,37 @@ Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 > **Status: deferred to v0.2.** Per §13, the GUI is deferred to v0.2; the
 > TUI ships in v0.1. This plan describes the v0.2 work and is included in the
 > initial planning batch so the workspace shape and API contract on
-> `paladin-core` accommodate it.
+> `paladin-auth-core` accommodate it.
 
 ## Scope
 
-Standalone GTK4 binary `paladin-gtk` built with **Relm4** on **GTK4** per
+Standalone GTK4 binary `paladin-auth-gtk` built with **Relm4** on **GTK4** per
 §7, using `libadwaita` widgets per §9.
 Exposes the same operations as the TUI: search/list of accounts, copy code,
 HOTP `next` with reveal window, add account (manual, `otpauth://` URI
 paste, or scan-from-clipboard image), remove account, import/export,
 settings (auto-lock + clipboard-clear), passphrase set/change/remove.
 
-Per DESIGN §3: depends only on `paladin-core`. Never reaches into
-`paladin-cli` or `paladin-tui`.
+Per DESIGN §3: depends only on `paladin-auth-core`. Never reaches into
+`paladin-auth-cli` or `paladin-auth-tui`.
 
 ## Crate layout
 
 ```
-crates/paladin-gtk/
-├── Cargo.toml             # license = "AGPL-3.0-or-later"; declares both [lib] and [[bin]] (name = "paladin-gtk") so tests/ can compile against internal modules
+crates/paladin-auth-gtk/
+├── Cargo.toml             # license = "AGPL-3.0-or-later"; declares both [lib] and [[bin]] (name = "paladin-auth-gtk") so tests/ can compile against internal modules
 ├── build.rs               # gresource bundle (icons, *.ui, *.css) + glib-compile-schemas → OUT_DIR/schemas/
 ├── data/
-│   ├── paladin-gtk.gresource.xml
-│   ├── org.tamx.Paladin.Gui.gschema.xml  # per-user GSettings schema (show-section-headers, show-column-headers, show-next-code-column, …); installs to /usr/share/glib-2.0/schemas/
+│   ├── paladin-auth-gtk.gresource.xml
+│   ├── org.tamx.PaladinAuth.Gui.gschema.xml  # per-user GSettings schema (show-section-headers, show-column-headers, show-next-code-column, …); installs to /usr/share/glib-2.0/schemas/
 │   ├── ui/                # *.ui templates
 │   ├── icons/             # app icon + fallbacks
-│   ├── metainfo/          # AppStream metadata; file is named `<app-id>.metainfo.xml` (`org.tamx.Paladin.Gui.metainfo.xml`) so Flathub's reproducible-build check matches; installs to `/usr/share/metainfo/<app-id>.metainfo.xml`
+│   ├── metainfo/          # AppStream metadata; file is named `<app-id>.metainfo.xml` (`org.tamx.PaladinAuth.Gui.metainfo.xml`) so Flathub's reproducible-build check matches; installs to `/usr/share/metainfo/<app-id>.metainfo.xml`
 │   ├── style.css
-│   └── org.tamx.Paladin.Gui.desktop  # named after the §11.4 app ID so the same file installs verbatim in native and Flatpak builds
+│   └── org.tamx.PaladinAuth.Gui.desktop  # named after the §11.4 app ID so the same file installs verbatim in native and Flatpak builds
 ├── src/
 │   ├── lib.rs             # re-exports internal modules so integration tests in tests/ can reach them; binary entry stays in main.rs
-│   ├── main.rs            # adw::init, register resources, RelmApp::new("org.tamx.Paladin.Gui").run(...) — ID matches the §11.4 Flatpak app ID and the desktop file's StartupWMClass
+│   ├── main.rs            # adw::init, register resources, RelmApp::new("org.tamx.PaladinAuth.Gui").run(...) — ID matches the §11.4 Flatpak app ID and the desktop file's StartupWMClass
 │   ├── cli.rs             # GlobalArgs (--vault, --no-color); reject --json
 │   ├── app/
 │   │   ├── mod.rs         # app submodule namespace
@@ -54,25 +54,25 @@ crates/paladin-gtk/
 │   ├── export_dialog.rs   # ExportDialog (file picker + format + overwrite + encrypted passphrase)
 │   ├── export_qr_dialog.rs # ExportQrDialog — per-account QR export: single-page adw::Dialog opening directly on the rendered QR (no warning-ack gate) — caption + on-screen gtk::Picture (PNG staged at open by decide_export_qr_target) + Save PNG / Save SVG / Copy image to GDK clipboard / Done + informational warning footer
 │   ├── passphrase_dialog.rs # PassphraseDialog (set / change / remove flows)
-│   ├── destroy_dialog.rs  # DestroyDialog (Milestone 10) — AdwAlertDialog with destructive styling; calls paladin_core::destroy_vault on gio::spawn_blocking; opened from the primary-menu *Delete Vault…* entry, the unlock-dialog and startup-error footer link, and the Ctrl+Shift+Delete accelerator
+│   ├── destroy_dialog.rs  # DestroyDialog (Milestone 10) — AdwAlertDialog with destructive styling; calls paladin_auth_core::destroy_vault on gio::spawn_blocking; opened from the primary-menu *Delete Vault…* entry, the unlock-dialog and startup-error footer link, and the Ctrl+Shift+Delete accelerator
 │   ├── init_dialog.rs     # InitDialog — vault creation from the GUI (incl. create_force clobber confirmation)
 │   ├── unlock_dialog.rs   # UnlockComponent — encrypted vaults only (passphrase entry)
 │   ├── startup_error.rs   # non-mutating startup / open error view
 │   ├── settings.rs        # SettingsComponent (`AdwPreferencesDialog` with toggles + spinners over the §4.7 VaultSettings fields)
-│   ├── otpauth_uri_paste.rs # `otpauth://`-paste pure-logic state machine for the AddAccount URI sub-path; validates via paladin_core::parse_otpauth
-│   ├── qr_clipboard.rs    # Clipboard-QR "scan from clipboard image" pure-logic glue: gdk::Texture → RGBA buffer (bounded by QR_RGBA_MAX_BYTES) → paladin_core::import::qr decoding
+│   ├── otpauth_uri_paste.rs # `otpauth://`-paste pure-logic state machine for the AddAccount URI sub-path; validates via paladin_auth_core::parse_otpauth
+│   ├── qr_clipboard.rs    # Clipboard-QR "scan from clipboard image" pure-logic glue: gdk::Texture → RGBA buffer (bounded by QR_RGBA_MAX_BYTES) → paladin_auth_core::import::qr decoding
 │   ├── effect_ownership.rs # In-flight vault-effect ownership state machine: serializes every vault-touching blocking effect through one slot so the UI rejects re-entry while a save is mid-flight
 │   ├── toast_queue.rs     # Newest-wins toast collapse queue with a TOAST_MIN_VISIBLE (1 s) minimum-visible guarantee; every add_toast site in AppModel funnels through ToastQueue so back-to-back toasts on the shared adw::ToastOverlay stop stacking
 │   ├── shortcuts_window.rs # `gtk::ShortcutsWindow` content + `format_app_shortcuts_window_*` helpers shared with the primary menu, the `gio::Application::set_accels_for_action` table, and the `tests/startup_probes.rs` lockstep pin
-│   ├── clipboard.rs       # gdk::Clipboard plumbing driving paladin_core::policy::clipboard_clear::ClipboardClearPolicy
-│   ├── clipboard_clear.rs # Clipboard auto-clear pure-logic glue; GUI owns the gdk::Clipboard reads/writes + glib timeout source, but every policy decision routes through paladin_core::policy::clipboard_clear (Zeroizing<Vec<u8>> for the captured value)
-│   ├── auto_lock.rs       # GLib idle/timeout plumbing driving paladin_core::policy::auto_lock::IdlePolicy (encrypted-only; plaintext no-op)
-│   ├── hotp_reveal.rs     # per-row reveal window via paladin_core::policy::hotp_reveal::deadline (uses paladin_core::HOTP_REVEAL_SECS)
+│   ├── clipboard.rs       # gdk::Clipboard plumbing driving paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+│   ├── clipboard_clear.rs # Clipboard auto-clear pure-logic glue; GUI owns the gdk::Clipboard reads/writes + glib timeout source, but every policy decision routes through paladin_auth_core::policy::clipboard_clear (Zeroizing<Vec<u8>> for the captured value)
+│   ├── auto_lock.rs       # GLib idle/timeout plumbing driving paladin_auth_core::policy::auto_lock::IdlePolicy (encrypted-only; plaintext no-op)
+│   ├── hotp_reveal.rs     # per-row reveal window via paladin_auth_core::policy::hotp_reveal::deadline (uses paladin_auth_core::HOTP_REVEAL_SECS)
 │   ├── icon_resolution.rs # gtk::IconTheme lookup against AccountSummary.icon_hint via the pure `resolve_display_icon` decision function
 │   ├── gsettings.rs       # per-user gio::Settings access for the show-section-headers / show-column-headers / show-next-code-column schema keys (and any future GUI-only prefs)
 │   ├── secret_fields.rs   # extract/clear passphrase + manual-secret entries; keeps secret-bearing widget state out of AppModel / AppMsg / AppOutput per DESIGN §8
-│   ├── search.rs          # case-insensitive issuer/label filtering using paladin_core::account_matches_search (parity with CLI / TUI)
-│   └── ticker.rs          # paladin_core::TICK_INTERVAL_MS glib::timeout_add_local source for TOTP gauge updates, Next-code projection, and clipboard staleness checks; install / teardown gated on AppState
+│   ├── search.rs          # case-insensitive issuer/label filtering using paladin_auth_core::account_matches_search (parity with CLI / TUI)
+│   └── ticker.rs          # paladin_auth_core::TICK_INTERVAL_MS glib::timeout_add_local source for TOTP gauge updates, Next-code projection, and clipboard staleness checks; install / teardown gated on AppState
 └── tests/
     ├── icon_resolution.rs
     ├── search_logic.rs
@@ -111,7 +111,7 @@ crates/paladin-gtk/
     ├── ticker_logic.rs             # TICK_INTERVAL_MS install / teardown gating against AppState (encrypted-locked teardown, unlocked install) and per-tick projection wiring
     ├── no_tokio_source.rs
     ├── thinness.rs
-    ├── desktop_entry_logic.rs      # `data/org.tamx.Paladin.Gui.desktop` fields (Name, Categories, Exec, StartupWMClass) match §11.4 + match the binary
+    ├── desktop_entry_logic.rs      # `data/org.tamx.PaladinAuth.Gui.desktop` fields (Name, Categories, Exec, StartupWMClass) match §11.4 + match the binary
     ├── metainfo_logic.rs           # AppStream metainfo XML schema sanity checks (release notes, component-id, content-rating, summary length)
     ├── icon_assets_logic.rs        # required app icon sizes + scalable SVG presence; filenames match the app ID
     ├── gresource_manifest_logic.rs # gresource bundle includes every *.ui / *.css / icon path the runtime needs
@@ -139,27 +139,27 @@ inclusion.
 
 - `AppModel` — owns the resolved vault path plus the `Missing`, `Locked`,
   `Unlocked`, `UnlockedBusy`, or `StartupError` state. Startup runs
-  `paladin_core::inspect(path)` and
+  `paladin_auth_core::inspect(path)` and
   routes the result: `VaultStatus::Plaintext` opens directly to
   `AccountListComponent`, `Encrypted` presents `UnlockComponent`, and
   `Missing` presents `InitDialog`. `default_vault_path`, `inspect`, or
   startup `open` failures that are not wrong-passphrase retries route to
   `StartupErrorComponent`, which never creates, overwrites, or repairs vault
   files; `unsafe_permissions` renders the `Some(text)` from
-  `paladin_core::format_unsafe_permissions(&err)`, falling back to the
+  `paladin_auth_core::format_unsafe_permissions(&err)`, falling back to the
   generic error text only if the formatter unexpectedly returns `None`.
 - `InitDialog` — only path that creates a vault from the GUI (v0.2;
   parity with DESIGN §6, §7). Two `AdwPasswordEntryRow` passphrase
   fields (twice-confirmed; both fields empty select plaintext) plus an
   explicit "create vault" confirmation button. Initial routing of the
-  user-supplied path runs through `paladin_core::classify_init_precheck`
+  user-supplied path runs through `paladin_auth_core::classify_init_precheck`
   (matching the CLI init flow and the core §5 truth table); the dialog
   renders the
   `InitPrecheck::Clear` case as the normal create path,
   `InitPrecheck::Existing` as the destructive-confirmation gate
   (see below), and `InitPrecheck::Propagate` as a non-mutating inline
   error. The plaintext path renders
-  `paladin_core::format_plaintext_storage_warning()` verbatim — the
+  `paladin_auth_core::format_plaintext_storage_warning()` verbatim — the
   same wording `PassphraseDialog`'s remove flow and the CLI / TUI use —
   and the user must tick the confirmation before submission is enabled.
   Encrypted submission requires two non-empty matching entries; one-empty
@@ -169,33 +169,33 @@ inclusion.
   `VaultInit::Encrypted(EncryptionOptions::new(secret)?)`) and
   dispatches `init_dialog::run_init_worker` on `gio::spawn_blocking`
   — the pure-logic worker body that calls
-  `paladin_core::Store::create(path, init)` then `Vault::save(&store)`
+  `paladin_auth_core::Store::create(path, init)` then `Vault::save(&store)`
   (the encrypted path validates the passphrase and runs the §4.4
   Argon2id KDF before save). The explicit save mirrors the CLI
-  `paladin init` flow so the freshly created vault is durable on
+  `paladin-auth init` flow so the freshly created vault is durable on
   disk by the time the worker returns, even when the user never
   adds an account. `run_init_worker` routes failures through
   `classify_create_error` so the dispatch site receives
   `InitWorkerEffect::Success { vault, store }`,
   `InitWorkerEffect::DestructiveGate`, or
   `InitWorkerEffect::InlineError(InlineError)` without re-deriving
-  the routing off the raw `PaladinError`.
+  the routing off the raw `PaladinAuthError`.
   On success, swaps
   `AppModel` to `Unlocked` with the returned
   `(Vault, Store)` and routes to `AccountListComponent`. The dialog
   stays open and surfaces `unsafe_permissions` (rendered as the
-  `Some(text)` from `paladin_core::format_unsafe_permissions(&err)`,
+  `Some(text)` from `paladin_auth_core::format_unsafe_permissions(&err)`,
   falling back to the generic error text if it returns `None`),
   `save_not_committed`, and `save_durability_unconfirmed` inline.
   `vault_exists` (if a vault appeared between `inspect` and `create`,
   i.e. the precheck reported `Clear` but the race resolved to
   `Existing`) opens an in-dialog `AdwAlertDialog` with `destructive-action`
   styling whose body is rendered from
-  `paladin_core::format_init_force_warning(existing_path)` so wording
+  `paladin_auth_core::format_init_force_warning(existing_path)` so wording
   stays identical to the CLI `init --force` confirmation. On
   confirm, the dialog re-dispatches `run_init_worker` with
   `InitWorkerMode::CreateForce` so the worker calls
-  `paladin_core::Store::create_force(path, init)` on
+  `paladin_auth_core::Store::create_force(path, init)` on
   `gio::spawn_blocking` (the §5 staged-clobber pipeline commits
   inline, no extra `Vault::save` step needed),
   consuming the pending `VaultInit` created from the already-entered
@@ -215,7 +215,7 @@ inclusion.
 - `AccountListComponent` — `gtk::ColumnView` (inside a `gtk::ScrolledWindow`)
   reading a `gtk::SingleSelection` that wraps a
   `gio::ListStore<crate::row_item::RowItem>`.  Each account in
-  `paladin_core::AccountSummary` order is one persistent `RowItem`
+  `paladin_auth_core::AccountSummary` order is one persistent `RowItem`
   GObject; the six columns (Account, Code, Time, Next, Copy, More) are
   bound via `gtk::SignalListItemFactory` builders shipped from
   `crate::column_view` (`build_account_column_factory`,
@@ -271,8 +271,8 @@ inclusion.
 
   Whether section rows are interleaved at all is gated by the
   per-user `show-section-headers` boolean GSettings key (schema id
-  `org.tamx.Paladin.Gui`, defined in
-  `data/org.tamx.Paladin.Gui.gschema.xml` and compiled into
+  `org.tamx.PaladinAuth.Gui`, defined in
+  `data/org.tamx.PaladinAuth.Gui.gschema.xml` and compiled into
   `OUT_DIR/schemas/` by `build.rs`).  Default `false`.  The flag
   is latched on `AccountListComponent` and passed into every
   `apply_interleaved_splice_plan` call;
@@ -319,7 +319,7 @@ inclusion.
 
   The Next column's `set_visible` is the AND of two latches:
   the per-user `show-next-code-column` boolean GSettings key
-  (schema id `org.tamx.Paladin.Gui`, default **`true`**) and the
+  (schema id `org.tamx.PaladinAuth.Gui`, default **`true`**) and the
   same `column_view::any_totp(&rows)` probe that gates the Time
   column.  Both latches live on `AccountListComponent`; the
   GSettings latch is updated by
@@ -332,7 +332,7 @@ inclusion.
   splice.
 
   The schema is GUI-only — vault behavior preferences (auto-lock,
-  clipboard auto-clear) stay in `paladin_core::VaultSettings`
+  clipboard auto-clear) stay in `paladin_auth_core::VaultSettings`
   inside the encrypted payload per DESIGN §4.7.  The
   `crate::gsettings` module is the only place that knows about
   schema ids / key names; callers go through `app_settings()`,
@@ -427,7 +427,7 @@ inclusion.
   to-search, focus shortcut, the bar's own close button) in addition
   to its own click. Filtering rebuilds the row set from
   `Vault::iter()` so it can call
-  `paladin_core::account_matches_search(&Account, query)` before
+  `paladin_auth_core::account_matches_search(&Account, query)` before
   projecting matches to `AccountSummary`; the `gio::ListStore<RowItem>`
   never holds secret fields (each `RowItem` only carries an
   `AccountRowModel` projection plus the row's currently bound
@@ -435,7 +435,7 @@ inclusion.
   matching as §5 / §6; no Unicode normalization. Empty issuer is
   allowed and the colon is still present in the match key; insertion
   order is preserved among matches. After a filter rebuild, selection
-  is computed by `paladin_core::select_after_filter(prev, filtered)`
+  is computed by `paladin_auth_core::select_after_filter(prev, filtered)`
   (preserve prior selection if still present, else first match) —
   parity with the TUI. Selection lives on the `gtk::SingleSelection`
   that wraps the `gio::ListStore<RowItem>`; the per-row position is
@@ -507,8 +507,8 @@ inclusion.
 
   HOTP rows hide their code until the user activates "next"
   (advances counter and saves); the reveal window deadline comes
-  from `paladin_core::policy::hotp_reveal::deadline(now)` (built on
-  the shared `paladin_core::HOTP_REVEAL_SECS`), and after expiry
+  from `paladin_auth_core::policy::hotp_reveal::deadline(now)` (built on
+  the shared `paladin_auth_core::HOTP_REVEAL_SECS`), and after expiry
   the code returns to the hidden state, matching the TUI.
   Activating "next" during an open reveal advances to the next
   counter and restarts the shared reveal window with the newly
@@ -538,7 +538,7 @@ inclusion.
   being left: the manual Base32 secret, the URI text, and any pending
   duplicate/add-anyway state.
   The URI path uses an `AdwEntryRow` for the URI string; on submit
-  the entry is passed to `paladin_core::parse_otpauth` on the main
+  the entry is passed to `paladin_auth_core::parse_otpauth` on the main
   thread (no I/O, cheap), the resulting `ValidatedAccount` shares the
   manual path's duplicate detection, "add anyway" override, and
   `Vault::mutate_and_save` insertion, and `validation_error` parser failures
@@ -551,22 +551,22 @@ inclusion.
   a `gdk::Texture` from the GDK clipboard, allocates an exact
   `width * height * 4` straight (non-premultiplied) RGBA8 buffer with
   overflow-checked multiplication, rejects sizes above
-  `paladin_core::QR_RGBA_MAX_BYTES` before allocation / download, and downloads
+  `paladin_auth_core::QR_RGBA_MAX_BYTES` before allocation / download, and downloads
   via a `gdk::TextureDownloader` set to `gdk::MemoryFormat::R8g8b8a8` with
   row stride `width * 4`. The default `Texture::download` path is avoided
   because it yields premultiplied pixels the QR decoder cannot consume.
   Width, height, bytes, and `import_time` are then passed to
-  `paladin_core::import::qr_image_bytes`. Manual fields cover label,
+  `paladin_auth_core::import::qr_image_bytes`. Manual fields cover label,
   optional issuer, Base32 secret, algorithm, digits, kind, TOTP period,
   HOTP counter, and the icon-hint mode (`Default from issuer`, `No icon`,
-  or explicit slug), matching `paladin_core::AccountInput` and
+  or explicit slug), matching `paladin_auth_core::AccountInput` and
   `IconHintInput`; the icon-hint entry text is normalized through
-  `paladin_core::parse_icon_hint_token` so the slug / `default` / `none`
+  `paladin_auth_core::parse_icon_hint_token` so the slug / `default` / `none`
   parsing matches the CLI/TUI add modals exactly. UI defaults match the CLI manual-add defaults in DESIGN
   §5: TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0, and icon hint
   derived from issuer when the user leaves it unset. Manual entries use
-  `paladin_core::validate_manual`; validation warnings show inline with
-  `paladin_core::format_validation_warning()` and do
+  `paladin_auth_core::validate_manual`; validation warnings show inline with
+  `paladin_auth_core::format_validation_warning()` and do
   not block creation, while field-level parse errors (invalid Base32,
   empty label, out-of-range digits / period / counter), plus any
   core-returned `validation_error`, block submission and stay inline
@@ -577,7 +577,7 @@ inclusion.
   that consumes the pending `ValidatedAccount` on the duplicate-allowed path
   (CLI parity with `--allow-duplicate`, appending a new account that shares the
   `(secret, issuer, label)` triple). Clipboard QR imports always go through
-  `paladin_core::import::qr_image_bytes` (which returns
+  `paladin_auth_core::import::qr_image_bytes` (which returns
   `Vec<ValidatedAccount>` regardless of QR count) with a fixed
   `ImportConflict::Skip` and report imported/skipped/warning counts (parity
   with §6); a single-QR clipboard image is the degenerate one-element case
@@ -613,24 +613,24 @@ inclusion.
   cancel / submit / close.
 - `ImportDialog` — `gtk::FileDialog` (the GTK 4.10+ replacement for the
   deprecated `gtk::FileChooserNative`) for the source file, a format
-  selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
+  selector (auto-detect or explicit `otpauth` / `aegis` / `paladin-auth` /
   `qr`), and an on-conflict selector (`skip` / `replace` / `append`).
-  Before any Paladin-bundle passphrase prompt, the GUI calls
-  `paladin_core::classify_paladin_import_precheck(path, forced_format)` so
+  Before any Paladin Auth-bundle passphrase prompt, the GUI calls
+  `paladin_auth_core::classify_paladin_auth_import_precheck(path, forced_format)` so
   it shares the CLI / TUI prompt decision table. `PromptForPassphrase`
   prompts for the bundle passphrase inside the dialog; `Reject(err)`
   surfaces that exact core error inline without prompting (for example
   `unsupported_plaintext_vault`, `invalid_header`, or
   `unsupported_format_version`); and `NoPrompt` consumes no passphrase and
-  continues through `paladin_core::import::from_file` so the import facade
+  continues through `paladin_auth_core::import::from_file` so the import facade
   owns `io_error`, `unsupported_import_format`, and format-specific
   validation errors. If the source path or forced
   format changes after a bundle passphrase has been entered, the passphrase
   row is cleared and the probe / prompt flow starts over. The selected
-  `paladin_core::import::from_file` call, the
+  `paladin_auth_core::import::from_file` call, the
   `Vault::import_accounts(accounts, conflict, import_time)` merge, and
   the surrounding `Vault::mutate_and_save` run as one serialized
-  `gio::spawn_blocking` vault effect (the encrypted-Paladin variant runs
+  `gio::spawn_blocking` vault effect (the encrypted-Paladin Auth variant runs
   Argon2id). The merge uses the user's policy and the same `import_time`
   used by `ImportOptions`;
   imported/skipped/replaced/appended/warning counts surface inline.
@@ -646,7 +646,7 @@ inclusion.
   errors and never mutate vault state.
 - `ExportDialog` — format selector (plaintext newline-separated
   `otpauth://` URI list — Gnome Authenticator–compatible — or
-  encrypted Paladin bundle) and `gtk::FileDialog` for the
+  encrypted Paladin Auth bundle) and `gtk::FileDialog` for the
   destination path. Overwriting an existing file is rejected unless
   the user confirms an inline overwrite gate (parity with CLI
   `--force`). Any overwrite gate is resolved before encrypted-bundle
@@ -661,9 +661,9 @@ inclusion.
   keep the fresh-AEAD-key derivation off the main loop; plaintext for
   symmetry, since `write_secret_file_atomic` chains multiple `fsync`s).
   Plaintext exports render
-  `paladin_core::format_plaintext_export_warning()` verbatim and the
+  `paladin_auth_core::format_plaintext_export_warning()` verbatim and the
   user must confirm before the write proceeds. Writes go through
-  `paladin_core::write_secret_file_atomic`.
+  `paladin_auth_core::write_secret_file_atomic`.
   On success the dialog closes and surfaces the written path in the main
   status/toast surface;
   `io_error`, `save_not_committed`, `save_durability_unconfirmed`,
@@ -708,7 +708,7 @@ inclusion.
     * A four-button footer: `Save as PNG…`, `Save as SVG…`,
       `Copy image`, and `Done`. `Save as PNG…` / `Save as SVG…` open
       a `gtk::FileDialog::save` and write through
-      `paladin_core::write_secret_file_atomic` on
+      `paladin_auth_core::write_secret_file_atomic` on
       `gio::spawn_blocking`. `Copy image` builds a
       `gdk::ContentProvider::for_value` carrying a `glib::Bytes` of
       the PNG payload with MIME `image/png` and hands it to
@@ -719,7 +719,7 @@ inclusion.
       the dialog.
     * Beneath the actions, an **informational warning footer**
       `gtk::Label` (the `warning` style class) rendering
-      `paladin_core::format_plaintext_qr_export_warning()` verbatim.
+      `paladin_auth_core::format_plaintext_qr_export_warning()` verbatim.
       It reminds the user to protect the QR but does **not** gate the
       code behind a click — the warning informs only (the
       clipboard-history risk per DESIGN §8 bullet 6 is part of this
@@ -757,7 +757,7 @@ inclusion.
   with an inline error. `set` and `change` also reject zero-length new
   passphrases inline with `invalid_passphrase`
   (`reason: "zero_length"`). `remove` renders
-  `paladin_core::format_plaintext_storage_warning()` verbatim and
+  `paladin_auth_core::format_plaintext_storage_warning()` verbatim and
   requires explicit confirmation before mutation. The available
   sub-flow is gated by `Vault::is_encrypted()`: `set` is enabled only
   when the getter returns `false`; `change` and `remove` only when it
@@ -769,7 +769,7 @@ inclusion.
   (GNOME-HIG irreversible-action pattern: heading + warning body +
   destructive-styled action button). The heading reads
   `Delete vault?` and the body is sourced verbatim from
-  `paladin_core::format_destroy_warning(path, backup_present)` so
+  `paladin_auth_core::format_destroy_warning(path, backup_present)` so
   the GTK, CLI text mode, and TUI modal all render byte-identical
   wording. `backup_present` is populated at open time by probing
   the sibling `vault.bin.bak` via `std::fs::try_exists`; an I/O
@@ -814,7 +814,7 @@ inclusion.
   focused it.
   On confirm the dialog dispatches an `AppMsg::DestroyVault {
   path }` to the `AppModel`, which calls
-  `paladin_core::destroy_vault(path)` on `gio::spawn_blocking`
+  `paladin_auth_core::destroy_vault(path)` on `gio::spawn_blocking`
   (the unlink + `fsync` is fast, but `spawn_blocking` keeps the
   threading model consistent with every other vault-touching
   effect — and lets the in-flight ownership state machine in
@@ -879,10 +879,10 @@ inclusion.
   surfaces.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts. Spinners clamp to
-  `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
+  `paladin_auth_core::AUTO_LOCK_SECS_MIN..=paladin_auth_core::AUTO_LOCK_SECS_MAX`
   and
-  `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`
-  (the §5 bounds, sourced from `paladin_core::ui_contract`). Uses
+  `paladin_auth_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_auth_core::CLIPBOARD_CLEAR_SECS_MAX`
+  (the §5 bounds, sourced from `paladin_auth_core::ui_contract`). Uses
   **live-apply** (each toggle change immediately invokes the matching
   setter inside `Vault::mutate_and_save`; spinner changes are debounced
   500 ms via `glib::timeout_add_local` so holding +/- does not fire one
@@ -899,7 +899,7 @@ inclusion.
 Passphrase fields, manual-secret fields, and the Add dialog's
 `otpauth://` URI entry are kept out of `AppModel`, `AppMsg`,
 `AppOutput`, and other long-lived component state. The GTK entry
-buffer is the unavoidable UI boundary; Paladin-owned copies are created only
+buffer is the unavoidable UI boundary; Paladin Auth-owned copies are created only
 at submit time, immediately wrapped in `secrecy::SecretString` for core
 calls, and zeroized when dropped. Submit, cancel, dialog close, and auto-lock
 clear the relevant GTK entry widgets before the component returns to its idle
@@ -913,9 +913,9 @@ for encrypted creation) in a zeroizing pending-create slot while the
 `vault_exists` destructive-confirmation gate is open. The pending value is
 consumed on "add anyway" / `create_force` and zeroized on cancel, close,
 replacement, or auto-lock. HOTP reveal codes and pending clipboard-clear
-values are likewise stored in Paladin-owned zeroizing buffers. GTK/GDK still
+values are likewise stored in Paladin Auth-owned zeroizing buffers. GTK/GDK still
 receive ordinary UI or clipboard copies at the display boundary; the
-Paladin-owned buffers are cleared when expired, replaced, or dropped.
+Paladin Auth-owned buffers are cleared when expired, replaced, or dropped.
 Validation/status messages never include secret values.
 
 ## Auto-lock and clipboard auto-clear (per §7)
@@ -924,11 +924,11 @@ Behave the same as the TUI, including **opt-in default** and the
 **plaintext-vault auto-lock no-op**. GTK owns the idle-event sourcing
 (`gtk::EventControllerKey`, motion controllers) and timer plumbing
 (`glib::timeout_add_local` integrated with the GTK main loop); the
-policy decisions route through `paladin-core`.
+policy decisions route through `paladin-auth-core`.
 
 - Auto-lock: idle events sourced through `gtk::EventControllerKey` /
   pointer controllers wired at the `AppModel` root drive
-  `paladin_core::policy::auto_lock::IdlePolicy`
+  `paladin_auth_core::policy::auto_lock::IdlePolicy`
   (`should_arm` / `next_deadline` / `is_expired`), which owns the
   encrypted-only gating and timer math. The deadline call passes
   `Vault::is_encrypted()` so plaintext vaults return `None` in core, not
@@ -945,7 +945,7 @@ policy decisions route through `paladin-core`.
 - Clipboard auto-clear: mode-agnostic — runs in both plaintext and
   encrypted vaults. GTK owns the `gdk::Clipboard.read_text` / `set_text`
   calls; the only-if-unchanged decision routes through
-  `paladin_core::policy::clipboard_clear::ClipboardClearPolicy`
+  `paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy`
   (`schedule` at copy time, `should_clear` on wake against the current
   clipboard text). Stale tokens are dropped first by the policy; pending
   copied values are zeroized after the clear attempt or stale-token drop.
@@ -962,7 +962,7 @@ TUI ignore the field entirely.
 ## Keyboard shortcuts (per §7)
 
 Every binding listed in DESIGN §7 is sourced from a single pinned helper
-inside `crates/paladin-gtk/src/app/model.rs` (or, where noted,
+inside `crates/paladin-auth-gtk/src/app/model.rs` (or, where noted,
 `shortcuts_window.rs` / `account_list.rs` / `add_account.rs`) so the menu,
 the `GtkShortcutsWindow`, the `gio::Application::set_accels_for_action`
 wiring, and the manual test plan never drift. The accelerator string column
@@ -1115,7 +1115,7 @@ are listed in the row's single space-separated `accelerator` property so
 `--no-color` is a parser-level no-op in the GUI: there is no ANSI palette
 to disable, and theming is delegated to Adwaita / the system theme.
 `--json` is rejected at parse time with clap's standard text
-diagnostic — `paladin-gtk` has no JSON output mode and never emits a
+diagnostic — `paladin-auth-gtk` has no JSON output mode and never emits a
 JSON envelope, mirroring DESIGN §5. The rejection is text-only at
 clap's normal usage exit code; there is no argv pre-scan equivalent of
 the CLI's strict-mode behavior because the GUI is never expected to be
@@ -1125,14 +1125,14 @@ start from `ImportDialog`.
 ## Vault interaction
 
 - Resolve vault path from `--vault` or
-  `paladin_core::default_vault_path()`, then call
-  `paladin_core::inspect(path)` to resolve the mode.
-- Plaintext → call `paladin_core::open(path, VaultLock::Plaintext)` directly
+  `paladin_auth_core::default_vault_path()`, then call
+  `paladin_auth_core::inspect(path)` to resolve the mode.
+- Plaintext → call `paladin_auth_core::open(path, VaultLock::Plaintext)` directly
   on the GTK main loop (no Argon2; just bincode decode and the §4.3 perm
   check, fast enough that the spawn-blocking thread hop costs more than the
   call itself), then jump to `AccountListComponent`.
 - Encrypted → present `UnlockComponent`. On submit, call
-  `paladin_core::open(path, VaultLock::Encrypted(secret))` on
+  `paladin_auth_core::open(path, VaultLock::Encrypted(secret))` on
   `gio::spawn_blocking` so the §4.4 Argon2 KDF (m=64 MiB defaults) does not
   block the GTK main loop; the dialog shows a spinner until the join
   completes. Wrong passphrase surfaces inline. `unsafe_permissions` and other
@@ -1141,18 +1141,18 @@ start from `ImportDialog`.
   `unsupported_format_version`, `kdf_params_out_of_bounds`, `io_error`)
   transition to `StartupErrorComponent` with a retry action that re-runs
   vault-path resolution and `inspect`; `unsafe_permissions` renders the
-  `Some(text)` from `paladin_core::format_unsafe_permissions(&err)` (§4.7),
+  `Some(text)` from `paladin_auth_core::format_unsafe_permissions(&err)` (§4.7),
   falling back to the generic error text if it returns `None`, so the
   wording matches the CLI and TUI exactly.
 - Missing → present `InitDialog`. v0.2 GUI creates vaults in-app on
   explicit user confirmation (DESIGN §6, §7). Plaintext path: empty
   passphrase fields plus the unencrypted-storage warning. Encrypted
   path: twice-confirmed passphrase. Both go through
-  `paladin_core::create` on `gio::spawn_blocking`. If `create` returns
+  `paladin_auth_core::create` on `gio::spawn_blocking`. If `create` returns
   `vault_exists` (a vault appeared between `inspect` and `create`), the
   dialog opens an `AdwAlertDialog` destructive-confirmation gate
   worded the same as the CLI `init --force` warning; on confirm it
-  re-runs the operation through `paladin_core::create_force` on
+  re-runs the operation through `paladin_auth_core::create_force` on
   `gio::spawn_blocking` (rotating the existing vault to `vault.bin.bak`
   per §5 staged clobber). Cancelling the destructive gate leaves the
   existing vault intact.
@@ -1189,7 +1189,7 @@ While `UnlockedBusy` is active:
 - Non-mutating navigation and already-rendered list display may remain
   responsive using `ui_snapshot`, but anything that would need fresh `Vault`
   access waits for the worker result. Quit / window-close requests are deferred
-  until the worker returns, so Paladin does not intentionally abandon a
+  until the worker returns, so Paladin Auth does not intentionally abandon a
   save-bearing operation mid-flight.
 - Settings live-apply never runs parallel saves. Spinner debouncing keeps only
   the latest value seen before a save starts; toggle changes that would overlap
@@ -1324,15 +1324,15 @@ work top-to-bottom without re-deriving the touch points.
   synchronous `gdk::Clipboard::set_text` path.
 * **Auto-clear arming:** the success path arms
   `pending_clipboard_clear` through the existing
-  `paladin_core::ClipboardClearPolicy::schedule` call inside
+  `paladin_auth_core::ClipboardClearPolicy::schedule` call inside
   `schedule_copy`; the next-code copy reuses that pipeline so a
   user with `clipboard_clear_enabled = true` sees the same wipe
   behavior as a current-code copy.
 * **Toast wording source:** the format string
   `Next code copied, valid in {n}s` is duplicated in
-  `paladin_gtk` rather than shared with `paladin_tui::app::state::format_next_code_copied`
+  `paladin_auth_gtk` rather than shared with `paladin_auth_tui::app::state::format_next_code_copied`
   (the two binary crates cannot depend on each other and a
-  `paladin-core` text helper would expand the public surface for
+  `paladin-auth-core` text helper would expand the public surface for
   one wording). Pin the wording in the
   `account_list_logic.rs` toast test and in the `tests/snapshots/`
   shortcuts-window snapshot so drift between the two crates
@@ -1347,7 +1347,7 @@ the implementer can claim by ticking it.
 
 * [x] **gschema entry.** Add a `<key name="show-next-code-column"
   type="b"><default>true</default></key>` block to
-  `data/org.tamx.Paladin.Gui.gschema.xml` next to the existing
+  `data/org.tamx.PaladinAuth.Gui.gschema.xml` next to the existing
   `show-section-headers` / `show-column-headers` keys. `build.rs`
   recompiles the gresource bundle on save.
 * [x] **`gsettings.rs` accessors.** Add `pub const
@@ -1444,7 +1444,7 @@ the implementer can claim by ticking it.
   are added together, which is exactly the lockstep guard the
   pattern provides. The same two helpers are surfaced through
   the primary menu and the `GtkShortcutsWindow` so the wiring
-  stays in lockstep. *(Landed inside `crates/paladin-gtk/src/app/model.rs`
+  stays in lockstep. *(Landed inside `crates/paladin-auth-gtk/src/app/model.rs`
   — the existing `format_app_*_accelerator` / `_action` /
   `_action_name` helpers already live there alongside
   `format_app_window_accelerator_bindings`; the action target is
@@ -1462,7 +1462,7 @@ the implementer can claim by ticking it.
   existing "menu accelerators don't surface toast errors"
   pattern). The cell click path is unaffected by this gate
   because cells are `sensitive=false` for HOTP rows. *(Landed
-  inside `crates/paladin-gtk/src/app/model.rs`: a
+  inside `crates/paladin-auth-gtk/src/app/model.rs`: a
   `build_app_copy_next_code_action()` factory adds the
   `"copy-next-code"` `gio::SimpleAction` to the bundled
   `build_app_window_action_group`; the existing
@@ -1482,7 +1482,7 @@ the implementer can claim by ticking it.
   Source the accelerator string from
   `format_app_copy_next_code_accelerator` so future renames stay
   in lockstep. *(Landed inside
-  `crates/paladin-gtk/src/shortcuts_window.rs`. The crate keeps
+  `crates/paladin-auth-gtk/src/shortcuts_window.rs`. The crate keeps
   the shortcuts-window definition in a single `shortcuts_window`
   module rather than a `view/` submodule, and the renderer is a
   pure-Rust XML template generator
@@ -1496,14 +1496,14 @@ the implementer can claim by ticking it.
   the existing `format_app_copy_next_code_action` /
   `format_app_copy_next_code_action_name` /
   `format_app_copy_next_code_accelerator` siblings in
-  `crates/paladin-gtk/src/app/model.rs` so the user-visible label
+  `crates/paladin-auth-gtk/src/app/model.rs` so the user-visible label
   stays in lockstep with the action wiring on a future rename.)*
 * [x] **`tests/snapshots/` shortcuts-window snapshot.** Update
   the `GtkShortcutsWindow` snapshot to include the new row.
   *(The crate does not use `insta` snapshot files; the
   "shortcuts-window snapshot" is the in-source unit test
   `format_app_shortcuts_window_entries_lists_*_rows_in_display_order`
-  in `crates/paladin-gtk/src/shortcuts_window.rs` that pins the
+  in `crates/paladin-auth-gtk/src/shortcuts_window.rs` that pins the
   entry array length and per-index `(accelerator, title)` pairs.
   That test was renamed from `_lists_five_rows_*` to
   `_lists_six_rows_*` with the new Copy-Next-Code assertion
@@ -1533,11 +1533,11 @@ the implementer can claim by ticking it.
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace --all-targets`, `cargo deny check`,
   `cargo audit`. `cargo public-api` snapshot stays unchanged
-  (no new `paladin-core` API).
+  (no new `paladin-auth-core` API).
 
 ### Open decisions / non-goals
 
-* **No new `paladin-core` API.** The TUI commit already added
+* **No new `paladin-auth-core` API.** The TUI commit already added
   `Vault::totp_next_code`; the GTK implementation reuses it
   verbatim. No public-api.txt diff is expected.
 * **No new CSS.** Both `.dim-label` and `.flat` are stock
@@ -1606,12 +1606,12 @@ re-deriving the touch points.
   `compose_copy_image_button_sensitive`). The staged values are held
   in `Zeroizing<Vec<u8>>` / `Zeroizing<String>` so the drop on dialog
   close or auto-lock zeroes the bytes. The warning text is rendered
-  verbatim from `paladin_core::format_plaintext_qr_export_warning()`
+  verbatim from `paladin_auth_core::format_plaintext_qr_export_warning()`
   as an **informational footer** `gtk::Label` (the `warning` style
   class, `set_wrap: true`) beneath the QR and its save actions — it
   informs but does not gate the code behind a click. A pure-logic
   test
-  (`format_export_qr_dialog_warning_body_matches_paladin_core_verbatim`)
+  (`format_export_qr_dialog_warning_body_matches_paladin_auth_core_verbatim`)
   pins the verbatim relationship so future warning rewordings flow
   through one helper.
 * **Thread isolation.** `Vault::export_qr_png` and
@@ -1669,9 +1669,9 @@ re-deriving the touch points.
   pruning so an auto-lock fire drops the dialog widget (along
   with the staged PNG / SVG / texture buffers) before the
   `(Vault, Store)` pair is destroyed.
-* **Thinness contract.** `paladin-gtk` continues to forbid
+* **Thinness contract.** `paladin-auth-gtk` continues to forbid
   direct `image` / `rqrr` / `qrcode` use through
-  `tests/thinness.rs`. PNG bytes leave `paladin-core` as
+  `tests/thinness.rs`. PNG bytes leave `paladin-auth-core` as
   `Zeroizing<Vec<u8>>`, SVG bytes leave as `Zeroizing<String>`;
   the GTK crate consumes PNG through `gdk::Texture::from_bytes`
   (for the on-screen `Picture`) and `write_secret_file_atomic`
@@ -1690,14 +1690,14 @@ single reviewable commit (mirroring the shape of the
 unticked box is a discrete unit of work the implementer can claim
 by ticking it.
 
-* [x] **`paladin-core` API.** Land the §4.7 surface first:
+* [x] **`paladin-auth-core` API.** Land the §4.7 surface first:
   `QrRenderOptions`, the `QR_MODULE_SIZE_PX_*` constants,
   `Vault::export_qr_png` / `export_qr_svg` / `export_qr_ansi`,
   the parallel `export::qr_*` free functions, and
   `format_plaintext_qr_export_warning`. `qrcode` moves from
   `[dev-dependencies]` to `[dependencies]` in
-  `crates/paladin-core/Cargo.toml`. Update
-  `crates/paladin-core/public-api.txt` to match. The core-side
+  `crates/paladin-auth-core/Cargo.toml`. Update
+  `crates/paladin-auth-core/public-api.txt` to match. The core-side
   tests (DESIGN §10 "QR export") land in the same commit.
 * [x] **Kebab menu order.** Extend
   `account_list::build_kebab_menu_model` to append `Show QR…`
@@ -1748,7 +1748,7 @@ by ticking it.
   the `"warning"` child mounted on init. Inside `"warning"`,
   mount Page 1's `adw::ActionRow` rendering
   `compose_export_qr_warning_body() ->
-  paladin_core::format_plaintext_qr_export_warning()`. Mount the
+  paladin_auth_core::format_plaintext_qr_export_warning()`. Mount the
   ack `adw::SwitchRow` and route its
   `connect_active_notify` through
   `ExportQrDialogMsg::AckToggled(bool)` only — toggling the
@@ -1761,7 +1761,7 @@ by ticking it.
   `compose_show_qr_button_sensitive(state)` against
   `state.ack_revealed`; `connect_clicked` dispatches
   `ExportQrDialogMsg::ShowQr`). Pin the verbatim relationship by
-  `format_export_qr_dialog_warning_body_matches_paladin_core_verbatim`,
+  `format_export_qr_dialog_warning_body_matches_paladin_auth_core_verbatim`,
   the button-sensitivity rule by
   `compose_show_qr_button_sensitive_false_until_ack_revealed` /
   `compose_show_qr_button_sensitive_true_after_ack_toggled_on`,
@@ -1821,7 +1821,7 @@ by ticking it.
   `run_export_qr_save_worker` on `gio::spawn_blocking`. For PNG,
   the worker reuses the already-staged `state.staged_png` bytes
   (populated when the user pressed Show-QR) and writes them
-  through `paladin_core::write_secret_file_atomic`; the worker
+  through `paladin_auth_core::write_secret_file_atomic`; the worker
   never calls `vault.export_qr_png` a second time, so on-screen
   Picture bytes and on-disk bytes are byte-identical by
   construction. For SVG, `state.staged_svg` is empty until the
@@ -1829,7 +1829,7 @@ by ticking it.
   `vault.export_qr_svg(...)` once, parks the result in
   `state.staged_svg` (so a subsequent save-as-SVG to a different
   path reuses it), and writes through
-  `paladin_core::write_secret_file_atomic`. Pin the worker
+  `paladin_auth_core::write_secret_file_atomic`. Pin the worker
   round-trip in
   `run_export_qr_save_worker_plaintext_png_succeeds_and_writes_0600_file`
   + the matching SVG variant.
@@ -1954,11 +1954,11 @@ by ticking it.
   is safe on every auto-lock fire even when the user never
   opened the dialog.
 * [x] **Thinness contract.** Re-run
-  `cargo test -p paladin-gtk --test thinness` to confirm the
+  `cargo test -p paladin-auth-gtk --test thinness` to confirm the
   GTK crate still passes — the new file imports only
-  `paladin_core::*` and `gtk` / `gdk` / `glib` / `adw` /
+  `paladin_auth_core::*` and `gtk` / `gdk` / `glib` / `adw` /
   `relm4`. No `image` / `rqrr` / `qrcode` imports anywhere in
-  `crates/paladin-gtk/src/`.
+  `crates/paladin-auth-gtk/src/`.
 * [x] **Manual test plan.** Append five scenarios to
   `tests/manual/MANUAL_TEST_PLAN.md`:
     * "Open the kebab on a TOTP row → `Show QR…` is the second
@@ -2028,7 +2028,7 @@ by ticking it.
 * **No new GSettings key.** Unlike the Next-code column, the QR
   dialog has no per-user "show / hide" preference — the feature
   is an explicit per-account action, not a list-view affordance.
-  No `data/org.tamx.Paladin.Gui.gschema.xml` change is needed.
+  No `data/org.tamx.PaladinAuth.Gui.gschema.xml` change is needed.
 * **No new CSS.** `gtk::Picture`, `adw::ActionRow`,
   `adw::SwitchRow`, `gtk::Button`, and the standard
   `destructive-action` / `suggested-action` style classes carry
@@ -2067,7 +2067,7 @@ This section pins the v0.2 row-context-menu surface — four menu
 entries shared between right-click, the GNOME-canonical
 `Menu` / `Shift+F10` keyboard equivalent, and the per-row kebab —
 plus the new `EditDialog` that the menu's "Edit…" entry mounts.
-Both pieces depend on `paladin-core` Phase M
+Both pieces depend on `paladin-auth-core` Phase M
 (`AccountEdit` + `Vault::edit_account_metadata`); the GTK work is
 red until that ships.
 
@@ -2179,7 +2179,7 @@ red until that ships.
   its tests share one decision function.
     1. *Label* — required; pre-populated from
        `AccountSummary::label`. Validates through
-       `paladin_core::validate_label` on each keystroke; the
+       `paladin_auth_core::validate_label` on each keystroke; the
        row's `error_message` is cleared / set on transition.
        Buffer, after §4.1 label normalization (trim), equal
        to `AccountSummary::label` projects to
@@ -2192,7 +2192,7 @@ red until that ships.
        cosmetic touch.
     2. *Issuer* — optional; pre-populated from
        `AccountSummary::issuer.as_deref().unwrap_or("")`.
-       Validates through `paladin_core::validate_issuer` on
+       Validates through `paladin_auth_core::validate_issuer` on
        each keystroke; the row's `error_message` is cleared /
        set on transition. An inline
        `Adw.EntryRow::add_suffix(gtk::Button)` clears the row
@@ -2230,7 +2230,7 @@ red until that ships.
        lowercasing): uppercase input surfaces the §5
        `validation_error` (`field: "icon_hint"`, `reason:
        "invalid_chars"`) inline beside the row. Parses through
-       `paladin_core::parse_icon_hint_token` on each keystroke
+       `paladin_auth_core::parse_icon_hint_token` on each keystroke
        (driving the inline `error_message`, Save sensitivity,
        and the icon-preview suffix). Projection rules
        (mirroring the issuer's WYSIWYS layout so empty buffers
@@ -2289,7 +2289,7 @@ red until that ships.
   spawning a worker (same affordance the AddDialog uses for
   `Vault::find_duplicate`). The single-writer-per-vault
   contract holds for v0.2: cross-process races (e.g. a
-  concurrent `paladin edit` from the CLI) are handled by
+  concurrent `paladin-auth edit` from the CLI) are handled by
   `Vault::mutate_and_save`'s file lock under
   last-writer-wins semantics; the GTK dialog does not poll
   the vault between mount and submit. The handler feeds the
@@ -2416,10 +2416,10 @@ red until that ships.
 ### Build order
 
 The work lands in slices so each commit ships a green test slice
-and a working app. `paladin-core` Phase M must land before any
-`paladin-gtk` slice can be wired through — until then, every GTK
+and a working app. `paladin-auth-core` Phase M must land before any
+`paladin-auth-gtk` slice can be wired through — until then, every GTK
 slice is gated on a stub `Vault::edit_account_metadata` shim that
-the test fixture provides through `paladin-core`'s
+the test fixture provides through `paladin-auth-core`'s
 `test-fault-injection` feature. Slices 1–3 are internal-only and
 do **not** ship to users on their own: slice 1 relabels the menu
 entry from `Rename…` to `Edit…` while still mounting
@@ -2554,7 +2554,7 @@ core.
    `Effect::EditAccountMetadata { edit: AccountEdit {
    label: Some(...), ..Default::default() } }` matches what
    the retired `RenameDialog` used to send, locking the
-   regression contract. `Vault::rename` (and `paladin
+   regression contract. `Vault::rename` (and `paladin-auth
    rename` and the TUI Rename modal) stay — only the GTK
    rename surface is retired. `Vault::rename` is
    intentionally retained as a forwarder over
@@ -2586,29 +2586,29 @@ core.
 
 ## Linux desktop integration
 
-- `data/org.tamx.Paladin.Gui.desktop` shipped at
-  `/usr/share/applications/org.tamx.Paladin.Gui.desktop` per §11.3.
-  Sets `Name=Paladin`, `Icon=org.tamx.Paladin.Gui` (the icon-theme
+- `data/org.tamx.PaladinAuth.Gui.desktop` shipped at
+  `/usr/share/applications/org.tamx.PaladinAuth.Gui.desktop` per §11.3.
+  Sets `Name=Paladin Auth`, `Icon=org.tamx.PaladinAuth.Gui` (the icon-theme
   name resolves to the app-ID-named files installed below),
-  `StartupWMClass=org.tamx.Paladin.Gui`,
+  `StartupWMClass=org.tamx.PaladinAuth.Gui`,
   `Categories=Utility;Security;`, and security/authenticator terms in
-  `Keywords=`, and uses `Exec=paladin-gtk` with no file/URI placeholders.
+  `Keywords=`, and uses `Exec=paladin-auth-gtk` with no file/URI placeholders.
   v0.2 does not register a MIME type or URI handler; imports start inside
   `ImportDialog`, matching the global-flag parser contract above. Both
   native (`.deb` / `.rpm`) and Flatpak builds install the desktop entry
   verbatim with this app-ID-based filename so AppStream's
-  `<launchable type="desktop-id">org.tamx.Paladin.Gui.desktop</launchable>`
+  `<launchable type="desktop-id">org.tamx.PaladinAuth.Gui.desktop</launchable>`
   resolves identically and a single metainfo file works in every
   packaging format.
 - App icon at
-  `/usr/share/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg`,
+  `/usr/share/icons/hicolor/scalable/apps/org.tamx.PaladinAuth.Gui.svg`,
   named after the §11.4 app ID so the same files satisfy native and
   Flathub install-layout checks without per-format renaming. Symbolic
   variant at
-  `…/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg` if the
+  `…/symbolic/apps/org.tamx.PaladinAuth.Gui-symbolic.svg` if the
   Adwaita-style symbolic palette warrants it; a
   `16`/`24`/`32`/`48`/`64`/`128`/`256`/`512` PNG fallback set
-  named `org.tamx.Paladin.Gui.png` is shipped under
+  named `org.tamx.PaladinAuth.Gui.png` is shipped under
   `/usr/share/icons/hicolor/<size>/apps/` for non-SVG icon
   consumers. The 64 / 128 / 256 / 512 sizes cover what GNOME
   Shell's app-drawer and search results actually request; without
@@ -2621,10 +2621,10 @@ core.
 
 ## Packaging (per §11)
 
-`paladin-gtk` ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.2
+`paladin-auth-gtk` ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.2
 (§11.1). Implementation owes the release pipeline:
 
-- **Cargo.toml metadata.** `crates/paladin-gtk/Cargo.toml` inherits
+- **Cargo.toml metadata.** `crates/paladin-auth-gtk/Cargo.toml` inherits
   `description`, `repository`, `homepage`, `license` (set to
   `"AGPL-3.0-or-later"` at the workspace), `edition`, and
   `rust-version` from the workspace's `[workspace.package]` table
@@ -2635,24 +2635,24 @@ core.
   `keywords` and `categories` fields locally. The
   packaging pipeline sources these values from Cargo metadata when
   building `.deb` / `.rpm` so the per-format configs in
-  `packaging/deb/paladin-gtk.yaml` and `packaging/rpm/paladin-gtk.yaml`
+  `packaging/deb/paladin-auth-gtk.yaml` and `packaging/rpm/paladin-auth-gtk.yaml`
   stay minimal.
-- **`.deb` / `.rpm` (via `nfpm`).** `packaging/deb/paladin-gtk.yaml`
-  and `packaging/rpm/paladin-gtk.yaml` install
-  `/usr/bin/paladin-gtk`, the desktop entry at
+- **`.deb` / `.rpm` (via `nfpm`).** `packaging/deb/paladin-auth-gtk.yaml`
+  and `packaging/rpm/paladin-auth-gtk.yaml` install
+  `/usr/bin/paladin-auth-gtk`, the desktop entry at
   `/usr/share/applications/`, the AppStream metainfo file at
-  `/usr/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml`
+  `/usr/share/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml`
   (same source file the Flatpak manifest exports), and the icon set
   under `/usr/share/icons/hicolor/`. Debian declares `libgtk-4-1
   (>= 4.16)` and `libadwaita-1-0 (>= 1.6)`; Fedora declares the
   matching `gtk4` and `libadwaita` package names.
   Distributions whose stable channel ships older GTK / libadwaita
-  cannot install `paladin-gtk` until their baseline rises — this is
+  cannot install `paladin-auth-gtk` until their baseline rises — this is
   intentional so the GUI uses the current Adwaita widget set
   (`AdwAlertDialog`, `AdwAboutDialog`, `AdwPreferencesDialog`) without
   a deprecated-widget shim. No maintainer
   scripts: packages do not create or alter vaults; vault files live under
-  `$XDG_DATA_HOME/paladin/` when created by `paladin init` or by the
+  `$XDG_DATA_HOME/paladin-auth/` when created by `paladin-auth init` or by the
   GUI's `InitDialog`. The §11
   packaging pipeline validates the
   installed desktop entry with `desktop-file-validate`, validates the
@@ -2662,38 +2662,38 @@ core.
   post-install hooks.
 
   *Implemented (v0.2 Milestone 7, `.rpm` + `.deb`):* the local
-  entry points are `cargo xtask package --frontend paladin-gtk
-  --format rpm` (or `make rpm-paladin-gtk`) and `cargo xtask
-  package --frontend paladin-gtk --format deb` (or
-  `make deb-paladin-gtk`). The xtask runs `cargo build --release
-  --locked -p paladin-gtk`, then invokes `nfpm` inside the
+  entry points are `cargo xtask package --frontend paladin-auth-gtk
+  --format rpm` (or `make rpm-paladin-auth-gtk`) and `cargo xtask
+  package --frontend paladin-auth-gtk --format deb` (or
+  `make deb-paladin-auth-gtk`). The xtask runs `cargo build --release
+  --locked -p paladin-auth-gtk`, then invokes `nfpm` inside the
   `docker.io/goreleaser/nfpm` container under rootless podman with
-  `${PALADIN_VERSION}` exported. Output lands in
-  `target/dist/paladin-gtk-*.rpm` /
-  `target/dist/paladin-gtk_*.deb`. The CI `packaging-dry-run` job
+  `${PALADIN_AUTH_VERSION}` exported. Output lands in
+  `target/dist/paladin-auth-gtk-*.rpm` /
+  `target/dist/paladin-auth-gtk_*.deb`. The CI `packaging-dry-run` job
   (`.github/workflows/ci.yml`) still runs the same `nfpm
-  package -f packaging/{rpm,deb}/paladin-gtk.yaml` commands
+  package -f packaging/{rpm,deb}/paladin-auth-gtk.yaml` commands
   directly so the dry-run does not depend on xtask being green.
   The CLI and TUI `.deb` manifests
-  (`packaging/deb/paladin.yaml`, `packaging/deb/paladin-tui.yaml`)
+  (`packaging/deb/paladin-auth.yaml`, `packaging/deb/paladin-auth-tui.yaml`)
   reuse the same `--format deb` xtask wiring and are built
   alongside the GTK `.deb` by the tag-driven release workflow.
-- **Flatpak.** `packaging/flatpak/paladin-gtk.yml` declares
+- **Flatpak.** `packaging/flatpak/paladin-auth-gtk.yml` declares
   `org.gnome.Platform//47` (and the matching SDK) — that runtime
   bundles GTK 4.16 and libadwaita 1.6, matching the
   packaging baseline so the Adwaita widget set
   (`AdwAlertDialog`, `AdwAboutDialog`, `AdwPreferencesDialog`) is
   available identically in native and Flatpak builds. No `--share=network`, and the §11.4 sandbox
   permissions:
-  `xdg-data/paladin:create`, `xdg-config/paladin:create`, plus the
+  `xdg-data/paladin-auth:create`, `xdg-config/paladin-auth:create`, plus the
   Wayland and X11 fallback clipboard path required for `gdk::Clipboard`
   (`--socket=wayland`, `--socket=fallback-x11`, `--share=ipc`). The
-  Flatpak app ID is the §11.4 ID `org.tamx.Paladin.Gui`. The same
+  Flatpak app ID is the §11.4 ID `org.tamx.PaladinAuth.Gui`. The same
   string is passed to
   `RelmApp::new(...)` in `main.rs` and set as `StartupWMClass` in
-  `data/org.tamx.Paladin.Gui.desktop`, so window-to-launcher
+  `data/org.tamx.PaladinAuth.Gui.desktop`, so window-to-launcher
   mapping works identically in both Flatpak and native installs. The manifest exports
-  `data/metainfo/org.tamx.Paladin.Gui.metainfo.xml` to
+  `data/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml` to
   `/usr/share/metainfo/` and validates it during the packaging dry-run.
   `flatpak-builder` consumes the
   tagged release tarball with vendored Cargo deps so Flathub builds
@@ -2703,14 +2703,14 @@ core.
   schemas, and pixbuf loaders ship inside the bundle. The
   `AppRun` is the linuxdeploy default which exports
   `GTK_PATH` / `GDK_PIXBUF_MODULE_FILE` to the bundled paths
-  before invoking `paladin-gtk`. Output is
-  `paladin-gtk-<version>-x86_64.AppImage`; embedded `zsync` points
+  before invoking `paladin-auth-gtk`. Output is
+  `paladin-auth-gtk-<version>-x86_64.AppImage`; embedded `zsync` points
   at the GitHub Releases feed for in-place updates (§11.5).
 - **Reproducible builds.** Same workspace pipeline as the CLI /
   TUI: vendored deps, `cargo build --locked`,
   `SOURCE_DATE_EPOCH` from the release tag. The `gresource`
   bundle is built deterministically by `glib-compile-resources`
-  (input file order is fixed by `paladin-gtk.gresource.xml`).
+  (input file order is fixed by `paladin-auth-gtk.gresource.xml`).
   `linuxdeploy` runs after `cargo build` and does not re-link.
 - **Signing.** `.deb`, `.rpm`, and AppImage are signed with
   `minisign` per §11.6; the public key plus signature ride
@@ -2724,9 +2724,9 @@ core.
 - **Release workflow.** `.github/workflows/release.yml` triggers on
   `v*` tag pushes (and supports `workflow_dispatch` for dry-runs).
   It builds inside the same `fedora:42` container as the CI
-  packaging-dry-run job, derives `PALADIN_VERSION` by stripping the
-  leading `v` from the tag, builds `paladin-cli`, `paladin-tui`, and
-  `paladin-gtk` with `cargo build --release --locked`, then runs
+  packaging-dry-run job, derives `PALADIN_AUTH_VERSION` by stripping the
+  leading `v` from the tag, builds `paladin-auth-cli`, `paladin-auth-tui`, and
+  `paladin-auth-gtk` with `cargo build --release --locked`, then runs
   `nfpm` against the three `packaging/rpm/*.yaml` manifests and the
   three `packaging/deb/*.yaml` manifests. The GTK `.deb` and `.rpm`
   payloads are extracted and re-validated with
@@ -2751,7 +2751,7 @@ The 1.6 floor is set so the GUI uses the current widget set
 deprecated `AdwMessageDialog` / `AdwAboutWindow` /
 `AdwPreferencesWindow` (the last of which is deprecated as of
 libadwaita 1.6). Distributions whose stable channel ships older
-GTK / libadwaita cannot install `paladin-gtk` until their baseline
+GTK / libadwaita cannot install `paladin-auth-gtk` until their baseline
 rises — accepted as a deliberate trade-off rather than maintain a
 deprecated-widget compatibility shim. Keep the build-time and
 runtime-declared baselines aligned on any future bump.
@@ -2770,7 +2770,7 @@ Milestone 7 sign-off in §"Definition of done".
 ### Pure-logic unit tests
 
 These run without a display server. Each lives under
-`crates/paladin-gtk/tests/`.
+`crates/paladin-auth-gtk/tests/`.
 
 #### `tests/icon_resolution.rs`
 
@@ -2780,17 +2780,17 @@ These run without a display server. Each lives under
 - [x] Failed `gtk::IconTheme` lookup falls back to the placeholder
   icon.
 - [x] Icon-hint token parsing through
-  `paladin_core::parse_icon_hint_token` (slug / `default` / `none`)
+  `paladin_auth_core::parse_icon_hint_token` (slug / `default` / `none`)
   matches the CLI / TUI add-modal behavior.
 
 #### `tests/search_logic.rs`
 
-- [x] Filtering routes through `paladin_core::account_matches_search`
+- [x] Filtering routes through `paladin_auth_core::account_matches_search`
   with the same case-insensitive substring rules as the CLI / TUI
   (empty issuer keeps the colon in the match key, no Unicode
   normalization).
 - [x] Post-filter selection routes through
-  `paladin_core::select_after_filter` (preserve prior selection if
+  `paladin_auth_core::select_after_filter` (preserve prior selection if
   still present, else first match).
 - [x] CLI's `id:<hex>` prefix form is **not** honored by the GUI
   search (parity with the TUI).
@@ -2810,7 +2810,7 @@ These run without a display server. Each lives under
 #### `tests/startup_probes.rs`
 
 - [x] `run_startup_probes` resolves the requested path, calls
-  `paladin_core::inspect`, and opens plaintext vaults into
+  `paladin_auth_core::inspect`, and opens plaintext vaults into
   `AppState::Unlocked` with the live `(Vault, Store)` pair.
 - [x] Missing vaults route to `AppState::Missing` without creating a
   file; encrypted vaults route to `AppState::Locked` without running
@@ -2842,7 +2842,7 @@ These run without a display server. Each lives under
 #### `tests/auto_lock_logic.rs`
 
 - [x] Idle-event source feeds
-  `paladin_core::policy::auto_lock::IdlePolicy::should_arm` /
+  `paladin_auth_core::policy::auto_lock::IdlePolicy::should_arm` /
   `next_deadline` / `is_expired` outcomes correctly for both
   encrypted and plaintext vaults (plaintext returns `None` from
   core, not via a GUI shortcut).
@@ -2869,7 +2869,7 @@ These run without a display server. Each lives under
   drop. Both `None` (read failure, missing clipboard text) and
   `Some("")` collapse to an empty buffer so the only-if-unchanged
   byte-equality check in
-  `paladin_core::ClipboardClearPolicy::should_clear` (via
+  `paladin_auth_core::ClipboardClearPolicy::should_clear` (via
   `crate::clipboard_clear::evaluate_wake`) resolves to
   `WakeDecision::Mismatch` in those cases — the wipe stays its
   hand rather than clobbering whatever the user has on the
@@ -2882,7 +2882,7 @@ These run without a display server. Each lives under
 #### `tests/clipboard_clear_logic.rs`
 
 - [x] Copy capture routes through
-  `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`.
+  `paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`.
 - [x] Wake routes through `should_clear` against the current
   `gdk::Clipboard` text (only-if-unchanged).
 - [x] Stale tokens are dropped first by the policy.
@@ -2894,8 +2894,8 @@ These run without a display server. Each lives under
 #### `tests/hotp_reveal_logic.rs`
 
 - [x] Reveal window timing routes through
-  `paladin_core::policy::hotp_reveal::deadline` (uses
-  `paladin_core::HOTP_REVEAL_SECS`).
+  `paladin_auth_core::policy::hotp_reveal::deadline` (uses
+  `paladin_auth_core::HOTP_REVEAL_SECS`).
 - [x] Visible counter label tracks `Code.counter_used` during reveal;
   the row reverts to the stored next counter when hidden.
 - [x] Activating "next" during an open reveal advances the counter
@@ -2930,7 +2930,7 @@ These run without a display server. Each lives under
   `kdf_params_out_of_bounds`, `io_error`) routes to
   `StartupErrorComponent`.
 - [x] `unsafe_permissions` rendering uses the `Some(text)` from
-  `paladin_core::format_unsafe_permissions(&err)`, falling back to
+  `paladin_auth_core::format_unsafe_permissions(&err)`, falling back to
   the generic error text only when the formatter returns `None`.
 - [x] Retry helper for `StartupErrorComponent` re-runs vault-path
   resolution + `inspect`; widget action wiring is tracked in the
@@ -2941,16 +2941,16 @@ These run without a display server. Each lives under
 - [x] RGBA byte-length / stride preparation matches `width * 4`
   rows / `width * height * 4` total with overflow-checked
   multiplication.
-- [x] Sizes above `paladin_core::QR_RGBA_MAX_BYTES` reject before
+- [x] Sizes above `paladin_auth_core::QR_RGBA_MAX_BYTES` reject before
   allocation / download.
 - [x] Decoded buffer is passed to
-  `paladin_core::import::qr_image_bytes` with `ImportConflict::Skip`
+  `paladin_auth_core::import::qr_image_bytes` with `ImportConflict::Skip`
   and reports imported / skipped / warning counts (parity with §6).
 
 #### `tests/account_list_logic.rs`
 
 - [x] `row_models_from_vault` projects accounts through
-  `paladin_core::AccountSummary` without exposing secret bytes.
+  `paladin_auth_core::AccountSummary` without exposing secret bytes.
 - [x] Empty vaults render no rows; populated vaults preserve insertion
   order across TOTP and HOTP rows.
 - [x] Empty issuer display collapses to the bare label instead of a
@@ -2974,8 +2974,8 @@ These run without a display server. Each lives under
 
 - [ ] `build.rs`-compiled gschema declares the
   `show-section-headers` key under schema id
-  `org.tamx.Paladin.Gui` so
-  `paladin_gtk::gsettings::show_section_headers` resolves at
+  `org.tamx.PaladinAuth.Gui` so
+  `paladin_auth_gtk::gsettings::show_section_headers` resolves at
   runtime.
 - [ ] Default value of `show-section-headers` is `false` (per
   DESIGN §7).
@@ -2988,8 +2988,8 @@ These run without a display server. Each lives under
   controller.
 - [x] `build.rs`-compiled gschema declares the
   `show-next-code-column` key under schema id
-  `org.tamx.Paladin.Gui` so
-  `paladin_gtk::gsettings::show_next_code_column` resolves at
+  `org.tamx.PaladinAuth.Gui` so
+  `paladin_auth_gtk::gsettings::show_next_code_column` resolves at
   runtime.  Pinned by `schema_carries_show_next_code_column_key`.
 - [x] Default value of `show-next-code-column` is `true` (per
   DESIGN §7 — the Next column is on by default and hideable via
@@ -3090,16 +3090,16 @@ These run without a display server. Each lives under
   `invalid_passphrase` (`reason: "confirmation_mismatch"`).
 - [x] Plaintext-warning gate must be ticked before submission is
   enabled; the rendered text matches
-  `paladin_core::format_plaintext_storage_warning()` verbatim.
-- [x] `paladin_core::classify_init_precheck` routing:
+  `paladin_auth_core::format_plaintext_storage_warning()` verbatim.
+- [x] `paladin_auth_core::classify_init_precheck` routing:
   `InitPrecheck::Clear` opens the normal create path,
   `InitPrecheck::Existing` opens the destructive-confirmation gate,
   `InitPrecheck::Propagate` shows an inline error.
 - [x] `vault_exists` returned by `create` after a `Clear` precheck
   (race) opens the destructive-confirmation gate worded by
-  `paladin_core::format_init_force_warning(existing_path)`.
+  `paladin_auth_core::format_init_force_warning(existing_path)`.
 - [x] Confirming the destructive gate routes through
-  `paladin_core::create_force` and consumes the pending
+  `paladin_auth_core::create_force` and consumes the pending
   `VaultInit`.
 - [x] Cancelling the destructive gate leaves the existing vault
   intact and zeroizes the pending `VaultInit`.
@@ -3140,12 +3140,12 @@ These run without a display server. Each lives under
 #### `tests/add_account_logic.rs`
 
 - [x] Manual Add maps widget fields onto
-  `paladin_core::AccountInput`, including kind-conditional TOTP
+  `paladin_auth_core::AccountInput`, including kind-conditional TOTP
   period / HOTP counter handling.
 - [x] Icon-hint text normalizes through
-  `paladin_core::parse_icon_hint_token` for slug / `default` /
+  `paladin_auth_core::parse_icon_hint_token` for slug / `default` /
   `none` parity with CLI / TUI add flows.
-- [x] `paladin_core::validate_manual` warnings proceed with inline
+- [x] `paladin_auth_core::validate_manual` warnings proceed with inline
   warning display; field parse errors and core `validation_error`
   reject inline without mutating the vault.
 - [x] Duplicate detection returns the existing account and stages a
@@ -3183,7 +3183,7 @@ These run without a display server. Each lives under
 #### `tests/edit_dialog_logic.rs`
 
 v0.2 (DESIGN §7 Milestone 9). All bullets are red until Phase M
-ships in `paladin-core` and the GTK EditDialog lands.
+ships in `paladin-auth-core` and the GTK EditDialog lands.
 
 - [ ] Pre-populates the three rows from the focused account's
   `AccountSummary` (label, issuer-or-empty-string, icon-hint
@@ -3362,9 +3362,9 @@ ships in `paladin-core` and the GTK EditDialog lands.
 #### Manual test plan addendum (Milestone 9)
 
 The five EditDialog scenarios below land in
-`crates/paladin-gtk/tests/manual/MANUAL_TEST_PLAN.md` and are
+`crates/paladin-auth-gtk/tests/manual/MANUAL_TEST_PLAN.md` and are
 mirrored into the `REQUIRED_ITEMS` constant guarded by
-`crates/paladin-gtk/tests/manual_test_plan_doc.rs` (so the
+`crates/paladin-auth-gtk/tests/manual_test_plan_doc.rs` (so the
 manual-plan doc-guard fails the test bar if any of the five
 goes missing). Each is a separate bullet pinned to the
 locked Phase M contract:
@@ -3460,7 +3460,7 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
 #### `tests/otpauth_uri_paste_logic.rs`
 
 - [x] Successful URI parse routes through
-  `paladin_core::parse_otpauth` and shares the manual path's
+  `paladin_auth_core::parse_otpauth` and shares the manual path's
   duplicate-detection logic.
 - [x] Parse errors for malformed URIs, unsupported scheme,
   unsupported `type=`, and `validation_error` stay inline without
@@ -3475,15 +3475,15 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
 #### `tests/import_dialog_logic.rs`
 
 - [x] Format-selector routing (auto-detect / explicit `otpauth` /
-  `aegis` / `paladin` / `qr`) reaches the correct
-  `paladin_core::import::from_file` invocation.
+  `aegis` / `paladin-auth` / `qr`) reaches the correct
+  `paladin_auth_core::import::from_file` invocation.
 - [x] On-conflict policy (`skip` / `replace` / `append`) threads
   through `Vault::import_accounts` and is reflected in the merge
   outcome.
-- [x] `paladin_core::classify_paladin_import_precheck` routing for
+- [x] `paladin_auth_core::classify_paladin_auth_import_precheck` routing for
   `PromptForPassphrase`, `Reject(err)`, and `NoPrompt` covers
-  encrypted Paladin, plaintext Paladin, malformed / unsupported
-  Paladin headers, missing files, non-Paladin content, and
+  encrypted Paladin Auth, plaintext Paladin Auth, malformed / unsupported
+  Paladin Auth headers, missing files, non-Paladin Auth content, and
   forced-format mismatches.
 - [x] Bundle-passphrase row clears when the source path or forced
   format changes after entry, and the probe / prompt flow restarts.
@@ -3505,7 +3505,7 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
 - [x] Overwrite gate resets when the destination or format changes.
 - [x] Plaintext-warning gate resets when the destination or format
   changes; the rendered text matches
-  `paladin_core::format_plaintext_export_warning()` verbatim.
+  `paladin_auth_core::format_plaintext_export_warning()` verbatim.
 - [x] Encrypted twice-confirm match accepts; mismatch rejects with
   `invalid_passphrase` (`reason: "confirmation_mismatch"`).
 - [x] Empty encrypted passphrase rejects with `invalid_passphrase`
@@ -3518,9 +3518,9 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
 
 #### `tests/export_qr_dialog_logic.rs`
 
-- [x] `format_export_qr_dialog_warning_body_matches_paladin_core_verbatim`
+- [x] `format_export_qr_dialog_warning_body_matches_paladin_auth_core_verbatim`
   pins that the rendered warning body equals
-  `paladin_core::format_plaintext_qr_export_warning()` exactly, so a
+  `paladin_auth_core::format_plaintext_qr_export_warning()` exactly, so a
   future warning reword in core propagates to the GUI without an edit.
 - [x] `export_qr_dialog_state_new_stages_png_from_init` and
   `export_qr_dialog_state_new_surfaces_render_error_from_init` pin
@@ -3540,7 +3540,7 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
   `ExportQrDialogState::staged_png`.
 - [x] `compose_export_qr_caption_text_reads_summary_display_label`
   pins that the `gtk::Label` caption reads
-  `paladin_core::summary_display_label(&summary)`, so the
+  `paladin_auth_core::summary_display_label(&summary)`, so the
   issuer:label rendering matches CLI / TUI parity and a future change
   propagates to the GUI through one helper. Companion
   `compose_export_qr_dialog_caption_widget_uses_title_3_style_class`
@@ -3592,12 +3592,12 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
   `state.staged_png` with the bytes returned by
   `vault.export_qr_png(...)` on the main loop (matching the
   Show-QR press path), then run the save worker which calls only
-  `paladin_core::write_secret_file_atomic` against the staged
+  `paladin_auth_core::write_secret_file_atomic` against the staged
   bytes — the on-disk file equals the staged bytes verbatim, and
   the file permission bits are `0o600` (verified with
   `std::os::unix::fs::PermissionsExt::mode` masked to `0o7777`).
   *Implementation note (Phase 5):* `rqrr` round-trip decode
-  deferred (paladin-gtk has no `rqrr` dev-dep yet); the
+  deferred (paladin-auth-gtk has no `rqrr` dev-dep yet); the
   byte-verbatim assertion is sufficient because both the
   on-screen Picture and the on-disk bytes flow through the same
   `vault.export_qr_png` output. Pin separately
@@ -3610,7 +3610,7 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
   is the SVG variant: with `state.staged_svg` empty, the worker
   calls `vault.export_qr_svg(...)` once, parks the result in
   `staged_svg_after`, and writes through
-  `paladin_core::write_secret_file_atomic`. The resulting file is
+  `paladin_auth_core::write_secret_file_atomic`. The resulting file is
   non-empty UTF-8 text starting with `<?xml` or `<svg`, and the
   permission bits are `0o600`. The test does not re-decode SVG
   (rqrr does not consume SVG); the byte-roundtrip is enough. Pin
@@ -3625,7 +3625,7 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
   and `run_export_qr_save_worker_returns_save_durability_unconfirmed_after_rename`
   pin the two storage-failure surfaces by enabling the core's
   `test-fault-injection` feature and setting
-  `PALADIN_FAULT_INJECT=pre_commit|post_commit`. Both end with the dialog
+  `PALADIN_AUTH_FAULT_INJECT=pre_commit|post_commit`. Both end with the dialog
   staying open and the typed error / warning rendered inline.
 - [x] `classify_export_qr_save_error_io_error_renders_inline`,
   `classify_export_qr_save_error_save_not_committed_renders_inline`,
@@ -3641,7 +3641,7 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
   and `apply_msg_save_completed_restashes_staged_svg_for_subsequent_saves`.
   The worker IO-error path is pinned by
   `run_export_qr_save_worker_png_missing_parent_surfaces_save_not_committed_inline`
-  — `paladin_core::write_secret_file_atomic` collapses every
+  — `paladin_auth_core::write_secret_file_atomic` collapses every
   pre-commit IO failure into `save_not_committed`, so the
   missing-parent test asserts `SaveNotCommitted` (the
   `IoError` kind ships in the unit-level classify test).
@@ -3732,7 +3732,7 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
 - [x] `set` / `change` reject zero-length new passphrases with
   `invalid_passphrase` (`reason: "zero_length"`).
 - [x] `remove` renders
-  `paladin_core::format_plaintext_storage_warning()` verbatim and
+  `paladin_auth_core::format_plaintext_storage_warning()` verbatim and
   requires explicit confirmation before mutation.
 - [x] Switching sub-flows clears all passphrase rows and pending
   plaintext-removal confirmation.
@@ -3744,9 +3744,9 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
 - [x] Live-apply path runs `Vault::mutate_and_save` once per
   accepted change.
 - [x] Spinners clamp to
-  `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
+  `paladin_auth_core::AUTO_LOCK_SECS_MIN..=paladin_auth_core::AUTO_LOCK_SECS_MAX`
   and
-  `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`.
+  `paladin_auth_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_auth_core::CLIPBOARD_CLEAR_SECS_MAX`.
 - [x] 500 ms debounce coalesces repeated spinner changes so only
   the most recent buffered value reaches `mutate_and_save`.
 - [x] `save_not_committed` reverts the visible widget value to the
@@ -3798,42 +3798,42 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
 
 Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
 
-- [x] `xvfb-run` launches `paladin-gtk` and the process exits
+- [x] `xvfb-run` launches `paladin-auth-gtk` and the process exits
   cleanly. Asserted by
-  `crates/paladin-gtk/tests/gtk_smoke.rs::xvfb_run_launches_paladin_gtk_and_process_exits`;
+  `crates/paladin-auth-gtk/tests/gtk_smoke.rs::xvfb_run_launches_paladin_auth_gtk_and_process_exits`;
   `.github/workflows/ci.yml` provisions the `clippy` and `test` jobs
   inside a `fedora:42` container with `gtk4-devel`, `libadwaita-devel`,
   and (`test` only) `xorg-x11-server-Xvfb` so the test runs under a
   synthetic display instead of skipping. The container is required
   because `ubuntu-24.04` ships GTK 4.14 / libadwaita 1.5 — too old
   for the `v4_16` / `v1_6` feature gates in
-  `crates/paladin-gtk/Cargo.toml`.
+  `crates/paladin-auth-gtk/Cargo.toml`.
 - [x] App opens a prepared plaintext vault. `AppModel::init` runs
-  `app::model::run_startup_probes` (resolve path → `paladin_core::inspect`
-  → `paladin_core::Store::open` with `VaultLock::Plaintext` for the
+  `app::model::run_startup_probes` (resolve path → `paladin_auth_core::inspect`
+  → `paladin_auth_core::Store::open` with `VaultLock::Plaintext` for the
   plaintext branch) and seeds `AppModel::state` / `AppModel::vault`
   from the result. Under `--exit-after-startup`, the model prints
   `app::model::startup_state_marker(&state)` to stdout before quitting
   so the smoke test
-  `crates/paladin-gtk/tests/gtk_smoke.rs::app_opens_prepared_plaintext_vault`
+  `crates/paladin-auth-gtk/tests/gtk_smoke.rs::app_opens_prepared_plaintext_vault`
   asserts the resolved `AppState::Unlocked` variant via that line.
-  Pure-logic coverage in `crates/paladin-gtk/tests/startup_probes.rs`
+  Pure-logic coverage in `crates/paladin-auth-gtk/tests/startup_probes.rs`
   exercises the `Unlocked` / `Missing` / `StartupError` branches plus
   the marker format without a display server.
 - [x] `AccountListComponent` renders the prepared accounts. The
   unlocked `AppModel` builds a `Vec<AccountRowModel>` via
   `account_list::row_models_from_vault` (an `AccountSummary`-driven
-  projection — no secret bytes leave `paladin_core`) and launches an
+  projection — no secret bytes leave `paladin_auth_core`) and launches an
   `AccountListComponent` controller; the component pushes each
   `AccountRowModel` into a `FactoryVecDeque<AccountRowComponent>`
   whose parent widget is a `gtk::ListBox`. Under `--exit-after-startup`,
   `AppModel` emits a second stdout marker —
-  `paladin-gtk: account_list_rows=<labels>` produced by
+  `paladin-auth-gtk: account_list_rows=<labels>` produced by
   `account_list::format_rendered_marker` — so the smoke test
-  `crates/paladin-gtk/tests/gtk_smoke.rs::app_renders_prepared_accounts`
+  `crates/paladin-auth-gtk/tests/gtk_smoke.rs::app_renders_prepared_accounts`
   asserts the rendered row set under `xvfb-run` without driving
   widgets. Pure-logic coverage in
-  `crates/paladin-gtk/tests/account_list_logic.rs` exercises the
+  `crates/paladin-auth-gtk/tests/account_list_logic.rs` exercises the
   projection (insertion-order preservation, empty-issuer collapse,
   TOTP / HOTP summary fields) and the marker format without a
   display server.
@@ -3842,20 +3842,20 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   routes `AppModel` to `AppState::StartupError`, `AppModel` launches
   a `StartupErrorComponent` controller whose `AdwStatusPage` body
   reads `StartupError::rendered` verbatim (the same text the CLI /
-  TUI surface via `paladin_core::format_unsafe_permissions` or
-  `PaladinError::Display`). Under `--exit-after-startup`, `AppModel`
+  TUI surface via `paladin_auth_core::format_unsafe_permissions` or
+  `PaladinAuthError::Display`). Under `--exit-after-startup`, `AppModel`
   emits an additional stdout marker —
-  `paladin-gtk: startup_error_body=<rendered>` produced by
+  `paladin-auth-gtk: startup_error_body=<rendered>` produced by
   `startup_error::format_startup_error_marker` (newlines collapsed
   to `|` so the line stays single-line for `stdout.contains(...)`
   assertions) — exclusively from the `StartupError` branch, so its
   presence proves the widget actually mounted. The smoke test
-  `crates/paladin-gtk/tests/gtk_smoke.rs::app_renders_startup_error_for_corrupt_vault`
+  `crates/paladin-auth-gtk/tests/gtk_smoke.rs::app_renders_startup_error_for_corrupt_vault`
   drives the path with a corrupt vault file that forces
-  `paladin_core::inspect` into `InvalidHeader` and asserts on both
+  `paladin_auth_core::inspect` into `InvalidHeader` and asserts on both
   the existing `startup_state=StartupError` line and the new body
   marker. Pure-logic coverage in
-  `crates/paladin-gtk/tests/startup_error_logic.rs` pins the
+  `crates/paladin-auth-gtk/tests/startup_error_logic.rs` pins the
   marker prefix, the rendered passthrough for single-line bodies,
   and the newline-collapse contract for the multi-line
   `UnsafePermissions` body.
@@ -3864,25 +3864,25 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   routes `AppModel` to `AppState::Missing` (no vault at the resolved
   path), `AppModel` launches an `InitDialogComponent` controller
   whose `AdwStatusPage` body names the resolved path alongside the
-  shared `paladin_core::format_plaintext_storage_warning()` copy
+  shared `paladin_auth_core::format_plaintext_storage_warning()` copy
   (so warning wording stays in lockstep with the CLI and TUI). The
   full passphrase-field / destructive-`create_force` wiring described
   in the §"Component tree" and §"Milestone 7 checklist" entry for
-  `InitDialog` is implemented in `crates/paladin-gtk/src/init_dialog.rs`
+  `InitDialog` is implemented in `crates/paladin-auth-gtk/src/init_dialog.rs`
   (two `AdwPasswordEntryRow`s plus the `Store::create_force` worker
   dispatched via `gio::spawn_blocking`). Under `--exit-after-startup`,
   `AppModel` emits an additional stdout marker —
-  `paladin-gtk: init_dialog_path=<path>` produced by
+  `paladin-auth-gtk: init_dialog_path=<path>` produced by
   `init_dialog::format_init_dialog_marker` — exclusively from the
   `Missing` branch, so its presence proves the widget actually
   mounted. The smoke test
-  `crates/paladin-gtk/tests/gtk_smoke.rs::app_renders_init_dialog_for_missing_vault`
+  `crates/paladin-auth-gtk/tests/gtk_smoke.rs::app_renders_init_dialog_for_missing_vault`
   drives the path with a `0700`-mode tempdir entry that never gets
   created on disk and asserts on both the existing
   `startup_state=Missing` line and the new path marker, while also
   verifying that the unlocked / startup-error markers stay absent.
   Pure-logic coverage in
-  `crates/paladin-gtk/tests/init_dialog_logic.rs` pins the marker
+  `crates/paladin-auth-gtk/tests/init_dialog_logic.rs` pins the marker
   prefix and the path-passthrough rendering.
 - [x] `UnlockDialogComponent` renders the passphrase-entry surface
   for the `Locked` branch. When `run_startup_probes` routes
@@ -3890,26 +3890,26 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   resolved path), `AppModel` launches an `UnlockDialogComponent`
   controller whose `AdwStatusPage` body names the resolved path so
   the user can confirm the destination before typing a passphrase.
-  The full passphrase-entry / `gio::spawn_blocking` `paladin_core::open`
+  The full passphrase-entry / `gio::spawn_blocking` `paladin_auth_core::open`
   worker / inline-decrypt-failure wiring described in the
   §"Component tree" and §"Milestone 7 checklist" entry for
   `UnlockComponent` is implemented in
-  `crates/paladin-gtk/src/unlock_dialog.rs` (passphrase entry with
+  `crates/paladin-auth-gtk/src/unlock_dialog.rs` (passphrase entry with
   keystroke shadowing, `gio::spawn_blocking` Argon2id worker, inline
   `decrypt_failed` / `invalid_passphrase` rendering with non-auth
   failures routed to `StartupErrorComponent`).
   Under `--exit-after-startup`, `AppModel` emits an additional
-  stdout marker — `paladin-gtk: unlock_dialog_path=<path>` produced
+  stdout marker — `paladin-auth-gtk: unlock_dialog_path=<path>` produced
   by `unlock_dialog::format_unlock_dialog_marker` — exclusively
   from the `Locked` branch, so its presence proves the widget
   actually mounted. The smoke test
-  `crates/paladin-gtk/tests/gtk_smoke.rs::app_renders_unlock_dialog_for_encrypted_vault`
+  `crates/paladin-auth-gtk/tests/gtk_smoke.rs::app_renders_unlock_dialog_for_encrypted_vault`
   drives the path with an encrypted vault built from light Argon2
   params (`m_kib=8192, t=1, p=1`) so the test stays fast, and
   asserts on both the existing `startup_state=Locked` line and the
   new path marker, while also verifying that the unlocked /
   startup-error / init-dialog markers stay absent. Pure-logic
-  coverage in `crates/paladin-gtk/tests/unlock_dialog_logic.rs`
+  coverage in `crates/paladin-auth-gtk/tests/unlock_dialog_logic.rs`
   pins the marker prefix and the path-passthrough rendering.
 
 ### Thinness contract (`tests/thinness.rs`)
@@ -3955,12 +3955,12 @@ an X11 session before sign-off.
   counts match.
 - [ ] Import aegis plaintext with each on-conflict policy; reported
   counts match.
-- [ ] Import encrypted Paladin bundle with each on-conflict policy;
+- [ ] Import encrypted Paladin Auth bundle with each on-conflict policy;
   reported counts match.
 - [ ] Import QR image file with each on-conflict policy; reported
   counts match.
 - [ ] Export plaintext: warning + confirmation, `0600` output.
-- [ ] Export encrypted Paladin bundle: twice-confirm, round-trip
+- [ ] Export encrypted Paladin Auth bundle: twice-confirm, round-trip
   via Import.
 - [ ] Refused overwrite without confirmation leaves the destination
   untouched.
@@ -3984,7 +3984,7 @@ foundation, startup/window routing, vault access, list/row behavior,
 dialog flows, shared policy/effect plumbing, then desktop packaging and
 sign-off.
 
-- [x] Add the `paladin-gtk` crate to the workspace.
+- [x] Add the `paladin-auth-gtk` crate to the workspace.
 - [x] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
   Rename / Import / Export / Passphrase / Settings / StartupError).
   All twelve controllers mount with the same `<Name>Init` /
@@ -4008,16 +4008,16 @@ sign-off.
   - [x] Accept `--no-color` as a parser-level no-op for CLI / TUI
     parity; do not expose any GUI theme override from this flag.
   - [x] Reject `--json` at parse time with clap's standard text
-    diagnostic; never emit a JSON envelope from `paladin-gtk`.
+    diagnostic; never emit a JSON envelope from `paladin-auth-gtk`.
   - [x] Reject positional file / URI arguments; imports always start
     from `ImportDialog`.
   - [x] Keep the smoke-test-only `--exit-after-startup` flag hidden from
     `--help` while still parsing it for `tests/gtk_smoke.rs`.
 - [x] Startup routing and non-mutating startup-error actions.
   - [x] Resolve the startup path from `--vault` or
-    `paladin_core::default_vault_path()` before inspecting the vault.
+    `paladin_auth_core::default_vault_path()` before inspecting the vault.
   - [x] Route `VaultStatus::Plaintext` through
-    `paladin_core::Store::open(..., VaultLock::Plaintext)` and seed
+    `paladin_auth_core::Store::open(..., VaultLock::Plaintext)` and seed
     `AppState::Unlocked` plus the live `(Vault, Store)` pair.
   - [x] Route `VaultStatus::Encrypted` to `AppState::Locked` and mount
     `UnlockComponent`; do not run Argon2id until the user submits a
@@ -4026,8 +4026,8 @@ sign-off.
     `InitDialog` without creating files before explicit confirmation.
   - [x] Route `default_vault_path`, `inspect`, and non-passphrase open
     failures to `StartupErrorComponent` with rendered text sourced from
-    `paladin_core::format_unsafe_permissions(&err)` when available and
-    `PaladinError::Display` otherwise.
+    `paladin_auth_core::format_unsafe_permissions(&err)` when available and
+    `PaladinAuthError::Display` otherwise.
   - [x] Wire the `StartupErrorComponent` Retry action to re-run path
     resolution plus `inspect` and then re-route to `Missing`, `Locked`,
     `Unlocked`, or `StartupError` from the fresh probe result.
@@ -4046,7 +4046,7 @@ sign-off.
     notice, HOTP `save_durability_unconfirmed` warning, export-success
     path) can be delivered via `AdwToast`.
   - [x] Load `data/style.css` from the gresource bundle via
-    `gtk::CssProvider` so Paladin-specific tweaks layer on top of
+    `gtk::CssProvider` so Paladin Auth-specific tweaks layer on top of
     Adwaita defaults; never re-skin the Adwaita palette.
   - [x] Route every active screen (`InitDialog`, `UnlockComponent`,
     `StartupErrorComponent`, `AccountListComponent`) through the same
@@ -4054,15 +4054,15 @@ sign-off.
 - [x] In-app vault initialization (`InitDialog` for missing vaults;
   plaintext + encrypted paths; explicit confirmation; plaintext-path
   warning sourced from
-  `paladin_core::format_plaintext_storage_warning()`; in-dialog
+  `paladin_auth_core::format_plaintext_storage_warning()`; in-dialog
   destructive `create_force` clobber confirmation rendered from
-  `paladin_core::format_init_force_warning(existing_path)` when a vault
+  `paladin_auth_core::format_init_force_warning(existing_path)` when a vault
   already exists at the path; pre-commit + durability-unconfirmed
   handling).
   - [x] Add two `AdwPasswordEntryRow` passphrase entries (passphrase +
     confirmation) to `InitDialogComponent`'s body, keeping the existing
     `Missing`-branch path label as the `AdwStatusPage` description.
-  - [x] Render `paladin_core::format_plaintext_storage_warning()`
+  - [x] Render `paladin_auth_core::format_plaintext_storage_warning()`
     verbatim alongside a confirmation tick; gate submission on the tick
     when both passphrase fields are empty (the plaintext path).
   - [x] Route plaintext vs encrypted on submit by the empty-vs-non-empty
@@ -4084,7 +4084,7 @@ sign-off.
     closing the dialog.
   - [x] Handle `InitWorkerEffect::DestructiveGate` by opening an
     in-dialog `AdwAlertDialog` with `destructive-action` styling whose
-    body is `paladin_core::format_init_force_warning(existing_path)`.
+    body is `paladin_auth_core::format_init_force_warning(existing_path)`.
   - [x] On destructive-gate confirm, re-dispatch the worker with
     `InitWorkerMode::CreateForce`, consuming the pending `VaultInit`.
   - [x] On destructive-gate cancel, close the alert and return to the
@@ -4096,7 +4096,7 @@ sign-off.
     `save_durability_unconfirmed`, and any other typed error returned
     by `classify_create_error`.
   - [x] Render `unsafe_permissions` from the `Some(text)` of
-    `paladin_core::format_unsafe_permissions(&err)`, falling back to
+    `paladin_auth_core::format_unsafe_permissions(&err)`, falling back to
     the generic error text only when the formatter returns `None`.
   - [x] Zeroize passphrase-entry widget buffers and the pending
     `VaultInit` on submit, cancel, destructive-confirmation cancel,
@@ -4116,7 +4116,7 @@ sign-off.
     `cleartext`, `phrase`, HOTP / TOTP / reveal-code spellings) —
     plain plaintext fields (rename `label`, issuer, file path)
     stay clear.
-  - [x] Wrap Paladin-owned secret copies in `SecretString` or
+  - [x] Wrap Paladin Auth-owned secret copies in `SecretString` or
     `Zeroizing` immediately at submit / copy time, and drop them as
     soon as the core call or clipboard policy no longer needs them.
     `tests/secret_fields_logic.rs::secret_entry_take_returns_zeroizing_and_empties_self`
@@ -4130,7 +4130,7 @@ sign-off.
     `ClearReason::{Submit, Cancel, Close, AutoLock, Replace,
     PathSwitch}` variants and the `*SecretState::clear_for` /
     `switch_path` / `switch_sub_flow` helpers in
-    `crates/paladin-gtk/src/secret_fields.rs` are exercised by
+    `crates/paladin-auth-gtk/src/secret_fields.rs` are exercised by
     `tests/secret_fields_logic.rs` (35+ tests covering Add / Init /
     Passphrase state machines).
   - [x] Ensure validation, duplicate, import, export, and status
@@ -4142,17 +4142,17 @@ sign-off.
     plus the source-level guard above which prevents
     `InlineError::from_error` signatures from accepting a
     passphrase / secret parameter (those formatters only take
-    `&PaladinError`, which never carries the typed-in passphrase).
+    `&PaladinAuthError`, which never carries the typed-in passphrase).
 - [x] Conditional unlock view (encrypted vaults only).
 - [x] `UnlockComponent` full implementation (passphrase entry,
-  `paladin_core::open` on `gio::spawn_blocking`, inline-error
+  `paladin_auth_core::open` on `gio::spawn_blocking`, inline-error
   handling).
   - [x] Add an `AdwPasswordEntryRow` to `UnlockComponent`'s body so
     the user can type a passphrase against the resolved encrypted
     vault.
   - [x] On submit, wrap the entered passphrase in
     `secrecy::SecretString` and dispatch
-    `paladin_core::open(path, VaultLock::Encrypted(secret))` on
+    `paladin_auth_core::open(path, VaultLock::Encrypted(secret))` on
     `gio::spawn_blocking` so the §4.4 Argon2 KDF stays off the main
     loop; surface a spinner / busy affordance while the join is
     pending.
@@ -4167,7 +4167,7 @@ sign-off.
     `invalid_header`, `invalid_payload`,
     `unsupported_format_version`, `kdf_params_out_of_bounds`,
     `io_error`); `unsafe_permissions` renders the `Some(text)` from
-    `paladin_core::format_unsafe_permissions(&err)` with the generic
+    `paladin_auth_core::format_unsafe_permissions(&err)` with the generic
     error text fallback so wording matches the CLI / TUI exactly.
   - [x] Zeroize the passphrase widget buffer on submit / cancel /
     dialog close / auto-lock per §"Secret entry handling".
@@ -4175,8 +4175,8 @@ sign-off.
   `FactoryVecDeque<AccountRowComponent>`, search bar + entry,
   selection management).
   - [x] Build the row set from `Vault::iter()` projected through
-    `paladin_core::AccountSummary` into `AccountRowModel` entries —
-    no secret bytes leave `paladin_core`.
+    `paladin_auth_core::AccountSummary` into `AccountRowModel` entries —
+    no secret bytes leave `paladin_auth_core`.
   - [x] Mount a `gtk::ListBox` (inside a `gtk::ScrolledWindow`)
     driven by a `relm4::factory::FactoryVecDeque<AccountRowComponent>`.
     Each `AccountRowModel` is pushed as one persistent
@@ -4215,11 +4215,11 @@ sign-off.
     `search-mode-enabled` is bound to the header-bar search-toggle
     button.
   - [x] On query change, rebuild the list by calling
-    `paladin_core::account_matches_search(&Account, query)` against
+    `paladin_auth_core::account_matches_search(&Account, query)` against
     `Vault::iter()` before projecting matches to `AccountSummary`;
     preserve insertion order among matches.
   - [x] After each filter rebuild, set the selected row from
-    `paladin_core::select_after_filter(prev, filtered)` (preserve
+    `paladin_auth_core::select_after_filter(prev, filtered)` (preserve
     prior selection if still present, else first match) for parity
     with the TUI.
   - [x] Refresh the store after every vault mutation (Add / Remove /
@@ -4258,7 +4258,7 @@ sign-off.
     `AccountSummary.icon_hint` with the placeholder fallback (see
     "Icon resolution" item below).
   - [x] Render a code label populated from
-    `paladin_core::totp_code` for TOTP rows and from the hidden /
+    `paladin_auth_core::totp_code` for TOTP rows and from the hidden /
     reveal state for HOTP rows (see "HOTP reveal" item below).
     `account_list::bind_row` reads `RowDisplay::code` and writes
     the resulting text through `code.set_label(&code_text)` —
@@ -4266,8 +4266,8 @@ sign-off.
     and `CodeDisplay::Visible(c)` renders the live code. For TOTP
     rows, the ticker (`crate::ticker::compute_tick_displays`)
     publishes `vault.totp_code(row.id, now)` through `project_row`
-    on every `paladin_core::TICK_INTERVAL_MS` tick so the visible
-    code stays in lockstep with `paladin_core`'s TOTP window;
+    on every `paladin_auth_core::TICK_INTERVAL_MS` tick so the visible
+    code stays in lockstep with `paladin_auth_core`'s TOTP window;
     races against vault mutations or clock-skew failures fall
     through to leave the prior display in place, never blanking
     the row. For HOTP rows, `crate::hotp_reveal::project_row_with_code`
@@ -4278,7 +4278,7 @@ sign-off.
     hidden rows show the stored next counter and revealed rows
     show the `Code.counter_used` label.
   - [x] For TOTP rows, render a progress widget (gauge / level bar)
-    that ticks against the shared `paladin_core::TICK_INTERVAL_MS`
+    that ticks against the shared `paladin_auth_core::TICK_INTERVAL_MS`
     source (see "TOTP ticker" item below). The continuous
     `gtk::ProgressBar` is appended to each row by `build_row_widget`
     and bound by `bind_row` from
@@ -4376,13 +4376,13 @@ sign-off.
     after every dispatch so any state transition flipping
     `AppState::is_busy()` propagates a debounced re-splice through
     the row factory.
-- [x] TOTP ticker (`paladin_core::TICK_INTERVAL_MS` timeout source
+- [x] TOTP ticker (`paladin_auth_core::TICK_INTERVAL_MS` timeout source
   for gauge updates and clipboard staleness checks).
   - [x] Install a single `glib::timeout_add_local` source ticking
-    at `paladin_core::TICK_INTERVAL_MS` while at least one TOTP row
+    at `paladin_auth_core::TICK_INTERVAL_MS` while at least one TOTP row
     is visible.
   - [x] On each tick, recompute the TOTP gauge value and the
-    visible code from `paladin_core::totp_code(account, now)` for
+    visible code from `paladin_auth_core::totp_code(account, now)` for
     every TOTP row in the current list view.
   - [x] On each tick, give the clipboard auto-clear policy a chance
     to wake against the current `gdk::Clipboard` text
@@ -4403,7 +4403,7 @@ sign-off.
     transitions and reinstall on `Unlocked` so plaintext and
     encrypted vaults share the same lifecycle.
 - [x] HOTP reveal window behavior
-  (`paladin_core::policy::hotp_reveal::deadline` driver,
+  (`paladin_auth_core::policy::hotp_reveal::deadline` driver,
   peek-stage-advance worker, restart-on-next semantics,
   hidden-state copy disabling).
   - [x] On row activation of "next", stage the would-be visible
@@ -4417,7 +4417,7 @@ sign-off.
     path.)
   - [x] On worker success or `save_durability_unconfirmed`, publish
     the staged code to the row's reveal slot and start the reveal
-    timer from `paladin_core::policy::hotp_reveal::deadline(now)`.
+    timer from `paladin_auth_core::policy::hotp_reveal::deadline(now)`.
     (`apply_advance_outcome` → `apply_advance_decision` inserts the
     `RevealWindow` into `AppModel::reveal_windows` keyed by
     `AccountId`; `row_display_for_reveal` projects the live code
@@ -4467,7 +4467,7 @@ sign-off.
   - [x] Implement `icons.rs` lookups against the system
     `gtk::IconTheme` for the slug carried in
     `AccountSummary.icon_hint`. (Lives in
-    `crates/paladin-gtk/src/icon_resolution.rs`; the row factory in
+    `crates/paladin-auth-gtk/src/icon_resolution.rs`; the row factory in
     `account_list::build_row_factory` resolves the slug via
     `icon_resolution::resolve_display_icon` against
     `gtk::IconTheme::for_display(...).has_icon(...)` at bind time.)
@@ -4477,10 +4477,10 @@ sign-off.
     `tests/icon_resolution.rs` and used by `bind_row_icon`.)
   - [x] Ship the placeholder icon in the gresource bundle so it is
     available identically in native and Flatpak builds. (Lives at
-    `crates/paladin-gtk/data/icons/scalable/actions/dialog-password-symbolic.svg`
-    and is bundled by `data/paladin-gtk.gresource.xml`; the runtime
+    `crates/paladin-auth-gtk/data/icons/scalable/actions/dialog-password-symbolic.svg`
+    and is bundled by `data/paladin-auth-gtk.gresource.xml`; the runtime
     `wire_app_icon_theme_resource_path` helper in
-    `crates/paladin-gtk/src/app/model.rs` calls
+    `crates/paladin-auth-gtk/src/app/model.rs` calls
     `IconTheme::for_display(display).add_resource_path(format_app_icon_theme_resource_path())`
     so the placeholder resolves against the embedded payload even in
     sandboxed Flatpak runtimes.)
@@ -4541,7 +4541,7 @@ sign-off.
   - [x] Handle `save_not_committed` by restoring the prior label in
     memory and keeping the dialog open with the inline error.
     (`classify_rename_error` routes
-    `PaladinError::SaveNotCommitted { .. }` to
+    `PaladinAuthError::SaveNotCommitted { .. }` to
     `RenameErrorOutcome::RestorePrior(InlineError {
     kind: ErrorKind::SaveNotCommitted, .. })` regardless of whether
     a `.bak` rotation ran; `apply_msg` on
@@ -4564,7 +4564,7 @@ sign-off.
   - [x] Handle `save_durability_unconfirmed` by keeping the new label
     in memory and attaching the warning to the dialog body.
     (`classify_rename_error` routes
-    `PaladinError::SaveDurabilityUnconfirmed` to
+    `PaladinAuthError::SaveDurabilityUnconfirmed` to
     `RenameErrorOutcome::KeepNewWithWarning(InlineWarning {
     kind: ErrorKind::SaveDurabilityUnconfirmed, .. })`; `apply_msg`
     on `RenameDialogMsg::WorkerFailed(KeepNewWithWarning(_))` leaves
@@ -4690,9 +4690,9 @@ sign-off.
     `gio::spawn_blocking` so the §4.3 atomic-write pipeline rolls back
     the in-memory removal on `save_not_committed` before returning;
     `classify_remove_error` routes the typed
-    `PaladinError::SaveNotCommitted` to
+    `PaladinAuthError::SaveNotCommitted` to
     `RemoveErrorOutcome::RestorePrior(InlineError)` and
-    `PaladinError::SaveDurabilityUnconfirmed` to
+    `PaladinAuthError::SaveDurabilityUnconfirmed` to
     `RemoveErrorOutcome::KeepRemovedWithWarning(InlineWarning)`.
     `apply_msg(WorkerFailed(...))` stashes the typed outcome on
     `RemoveDialogState::worker_outcome` so the view's #[watch]
@@ -4717,7 +4717,7 @@ sign-off.
     `io_error`, and defensive `validation_error` inline without
     closing the dialog; the dialog never mutates visible state
     until the worker returns.
-    (Every other typed `PaladinError` falls into the
+    (Every other typed `PaladinAuthError` falls into the
     `classify_remove_error` defensive arm
     `RemoveErrorOutcome::InlineError(InlineError)`, which
     `apply_msg(WorkerFailed(...))` stashes onto
@@ -4801,7 +4801,7 @@ sign-off.
     Qr-leaving switch (the QR page reads the clipboard texture on
     activation, not from a held buffer) and still drops any pending
     duplicate-add `Box<ValidatedAccount>` so the `ZeroizeOnDrop` impl on
-    `paladin_core::Secret` wipes the carried bytes when the returned
+    `paladin_auth_core::Secret` wipes the carried bytes when the returned
     `Option` drops. Pinned by
     `tests/add_account_logic.rs::format_add_path_label_qr_returns_scan_clipboard`,
     `format_add_path_name_qr_returns_qr_slug`,
@@ -4881,7 +4881,7 @@ sign-off.
     [`crate::secret_fields::AddSecretState::switch_path`] to wipe the
     leaving path's hidden secret-bearing buffer — the manual Base32
     secret on `Manual` → `*`, the URI text on `Uri` → `*` — and drops
-    any pending duplicate-add [`paladin_core::ValidatedAccount`] via
+    any pending duplicate-add [`paladin_auth_core::ValidatedAccount`] via
     `Box`'s `ZeroizeOnDrop` impl. An unknown / case-folded /
     whitespace-padded slug routes through `parse_add_path_name` as
     `None` and the dispatch arm leaves visible state untouched so a
@@ -5022,7 +5022,7 @@ sign-off.
   icon hint).
   - [x] Mount the manual form on the `AdwViewStack`'s "Manual" page
     using `AdwEntryRow` / `AdwSpinRow` / `AdwComboRow` rows that map
-    onto `paladin_core::AccountInput`. The `AddAccountComponent`'s
+    onto `paladin_auth_core::AccountInput`. The `AddAccountComponent`'s
     `view!` macro now populates the Manual page with four
     `adw::PreferencesGroup` clusters: an identity group
     (`adw::EntryRow` for label / issuer / icon-hint), a secret group
@@ -5058,7 +5058,7 @@ sign-off.
     already seeds the typed draft at the §5 defaults, and the
     `view!` macro reads each manual-form widget through the
     `compose_manual_*(&model.state)` projections so the dialog's
-    first render already matches the CLI `paladin add` defaults
+    first render already matches the CLI `paladin-auth add` defaults
     without user input. Pinned by
     `tests/add_account_logic.rs::fresh_add_dialog_seeds_manual_form_to_design_section_5_cli_defaults`
     (aggregating contract over `compose_manual_kind_selected`,
@@ -5069,20 +5069,20 @@ sign-off.
     `compose_manual_icon_hint_text`) and
     `fresh_add_dialog_icon_hint_default_resolves_to_default_from_issuer_mode`
     (pins that the empty icon-hint entry threads through
-    `paladin_core::parse_icon_hint_token` into
+    `paladin_auth_core::parse_icon_hint_token` into
     `IconHintInput::Default`), on top of the existing per-field
     `compose_manual_*_fresh_dialog_*` /
     `manual_draft_state_default_matches_cli_manual_add_defaults` /
     `add_dialog_state_new_initializes_manual_draft_to_defaults`
     siblings.
   - [x] Normalize the icon-hint entry through
-    `paladin_core::parse_icon_hint_token` so the slug / `default` /
+    `paladin_auth_core::parse_icon_hint_token` so the slug / `default` /
     `none` parsing matches the CLI / TUI add modals exactly.
     `classify_manual_submit` threads the typed
     `ManualDraftState::icon_hint_text` (preserved verbatim — case and
     whitespace included — by `apply_msg(AddAccountMsg::ManualIconHintChanged)`
     per the L2364 widget binding) through
-    `paladin_core::parse_icon_hint_token`, short-circuiting any
+    `paladin_auth_core::parse_icon_hint_token`, short-circuiting any
     malformed slug as `ManualSubmitOutcome::InlineError` before
     `validate_manual` runs. Empty / `none` (any case) / explicit
     lowercase slugs map to `IconHintInput::Default` /
@@ -5093,7 +5093,7 @@ sign-off.
     `classify_manual_submit_explicit_slug_stored_verbatim`, and
     `classify_manual_submit_malformed_slug_rejects_inline`.
   - [x] On submit, validate the inputs through
-    `paladin_core::validate_manual`; parse errors (invalid Base32,
+    `paladin_auth_core::validate_manual`; parse errors (invalid Base32,
     empty label, out-of-range digits / period / counter) and any
     core-returned `validation_error` block submission inline without
     mutating the vault. `classify_manual_submit` calls
@@ -5114,7 +5114,7 @@ sign-off.
     `compose_inline_error_revealed_*` plus the existing
     `classify_manual_submit_*` rejection invariants.
   - [x] Render validation warnings inline via
-    `paladin_core::format_validation_warning()` without blocking
+    `paladin_auth_core::format_validation_warning()` without blocking
     creation. The duplicate-collision `adw::AlertDialog` (presented
     by `AddAccountComponent::present_duplicate_alert` and worded by
     `compose_pending_duplicate_alert_body`) embeds the staged
@@ -5223,7 +5223,7 @@ sign-off.
     cancel / dialog close / auto-lock and when the user switches
     away from the manual stack page.
     `AddSecretState::manual_secret` stores the
-    `AddAccountMsg::ManualSecretChanged` shadow in a Paladin-owned
+    `AddAccountMsg::ManualSecretChanged` shadow in a Paladin Auth-owned
     `SecretEntry` (a `Zeroizing<String>` whose bytes wipe on drop /
     `take` / `set`), and `apply_msg` drains it through
     `AddSecretState::clear_for(ClearReason::Submit | Cancel | Close)`
@@ -5243,7 +5243,7 @@ sign-off.
     `tests/add_account_logic.rs::inline_error_does_not_echo_manual_secret_text`
     for the §"Secret entry handling" redaction contract.
 - [x] Add-via-`otpauth://`-URI paste path in `AddAccountComponent`,
-  decoded via `paladin_core::parse_otpauth` and sharing the manual
+  decoded via `paladin_auth_core::parse_otpauth` and sharing the manual
   duplicate / validation paths.
   - [x] Add a URI `AdwEntryRow` for the `otpauth://` string on its
     dedicated stack page. The `AddAccountComponent`'s `view!` macro
@@ -5256,7 +5256,7 @@ sign-off.
     flush the visible entry text. The keystroke `connect_changed`
     signal dispatches `AddAccountMsg::UriTextChanged(entry.text())`
     so the typed bytes shadow into
-    `AddSecretState::uri_text` — the same Paladin-owned
+    `AddSecretState::uri_text` — the same Paladin Auth-owned
     `SecretEntry` that drains on cancel / switch / close / submit /
     auto-lock per the §"Secret entry handling" contract. Pinned by
     `tests/add_account_logic.rs::compose_uri_text_value_fresh_dialog_returns_empty`,
@@ -5268,13 +5268,13 @@ sign-off.
     `format_uri_text_title_returns_otpauth_uri` /
     `apply_msg_uri_text_changed_shadows_into_secret_state` /
     `apply_msg_uri_text_changed_replaces_prior_shadow` siblings.
-  - [x] On submit, call `paladin_core::parse_otpauth` synchronously
+  - [x] On submit, call `paladin_auth_core::parse_otpauth` synchronously
     on the main thread (no I/O); surface parse failures inline
     without echoing the URI text. `compose_submit_outcome`
     dispatches to `compose_uri_submit_outcome` when the active path
     is `AddPath::Uri`; the helper threads
     `state.secret_state().uri_text.text()` through
-    `paladin_core::parse_otpauth` synchronously
+    `paladin_auth_core::parse_otpauth` synchronously
     (`tests/otpauth_uri_paste_logic.rs::classify_uri_submit_signature_takes_borrowed_str_so_caller_retains_buffer`
     pins the borrowed-`&str` signature so the call cannot escape
     the GTK main loop into a worker). Parse failures route as
@@ -5316,7 +5316,7 @@ sign-off.
     state) when the user switches stack pages, on submit, on cancel,
     on dialog close, and on auto-lock; never carry the URI in
     `AppMsg` or `AppOutput`. `AddSecretState::uri_text` is a
-    Paladin-owned `SecretEntry` whose bytes wipe on drop /
+    Paladin Auth-owned `SecretEntry` whose bytes wipe on drop /
     `take` / `set`; `apply_msg` drains it through
     `AddSecretState::clear_for(ClearReason::Submit | Cancel |
     Close)` on the corresponding arms and through
@@ -5337,7 +5337,7 @@ sign-off.
     siblings, alongside `tests/secret_fields_logic.rs::*` for the
     `SecretEntry` zeroize invariants.
 - [x] `AddAccountComponent` QR clipboard image path (`gdk::Clipboard`
-  texture read → `paladin_core::import::qr_image_bytes` with
+  texture read → `paladin_auth_core::import::qr_image_bytes` with
   `ImportConflict::Skip`). The live `AppMsg::AddAccountAction(
   AddAccountOutput::RequestScanClipboard)` arm now drives
   `gdk::Clipboard::read_texture_async` whose callback runs the four-
@@ -5367,7 +5367,7 @@ sign-off.
     `AddAccountMsg::ScanClipboardClicked`. The `apply_msg` arm for
     that variant is a state-side no-op (the component emits the
     request as an output and the `AppModel`-side handler at
-    `crates/paladin-gtk/src/app/model.rs` owns the live
+    `crates/paladin-auth-gtk/src/app/model.rs` owns the live
     `gdk::Display::default().clipboard().read_texture_async`
     round-trip plus the `gdk::TextureDownloader` decode and the QR
     worker dispatch covered by the sub-items below). Pinned by
@@ -5383,7 +5383,7 @@ sign-off.
   - [x] Allocate an exact `width * height * 4` straight
     (non-premultiplied) RGBA8 buffer with overflow-checked
     multiplication; reject sizes above
-    `paladin_core::QR_RGBA_MAX_BYTES` before allocation / download.
+    `paladin_auth_core::QR_RGBA_MAX_BYTES` before allocation / download.
     `crate::qr_clipboard::prepare_rgba_layout` runs the
     overflow-checked multiplications (`u32 -> usize` widening +
     `checked_mul(height) -> checked_mul(4)`) and rejects oversized
@@ -5443,7 +5443,7 @@ sign-off.
     and dispatches `run_qr_worker` through the existing
     `compose_qr_worker_input` boundary.
   - [x] Pass width, height, bytes, and `import_time` into
-    `paladin_core::import::qr_image_bytes`; the call returns
+    `paladin_auth_core::import::qr_image_bytes`; the call returns
     `Vec<ValidatedAccount>` regardless of QR count.
     The new pure-logic helper
     `crate::qr_clipboard::compose_qr_decode_outcome(layout,
@@ -5451,12 +5451,12 @@ sign-off.
     QrDecodeOutcome` ties the post-download `verify_download_layout`
     check to the `decode_clipboard_qr` call (which itself forwards
     `layout.width()`, `layout.height()`, the buffer, and
-    `import_time` into `paladin_core::import::qr_image_bytes`) so
+    `import_time` into `paladin_auth_core::import::qr_image_bytes`) so
     the live `AppModel` clipboard-QR handler cannot bypass the
     stride / length gate before reaching the `rqrr`-backed decoder.
     The three outcome variants — `Decoded(Vec<ValidatedAccount>)`,
     `DownloadMismatch(DownloadMismatch)`, and
-    `DecodeError(PaladinError)` — feed the inline-error / worker-
+    `DecodeError(PaladinAuthError)` — feed the inline-error / worker-
     dispatch routing that lands in the next sub-items. Pinned by
     `tests/qr_clipboard_logic.rs::compose_qr_decode_outcome_signature_takes_layout_bytes_stride_and_import_time`,
     `compose_qr_decode_outcome_returns_download_mismatch_when_stride_disagrees`,
@@ -5546,7 +5546,7 @@ sign-off.
     The pure-logic chain is the new typed
     `crate::qr_clipboard::QrPreflightError` enum (four variants:
     `NoClipboardImage`, `LayoutRejected(QrLayoutError)`,
-    `DownloadMismatch(DownloadMismatch)`, `Decode(PaladinError)`)
+    `DownloadMismatch(DownloadMismatch)`, `Decode(PaladinAuthError)`)
     plus the `classify_qr_outcome(QrDecodeOutcome) ->
     Result<Vec<ValidatedAccount>, QrPreflightError>` classifier
     that handles the post-download verify + decode + empty-batch-
@@ -5556,8 +5556,8 @@ sign-off.
     1-2. `QrPreflightError::kind()` threads the stable §5
     `ErrorKind` through to the dialog: `NoClipboardImage` →
     `InvalidState`; `LayoutRejected` / `DownloadMismatch` →
-    `InvalidPayload`; `Decode(PaladinError)` → the underlying
-    `PaladinError::kind()` (`NoEntriesToImport` for zero decoded
+    `InvalidPayload`; `Decode(PaladinAuthError)` → the underlying
+    `PaladinAuthError::kind()` (`NoEntriesToImport` for zero decoded
     QRs, `ValidationError` for invalid payload, etc.). The
     `crate::add_account::InlineError::from_qr_preflight_error`
     converter feeds the projection into the existing
@@ -5570,7 +5570,7 @@ sign-off.
     v.import_accounts(...))` worker is dispatched. The live GDK
     clipboard texture read / download / decode wiring on
     `AppModel::update` is implemented in
-    `crates/paladin-gtk/src/app/model.rs` (the `read_texture_async`
+    `crates/paladin-auth-gtk/src/app/model.rs` (the `read_texture_async`
     callback feeds `load_clipboard_qr_capture`, which runs
     `gdk::TextureDownloader` and the QR worker via
     `gtk::gio::spawn_blocking`); the pure-logic helpers and routing
@@ -5583,7 +5583,7 @@ sign-off.
     `qr_preflight_error_no_clipboard_image_display_is_non_empty_and_does_not_panic`,
     `qr_preflight_error_layout_rejected_display_includes_underlying_qr_layout_error_body`,
     `qr_preflight_error_download_mismatch_display_includes_underlying_download_mismatch_body`,
-    `qr_preflight_error_decode_display_includes_underlying_paladin_error_body`,
+    `qr_preflight_error_decode_display_includes_underlying_paladin_auth_error_body`,
     `qr_preflight_error_display_does_not_echo_secret_bytes`,
     `qr_preflight_error_implements_std_error`,
     `classify_qr_outcome_decoded_non_empty_returns_ok_accounts`,
@@ -5597,7 +5597,7 @@ sign-off.
     `inline_error_from_qr_preflight_download_mismatch_uses_invalid_payload_kind`,
     `inline_error_from_qr_preflight_decode_no_entries_uses_no_entries_to_import_kind`,
     `inline_error_from_qr_preflight_decode_validation_error_uses_validation_error_kind`,
-    `inline_error_from_qr_preflight_decode_uses_underlying_paladin_error_display_body`,
+    `inline_error_from_qr_preflight_decode_uses_underlying_paladin_auth_error_display_body`,
     `inline_error_from_qr_preflight_no_image_body_mentions_clipboard_or_image`,
     `apply_msg_qr_preflight_failure_routes_through_render_inline_error_arm`,
     and
@@ -5608,21 +5608,21 @@ sign-off.
   - [x] Pick the source file via `gtk::FileDialog` (the GTK 4.10+
     replacement for the deprecated `gtk::FileChooserNative`).
   - [x] Add a format selector (auto-detect / explicit `otpauth` /
-    `aegis` / `paladin` / `qr`) and an on-conflict selector
+    `aegis` / `paladin-auth` / `qr`) and an on-conflict selector
     (`skip` / `replace` / `append`).
-  - [x] Before any Paladin-bundle passphrase prompt, call
-    `paladin_core::classify_paladin_import_precheck(path,
+  - [x] Before any Paladin Auth-bundle passphrase prompt, call
+    `paladin_auth_core::classify_paladin_auth_import_precheck(path,
     forced_format)` and act on the returned variant:
     `PromptForPassphrase` prompts inside the dialog, `Reject(err)`
     surfaces the exact core error inline without prompting, and
-    `NoPrompt` continues through `paladin_core::import::from_file`.
+    `NoPrompt` continues through `paladin_auth_core::import::from_file`.
   - [x] Clear the bundle-passphrase row when the source path or
     forced format changes after entry, and restart the probe /
     prompt flow.
-  - [x] Run the selected `paladin_core::import::from_file` call,
+  - [x] Run the selected `paladin_auth_core::import::from_file` call,
     the `Vault::import_accounts(accounts, conflict, import_time)`
     merge, and the surrounding `Vault::mutate_and_save` as one
-    serialized `gio::spawn_blocking` worker (encrypted-Paladin runs
+    serialized `gio::spawn_blocking` worker (encrypted-Paladin Auth runs
     Argon2id; keep it off the main loop).
   - [x] On success, refresh `AccountListComponent` from the returned
     vault and keep the dialog on a post-success counts panel until the
@@ -5647,7 +5647,7 @@ sign-off.
   twice-confirm passphrase, `write_secret_file_atomic` call).
   - [x] Add a format selector (plaintext newline-separated
     `otpauth://` URI list — Gnome Authenticator–compatible — or
-    encrypted Paladin bundle) and pick the destination via
+    encrypted Paladin Auth bundle) and pick the destination via
     `gtk::FileDialog`.
     (`ExportFormatChoice` gains `Default` (returns
     `PlaintextOtpauth`, mirroring the CLI's no-`--format` behavior)
@@ -5664,7 +5664,7 @@ sign-off.
     path comparisons stay authoritative). A second
     `adw::PreferencesGroup` "Options" mounts an `adw::ComboRow`
     "Format" bound to `format_export_dialog_format_labels()`
-    (`["Plaintext otpauth:// URI list", "Encrypted Paladin
+    (`["Plaintext otpauth:// URI list", "Encrypted Paladin Auth
     bundle"]`); the `connect_selected_notify` callback decodes the
     selection through `format_choice_from_index` and dispatches
     `ExportDialogMsg::FormatChanged(ExportFormatChoice)`, ignoring
@@ -5773,7 +5773,7 @@ sign-off.
     `apply_msg_overwrite_acknowledged_false_clears_state`,
     `format_export_dialog_overwrite_gate_title_is_non_empty`, and
     `format_export_dialog_overwrite_gate_subtitle_is_non_empty`.)
-  - [x] Render `paladin_core::format_plaintext_export_warning()`
+  - [x] Render `paladin_auth_core::format_plaintext_export_warning()`
     verbatim on the plaintext path and require explicit
     confirmation before the write proceeds.
     (`ExportDialogState` gains a `plaintext_warning_acknowledged:
@@ -5792,7 +5792,7 @@ sign-off.
     keyed to the format selector — the user sees the risk before
     committing to a destination; `compose_plaintext_warning_body()`
     re-exposes `plaintext_warning_body()` (already a verbatim wrap of
-    `paladin_core::format_plaintext_export_warning`) so the GUI, CLI,
+    `paladin_auth_core::format_plaintext_export_warning`) so the GUI, CLI,
     and TUI all surface the same wording. The view! macro mounts an
     `adw::PreferencesGroup` titled `"Plaintext warning"` with an
     `adw::ActionRow` whose title is bound to
@@ -5823,7 +5823,7 @@ sign-off.
     `compose_plaintext_warning_visible_true_on_plaintext_format`,
     `compose_plaintext_warning_visible_false_on_encrypted_format`,
     `compose_plaintext_warning_visible_true_on_default_state`,
-    `compose_plaintext_warning_body_matches_paladin_core_verbatim`,
+    `compose_plaintext_warning_body_matches_paladin_auth_core_verbatim`,
     `compose_submit_button_sensitive_false_when_plaintext_warning_visible_unacked`,
     `compose_submit_button_sensitive_true_after_plaintext_warning_acked`,
     `compose_submit_button_sensitive_true_on_encrypted_format_without_plaintext_ack`,
@@ -5903,7 +5903,7 @@ sign-off.
     inside `apply_msg`; rejections stage an
     `InlineError::from_rejection(SubmitRejection)` projection on
     `ExportDialogState::inline_error`, which renders verbatim through
-    the matching `PaladinError::InvalidPassphrase { reason }` variant
+    the matching `PaladinAuthError::InvalidPassphrase { reason }` variant
     so wording stays in lock-step with the CLI / TUI. The plaintext
     path is a no-op for the pre-flight; both paths clear any stale
     inline error on accept. Per-keystroke
@@ -5937,11 +5937,11 @@ sign-off.
     bundle to keep the fresh-AEAD-key derivation off the main loop;
     plaintext for symmetry since `write_secret_file_atomic` chains
     multiple `fsync`s); the write goes through
-    `paladin_core::write_secret_file_atomic`.
+    `paladin_auth_core::write_secret_file_atomic`.
     (`run_export_worker(ExportWorkerInput) -> ExportWorkerCompletion`
     consumes the live `(Vault, Store)` pair, builds the bytes via
-    `paladin_core::export::otpauth_list` / `paladin_core::export::encrypted`,
-    and hands them to `paladin_core::write_secret_file_atomic`. The
+    `paladin_auth_core::export::otpauth_list` / `paladin_auth_core::export::encrypted`,
+    and hands them to `paladin_auth_core::write_secret_file_atomic`. The
     typed result routes through `classify_export_result` into
     `ExportOutcome::{Success, DurabilityWarning, Inline}`. `AppModel`
     spawns it via `gtk::glib::spawn_future_local` wrapping
@@ -5952,7 +5952,7 @@ sign-off.
     `compose_export_dispatch`, and `apply_export_dispatch_inplace` in
     `app::state` mirror the import dispatch family. Pinned by
     `tests/export_dialog_logic.rs::worker_integration::run_export_worker_plaintext_writes_otpauth_json_and_returns_success`,
-    `run_export_worker_encrypted_writes_paladin_bundle_and_returns_success`,
+    `run_export_worker_encrypted_writes_paladin_auth_bundle_and_returns_success`,
     and `run_export_worker_plaintext_io_error_returns_inline` (real
     `(Vault, Store)` round-trip through tempfile vault).)
   - [x] On success, close the dialog and surface the written path
@@ -6008,12 +6008,12 @@ sign-off.
   Read-only feature, no `Vault::mutate_and_save` involvement, no
   GSettings key, no window-level accelerator.
   - [x] Promote `qrcode` from `[dev-dependencies]` to
-    `[dependencies]` in `crates/paladin-core/Cargo.toml` and land the
+    `[dependencies]` in `crates/paladin-auth-core/Cargo.toml` and land the
     §4.7 surface (`QrRenderOptions`, `QR_MODULE_SIZE_PX_*`,
     `Vault::export_qr_png` / `export_qr_svg` / `export_qr_ansi`,
     `export::qr_*` free functions,
     `format_plaintext_qr_export_warning`). Update
-    `crates/paladin-core/public-api.txt` to match. Core tests land
+    `crates/paladin-auth-core/public-api.txt` to match. Core tests land
     in the same commit per DESIGN §10's QR-export bullet.
   - [x] Extend `account_list::build_kebab_menu_model` to insert
     `Show QR…` between `Rename…` and `Remove…`, targeting a new
@@ -6041,7 +6041,7 @@ sign-off.
     inside an `adw::Dialog`. Page 1 (`AdwViewStack` child name
     `"warning"`): warning body bound to
     `compose_export_qr_warning_body()` (verbatim from
-    `paladin_core::format_plaintext_qr_export_warning()`), the
+    `paladin_auth_core::format_plaintext_qr_export_warning()`), the
     ack `adw::SwitchRow` dispatching only
     `ExportQrDialogMsg::AckToggled(bool)`, and a footer with two
     buttons — `Cancel` (always sensitive; emits
@@ -6069,11 +6069,11 @@ sign-off.
     `ExportDialog` uses; dispatch
     `run_export_qr_save_worker` on `gio::spawn_blocking`. The PNG
     worker reuses the already-staged `state.staged_png` bytes and
-    only calls `paladin_core::write_secret_file_atomic` (no second
+    only calls `paladin_auth_core::write_secret_file_atomic` (no second
     `vault.export_qr_png` invocation). The SVG worker renders via
     `vault.export_qr_svg(...)` on first save (parking the bytes in
     `state.staged_svg` so a subsequent save-as-SVG reuses them)
-    and writes via `paladin_core::write_secret_file_atomic`.
+    and writes via `paladin_auth_core::write_secret_file_atomic`.
     Surface the 0600 output path inline and via an `adw::Toast`
     on the shared overlay.
   - [x] Wire `Copy image` through
@@ -6104,7 +6104,7 @@ sign-off.
     QR scenarios listed in the §"QR export dialog implementation"
     Build order.
   - [x] `tests/thinness.rs` passes — no `image` / `rqrr` /
-    `qrcode` imports in `crates/paladin-gtk/src/`.
+    `qrcode` imports in `crates/paladin-auth-gtk/src/`.
 - [x] `PassphraseDialogComponent` full implementation (`set` /
   `change` / `remove` sub-flows, gating, validation, error
   handling).
@@ -6136,7 +6136,7 @@ sign-off.
     stamps it onto `state.inline_rejection` and emits no output.
     Pinned by `apply_msg_submit_set_with_both_empty_stamps_zero_length`.)
   - [x] Render `remove` with
-    `paladin_core::format_plaintext_storage_warning()` verbatim and
+    `paladin_auth_core::format_plaintext_storage_warning()` verbatim and
     require explicit confirmation before mutation.
     (`remove_warning_label` renders the `remove_warning_body()`
     string verbatim; the `remove_ack_row` `AdwSwitchRow` flips the
@@ -6210,7 +6210,7 @@ sign-off.
     `AppModel::update`'s `PassphraseWorkerCompleted` arm raises the
     body on `self.toast_overlay` as the status confirmation. After
     the dispatch is applied, the same arm consults
-    `paladin_core::policy::auto_lock::IdlePolicy::should_arm` via
+    `paladin_auth_core::policy::auto_lock::IdlePolicy::should_arm` via
     `crate::auto_lock::idle_should_arm(vault)` on the reinstalled
     pair so the new on-disk mode flows through `Vault::is_encrypted` /
     `Vault::settings` exactly as the §"Clipboard + auto-lock parity
@@ -6256,13 +6256,13 @@ sign-off.
     sensitivity bind via `#[watch]` against the existing
     `compose_settings_dialog_*` helpers.)
   - [x] Clamp the timeout spinners to
-    `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
+    `paladin_auth_core::AUTO_LOCK_SECS_MIN..=paladin_auth_core::AUTO_LOCK_SECS_MAX`
     and
-    `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`.
+    `paladin_auth_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_auth_core::CLIPBOARD_CLEAR_SECS_MAX`.
     (Both spinners construct their `gtk::Adjustment` from the existing
     `format_settings_dialog_*_secs_adjustment` helpers, which already
     return the §5-pinned `(lower, upper, step)` tuple from
-    `paladin_core::*_SECS_MIN`/`MAX`. The state machine clamps any
+    `paladin_auth_core::*_SECS_MIN`/`MAX`. The state machine clamps any
     out-of-range value at `stage_auto_lock_secs` / `stage_clipboard_clear_secs`
     via `clamp_auto_lock_secs` / `clamp_clipboard_clear_secs`, asserted
     by the existing `clamp_*` test suite.)
@@ -6341,7 +6341,7 @@ sign-off.
     `compose_settings_dispatch_rollback_does_not_reask_idle`, and
     `compose_settings_dispatch_inline_does_not_reask_idle`.)
 - [x] Header-bar `+` button and primary menu wired with the pinned
-  entries (Import…, Export…, Passphrase…, Preferences, About Paladin,
+  entries (Import…, Export…, Passphrase…, Preferences, About Paladin Auth,
   Quit) per §"libadwaita usage", with Unlocked / `UnlockedBusy` gating
   applied to the mutating entries.
   - [x] Mount an `AdwHeaderBar` inside the `AdwToolbarView` top slot
@@ -6351,7 +6351,7 @@ sign-off.
     `adw::ToolbarView`; the `add_top_bar = &adw::HeaderBar` slot
     parents the primary `+` button, search-toggle, and primary
     `gtk::MenuButton`. Pinned by
-    `format_app_window_title_returns_paladin`,
+    `format_app_window_title_returns_paladin_auth`,
     `format_app_window_default_size_returns_1280_by_960`, and
     the smoke-test `gtk_smoke.rs` end-to-end mount check.)
   - [x] Add the primary "Add account" `+` button at the start of the
@@ -6497,7 +6497,7 @@ sign-off.
     `tests/column_view_logic.rs`.
   - [x] Add the primary `gtk::MenuButton` driven by a `gio::Menu`
     with the fixed entries Import…, Export…, Passphrase…,
-    Preferences, About Paladin, Quit.
+    Preferences, About Paladin Auth, Quit.
     (`view!`'s `pack_end = &gtk::MenuButton` slot is attached to
     the model returned by `build_app_primary_menu_model()` via
     `wire_app_menu_button_menu_model(&widgets.menu_button)` in
@@ -6543,25 +6543,25 @@ sign-off.
     `format_app_primary_menu_action_sensitivities_enables_mutating_entries_on_unlocked`,
     and `build_app_window_action_group_disables_mutating_actions_in_non_unlocked_states`.)
 - [x] About dialog (`AdwAboutDialog` wired to the primary menu's
-  "About Paladin" entry, metadata sourced from Cargo package fields
+  "About Paladin Auth" entry, metadata sourced from Cargo package fields
   embedded at compile time).
   - [x] Mount `AdwAboutDialog` behind the primary menu's "About
-    Paladin" entry; pull `application-name`, `version`,
+    Paladin Auth" entry; pull `application-name`, `version`,
     `developers`, `website`, and `issue-tracker` from Cargo package
     metadata via `env!` / `option_env!` so the strings stay in sync
     with the workspace.
     (`AppMsg::OpenAboutDialog` activates from the
     `"app.about"` action and presents the dialog returned by
     `build_app_about_dialog()`. The dialog's `application-name`
-    (`format_app_about_dialog_program_name` → `"Paladin"`,
-    matching the §11.3 desktop entry's `Name=Paladin`),
+    (`format_app_about_dialog_program_name` → `"Paladin Auth"`,
+    matching the §11.3 desktop entry's `Name=Paladin Auth`),
     `version` (`env!("CARGO_PKG_VERSION")`), `website`
     (`env!("CARGO_PKG_HOMEPAGE")`), `issue-url`
     (`concat!(env!("CARGO_PKG_REPOSITORY"), "/issues")`), and
     `support-url` (`concat!(env!("CARGO_PKG_REPOSITORY"),
     "/discussions")`) all flow through pinned
     `format_app_about_dialog_*` helpers sourced from Cargo
-    metadata that `crates/paladin-gtk/Cargo.toml` inherits from
+    metadata that `crates/paladin-auth-gtk/Cargo.toml` inherits from
     the workspace `[workspace.package]` table, so a workspace
     bump propagates automatically. `developers` resolves through
     the `format_app_about_dialog_developers` literal because
@@ -6579,14 +6579,14 @@ sign-off.
     bundle and surface it through
     `AdwAboutDialog::license-type` set to `Custom` with the bundled
     text.
-    (`data/paladin-gtk.gresource.xml` ships
+    (`data/paladin-auth-gtk.gresource.xml` ships
     `<file alias="LICENSE">LICENSE</file>` under the
-    `/org/tamx/Paladin/Gui` prefix; `build.rs` adds `../..`
+    `/org/tamx/PaladinAuth/Gui` prefix; `build.rs` adds `../..`
     (workspace root) as a second `glib-compile-resources`
     sourcedir so the repo-root `LICENSE` (AGPL-3.0-or-later,
     FSF AGPLv3 verbatim) packs into the bundle. The matching
     `format_app_about_dialog_license_resource_path` →
-    `"/org/tamx/Paladin/Gui/LICENSE"` pin keeps the manifest
+    `"/org/tamx/PaladinAuth/Gui/LICENSE"` pin keeps the manifest
     alias and any consumer that looks up the bundled text by
     path in lockstep. `format_app_about_dialog_license_type`
     flipped from `gtk::License::Agpl30` to
@@ -6606,20 +6606,20 @@ sign-off.
     `format_app_about_dialog_license_text_carries_version_3_marker`,
     `format_app_about_dialog_license_text_is_non_empty`,
     `format_app_about_dialog_license_text_does_not_contain_a_null_byte`,
-    `format_app_about_dialog_license_resource_path_returns_paladin_gui_license_path`,
+    `format_app_about_dialog_license_resource_path_returns_paladin_auth_gui_license_path`,
     `format_app_about_dialog_license_resource_path_uses_app_id_prefix`,
     `format_app_about_dialog_license_resource_path_does_not_end_with_a_trailing_slash`,
     and the
     `build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a_setter`
     setter-chain assertion on `dialog.license()`.)
-  - [x] Show the app icon `org.tamx.Paladin.Gui` and link to the
+  - [x] Show the app icon `org.tamx.PaladinAuth.Gui` and link to the
     repository / issue tracker URLs declared in the workspace
     `[workspace.package]` table.
     (`format_app_about_dialog_application_icon_name` returns
-    `crate::APP_ID` (`"org.tamx.Paladin.Gui"`) — the same
+    `crate::APP_ID` (`"org.tamx.PaladinAuth.Gui"`) — the same
     reverse-DNS key consumed by `RelmApp::new(APP_ID)`, the
-    §11.3 `Icon=org.tamx.Paladin.Gui` desktop entry, and the
-    hicolor `/usr/share/icons/hicolor/<size>/apps/org.tamx.Paladin.Gui.*`
+    §11.3 `Icon=org.tamx.PaladinAuth.Gui` desktop entry, and the
+    hicolor `/usr/share/icons/hicolor/<size>/apps/org.tamx.PaladinAuth.Gui.*`
     install layout, so the launcher glyph and the dialog
     header glyph resolve identically. The dialog's footer
     "Website", "Report an issue", and "Get support" links
@@ -6703,14 +6703,14 @@ sign-off.
   across passphrase transitions.
   - [x] Wire `gtk::EventControllerKey` and pointer motion controllers
     at the `AppModel` root so idle events feed
-    `paladin_core::policy::auto_lock::IdlePolicy`.
+    `paladin_auth_core::policy::auto_lock::IdlePolicy`.
     (`wire_app_window_idle_controllers` attaches one
     `gtk::EventControllerKey` and one `gtk::EventControllerMotion`
     on the root `adw::ApplicationWindow`; both post
     `AppMsg::IdleEvent(Instant::now())` per event. The update arm
     calls `IdleSource::refresh` against the live `(Vault, Store)`
     pair so the deadline routes through
-    `paladin_core::policy::auto_lock::IdlePolicy::next_deadline`,
+    `paladin_auth_core::policy::auto_lock::IdlePolicy::next_deadline`,
     keeping the plaintext-no-op and `auto_lock_enabled` opt-in
     rules in core. `IdleSource` (`auto_lock.rs`) holds the current
     deadline behind `new` / `refresh` / `deadline` / `is_armed` /
@@ -6824,7 +6824,7 @@ sign-off.
     helpers (`payload_text` / `captured_clipboard_bytes`) are pinned
     by `tests/clipboard_logic.rs`.)
   - [x] Drive clipboard auto-clear via
-    `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`
+    `paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`
     at copy time and `should_clear` on wake against the current
     clipboard text (only-if-unchanged); apply mode-agnostically
     (both plaintext and encrypted vaults).
@@ -7039,73 +7039,73 @@ sign-off.
 - [x] GUI runtime and dependency guardrails.
   - [x] Use GTK / GLib / Relm4 as the GUI event loop and run long work
     through `gio::spawn_blocking`; do not use `tokio` directly from
-    `paladin-gtk` source.
-  - [x] Keep `tokio` out of `paladin-gtk` direct dependencies; allow
+    `paladin-auth-gtk` source.
+  - [x] Keep `tokio` out of `paladin-auth-gtk` direct dependencies; allow
     only the transitive `relm4 → tokio` carve-out captured in
     `deny.toml`.
   - [x] Enforce the source-level runtime/network guard with
-    `crates/paladin-gtk/tests/no_tokio_source.rs`.
+    `crates/paladin-auth-gtk/tests/no_tokio_source.rs`.
   - [x] Keep the GUI thinness guard in `tests/thinness.rs` so crypto,
     storage, import/export parsers, QR decoding, path discovery, and
-    OTP primitives remain in `paladin-core`.
-- [x] Use `paladin_core::account_matches_search` for `search.rs` filtering,
-  `paladin_core::format_validation_warning()` for validation-warning
-  messages, and `paladin_core::format_plaintext_export_warning()` for the
+    OTP primitives remain in `paladin-auth-core`.
+- [x] Use `paladin_auth_core::account_matches_search` for `search.rs` filtering,
+  `paladin_auth_core::format_validation_warning()` for validation-warning
+  messages, and `paladin_auth_core::format_plaintext_export_warning()` for the
   `ExportDialog` plaintext path so the GUI never re-implements shared text
   or match-key logic.
-- [x] Use `paladin_core::classify_paladin_import_precheck` before any
-  encrypted-Paladin-bundle import prompt so the GUI shares the CLI / TUI
-  Paladin header decision table.
+- [x] Use `paladin_auth_core::classify_paladin_auth_import_precheck` before any
+  encrypted-Paladin Auth-bundle import prompt so the GUI shares the CLI / TUI
+  Paladin Auth header decision table.
 - [x] Linux desktop file, AppStream metadata, and icon.
-  - [x] Write `data/org.tamx.Paladin.Gui.desktop` with `Name=Paladin`,
-    `Icon=org.tamx.Paladin.Gui`,
-    `StartupWMClass=org.tamx.Paladin.Gui`,
+  - [x] Write `data/org.tamx.PaladinAuth.Gui.desktop` with `Name=Paladin Auth`,
+    `Icon=org.tamx.PaladinAuth.Gui`,
+    `StartupWMClass=org.tamx.PaladinAuth.Gui`,
     `Categories=Utility;Security;`, security/authenticator
-    `Keywords=`, and `Exec=paladin-gtk` (no file/URI placeholders).
-    (Shipped at `crates/paladin-gtk/data/org.tamx.Paladin.Gui.desktop`.
-    `Type=Application`, `Name=Paladin`, `Icon=org.tamx.Paladin.Gui`,
-    `Exec=paladin-gtk` with no `%F` / `%U` / `%f` / `%u` placeholders,
-    `Terminal=false`, `StartupWMClass=org.tamx.Paladin.Gui`,
+    `Keywords=`, and `Exec=paladin-auth-gtk` (no file/URI placeholders).
+    (Shipped at `crates/paladin-auth-gtk/data/org.tamx.PaladinAuth.Gui.desktop`.
+    `Type=Application`, `Name=Paladin Auth`, `Icon=org.tamx.PaladinAuth.Gui`,
+    `Exec=paladin-auth-gtk` with no `%F` / `%U` / `%f` / `%u` placeholders,
+    `Terminal=false`, `StartupWMClass=org.tamx.PaladinAuth.Gui`,
     `Categories=Utility;Security;`, and
     `Keywords=OTP;TOTP;HOTP;2FA;MFA;Authenticator;One-Time-Password;Two-Factor;Security;`.
     `Comment=` and `GenericName=` are filled so launchers can render the
     tooltip / generic-name overlay. The §11.3 Flatpak and native package
     manifests install this file verbatim under
-    `/usr/share/applications/org.tamx.Paladin.Gui.desktop`. Pinned by
+    `/usr/share/applications/org.tamx.PaladinAuth.Gui.desktop`. Pinned by
     `tests/desktop_entry_logic.rs`:
     `desktop_file_exists_at_expected_path`,
     `desktop_file_path_uses_app_id_basename`,
     `desktop_file_starts_with_desktop_entry_group_header`,
     `desktop_file_has_spdx_header_comment`,
     `desktop_entry_type_is_application`,
-    `desktop_entry_name_is_paladin`,
+    `desktop_entry_name_is_paladin_auth`,
     `desktop_entry_icon_matches_app_id`,
     `desktop_entry_startup_wm_class_matches_app_id`,
-    `desktop_entry_exec_is_paladin_gtk_binary_name`,
+    `desktop_entry_exec_is_paladin_auth_gtk_binary_name`,
     `desktop_entry_exec_has_no_file_or_uri_placeholders`,
     `desktop_entry_categories_includes_utility_and_security`,
     `desktop_entry_keywords_covers_security_authenticator_vocabulary`,
     `desktop_entry_terminal_is_false`,
     `desktop_entry_has_a_summary_comment_field`, and
     `desktop_entry_basename_matches_appstream_launchable_filename`.)
-  - [x] Write `data/metainfo/org.tamx.Paladin.Gui.metainfo.xml`
+  - [x] Write `data/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml`
     AppStream metadata with the matching
     `<launchable type="desktop-id">` plus screenshots and release
     notes for v0.2.
     (Shipped at
-    `crates/paladin-gtk/data/metainfo/org.tamx.Paladin.Gui.metainfo.xml`.
+    `crates/paladin-auth-gtk/data/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml`.
     `<component type="desktop-application">` with `<id>` matching
-    `paladin_gtk::APP_ID`,
-    `<launchable type="desktop-id">org.tamx.Paladin.Gui.desktop</launchable>`
+    `paladin_auth_gtk::APP_ID`,
+    `<launchable type="desktop-id">org.tamx.PaladinAuth.Gui.desktop</launchable>`
     pinned against the §11.3 desktop entry basename,
     `<metadata_license>CC0-1.0</metadata_license>`,
     `<project_license>AGPL-3.0-or-later</project_license>`,
-    `<name>Paladin</name>`, a one-sentence `<summary>`, a `<description>`
+    `<name>Paladin Auth</name>`, a one-sentence `<summary>`, a `<description>`
     block, `<categories>`, `<keywords>`, homepage / bugtracker /
     `vcs-browser` `<url>` entries pointing at the
     `[workspace.package]` URLs, an empty `<content_rating type="oars-1.1" />`
     block (Flathub / GNOME Software prerequisite), a default
-    `<screenshots>` slot, `<provides><binary>paladin-gtk</binary></provides>`,
+    `<screenshots>` slot, `<provides><binary>paladin-auth-gtk</binary></provides>`,
     and a v0.2 `<releases>` entry with `type="development"` release
     notes. `appstreamcli validate --no-net` passes (the network warnings
     are the validator failing to download placeholder asset URLs in
@@ -7115,16 +7115,16 @@ sign-off.
     `<component type="desktop-application">`, `<id>` ↔ `APP_ID`,
     `<launchable>` ↔ desktop file basename, `<metadata_license>` ∈
     {FSFAP, MIT, CC0-1.0, CC-BY-3.0, CC-BY-4.0, 0BSD},
-    `<project_license>` ↔ `AGPL-3.0-or-later`, `<name>` ↔ `Paladin`,
+    `<project_license>` ↔ `AGPL-3.0-or-later`, `<name>` ↔ `Paladin Auth`,
     `<summary>` non-empty + ≤80 chars + no trailing period,
     `<description>` present, `<releases>` with at least one
     `<release>`, `<screenshots>` block, homepage / bugtracker URLs,
     a developer block (`<developer>` or legacy `<developer_name>`),
     and the `<content_rating>` declaration.)
   - [x] Ship the scalable app icon at
-    `data/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg` and
+    `data/icons/hicolor/scalable/apps/org.tamx.PaladinAuth.Gui.svg` and
     16/24/32/48 PNG fallbacks under
-    `data/icons/hicolor/<size>/apps/org.tamx.Paladin.Gui.png`.
+    `data/icons/hicolor/<size>/apps/org.tamx.PaladinAuth.Gui.png`.
     (Scalable SVG drawn at the GNOME HIG-standard 128×128 viewport
     as a heraldic shield with a central keyhole and a six-digit
     OTP display, rendered against an Adwaita "blue 3" gradient.
@@ -7144,7 +7144,7 @@ sign-off.
     `<size>` from its install directory so a future rerasterization
     cannot silently land a mis-sized fallback).)
   - [x] Ship the symbolic variant at
-    `data/icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg`
+    `data/icons/hicolor/symbolic/apps/org.tamx.PaladinAuth.Gui-symbolic.svg`
     when the Adwaita palette warrants it.
     (Drawn at the GNOME HIG-standard 16×16 symbolic viewport as a
     single-color shield silhouette with a keyhole. Uses
@@ -7157,11 +7157,11 @@ sign-off.
     `symbolic_svg_is_well_formed_svg_root`,
     `symbolic_svg_carries_spdx_header`, and
     `symbolic_svg_uses_currentcolor_for_recoloring`.)
-  - [x] Wire `build.rs` + `data/paladin-gtk.gresource.xml` to compile
+  - [x] Wire `build.rs` + `data/paladin-auth-gtk.gresource.xml` to compile
     the gresource bundle deterministically via
     `glib-compile-resources` (fixed input order).
     (`build.rs` calls
-    `glib_build_tools::compile_resources(&["data", "../.."], "data/paladin-gtk.gresource.xml", "paladin-gtk.gresource")`
+    `glib_build_tools::compile_resources(&["data", "../.."], "data/paladin-auth-gtk.gresource.xml", "paladin-auth-gtk.gresource")`
     so `glib-compile-resources` consumes the XML manifest and emits
     a packed bundle under `OUT_DIR`. The manifest declares each
     payload explicitly (no globs), every `<file>` entry sets
@@ -7170,9 +7170,9 @@ sign-off.
     order — no filesystem-walk dependency. The bundle now ships
     the app stylesheet, the placeholder symbolic icon, the
     workspace `LICENSE` body, the scalable app icon
-    (`icons/scalable/apps/org.tamx.Paladin.Gui.svg`), and the
+    (`icons/scalable/apps/org.tamx.PaladinAuth.Gui.svg`), and the
     symbolic app icon
-    (`icons/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg`); the
+    (`icons/symbolic/apps/org.tamx.PaladinAuth.Gui-symbolic.svg`); the
     bundled app icons let the in-app `gtk::IconTheme` resolve
     `APP_ID` even when the system hicolor theme has not yet
     indexed the freshly installed PNG fallbacks (notably during
@@ -7201,9 +7201,9 @@ sign-off.
     installs `desktop-file-utils` (ships `desktop-file-validate`) and
     `appstream` (ships `appstreamcli`) on the `ubuntu-latest`
     runner, then runs `desktop-file-validate` against
-    `crates/paladin-gtk/data/org.tamx.Paladin.Gui.desktop` and
+    `crates/paladin-auth-gtk/data/org.tamx.PaladinAuth.Gui.desktop` and
     `appstreamcli validate --no-net` against
-    `crates/paladin-gtk/data/metainfo/org.tamx.Paladin.Gui.metainfo.xml`.
+    `crates/paladin-auth-gtk/data/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml`.
     The `--no-net` flag keeps the validator off the network so the
     job never depends on the external homepage / screenshot URLs being
     reachable — the substantive schema / required-field checks still
@@ -7217,9 +7217,9 @@ sign-off.
     edit that drops the validator step fails this test
     immediately, independent of whether the validators are installed
     locally.)
-- [x] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
+- [x] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-auth-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
-  - [x] Update `crates/paladin-gtk/Cargo.toml` to inherit
+  - [x] Update `crates/paladin-auth-gtk/Cargo.toml` to inherit
     `description` / `repository` / `homepage` / `license` /
     `edition` / `rust-version` from `[workspace.package]` and set
     the binary-specific `keywords` / `categories` locally. Pinned by
@@ -7229,7 +7229,7 @@ sign-off.
     `crate_manifest_declares_categories_locally_with_expected_values`,
     `crate_manifest_does_not_inherit_keywords_or_categories_from_workspace`,
     and `workspace_manifest_supplies_each_inherited_field` — together
-    these read both `crates/paladin-gtk/Cargo.toml` and the workspace
+    these read both `crates/paladin-auth-gtk/Cargo.toml` and the workspace
     `Cargo.toml` as plain text and fail if any of `version` /
     `edition` / `rust-version` / `license` / `repository` / `homepage`
     / `description` stops resolving through
@@ -7237,20 +7237,20 @@ sign-off.
     from the GUI-binary set `["otp", "totp", "hotp", "authenticator",
     "gtk"]` / `["gui", "authentication"]`, or if either facet is
     accidentally moved onto `[workspace.package]`.
-  - [x] Add `packaging/deb/paladin-gtk.yaml` (`nfpm`) installing
-    `/usr/bin/paladin-gtk`, the desktop entry, the AppStream
+  - [x] Add `packaging/deb/paladin-auth-gtk.yaml` (`nfpm`) installing
+    `/usr/bin/paladin-auth-gtk`, the desktop entry, the AppStream
     metainfo, and the hicolor icon set; declare
     `libgtk-4-1 (>= 4.16)` and `libadwaita-1-0 (>= 1.6)`; wire a
     narrowly scoped `postinstall` / `postremove` scriptlet pair
     that refreshes `/usr/share/applications/mimeinfo.cache` and
     `/usr/share/icons/hicolor/icon-theme.cache` (the shell scripts
-    live at `packaging/scripts/paladin-gtk-postinstall.sh` and
-    `packaging/scripts/paladin-gtk-postremove.sh` and are shared
+    live at `packaging/scripts/paladin-auth-gtk-postinstall.sh` and
+    `packaging/scripts/paladin-auth-gtk-postremove.sh` and are shared
     byte-for-byte with the `.rpm` manifest). Pinned by
     `tests/packaging_deb_nfpm_manifest_logic.rs`:
     `deb_manifest_exists_at_expected_path`,
     `deb_manifest_starts_with_spdx_license_header`,
-    `deb_manifest_declares_package_name_paladin_gtk`,
+    `deb_manifest_declares_package_name_paladin_auth_gtk`,
     `deb_manifest_declares_linux_platform_and_amd64_arch`,
     `deb_manifest_declares_workspace_license`,
     `deb_manifest_declares_workspace_homepage`,
@@ -7262,13 +7262,13 @@ sign-off.
     `deb_manifest_declares_required_scripts_section`,
     `deb_manifest_scripts_reference_only_the_baseline_keys`,
     `deb_manifest_script_references_point_to_existing_executable_files`,
-    `paladin_gtk_scripts_have_spdx_license_header`,
-    `paladin_gtk_scripts_touch_only_system_owned_caches`,
-    `paladin_gtk_scripts_gate_helpers_with_command_v_and_fail_soft`,
+    `paladin_auth_gtk_scripts_have_spdx_license_header`,
+    `paladin_auth_gtk_scripts_touch_only_system_owned_caches`,
+    `paladin_auth_gtk_scripts_gate_helpers_with_command_v_and_fail_soft`,
     and `deb_manifest_binary_install_uses_executable_mode` —
-    together these read `packaging/deb/paladin-gtk.yaml` as plain
+    together these read `packaging/deb/paladin-auth-gtk.yaml` as plain
     text (no `serde_yaml` dep lands in the test deck) and fail if
-    the manifest stops installing `/usr/bin/paladin-gtk` (with
+    the manifest stops installing `/usr/bin/paladin-auth-gtk` (with
     `mode: 0755`), the desktop entry at `/usr/share/applications/`,
     the AppStream metainfo at `/usr/share/metainfo/`, or any of the
     hicolor scalable / symbolic / 16x16 / 24x24 / 32x32 / 48x48 /
@@ -7281,16 +7281,16 @@ sign-off.
     `$HOME` / `$XDG_*` / `~/` / `/home/` references, network
     calls, or stop gating helpers with `command -v` + `|| :`
     fail-soft.
-  - [x] Add `packaging/rpm/paladin-gtk.yaml` (`nfpm`) installing the
+  - [x] Add `packaging/rpm/paladin-auth-gtk.yaml` (`nfpm`) installing the
     same payload with matching `gtk4` / `libadwaita` package names,
     and declaring the same `postinstall` / `postremove` scriptlet
     pair as the `.deb` (both manifests reference the shared
-    `packaging/scripts/paladin-gtk-*.sh` shell files so a fix lands
+    `packaging/scripts/paladin-auth-gtk-*.sh` shell files so a fix lands
     in both formats at once). Pinned by
     `tests/packaging_rpm_nfpm_manifest_logic.rs`:
     `rpm_manifest_exists_at_expected_path`,
     `rpm_manifest_starts_with_spdx_license_header`,
-    `rpm_manifest_declares_package_name_paladin_gtk`,
+    `rpm_manifest_declares_package_name_paladin_auth_gtk`,
     `rpm_manifest_declares_linux_platform_and_amd64_arch`,
     `rpm_manifest_declares_workspace_license`,
     `rpm_manifest_declares_workspace_homepage`,
@@ -7314,10 +7314,10 @@ sign-off.
     from `gtk4 >= 4.16` / `libadwaita >= 1.6`, if a Debian-style
     `libgtk-4-1` / `libadwaita-1-0` name slips in, or if the
     `scripts:` mapping diverges from the `.deb` manifest.
-  - [x] Add `packaging/flatpak/paladin-gtk.yml` declaring
+  - [x] Add `packaging/flatpak/paladin-auth-gtk.yml` declaring
     `org.gnome.Platform//47` and the matching SDK, the §11.4 sandbox
-    permissions (`xdg-data/paladin:create`,
-    `xdg-config/paladin:create`, `--socket=wayland`,
+    permissions (`xdg-data/paladin-auth:create`,
+    `xdg-config/paladin-auth:create`, `--socket=wayland`,
     `--socket=fallback-x11`, `--share=ipc`), no `--share=network`,
     and exporting the metainfo file to `/usr/share/metainfo/`
     (staged inside the Flatpak `/app/share/metainfo/` prefix that
@@ -7327,7 +7327,7 @@ sign-off.
     `flatpak_manifest_starts_with_spdx_license_header`,
     `flatpak_manifest_declares_app_id_matching_app_constant`,
     `flatpak_manifest_declares_gnome_runtime_47_and_matching_sdk`,
-    `flatpak_manifest_declares_command_paladin_gtk`,
+    `flatpak_manifest_declares_command_paladin_auth_gtk`,
     `flatpak_manifest_declares_every_required_finish_arg`,
     `flatpak_manifest_does_not_declare_any_forbidden_finish_arg`
     (rejects `--share=network`, `--filesystem=home/host/host-os/
@@ -7348,16 +7348,16 @@ sign-off.
   - [x] Wire AppImage assembly via `linuxdeploy` +
     `linuxdeploy-plugin-gtk` so GTK4 modules, schemas, and pixbuf
     loaders ship inside the bundle; output
-    `paladin-gtk-<version>-x86_64.AppImage` with embedded `zsync`
+    `paladin-auth-gtk-<version>-x86_64.AppImage` with embedded `zsync`
     pointing at GitHub Releases. Implemented as
     `packaging/appimage/build-appimage.sh` (executable, bash strict
     mode), which pre-stages the AppStream metainfo and the non-
     primary hicolor icon sizes into the AppDir, then invokes
     `linuxdeploy --appdir … --desktop-file … --icon-file … --executable
-    … --plugin gtk --output appimage` with `OUTPUT=paladin-gtk-
-    ${PALADIN_VERSION}-x86_64.AppImage`,
-    `UPDATE_INFORMATION=gh-releases-zsync|FreedomBen|paladin|latest|
-    paladin-gtk-*-x86_64.AppImage.zsync`, and `ARCH=x86_64`. Pinned
+    … --plugin gtk --output appimage` with `OUTPUT=paladin-auth-gtk-
+    ${PALADIN_AUTH_VERSION}-x86_64.AppImage`,
+    `UPDATE_INFORMATION=gh-releases-zsync|FreedomBen|paladin-auth|latest|
+    paladin-auth-gtk-*-x86_64.AppImage.zsync`, and `ARCH=x86_64`. Pinned
     by `tests/packaging_appimage_build_script_logic.rs`:
     `appimage_script_exists_at_expected_path`,
     `appimage_script_is_executable`,
@@ -7371,13 +7371,13 @@ sign-off.
     `appimage_script_in_tree_references_all_exist_under_the_workspace`,
     `appimage_script_carries_zsync_update_information_pointing_at_github_releases`,
     `appimage_script_declares_versioned_output_filename`,
-    `appimage_script_reads_paladin_version_from_environment`,
+    `appimage_script_reads_paladin_auth_version_from_environment`,
     `appimage_script_does_not_hardcode_a_version_string`, and
     `appimage_script_targets_x86_64_architecture_explicitly` —
     together these fail if the script stops being executable, loses
     the strict-shell-mode directive, drops any `linuxdeploy` flag,
     bakes in a literal semver, or drifts the `UPDATE_INFORMATION`
-    pointer away from the `FreedomBen/paladin` GitHub Releases feed.
+    pointer away from the `FreedomBen/paladin-auth` GitHub Releases feed.
   - [x] Make the build reproducible: vendored deps,
     `cargo build --locked`, `SOURCE_DATE_EPOCH` from the release
     tag, with the gresource bundle and `linuxdeploy` step both
@@ -7396,7 +7396,7 @@ sign-off.
     `appimagetool` invokes transitively — that propagation is
     what makes successive runs of the same tag produce
     byte-identical `.AppImage` output. The fallback
-    `cargo build --release --locked -p paladin-gtk` invocation
+    `cargo build --release --locked -p paladin-auth-gtk` invocation
     keeps the lockfile authoritative at build time. Vendored
     deps land via `cargo vendor` in the release pipeline (the
     `vendor/` tree is not committed; the Flatpak manifest
@@ -7405,7 +7405,7 @@ sign-off.
     `tests/packaging_flatpak_manifest_logic.rs::flatpak_manifest_uses_locked_offline_cargo_build`).
     The gresource bundle stays deterministic via `build.rs`
     invoking `glib_build_tools::compile_resources` against the
-    fixed-order `data/paladin-gtk.gresource.xml` alias list
+    fixed-order `data/paladin-auth-gtk.gresource.xml` alias list
     (pinned by `tests/gresource_manifest_logic.rs::manifest_uses_explicit_file_entries_not_globs`).
     Pinned by
     `tests/packaging_reproducible_build_logic.rs::rust_toolchain_file_exists_at_workspace_root`,
@@ -7437,7 +7437,7 @@ sign-off.
     in the script source); the optional passphrase is piped through
     stdin when `MINISIGN_PASSWORD` is set so the signing step runs
     non-interactively in CI; the trusted-comment string defaults to
-    `"<artifact-basename> signed by paladin release pipeline"` but
+    `"<artifact-basename> signed by paladin-auth release pipeline"` but
     the release pipeline can override it via
     `MINISIGN_TRUSTED_COMMENT` (typically to embed the release tag).
     The script takes the artifact path as `$1`, invokes `minisign
@@ -7473,7 +7473,7 @@ sign-off.
     Flathub.
     (The in-tree Flathub submission tree lives at `packaging/flathub/`
     and carries the three artifacts a Flathub submission needs:
-    `org.tamx.Paladin.Gui.yml` — the flatpak-builder manifest named
+    `org.tamx.PaladinAuth.Gui.yml` — the flatpak-builder manifest named
     with the app-id basename per Flathub convention; `flathub.json`
     — the build-options companion declaring `only-arches: ["x86_64"]`
     so the initial submission scopes the build matrix to the
@@ -7484,10 +7484,10 @@ sign-off.
     Flathub's published key per DESIGN.md §11.4 / §11.6 so
     `packaging/sign/sign-artifact.sh` is NOT invoked for the Flatpak
     output). The manifest deliberately differs from
-    `packaging/flatpak/paladin-gtk.yml` only in its source pointer:
+    `packaging/flatpak/paladin-auth-gtk.yml` only in its source pointer:
     where the local packaging dry-run uses `type: dir, path: ../..`
     to build from the workspace tree, the Flathub manifest uses
-    `type: git` against `https://github.com/FreedomBen/paladin.git`
+    `type: git` against `https://github.com/FreedomBen/paladin-auth.git`
     + a per-release-stamped `tag:` / `commit:` plus a
     `cargo-sources.json` companion so Flathub's builder fetches the
     tagged release and resolves vendored Cargo deps offline. Pinned
@@ -7497,7 +7497,7 @@ sign-off.
     `flathub_manifest_starts_with_spdx_license_header`,
     `flathub_manifest_declares_app_id_matching_app_constant`,
     `flathub_manifest_declares_gnome_runtime_47_and_matching_sdk`,
-    `flathub_manifest_declares_command_paladin_gtk`,
+    `flathub_manifest_declares_command_paladin_auth_gtk`,
     `flathub_manifest_declares_every_required_finish_arg`,
     `flathub_manifest_does_not_declare_any_forbidden_finish_arg`,
     `flathub_manifest_finish_args_are_exactly_the_milestone_7_baseline_set`,
@@ -7506,7 +7506,7 @@ sign-off.
     `flathub_manifest_uses_locked_offline_cargo_build`,
     `flathub_manifest_module_name_matches_app_id_basename`,
     `flathub_manifest_source_is_upstream_not_local_dir`,
-    `flathub_manifest_source_references_paladin_github_repository`,
+    `flathub_manifest_source_references_paladin_auth_github_repository`,
     `flathub_json_exists_at_expected_path`,
     `flathub_json_declares_only_arches_with_x86_64`,
     `flathub_submission_readme_exists`,
@@ -7519,12 +7519,12 @@ sign-off.
     permission set drifts from the §11.4 baseline (in either
     direction), a `cargo build` invocation loses `--release` /
     `--locked` / `--offline`, the source pointer reverts to
-    `type: dir`, the URL stops pointing at FreedomBen/paladin, the
+    `type: dir`, the URL stops pointing at FreedomBen/paladin-auth, the
     `only-arches` scope drops x86_64, or the README stops naming
     `flathub/flathub`, the signing-inheritance contract, or the
     `cargo-sources` regeneration procedure. Once the submission PR
     against `flathub/flathub` merges, the same files land at the
-    root of `flathub/org.tamx.Paladin.Gui` and subsequent per-
+    root of `flathub/org.tamx.PaladinAuth.Gui` and subsequent per-
     release PRs target that new repo instead — the in-tree files
     stay the source of truth that the release pipeline stamps per
     release via `flatpak-cargo-generator` against the new tag's
@@ -7536,22 +7536,22 @@ sign-off.
     (`.github/workflows/ci.yml` now declares a `packaging-dry-run`
     job that runs inside the same `fedora:42` container the
     `clippy` / `test` jobs use — GTK 4.16 + libadwaita 1.6 headers
-    are present so `cargo build --release --locked -p paladin-gtk`
+    are present so `cargo build --release --locked -p paladin-auth-gtk`
     resolves against the version floor. The job installs `nfpm`
     pinned at the upstream `v2.41.3` GitHub release artifact (a
     `dnf install` would let the distro pick a divergent version
     or skip the package entirely on Fedora), exports
-    `PALADIN_VERSION="0.0.1-ci-dry-run"` so the
-    `version: ${PALADIN_VERSION}` substitution in both nfpm
+    `PALADIN_AUTH_VERSION="0.0.1-ci-dry-run"` so the
+    `version: ${PALADIN_AUTH_VERSION}` substitution in both nfpm
     manifests resolves to a concrete string, and then runs
-    `nfpm package -f packaging/deb/paladin-gtk.yaml -p deb -t
+    `nfpm package -f packaging/deb/paladin-auth-gtk.yaml -p deb -t
     target/dist/` and the matching `-p rpm` invocation against
-    `packaging/rpm/paladin-gtk.yaml`. Each artifact is extracted
+    `packaging/rpm/paladin-auth-gtk.yaml`. Each artifact is extracted
     into a staging directory (`dpkg-deb -x` for the `.deb`,
     `rpm2cpio | cpio -idm` for the `.rpm`) and both validators run
     against the installed payload at the FHS paths the manifests
-    claim (`usr/share/applications/org.tamx.Paladin.Gui.desktop`
-    and `usr/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml`)
+    claim (`usr/share/applications/org.tamx.PaladinAuth.Gui.desktop`
+    and `usr/share/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml`)
     — that closes the gap the existing `desktop-metainfo`
     source-validator job leaves open. The Flatpak + AppImage
     artifact-production sub-steps land in follow-up workflow
@@ -7568,7 +7568,7 @@ sign-off.
     `ci_packaging_dry_run_job_runs_in_a_fedora_container`,
     `ci_packaging_dry_run_installs_nfpm`,
     `ci_packaging_dry_run_builds_release_binary_with_locked_lockfile`,
-    `ci_packaging_dry_run_exports_paladin_version`,
+    `ci_packaging_dry_run_exports_paladin_auth_version`,
     `ci_packaging_dry_run_builds_deb_package_via_nfpm`,
     `ci_packaging_dry_run_builds_rpm_package_via_nfpm`,
     `ci_packaging_dry_run_extracts_deb_payload`,
@@ -7593,15 +7593,15 @@ sign-off.
   `Ctrl+Shift+C` accelerator. Tick each box in the dedicated
   "Build order" list as the corresponding code lands.
 - [x] **`DestroyDialog` (Milestone 10; DESIGN §4.3 / §7).** Depends
-  on `paladin_core::destroy_vault`, `DestroyReport`, and
-  `format_destroy_warning` landing in `paladin-core`. The GTK side
+  on `paladin_auth_core::destroy_vault`, `DestroyReport`, and
+  `format_destroy_warning` landing in `paladin-auth-core`. The GTK side
   replays the CLI / TUI contract through an `AdwAlertDialog` with
   destructive styling, a `gio::SpawnBlocking`-routed effect, and the
   same `effect_ownership.rs` serialization every mutating dialog
   uses. The work breaks down into ordered build steps so it can land
   as one or two focused commits:
   - [x] **Component scaffold.** Add
-    `crates/paladin-gtk/src/destroy_dialog.rs` with the
+    `crates/paladin-auth-gtk/src/destroy_dialog.rs` with the
     `relm4::SimpleComponent` shape (`DestroyDialogInit`,
     `DestroyDialogMsg`, `DestroyDialogOutput`) shared by every
     other dialog. The init carries the resolved vault path; the
@@ -7616,7 +7616,7 @@ sign-off.
   - [x] **Widget tree.** Use `AdwAlertDialog` for the GNOME-HIG
     irreversible-action pattern. Heading: `Delete vault?` body:
     the multi-paragraph warning from
-    `paladin_core::format_destroy_warning(path, backup_present)`
+    `paladin_auth_core::format_destroy_warning(path, backup_present)`
     rendered into an `AdwActionRow` (one row per paragraph) inside
     a `gtk::Box` extra-child. Add an `AdwEntryRow` labelled
     `Type 'yes' to confirm` whose buffer's `changed` signal
@@ -7634,7 +7634,7 @@ sign-off.
     install the `Ctrl+Shift+Delete` accelerator via the new
     `format_app_menu_delete_vault_accelerator` /
     `format_app_menu_delete_vault_action` helper pair in
-    `crates/paladin-gtk/src/app/model.rs`. Extend
+    `crates/paladin-auth-gtk/src/app/model.rs`. Extend
     `format_app_window_accelerator_bindings()` from 5 to 6
     entries and the
     `format_app_shortcuts_window_entries()` array from 6 to 7
@@ -7659,11 +7659,11 @@ sign-off.
     `set_accels_for_action` table, and the new helper pair.
   - [x] **Effect dispatch.** Add `AppMsg::DestroyVault { path }`
     and `AppMsg::DestroyVaultCompleted(Result<DestroyReport,
-    PaladinError>)`. `AppModel::update` for `DestroyVault`
+    PaladinAuthError>)`. `AppModel::update` for `DestroyVault`
     serializes the effect through `effect_ownership.rs` (parallel
     to every other mutating dialog), transitions to
     `UnlockedBusy`, and dispatches a `gio::spawn_blocking` closure
-    that calls `paladin_core::destroy_vault(path)` and posts the
+    that calls `paladin_auth_core::destroy_vault(path)` and posts the
     result back through a Relm4 sender. The `DestroyDialog` is
     disabled (insensitive) while the effect is in flight.
   - [x] **Result routing.** `AppMsg::DestroyVaultCompleted` arms:
@@ -7693,7 +7693,7 @@ sign-off.
       across the error re-display so the user does not have to
       retype it; the focus returns to the action button.
     * Any other error — keep the dialog open, render the
-      `PaladinError::Display` text inline (parallel to the rest of
+      `PaladinAuthError::Display` text inline (parallel to the rest of
       the GUI's effect-error rendering).
   - [x] **Auto-lock interaction.** Auto-lock firing while the
     dialog is open with no effect in flight zeroizes the
@@ -7722,7 +7722,7 @@ sign-off.
     (`app_destroy_flow_removes_vault_and_routes_to_init_dialog`):
     launch with a fresh plaintext vault and assert it starts in
     `Unlocked` (where *Delete Vault…* / `Ctrl+Shift+Delete` are
-    reachable); run the exact `paladin_core::destroy_vault` worker
+    reachable); run the exact `paladin_auth_core::destroy_vault` worker
     the dialog spawns; assert the on-disk vault is gone; then
     re-launch and assert the surface routes to `Missing` and
     mounts the `InitDialog`. The `--exit-after-startup` marker
@@ -7732,7 +7732,7 @@ sign-off.
     covered by the Milestone 10 manual test-plan bullets rather
     than the headless runner.
   - [x] **Manual test plan.** Add Milestone 10 bullets to
-    `crates/paladin-gtk/tests/manual/MANUAL_TEST_PLAN.md`:
+    `crates/paladin-auth-gtk/tests/manual/MANUAL_TEST_PLAN.md`:
     * Destroy vault via primary-menu item.
     * Destroy vault via unlock-dialog footer link.
     * Destroy vault via startup-error footer link.
@@ -7747,7 +7747,7 @@ sign-off.
       wipe.
 - [ ] Milestone 7 automated and manual sign-off stays tracked.
   - [x] Manual test plan documented in
-    `crates/paladin-gtk/tests/manual/MANUAL_TEST_PLAN.md`, with
+    `crates/paladin-auth-gtk/tests/manual/MANUAL_TEST_PLAN.md`, with
     `tests/manual_test_plan_doc.rs` guarding that the file exists and
     carries every required checklist item from this plan.
   - [ ] Execute every manual test-plan item cleanly on both a Wayland
@@ -7768,10 +7768,10 @@ the libadwaita 1.6 floor below is satisfiable), `libadwaita` (via the
 Debian dep declaration and to make `AdwAlertDialog` and
 `AdwAboutDialog` available without a compatibility shim), `glib`,
 `gio`, `gdk4`, `clap`, `zeroize` (pinned to the same `1.8` version
-used by `paladin-core` and `paladin-tui`, for the
+used by `paladin-auth-core` and `paladin-auth-tui`, for the
 `clipboard_clear::PendingClipboardClear { value: Zeroizing<Vec<u8>> }`
 captured-bytes wrapper so the post-copy clipboard payload zeroes on
-drop), plus `paladin-core`. GDK
+drop), plus `paladin-auth-core`. GDK
 clipboard is the canonical Wayland/X11 path; `arboard` is **not** a
 hard dependency for v0.2 and is only added if GDK clipboard proves
 insufficient during implementation. Build-time tooling includes
@@ -7783,7 +7783,7 @@ AppStream validation tooling for the Flatpak/native metadata dry-run.
 raised to 1.6 on 2026-05-06) so the GUI follows the GNOME HIG out
 of the box and the §11.3 packaging declaration matches the actual
 binary dependency. `data/style.css` (scoped via `gtk::CssProvider`)
-carries only Paladin-specific tweaks on top of Adwaita defaults — it
+carries only Paladin Auth-specific tweaks on top of Adwaita defaults — it
 never tries to recreate the Adwaita palette.
 
 ## GUI runtime carve-out
@@ -7791,7 +7791,7 @@ never tries to recreate the Adwaita palette.
 **No direct `tokio` use, with one transitive-dep carve-out.** GTK's
 main loop is the executor; long work runs on `gio::spawn_blocking`
 with results delivered back to the main thread via Relm4 messages.
-`paladin-gtk` source files therefore must not contain `use tokio`
+`paladin-auth-gtk` source files therefore must not contain `use tokio`
 or `tokio::` references — `tests/no_tokio_source.rs` enforces this
 the same way `tests/thinness.rs` enforces the crypto / storage
 contract. The crate's own `[dependencies]` must not declare
@@ -7803,15 +7803,15 @@ for its mpsc-channel internals — a structured-concurrency
 primitive, not a network stack. `cargo deny check` admits this
 edge via the `wrappers = ["relm4"]` rule on `tokio` in
 `deny.toml`; the lockfile-subtree guard in
-`crates/paladin-core/tests/no_network.rs` continues to assert that
-no banned dep is reachable from `paladin-core`, `paladin-cli`, or
-`paladin-tui`, so the no-network rule remains in force for the
+`crates/paladin-auth-core/tests/no_network.rs` continues to assert that
+no banned dep is reachable from `paladin-auth-core`, `paladin-auth-cli`, or
+`paladin-auth-tui`, so the no-network rule remains in force for the
 security-sensitive subtree. See DESIGN.md §8 bullet 10 for the
 authoritative wording.
 
 No other tokio-adjacent crate (`tokio-util`, `tokio-rustls`, …) is
 permitted; only the base `tokio` package, only when reached via
-`relm4`. New direct deps of `paladin-gtk` that would pull in a
+`relm4`. New direct deps of `paladin-auth-gtk` that would pull in a
 different async runtime or network stack require a DESIGN.md update
 before being added.
 
@@ -7822,8 +7822,8 @@ The `gio::spawn_blocking` worker contract types
 `ImportFormat`, `ImportOptions`, `EncryptionOptions`, `Argon2Params`,
 `VaultLock`, `VaultInit`, `VaultStatus`, `VaultSettings`, `SettingKey`,
 `SettingPatch`, `AccountKindInput`, `IconHintInput`, `AccountInput`,
-`AccountQuery`, `InitPrecheck`, `PaladinImportPrecheck`, and
-`PaladinError`) are all part of the
+`AccountQuery`, `InitPrecheck`, `PaladinAuthImportPrecheck`, and
+`PaladinAuthError`) are all part of the
 §4.7 worker-boundary `Send` set that Phase J of the core plan asserts
 via CI, so the GUI can move them across thread boundaries during
 encrypted `open` / `create` / `create_force` and any save-bearing
@@ -7831,22 +7831,22 @@ dialog operation without re-asserting `Send` itself.
 
 ## Thinness contract
 
-`paladin-gtk` is a presentation layer. Crypto, storage, import/export,
+`paladin-auth-gtk` is a presentation layer. Crypto, storage, import/export,
 and OTP primitives must never be re-implemented or imported directly
-here — they belong in `paladin-core` per DESIGN §3.
+here — they belong in `paladin-auth-core` per DESIGN §3.
 
 - [x] Tests: `tests/thinness.rs` — a source-level guard that scans
-  `crates/paladin-gtk/src/` for forbidden crate-name spellings:
+  `crates/paladin-auth-gtk/src/` for forbidden crate-name spellings:
   `argon2`, `chacha20poly1305`, `bincode`, `hmac`, `sha1`, `sha2`,
   `rqrr`, `image`, `getrandom`, `directories`, `url`. Any direct
   reference fails the test with a message pointing at the file and
-  the symbol so the offending logic can be moved into `paladin-core`.
-  The crate manifest is also checked: `paladin-gtk` must not declare
+  the symbol so the offending logic can be moved into `paladin-auth-core`.
+  The crate manifest is also checked: `paladin-auth-gtk` must not declare
   any of those crates as a direct `[dependencies]` entry. (GUI image
   clipboard imports route raw RGBA buffers through
-  `paladin_core::import::qr_image_bytes`, so neither `image` nor
+  `paladin_auth_core::import::qr_image_bytes`, so neither `image` nor
   `rqrr` belong in the GTK crate.) Keeps the GUI a thin shell over
-  `paladin_core::*` plus the GTK / Adwaita / GLib stack.
+  `paladin_auth_core::*` plus the GTK / Adwaita / GLib stack.
 
 ## libadwaita usage
 
@@ -7869,7 +7869,7 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
   `ImportDialog`), **Export…** (opens `ExportDialog`), **Passphrase…**
   (opens `PassphraseDialog` with the sub-flow gated by
   `Vault::is_encrypted()`), **Preferences** (opens
-  `SettingsComponent`'s `AdwPreferencesDialog`), **About Paladin**
+  `SettingsComponent`'s `AdwPreferencesDialog`), **About Paladin Auth**
   (opens `AdwAboutDialog`), and **Quit**. The `+` button and the
   Import / Export / Passphrase / Preferences entries are **disabled
   when `AppModel` is not in `Unlocked`** (so they are off in
@@ -7947,9 +7947,9 @@ section just pins which Adwaita class fills each role.
 - **Destroy Vault available from the primary menu and from the
   unlock / startup-error footer** (Milestone 10). The
   `AdwAlertDialog` renders
-  `paladin_core::format_destroy_warning(path, backup_present)`,
+  `paladin_auth_core::format_destroy_warning(path, backup_present)`,
   gates the destructive button behind an `yes` confirmation entry,
-  routes the effect through `paladin_core::destroy_vault` on
+  routes the effect through `paladin_auth_core::destroy_vault` on
   `gio::spawn_blocking`, transitions to `Missing` + `InitDialog`
   on success, surfaces partial failures (symlink rejection,
   backup-unlink failure, parent-`fsync` failure) inline with the
@@ -8040,7 +8040,7 @@ to a real `gtk::ColumnView` rewrite next:
    resize, column visibility menus, and the libadwaita "compact /
    default density" toggles all want `gtk::ColumnView`.
 3. **Two layout templates to keep in sync.** `build_row_widget` in
-   `crates/paladin-gtk/src/account_row.rs` and the header-strip
+   `crates/paladin-auth-gtk/src/account_row.rs` and the header-strip
    builder must remain bit-for-bit aligned in column order, spacing,
    and per-cell visibility logic. The contract is enforced by the
    shared `ColumnSizeGroups` registration code, but it is still two
@@ -8106,7 +8106,7 @@ glib::wrapper! {
 mod imp {
     use std::cell::{Cell, RefCell};
     use crate::account_row::RowDisplay;
-    use paladin_core::AccountId;
+    use paladin_auth_core::AccountId;
 
     #[derive(Default)]
     pub struct RowItem {
@@ -8118,7 +8118,7 @@ mod imp {
 
     #[glib::object_subclass]
     impl ObjectSubclass for RowItem {
-        const NAME: &'static str = "PaladinRowItem";
+        const NAME: &'static str = "PaladinAuthRowItem";
         type Type = super::RowItem;
     }
 
@@ -8218,15 +8218,15 @@ goes through a per-row `gio::SimpleActionGroup` named
 
 | File | Change |
 |---|---|
-| `crates/paladin-gtk/src/account_list.rs` | Substantial rewrite. `gtk::ListBox` → `gtk::ColumnView`. `FactoryVecDeque<AccountRowComponent>` → `gio::ListStore<RowItem>` + `gtk::SignalListItemFactory` per column. Selection moves to `gtk::SingleSelection`. The in-list section-header dispatch table (`precompute_section_headers`, `install_section_header_func`, `build_section_header_label`) is replaced by `RowKind::Section` interleaving in `AppModel`; the pure predicate helpers (`row_section_header`, `issuer_group_header`) survive and feed the interleaver. |
-| `crates/paladin-gtk/src/account_row.rs` | The factory-component machinery (`AccountRowComponent`, `AccountRowInit`, `AccountRowMsg`, `AccountRowOutput`, `AccountRowWidgets`, `build_row_widget`, `bind_row`, `install_row_action_group`) is **deleted**. The pure projection helpers (`project_row`, `progress_display`, `progress_urgency`, `code_display`, `counter_display`, `apply_busy_mask`, `next_button_visible`, `progress_visible`, `kebab_visible`, `copy_enabled`) survive — the ColumnView cell factories consume the same `RowDisplay` values. |
-| **new** `crates/paladin-gtk/src/row_item.rs` | `RowItem` `GObject` subclass + `glib::Properties` derive macro + `set_display` mutator. |
-| **new** `crates/paladin-gtk/src/column_view.rs` (or fold into `account_list.rs`) | Cell factory builders: `build_account_column_factory`, `build_code_column_factory`, `build_time_column_factory`, `build_copy_column_factory`, `build_kebab_column_factory`. Each returns a `gtk::SignalListItemFactory` whose `setup` builds the cell widget tree and whose `bind` reads from the `RowItem`'s properties. |
-| `crates/paladin-gtk/src/app/model.rs` | `AccountListInit` field names change (`rows: Vec<AccountRowModel>` → unchanged), `initial_selection` semantics unchanged. `AppMsg::ShowSectionHeadersChanged` is rewired to rebuild the interleaved row list and `splice_diff` it into the store. New `AppMsg::ShowColumnHeadersChanged(bool)` mirrors that signal for the new `show-column-headers` key. Per-tick dispatch helpers (`tick_dispatch_plan`, `forward_row_output`) need re-routing since `AccountRowOutput` no longer exists — actions emit `AccountListOutput` directly from the cell-factory closures. |
-| `crates/paladin-gtk/src/data/org.tamx.Paladin.Gui.gschema.xml` | Add `show-column-headers` key (default `true`); the existing `show-section-headers` key stays. |
-| `crates/paladin-gtk/src/settings.rs` | Add a preferences row for `show-column-headers` alongside the existing `show-section-headers` row (Display group, title/subtitle helper fns mirroring the section-headers row). |
-| `crates/paladin-gtk/tests/account_list_logic.rs` | Tests that bind directly to `AccountRowComponent` re-target to the new factory builders. Selection / search / busy-mask broadcast tests stay structurally similar but call into ColumnView APIs (`SingleSelection::selected`, `gio::ListStore::n_items`). |
-| `crates/paladin-gtk/tests/account_row_logic.rs` | Pure projection helpers (`project_row` et al.) stay; widget-bind tests delete with `bind_row`. |
+| `crates/paladin-auth-gtk/src/account_list.rs` | Substantial rewrite. `gtk::ListBox` → `gtk::ColumnView`. `FactoryVecDeque<AccountRowComponent>` → `gio::ListStore<RowItem>` + `gtk::SignalListItemFactory` per column. Selection moves to `gtk::SingleSelection`. The in-list section-header dispatch table (`precompute_section_headers`, `install_section_header_func`, `build_section_header_label`) is replaced by `RowKind::Section` interleaving in `AppModel`; the pure predicate helpers (`row_section_header`, `issuer_group_header`) survive and feed the interleaver. |
+| `crates/paladin-auth-gtk/src/account_row.rs` | The factory-component machinery (`AccountRowComponent`, `AccountRowInit`, `AccountRowMsg`, `AccountRowOutput`, `AccountRowWidgets`, `build_row_widget`, `bind_row`, `install_row_action_group`) is **deleted**. The pure projection helpers (`project_row`, `progress_display`, `progress_urgency`, `code_display`, `counter_display`, `apply_busy_mask`, `next_button_visible`, `progress_visible`, `kebab_visible`, `copy_enabled`) survive — the ColumnView cell factories consume the same `RowDisplay` values. |
+| **new** `crates/paladin-auth-gtk/src/row_item.rs` | `RowItem` `GObject` subclass + `glib::Properties` derive macro + `set_display` mutator. |
+| **new** `crates/paladin-auth-gtk/src/column_view.rs` (or fold into `account_list.rs`) | Cell factory builders: `build_account_column_factory`, `build_code_column_factory`, `build_time_column_factory`, `build_copy_column_factory`, `build_kebab_column_factory`. Each returns a `gtk::SignalListItemFactory` whose `setup` builds the cell widget tree and whose `bind` reads from the `RowItem`'s properties. |
+| `crates/paladin-auth-gtk/src/app/model.rs` | `AccountListInit` field names change (`rows: Vec<AccountRowModel>` → unchanged), `initial_selection` semantics unchanged. `AppMsg::ShowSectionHeadersChanged` is rewired to rebuild the interleaved row list and `splice_diff` it into the store. New `AppMsg::ShowColumnHeadersChanged(bool)` mirrors that signal for the new `show-column-headers` key. Per-tick dispatch helpers (`tick_dispatch_plan`, `forward_row_output`) need re-routing since `AccountRowOutput` no longer exists — actions emit `AccountListOutput` directly from the cell-factory closures. |
+| `crates/paladin-auth-gtk/src/data/org.tamx.PaladinAuth.Gui.gschema.xml` | Add `show-column-headers` key (default `true`); the existing `show-section-headers` key stays. |
+| `crates/paladin-auth-gtk/src/settings.rs` | Add a preferences row for `show-column-headers` alongside the existing `show-section-headers` row (Display group, title/subtitle helper fns mirroring the section-headers row). |
+| `crates/paladin-auth-gtk/tests/account_list_logic.rs` | Tests that bind directly to `AccountRowComponent` re-target to the new factory builders. Selection / search / busy-mask broadcast tests stay structurally similar but call into ColumnView APIs (`SingleSelection::selected`, `gio::ListStore::n_items`). |
+| `crates/paladin-auth-gtk/tests/account_row_logic.rs` | Pure projection helpers (`project_row` et al.) stay; widget-bind tests delete with `bind_row`. |
 | This document (`docs/IMPLEMENTATION_PLAN_04_GTK.md`) | Rewrite §"Component tree" → describe ColumnView. Update §"libadwaita usage" if the row's CSS classes change. Note the section-header decision. Promote this appendix into the body of the plan. |
 | `docs/DESIGN.md` | If user-visible behavior around section headers changes (Path 1), the relevant paragraph updates here. |
 
@@ -8239,7 +8239,7 @@ are recorded in §A.6 and need no further deliberation; the checklist
 below reflects those resolutions.
 
 #### `RowItem` GObject
-- [x] Define `RowItem` in `crates/paladin-gtk/src/row_item.rs` with `id`, `display`, `icon_hint`, `busy` properties.
+- [x] Define `RowItem` in `crates/paladin-auth-gtk/src/row_item.rs` with `id`, `display`, `icon_hint`, `busy` properties.
 - [x] Wire `glib::Properties` derive (Rust GObject crate) and the per-property setters. *Implementation note*: `RowDisplay` carries non-`Value` shapes (`CodeDisplay`, `ProgressDisplay`, `AccountKindSummary`) so the per-property derive isn't a clean fit for the full projection. The implementation keeps the same observable contract via a custom `display-changed` signal (`ROW_ITEM_DISPLAY_CHANGED_SIGNAL`) that fires on every `set_display` / `set_busy` mutation; cell factories will `connect_local` to that name in their `bind` step. The four documented fields are exposed as plain Rust getters / setters on the wrapper.
 - [x] Add `RowItem::from_row_model(&AccountRowModel) -> Self`.
 - [x] Add `RowItem::set_display(&self, RowDisplay)` and verify it fires the change signal (now `display-changed`, see note above).
@@ -8271,7 +8271,7 @@ below reflects those resolutions.
 - [x] Stress test: 50 TOTP accounts, 1s tick, observe no flicker / no dropped clicks across 60s.  Automated as `tick_stress_preserves_store_size_and_row_identity_across_many_iterations` in `tests/account_list_logic.rs`: 50 TOTP rows × 60 simulated tick iterations, asserts `store.n_items()` is invariant (no splice from the Tick path) and every `RowItem` GObject pointer is invariant (no allocations) every iteration. Companion `tick_dispatch_fans_change_signal_through_set_display` counts the `display-changed` signal firings so a regression that silently breaks the change-signal fan-out cannot pass undetected. The data-level proofs stand in for the manual visual QA; a human pass is still appropriate when the live `gtk::ColumnView` lands but is no longer a blocker for the checklist.
 
 #### Search / filter
-- [x] `AppModel` recomputes `filtered_row_models_from_vault(...)`, then asks the live `AccountListComponent` to `splice_diff` the new vec into its store.  The wiring runs through two call sites in `crates/paladin-gtk/src/app/model.rs`: the `AppMsg::AccountListAction(AccountListOutput::QueryChanged)` handler (user typed into the search bar) and `AppModel::refresh_account_list` (post-mutation refresh after Add / Rename / Remove), both of which project through `filtered_row_models_from_vault(vault, &self.search_query)` and emit `AccountListMsg::Refresh`; the live `AccountListComponent` handler calls [`crate::column_view::apply_interleaved_splice_plan`] against its `gio::ListStore<RowItem>`.  End-to-end coverage lives in `tests/account_list_logic.rs` as `search_then_splice_filters_store_to_matches_only`, `search_then_splice_preserves_matched_row_identity_across_query_changes` (proves the live `gtk::SingleSelection` cursor survives a query change because matched-row `RowItem` GObject pointers are stable), and `search_then_splice_after_vault_mutation_reapplies_query` (pins `refresh_account_list`'s `&self.search_query` carry-through after a vault Add).
+- [x] `AppModel` recomputes `filtered_row_models_from_vault(...)`, then asks the live `AccountListComponent` to `splice_diff` the new vec into its store.  The wiring runs through two call sites in `crates/paladin-auth-gtk/src/app/model.rs`: the `AppMsg::AccountListAction(AccountListOutput::QueryChanged)` handler (user typed into the search bar) and `AppModel::refresh_account_list` (post-mutation refresh after Add / Rename / Remove), both of which project through `filtered_row_models_from_vault(vault, &self.search_query)` and emit `AccountListMsg::Refresh`; the live `AccountListComponent` handler calls [`crate::column_view::apply_interleaved_splice_plan`] against its `gio::ListStore<RowItem>`.  End-to-end coverage lives in `tests/account_list_logic.rs` as `search_then_splice_filters_store_to_matches_only`, `search_then_splice_preserves_matched_row_identity_across_query_changes` (proves the live `gtk::SingleSelection` cursor survives a query change because matched-row `RowItem` GObject pointers are stable), and `search_then_splice_after_vault_mutation_reapplies_query` (pins `refresh_account_list`'s `&self.search_query` carry-through after a vault Add).
 - [x] Cursor / selection survives a query change as today (`selected_row_after_refresh` + `position_for_account` together preserve the prior cursor across a `Refresh` whose `rows` still contain the selected id).
 
 #### Section headers (via `RowKind::Section`)
@@ -8283,10 +8283,10 @@ below reflects those resolutions.
 - [x] Tests: section rows are non-selectable; toggling the `show-section-headers` GSettings key rebuilds the row list without resetting the live account-row selection; section rows render in the correct positions relative to the account rows per the `row_section_header` predicate.  Pure-logic coverage lives in `tests/column_view_logic.rs` as `apply_interleaved_inserts_section_rows_at_predicate_positions`, `apply_interleaved_every_section_row_is_marked_is_section` (pins the `is_section()` gate the cell factory's `set_selectable(!is_section())` reads), `apply_interleaved_disabled_yields_only_account_rows`, `apply_interleaved_account_row_identity_survives_show_section_headers_toggle` (proves the live `gtk::SingleSelection` cursor survives a preference flip because account `RowItem` GObject pointers are preserved), `apply_interleaved_section_rows_match_row_section_header_predicate` (cross-checks store positions against the shared `row_section_header` predicate), and `apply_interleaved_repeated_toggle_is_idempotent_for_account_rows`.
 
 #### Column-header visibility preference
-- [x] `show-column-headers` schema key in `org.tamx.Paladin.Gui.gschema.xml`, default `true`.
+- [x] `show-column-headers` schema key in `org.tamx.PaladinAuth.Gui.gschema.xml`, default `true`.
 - [x] `crate::gsettings::{show_column_headers, set_show_column_headers, SHOW_COLUMN_HEADERS_KEY}` mirroring the existing `show_section_headers` helpers.
 - [x] `AppMsg::ShowColumnHeadersChanged(bool)` + `changed::show-column-headers` signal wiring mirroring `show-section-headers`.
-- [x] `AccountListMsg::SetShowColumnHeaders(bool)` → toggle the [`account_list::COLUMN_VIEW_NO_HEADERS_CSS_CLASS`] CSS class on the `gtk::ColumnView`.  The class is hooked up in `crates/paladin-gtk/data/style.css`, which collapses the header strip allocation (`min-height: 0`, `padding: 0`, `border: none`) and fades each cell to `opacity: 0` so the header disappears without restructuring the widget tree.
+- [x] `AccountListMsg::SetShowColumnHeaders(bool)` → toggle the [`account_list::COLUMN_VIEW_NO_HEADERS_CSS_CLASS`] CSS class on the `gtk::ColumnView`.  The class is hooked up in `crates/paladin-auth-gtk/data/style.css`, which collapses the header strip allocation (`min-height: 0`, `padding: 0`, `border: none`) and fades each cell to `opacity: 0` so the header disappears without restructuring the widget tree.
 - [x] Preferences row in `settings.rs` Display group with title/subtitle helper fns, alongside the existing `show-section-headers` row.
 
 #### Docs sync
@@ -8298,7 +8298,7 @@ below reflects those resolutions.
 - [x] `cargo fmt --all -- --check` clean.
 - [x] `cargo clippy --workspace --all-targets -- -D warnings` clean.
 - [x] `cargo test --workspace --all-targets` green (138/138 test binaries pass).
-- [x] `cargo public-api` diff reviewed — `paladin-gtk` is a binary crate (only `paladin-core` snapshots `cargo public-api` per CI), so no snapshot update is needed; the `paladin-core` surface did not change in this migration.  Verified 2026-05-24 by regenerating with the CI invocation (`cargo public-api -p paladin-core --simplified --color=never`) and confirming zero substantive diff against `crates/paladin-core/public-api.txt` (the only delta is two stale `Documenting…` / `Finished` build-log lines at the top of the committed file, a pre-existing wart unrelated to this work).
+- [x] `cargo public-api` diff reviewed — `paladin-auth-gtk` is a binary crate (only `paladin-auth-core` snapshots `cargo public-api` per CI), so no snapshot update is needed; the `paladin-auth-core` surface did not change in this migration.  Verified 2026-05-24 by regenerating with the CI invocation (`cargo public-api -p paladin-auth-core --simplified --color=never`) and confirming zero substantive diff against `crates/paladin-auth-core/public-api.txt` (the only delta is two stale `Documenting…` / `Finished` build-log lines at the top of the committed file, a pre-existing wart unrelated to this work).
 - [x] `cargo deny check` and `cargo audit` clean (no new advisories or licensing changes; pre-existing `unmatched license allowance` notes are unrelated to this work).
 
 ### A.5 Migration risk register
@@ -8462,7 +8462,7 @@ should land:
    unsorted preserves the vault insertion-order contract.
 6. **Column-header visibility preference** (§A.4
    "Column-header visibility"): new `show-column-headers` key in
-   `data/org.tamx.Paladin.Gui.gschema.xml`, helpers in
+   `data/org.tamx.PaladinAuth.Gui.gschema.xml`, helpers in
    `gsettings.rs`, `AppMsg::ShowColumnHeadersChanged(bool)`,
    `AccountListMsg::SetShowColumnHeaders(bool)` that toggles
    `gtk::ColumnView::set_show_column_separators` (or hides each
@@ -8472,7 +8472,7 @@ should land:
    §"Component tree" > `AccountListComponent` to describe the
    ColumnView shape, and update `docs/DESIGN.md` if any
    user-visible behavior shifts beyond the new preferences.
-8. **CI gates**: regenerate `crates/paladin-core/public-api.txt`
+8. **CI gates**: regenerate `crates/paladin-auth-core/public-api.txt`
    if the public surface changed (it didn't yet — the foundation
    is additive, but the rewrite will), then re-confirm `cargo
    fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,

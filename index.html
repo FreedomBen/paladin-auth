@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Paladin — Ironclad Rust OTP Authenticator</title>
+    <title>Paladin Auth — Ironclad Rust OTP Authenticator</title>
     <meta name="description" content="A local-first, zero-telemetry, and memory-safe Rust OTP authenticator with stateless CLI, keyboard-driven TUI, and modern GTK4 interfaces sharing a single robust core.">
     
     <!-- Open Graph / Meta -->
     <meta property="og:type" content="website">
-    <meta property="og:title" content="Paladin — Ironclad Rust OTP Authenticator">
+    <meta property="og:title" content="Paladin Auth — Ironclad Rust OTP Authenticator">
     <meta property="og:description" content="Local-first, memory-safe Rust OTP authenticator with CLI, TUI, and GTK4 interfaces sharing a single robust core. Zero telemetry, zero network.">
-    <meta property="og:image" content="assets/paladin_hero_graphic.png">
+    <meta property="og:image" content="assets/paladin_auth_hero_graphic.png">
 
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1222,7 +1222,7 @@
                     <path d="M20 4 L34 8 L34 22 C34 30 28 35 20 38 C12 35 6 30 6 22 L6 8 Z" />
                     <path d="M20 12 L20 28 M15 18 L25 18 M17 23 L23 23" stroke="#f3f4f6" stroke-linecap="round" />
                 </svg>
-                <span>PALADIN</span>
+                <span>PALAUTH</span>
             </a>
             <ul class="nav-links">
                 <li><a href="#ecosystem">Architecture</a></li>
@@ -1258,7 +1258,7 @@
                 <div class="hero-graphic-card" id="tilt-card">
                     <div class="glass-highlight"></div>
                     <div class="hero-img-wrap">
-                        <img src="assets/paladin_hero_graphic.png" alt="Paladin Shield Logo" class="hero-img">
+                        <img src="assets/paladin_auth_hero_graphic.png" alt="Paladin Auth Shield Logo" class="hero-img">
                     </div>
                 </div>
             </div>
@@ -1277,12 +1277,12 @@
                 <div class="architecture-diagram">
                     <!-- Circular Orbit representation -->
                     <div class="arch-orbit orbit-1">
-                        <div class="orbit-node node-cli" data-target="cli">paladin CLI</div>
-                        <div class="orbit-node node-tui" data-target="tui">paladin TUI</div>
-                        <div class="orbit-node node-gtk" data-target="gtk">paladin GTK</div>
+                        <div class="orbit-node node-cli" data-target="cli">paladin-auth CLI</div>
+                        <div class="orbit-node node-tui" data-target="tui">paladin-auth TUI</div>
+                        <div class="orbit-node node-gtk" data-target="gtk">paladin-auth GTK</div>
                     </div>
                     <div class="arch-core">
-                        paladin-core
+                        paladin-auth-core
                         <span>shared engine</span>
                     </div>
                 </div>
@@ -1293,7 +1293,7 @@
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
                         </div>
                         <div class="ecosystem-item-content">
-                            <h3>crates/paladin-core</h3>
+                            <h3>crates/paladin-auth-core</h3>
                             <p>The domain model, OTP generation (TOTP/HOTP), cryptographic operations, vault storage formats, and atomic file handlers are isolated in a rock-solid library crate.</p>
                         </div>
                     </div>
@@ -1335,7 +1335,7 @@
                     <div class="authenticator-header">
                         <div class="authenticator-title">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="url(#logo-grad)" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                            <span>Paladin Vault</span>
+                            <span>Paladin Auth Vault</span>
                         </div>
                         <!-- Circular progress timer -->
                         <div class="timer-circle">
@@ -1384,7 +1384,7 @@
                 <div class="vault-showcase-card">
                     <h3 style="font-family: var(--font-display); font-size: 22px; color: white; margin-bottom: 16px;">Secure Vault Primitives</h3>
                     <p style="color: var(--text-secondary); font-size: 14.5px; margin-bottom: 24px;">
-                        Paladin supports two secure vault storage architectures. Change settings instantly at any point without reformatting.
+                        Paladin Auth supports two secure vault storage architectures. Change settings instantly at any point without reformatting.
                     </p>
 
                     <div class="vault-toggle-container">
@@ -1409,7 +1409,7 @@
                         <div class="decrypt-form" id="js-decrypt-form">
                             <div class="input-group">
                                 <label for="vault-pass">Passphrase</label>
-                                <input type="password" id="vault-pass" placeholder="Enter passphrase (use 'paladin')">
+                                <input type="password" id="vault-pass" placeholder="Enter passphrase (use 'paladin-auth')">
                             </div>
                             <button class="btn-submit" onclick="handleDecrypt()" style="background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary)); border: none;">
                                 Unlock Vault
@@ -1439,21 +1439,21 @@
                         <span class="t-dot t-dot-yellow"></span>
                         <span class="t-dot t-dot-green"></span>
                     </div>
-                    <div class="terminal-title">bash — user@paladin-node:~</div>
+                    <div class="terminal-title">bash — user@paladin-auth-node:~</div>
                     <div style="width: 42px;"></div>
                 </div>
 
                 <div class="terminal-tabs">
-                    <button class="terminal-tab-btn active" onclick="switchTerminalTab(this, 'init')">paladin init</button>
-                    <button class="terminal-tab-btn" onclick="switchTerminalTab(this, 'add')">paladin add</button>
-                    <button class="terminal-tab-btn" onclick="switchTerminalTab(this, 'list')">paladin list</button>
-                    <button class="terminal-tab-btn" onclick="switchTerminalTab(this, 'tui')">paladin tui (Dashboard)</button>
+                    <button class="terminal-tab-btn active" onclick="switchTerminalTab(this, 'init')">paladin-auth init</button>
+                    <button class="terminal-tab-btn" onclick="switchTerminalTab(this, 'add')">paladin-auth add</button>
+                    <button class="terminal-tab-btn" onclick="switchTerminalTab(this, 'list')">paladin-auth list</button>
+                    <button class="terminal-tab-btn" onclick="switchTerminalTab(this, 'tui')">paladin-auth tui (Dashboard)</button>
                 </div>
 
                 <div class="terminal-body" id="js-terminal-body">
-                    <div><span class="prompt-symbol">$</span><span id="js-term-input">paladin init</span></div>
+                    <div><span class="prompt-symbol">$</span><span id="js-term-input">paladin-auth init</span></div>
                     <div class="terminal-output" id="js-term-output">
-Initializing secure vault at ~/.local/share/paladin/vault.bin
+Initializing secure vault at ~/.local/share/paladin-auth/vault.bin
 
 Choose Vault Mode:
   1) Plaintext Vault (0600 file permissions)
@@ -1500,7 +1500,7 @@ Vault initialized successfully!
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
                     </div>
                     <h3>Completely Sandbox Locked</h3>
-                    <p>Paladin uses an explicit compilation deny layer checking all code dependencies. The application compilation breaks instantly if any imported module attempts to open standard sockets or load any network stacks.</p>
+                    <p>Paladin Auth uses an explicit compilation deny layer checking all code dependencies. The application compilation breaks instantly if any imported module attempts to open standard sockets or load any network stacks.</p>
                 </div>
 
                 <div class="feature-card">
@@ -1547,8 +1547,8 @@ Vault initialized successfully!
                     <button class="btn-copy-install" onclick="copyInstallCmd()" id="btn-copy-install">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                     </button>
-                    <pre class="install-code" id="js-install-code">cargo install --path crates/paladin-cli
-cargo install --path crates/paladin-tui</pre>
+                    <pre class="install-code" id="js-install-code">cargo install --path crates/paladin-auth-cli
+cargo install --path crates/paladin-auth-tui</pre>
                 </div>
             </div>
         </div>
@@ -1561,9 +1561,9 @@ cargo install --path crates/paladin-tui</pre>
                 <svg width="24" height="24" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="2.5">
                     <path d="M20 4 L34 8 L34 22 C34 30 28 35 20 38 C12 35 6 30 6 22 L6 8 Z" />
                 </svg>
-                <span>PALADIN</span>
+                <span>PALAUTH</span>
             </a>
-            <p>© 2026 The Paladin Authors. Open-Source under the AGPL-3.0 License.</p>
+            <p>© 2026 The Paladin Auth Authors. Open-Source under the AGPL-3.0 License.</p>
             <ul class="footer-links">
                 <li><a href="README.md">Readme</a></li>
                 <li><a href="docs/DESIGN.md">Design</a></li>
@@ -1944,8 +1944,8 @@ cargo install --path crates/paladin-tui</pre>
         // Terminal Simulator JS switcher
         const terminalCommands = {
             init: {
-                input: 'paladin init',
-                output: `<span class="t-dim">Initializing secure vault at ~/.local/share/paladin/vault.bin</span>
+                input: 'paladin-auth init',
+                output: `<span class="t-dim">Initializing secure vault at ~/.local/share/paladin-auth/vault.bin</span>
 
 Choose Vault Mode:
   1) Plaintext Vault (0600 file permissions)
@@ -1958,7 +1958,7 @@ Confirm passphrase: <span class="t-dim">**********</span>
 <span class="t-green">Vault initialized successfully!</span>`
             },
             add: {
-                input: 'paladin add --uri "otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub"',
+                input: 'paladin-auth add --uri "otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub"',
                 output: `<span class="t-dim">Attempting to add account from URI:</span>
   <span class="t-blue">otpauth://totp/GitHub:alice?secret=***&issuer=GitHub</span>
 
@@ -1970,7 +1970,7 @@ Validating OTP secret length and algorithm standards...
 <span class="t-green">Added: GitHub (alice)</span>`
             },
             list: {
-                input: 'paladin list',
+                input: 'paladin-auth list',
                 output: `+----------------------+--------------------+--------+--------+
 | Account ID           | Account / Issuer   | Type   | Digits |
 +----------------------+--------------------+--------+--------+
@@ -1980,8 +1980,8 @@ Validating OTP secret length and algorithm standards...
 +----------------------+--------------------+--------+--------+`
             },
             tui: {
-                input: 'paladin tui',
-                output: `<span class="t-green">┌─ Paladin Authenticator TUI ────────────────────────────┐</span>
+                input: 'paladin-auth tui',
+                output: `<span class="t-green">┌─ Paladin Auth Authenticator TUI ────────────────────────────┐</span>
 <span class="t-green">│</span> Search: [github_____________________________________] <span class="t-green">│</span>
 <span class="t-green">│</span>                                                        <span class="t-green">│</span>
 <span class="t-green">│</span>  <span class="t-blue">▶ GitHub: alice</span>            [<span class="t-blue">843 921</span>]  (23s remaining) <span class="t-green">│</span>
@@ -2009,8 +2009,8 @@ Validating OTP secret length and algorithm standards...
 
         // Install command switcher
         const installCommands = {
-            cargo: 'cargo install --path crates/paladin-cli\ncargo install --path crates/paladin-tui',
-            source: 'git clone https://github.com/FreedomBen/paladin.git\ncd paladin\ncargo build --release --workspace'
+            cargo: 'cargo install --path crates/paladin-auth-cli\ncargo install --path crates/paladin-auth-tui',
+            source: 'git clone https://github.com/FreedomBen/paladin-auth.git\ncd paladin-auth\ncargo build --release --workspace'
         };
         let activeInstallTab = 'cargo';
 

@@ -1,0 +1,5 @@
+---
+source: crates/paladin-auth-cli/tests/cli_edit.rs
+expression: stderr
+---
+paladin-auth: validation error: label: empty

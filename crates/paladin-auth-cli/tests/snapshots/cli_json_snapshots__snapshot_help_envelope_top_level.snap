@@ -1,0 +1,10 @@
+---
+source: crates/paladin-auth-cli/tests/cli_json_snapshots.rs
+expression: parse_stdout_json(&assert)
+---
+{
+  "help": {
+    "command": "paladin-auth",
+    "text": "[help-text]"
+  }
+}

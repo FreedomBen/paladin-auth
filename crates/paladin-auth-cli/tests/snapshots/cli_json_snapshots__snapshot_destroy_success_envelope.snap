@@ -1,0 +1,11 @@
+---
+source: crates/paladin-auth-cli/tests/cli_json_snapshots.rs
+expression: parse_stdout_json(&out)
+---
+{
+  "destroyed": {
+    "backup_deleted": true,
+    "primary_deleted": true,
+    "vault_path": "[vault-path]"
+  }
+}

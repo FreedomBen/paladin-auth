@@ -1,0 +1,25 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
+---
+┌ Paladin Auth [plaintext] ────────────────────────────────────────────────────┐
+│ Search: git                                                                  │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ ▶ GitHub (ben@example.com)            914 994  ██████░░░░   18s  ↪   255 062 │
+│   GitLab (ben@example.com)            914 994  ██████░░░░   18s  ↪   255 062 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find     │
+└──────────────────────────────────────────────────────────────────────────────┘
+─── styles ───
+(1..27, 0) " Paladin Auth [plaintext] " fg=Reset bg=Reset mod=BOLD
+(2..4, 3) "▶ " fg=Reset bg=Reset mod=BOLD | REVERSED
+(4..7, 3) "Git" fg=Reset bg=Reset mod=BOLD | UNDERLINED | REVERSED
+(7..67, 3) "Hub (ben@example.com)            914 994  ██████░░░░   18s  " fg=Reset bg=Reset mod=BOLD | REVERSED
+(67..78, 3) "↪   255 062" fg=Reset bg=Reset mod=BOLD | DIM | REVERSED
+(4..7, 4) "Git" fg=Reset bg=Reset mod=BOLD | UNDERLINED
+(38..47, 4) "  914 994" fg=Reset bg=Reset mod=BOLD
+(67..78, 4) "↪   255 062" fg=Reset bg=Reset mod=DIM

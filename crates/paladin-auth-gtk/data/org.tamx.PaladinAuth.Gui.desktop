@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Paladin Auth GTK desktop entry per IMPLEMENTATION_PLAN_04_GTK.md
+# §"Linux desktop integration". This file installs verbatim at
+# /usr/share/applications/org.tamx.PaladinAuth.Gui.desktop in both the
+# native (.deb / .rpm) and Flatpak packaging formats so the AppStream
+# <launchable type="desktop-id">org.tamx.PaladinAuth.Gui.desktop</launchable>
+# reference resolves identically across packagings.
+#
+# Icon=, StartupWMClass=, and the AppStream <id> share the app ID
+# org.tamx.PaladinAuth.Gui (see paladin_auth_gtk::APP_ID) so the icon-theme
+# lookup, the window-to-launcher grouping, and the AppStream
+# component reference all resolve identically.
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Paladin Auth
+GenericName=Authenticator
+Comment=One-time password authenticator for TOTP and HOTP accounts
+Icon=org.tamx.PaladinAuth.Gui
+Exec=paladin-auth-gtk
+Terminal=false
+StartupNotify=true
+StartupWMClass=org.tamx.PaladinAuth.Gui
+Categories=Utility;Security;
+Keywords=OTP;TOTP;HOTP;2FA;MFA;Authenticator;One-Time-Password;Two-Factor;Security;

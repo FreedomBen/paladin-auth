@@ -1,4 +1,4 @@
-# cargo-deny policy for the Paladin workspace.
+# cargo-deny policy for the Paladin Auth workspace.
 #
 # docs/DESIGN.md §8 ("no network, no telemetry") is enforced here:
 #   * License hygiene -- AGPL-compatible permissive licenses only.
@@ -56,16 +56,16 @@ wildcards = "deny"
 # `wildcards = "deny"` rule above.
 allow-wildcard-paths = true
 deny = [
-    # Async runtimes / network stacks have no place in `paladin-core`,
-    # `paladin-cli`, or `paladin-tui`; the §8 "no network" rule is enforced
-    # here. `paladin-gtk` is exempted for `tokio` only via the `wrappers`
+    # Async runtimes / network stacks have no place in `paladin-auth-core`,
+    # `paladin-auth-cli`, or `paladin-auth-tui`; the §8 "no network" rule is enforced
+    # here. `paladin-auth-gtk` is exempted for `tokio` only via the `wrappers`
     # carve-out below: `relm4` (the GUI framework) uses `tokio` as a
     # structured-concurrency primitive (mpsc channels). GTK's main loop is
     # the executor and `gio::spawn_blocking` runs the long work, so no
     # network sockets are opened. The lockfile-level guard in
-    # `crates/paladin-core/tests/no_network.rs` further asserts that no
-    # banned dep is reachable from `paladin-core`, `paladin-cli`, or
-    # `paladin-tui`, so the no-network rule remains in force for the
+    # `crates/paladin-auth-core/tests/no_network.rs` further asserts that no
+    # banned dep is reachable from `paladin-auth-core`, `paladin-auth-cli`, or
+    # `paladin-auth-tui`, so the no-network rule remains in force for the
     # security-sensitive subtree. See `docs/IMPLEMENTATION_PLAN_04_GTK.md`
     # §"Dependencies" / §"GUI runtime carve-out" and `docs/DESIGN.md` §8.
     { name = "tokio", wrappers = ["relm4"] },

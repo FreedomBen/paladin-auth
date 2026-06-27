@@ -1,0 +1,28 @@
+---
+source: crates/paladin-auth-tui/tests/destroy_snapshots.rs
+expression: "render_to_text(&destroy_state(modal), 80, 24)"
+---
+┌ Paladin Auth — create vault ─────────────────────────────────────────────────┐
+│                                                                              │
+│  Vault: /home/u/.local/share/paladin-auth/vault.bin                          │
+│                                                                              │
+│  Choose vault protection:                                                    │
+│                                                                              │
+│  ▶┌ Destroy vault ───────────────────────────────────────────────────────┐   │
+│   │ This will permanently delete the vault at                            │   │
+│   │ /home/u/.local/share/paladin-auth/vault.bin. This cannot be undone.  │   │
+│  ↑│ The file is unlinked, not securely erased, so an encrypted vault is  │   │
+│   │ the only reliable protection for secrets already written to disk.    │   │
+│  C│ Type yes to confirm:                                                 │   │
+│   │ Vault file is a symlink, refusing to follow: /home/u/.local/share/pa │   │
+│   │                                                                      │   │
+│   │                    [ Cancel ]    [ Delete vault ]                    │   │
+│   │            Tab switches  ·  Enter confirms  ·  Esc cancels           │   │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

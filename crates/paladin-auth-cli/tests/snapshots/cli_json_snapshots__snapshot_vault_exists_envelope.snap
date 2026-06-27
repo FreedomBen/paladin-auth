@@ -1,0 +1,7 @@
+---
+source: crates/paladin-auth-cli/tests/cli_json_snapshots.rs
+expression: parse_stderr_json(&assert)
+---
+{
+  "error_kind": "vault_exists"
+}

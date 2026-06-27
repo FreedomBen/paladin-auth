@@ -1,0 +1,16 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: "render_to_text(&state, snapshot_now(), 80, 12)"
+---
+┌ Paladin Auth — unlock ───────────────────────────────────────────────────────┐
+│                                                                              │
+│  Vault: /var/lib/paladin-auth/vault.bin                                      │
+│                                                                              │
+│  Passphrase:                                                                 │
+│                                                                              │
+│  decryption failed                                                           │
+│                                                                              │
+│  Press Enter to unlock; Esc or Ctrl-C to quit.                               │
+│  Ctrl+Shift+D delete vault                                                   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

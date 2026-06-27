@@ -1,0 +1,22 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
+---
+┌ Paladin Auth [plaintext] ────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│   GitHub (ben@example.com)            914 994  ██████░░░░   18s  ↪   255 062 │
+│   Bank (savings) (#0)               ▸ press n to advance                     │
+│ ▶ VPN (work) (#41)                    654 321                                │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find     │
+└──────────────────────────────────────────────────────────────────────────────┘
+─── styles ───
+(1..27, 0) " Paladin Auth [plaintext] " fg=Reset bg=Reset mod=BOLD
+(38..47, 3) "  914 994" fg=Reset bg=Reset mod=BOLD
+(67..78, 3) "↪   255 062" fg=Reset bg=Reset mod=DIM
+(38..58, 4) "▸ press n to advance" fg=Reset bg=Reset mod=DIM
+(2..78, 5) "▶ VPN (work) (#41)                    654 321                               " fg=Reset bg=Reset mod=BOLD | REVERSED

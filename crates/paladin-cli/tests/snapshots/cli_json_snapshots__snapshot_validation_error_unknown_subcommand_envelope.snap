@@ -1,9 +1,0 @@
----
-source: crates/paladin-cli/tests/cli_json_snapshots.rs
-expression: parse_stderr_json(&assert)
----
-{
-  "error_kind": "validation_error",
-  "field": "argv",
-  "reason": "usage"
-}

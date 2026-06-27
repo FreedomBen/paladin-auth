@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Paladin Makefile.
+# Paladin Auth Makefile.
 #
 # Build, test, lint, and install entry points for the Cargo workspace
-# (paladin-core, paladin-cli, paladin-tui, paladin-gtk). The actual build
+# (paladin-auth-core, paladin-auth-cli, paladin-auth-tui, paladin-auth-gtk). The actual build
 # rules live in Cargo; this file just standardizes the common commands so
 # they match `DESIGN.md` §10 / `.github/workflows/ci.yml`.
 #
@@ -11,7 +11,7 @@
 #     make PROFILE=release build-all
 #     make PROFILE=release test-tui
 # Override the install prefix:
-#     make PREFIX=/opt/paladin install
+#     make PREFIX=/opt/paladin-auth install
 
 PREFIX  ?= /usr/local
 BINDIR  ?= ${PREFIX}/bin
@@ -21,13 +21,13 @@ CARGO   ?= cargo
 PROFILE ?= debug
 
 # Packaging defaults — overridable per-invocation, e.g.
-#     make PALADIN_VERSION=0.2.0-rc1 rpm
-#     make CONTAINER_RUNTIME=docker rpm-paladin
-#     make PALADIN_VERSION=0.2.0-rc1 deb
-# `PALADIN_VERSION` is interpolated into the `version:` field of the
+#     make PALADIN_AUTH_VERSION=0.2.0-rc1 rpm
+#     make CONTAINER_RUNTIME=docker rpm-paladin-auth
+#     make PALADIN_AUTH_VERSION=0.2.0-rc1 deb
+# `PALADIN_AUTH_VERSION` is interpolated into the `version:` field of the
 # nfpm manifests; defaults to a developer-build sentinel matching the
 # CI `packaging-dry-run` job in `.github/workflows/ci.yml`.
-PALADIN_VERSION   ?= 0.0.1-dev
+PALADIN_AUTH_VERSION   ?= 0.0.1-dev
 NFPM_IMAGE        ?= docker.io/goreleaser/nfpm:latest
 CONTAINER_RUNTIME ?= podman
 # Output directory for both .rpm and .deb artifacts. `RPM_OUTPUT_DIR`
@@ -45,17 +45,17 @@ else
 endif
 
 # Cargo package names (the values under `[package] name = ...`).
-CORE_PKG := paladin-core
-CLI_PKG  := paladin-cli
-TUI_PKG  := paladin-tui
-GTK_PKG  := paladin-gtk
+CORE_PKG := paladin-auth-core
+CLI_PKG  := paladin-auth-cli
+TUI_PKG  := paladin-auth-tui
+GTK_PKG  := paladin-auth-gtk
 
 # Installed binary names (the values under `[[bin]] name = ...`).
-# paladin-cli ships as `paladin`; paladin-tui and paladin-gtk match their
+# paladin-auth-cli ships as `paladin-auth`; paladin-auth-tui and paladin-auth-gtk match their
 # crate names.
-CLI_BIN := paladin
-TUI_BIN := paladin-tui
-GTK_BIN := paladin-gtk
+CLI_BIN := paladin-auth
+TUI_BIN := paladin-auth-tui
+GTK_BIN := paladin-auth-gtk
 
 .DEFAULT_GOAL := help
 
@@ -64,13 +64,13 @@ GTK_BIN := paladin-gtk
         test test-all test-core test-cli test-tui test-gtk \
         fmt fmt-check clippy check \
         clean install \
-        man rpm rpm-paladin rpm-paladin-tui rpm-paladin-gtk \
-        deb deb-paladin deb-paladin-tui deb-paladin-gtk
+        man rpm rpm-paladin-auth rpm-paladin-auth-tui rpm-paladin-auth-gtk \
+        deb deb-paladin-auth deb-paladin-auth-tui deb-paladin-auth-gtk
 
 help: ## Show this help
 	@awk 'BEGIN { \
 		FS = ":.*?## "; \
-		printf "Paladin -- Rust OTP authenticator (CLI + TUI + GTK)\n\n"; \
+		printf "Paladin Auth -- Rust OTP authenticator (CLI + TUI + GTK)\n\n"; \
 		printf "Usage: make [VAR=value ...] <target>\n\nTargets:\n"; \
 	} /^[a-zA-Z_][a-zA-Z0-9_-]*:.*?## / { \
 		printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2; \
@@ -81,7 +81,7 @@ help: ## Show this help
 	@printf "  BINDIR=%s\n"                       "${BINDIR}"
 	@printf "  DESTDIR=%s\n"                      "${DESTDIR}"
 	@printf "  CARGO=%s\n"                        "${CARGO}"
-	@printf "  PALADIN_VERSION=%s\n"              "${PALADIN_VERSION}"
+	@printf "  PALADIN_AUTH_VERSION=%s\n"              "${PALADIN_AUTH_VERSION}"
 	@printf "  NFPM_IMAGE=%s\n"                   "${NFPM_IMAGE}"
 	@printf "  CONTAINER_RUNTIME=%s\n"            "${CONTAINER_RUNTIME}"
 	@printf "  RPM_OUTPUT_DIR=%s\n"               "${RPM_OUTPUT_DIR}"
@@ -94,13 +94,13 @@ build: build-all ## Build every workspace crate (alias of build-all)
 build-all: ## Build the full workspace: core lib + CLI + TUI + GTK
 	${CARGO} build --workspace ${PROFILE_FLAG}
 
-build-cli: ## Build only paladin-cli (produces the `paladin` binary)
+build-cli: ## Build only paladin-auth-cli (produces the `paladin-auth` binary)
 	${CARGO} build -p ${CLI_PKG} ${PROFILE_FLAG}
 
-build-tui: ## Build only paladin-tui
+build-tui: ## Build only paladin-auth-tui
 	${CARGO} build -p ${TUI_PKG} ${PROFILE_FLAG}
 
-build-gtk: ## Build only paladin-gtk (requires gtk4>=4.16, libadwaita>=1.6)
+build-gtk: ## Build only paladin-auth-gtk (requires gtk4>=4.16, libadwaita>=1.6)
 	${CARGO} build -p ${GTK_PKG} ${PROFILE_FLAG}
 
 release: ## Build the full workspace with the release profile
@@ -113,18 +113,18 @@ test: test-all ## Run every test in the workspace (alias of test-all)
 test-all: ## Run `cargo test --workspace --all-targets` (matches CI)
 	${CARGO} test --workspace --all-targets
 
-test-core: ## Run paladin-core tests (the shared library)
+test-core: ## Run paladin-auth-core tests (the shared library)
 	${CARGO} test -p ${CORE_PKG} --all-targets
 
-test-cli: ## Run paladin-cli tests
+test-cli: ## Run paladin-auth-cli tests
 	${CARGO} test -p ${CLI_PKG} --all-targets
 
-test-tui: ## Run paladin-tui tests
+test-tui: ## Run paladin-auth-tui tests
 	${CARGO} test -p ${TUI_PKG} --all-targets
 
-# paladin-gtk's smoke test needs an X server; wrap with `xvfb-run` in
+# paladin-auth-gtk's smoke test needs an X server; wrap with `xvfb-run` in
 # headless environments (e.g. `xvfb-run make test-gtk`).
-test-gtk: ## Run paladin-gtk tests (needs X11; use xvfb-run if headless)
+test-gtk: ## Run paladin-auth-gtk tests (needs X11; use xvfb-run if headless)
 	${CARGO} test -p ${GTK_PKG} --all-targets
 
 # --- Lint & format -----------------------------------------------------------
@@ -167,54 +167,54 @@ install: ## Install release binaries to ${DESTDIR}${BINDIR} (forces release)
 man: ## Render clap-derived man pages into target/man/ (no packaging step)
 	${CARGO} run -p xtask --quiet -- man
 
-rpm: rpm-paladin rpm-paladin-tui rpm-paladin-gtk ## Build .rpm for every front-end (CLI + TUI + GTK)
+rpm: rpm-paladin-auth rpm-paladin-auth-tui rpm-paladin-auth-gtk ## Build .rpm for every front-end (CLI + TUI + GTK)
 
-rpm-paladin: ## Build the paladin (CLI) .rpm into ${PKG_OUTPUT_DIR}
+rpm-paladin-auth: ## Build the paladin-auth (CLI) .rpm into ${PKG_OUTPUT_DIR}
 	${CARGO} run -p xtask --quiet -- package \
-		--frontend paladin --format rpm \
-		--version "${PALADIN_VERSION}" \
+		--frontend paladin-auth --format rpm \
+		--version "${PALADIN_AUTH_VERSION}" \
 		--output-dir "${PKG_OUTPUT_DIR}" \
 		--nfpm-image "${NFPM_IMAGE}" \
 		--container-runtime "${CONTAINER_RUNTIME}"
 
-rpm-paladin-tui: ## Build the paladin-tui .rpm into ${PKG_OUTPUT_DIR}
+rpm-paladin-auth-tui: ## Build the paladin-auth-tui .rpm into ${PKG_OUTPUT_DIR}
 	${CARGO} run -p xtask --quiet -- package \
-		--frontend paladin-tui --format rpm \
-		--version "${PALADIN_VERSION}" \
+		--frontend paladin-auth-tui --format rpm \
+		--version "${PALADIN_AUTH_VERSION}" \
 		--output-dir "${PKG_OUTPUT_DIR}" \
 		--nfpm-image "${NFPM_IMAGE}" \
 		--container-runtime "${CONTAINER_RUNTIME}"
 
-rpm-paladin-gtk: ## Build the paladin-gtk .rpm into ${PKG_OUTPUT_DIR}
+rpm-paladin-auth-gtk: ## Build the paladin-auth-gtk .rpm into ${PKG_OUTPUT_DIR}
 	${CARGO} run -p xtask --quiet -- package \
-		--frontend paladin-gtk --format rpm \
-		--version "${PALADIN_VERSION}" \
+		--frontend paladin-auth-gtk --format rpm \
+		--version "${PALADIN_AUTH_VERSION}" \
 		--output-dir "${PKG_OUTPUT_DIR}" \
 		--nfpm-image "${NFPM_IMAGE}" \
 		--container-runtime "${CONTAINER_RUNTIME}"
 
-deb: deb-paladin deb-paladin-tui deb-paladin-gtk ## Build .deb for every front-end (CLI + TUI + GTK)
+deb: deb-paladin-auth deb-paladin-auth-tui deb-paladin-auth-gtk ## Build .deb for every front-end (CLI + TUI + GTK)
 
-deb-paladin: ## Build the paladin (CLI) .deb into ${PKG_OUTPUT_DIR}
+deb-paladin-auth: ## Build the paladin-auth (CLI) .deb into ${PKG_OUTPUT_DIR}
 	${CARGO} run -p xtask --quiet -- package \
-		--frontend paladin --format deb \
-		--version "${PALADIN_VERSION}" \
+		--frontend paladin-auth --format deb \
+		--version "${PALADIN_AUTH_VERSION}" \
 		--output-dir "${PKG_OUTPUT_DIR}" \
 		--nfpm-image "${NFPM_IMAGE}" \
 		--container-runtime "${CONTAINER_RUNTIME}"
 
-deb-paladin-tui: ## Build the paladin-tui .deb into ${PKG_OUTPUT_DIR}
+deb-paladin-auth-tui: ## Build the paladin-auth-tui .deb into ${PKG_OUTPUT_DIR}
 	${CARGO} run -p xtask --quiet -- package \
-		--frontend paladin-tui --format deb \
-		--version "${PALADIN_VERSION}" \
+		--frontend paladin-auth-tui --format deb \
+		--version "${PALADIN_AUTH_VERSION}" \
 		--output-dir "${PKG_OUTPUT_DIR}" \
 		--nfpm-image "${NFPM_IMAGE}" \
 		--container-runtime "${CONTAINER_RUNTIME}"
 
-deb-paladin-gtk: ## Build the paladin-gtk .deb into ${PKG_OUTPUT_DIR}
+deb-paladin-auth-gtk: ## Build the paladin-auth-gtk .deb into ${PKG_OUTPUT_DIR}
 	${CARGO} run -p xtask --quiet -- package \
-		--frontend paladin-gtk --format deb \
-		--version "${PALADIN_VERSION}" \
+		--frontend paladin-auth-gtk --format deb \
+		--version "${PALADIN_AUTH_VERSION}" \
 		--output-dir "${PKG_OUTPUT_DIR}" \
 		--nfpm-image "${NFPM_IMAGE}" \
 		--container-runtime "${CONTAINER_RUNTIME}"

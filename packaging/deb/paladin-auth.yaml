@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# nfpm manifest for the `paladin-auth` CLI Debian (.deb) package.
+#
+# Per docs/DESIGN.md §11.3 ("Per-front-end packages") and
+# docs/IMPLEMENTATION_PLAN_02_CLI.md §"Packaging (per §11)", this
+# manifest installs the release binary at `/usr/bin/paladin-auth` and the
+# gzipped, clap-derived man page at
+# `/usr/share/man/man1/paladin-auth.1.gz`. The man page source is
+# produced by `cargo xtask man` (which renders via clap_mangen) and
+# gzipped before nfpm runs (matching the release workflow step in
+# `.github/workflows/release.yml`).
+#
+# Runtime dependency is `libc6` only — the CLI is otherwise
+# statically linked where possible (no OpenSSL, no libsqlite, no
+# libcurl), so minimal Debian / Ubuntu installs (server / container
+# images) can pull `paladin-auth` without dragging in a desktop dependency
+# chain. This is the headless-friendly footprint §11.3 promises and
+# is the Debian analogue of the `glibc` dependency declared in
+# `packaging/rpm/paladin-auth.yaml`.
+#
+# Maintainer scripts are intentionally absent — the CLI never runs
+# preinst, postinst, prerm, or postrm hooks. Vault files live under
+# `$XDG_DATA_HOME/paladin-auth/` and are only created by `paladin-auth init`,
+# so package state and user state are kept strictly separate.
+#
+# The contract pinned by this file is covered by
+# `crates/paladin-auth-cli/tests/packaging_deb_nfpm_manifest_logic.rs`;
+# changes here that break that contract fail
+# `cargo test --workspace --all-targets` independently of whether
+# `nfpm` itself is installed on the runner.
+
+name: paladin-auth
+arch: amd64
+platform: linux
+
+# Inherits from `${PALADIN_AUTH_VERSION}` injected by the release pipeline
+# (see docs/IMPLEMENTATION_PLAN_02_CLI.md §"Reproducible builds"). The
+# release tag drives the value so the .deb version, the workspace
+# `[workspace.package].version`, and the man-page footer all stay in
+# lockstep.
+version: ${PALADIN_AUTH_VERSION}
+
+section: utils
+priority: optional
+
+maintainer: Benjamin Porter <ben@ameelio.org>
+vendor: tamx
+description: "Paladin Auth: Rust OTP authenticator (TOTP + HOTP) CLI"
+homepage: https://paladin-auth.tamx.org
+license: AGPL-3.0-or-later
+
+# Debian's libc package. Mirrors the build-time glibc baseline the
+# release `cargo build --release --locked` produces in the Fedora 42
+# release container; distributions whose libc6 is too old to host that
+# binary cannot install paladin-auth — accepted in §11.3.
+depends:
+  - libc6
+
+contents:
+  # Release binary. mode: 0755 is required because nfpm defaults file
+  # mode to 0644, which would land a non-executable binary in /usr/bin.
+  - src: target/release/paladin-auth
+    dst: /usr/bin/paladin-auth
+    file_info:
+      mode: 0755
+
+  # Gzipped man page produced by `cargo xtask package` (which calls
+  # `xtask::man::render_all_gzipped`) or by the explicit `gzip -n -9`
+  # step the release workflow runs after `cargo xtask man`. The .gz
+  # suffix is required by man(1) compression conventions on Debian —
+  # `man paladin-auth` finds `paladin-auth.1.gz` via mandb's compressed-page
+  # lookup.
+  - src: target/man/paladin-auth.1.gz
+    dst: /usr/share/man/man1/paladin-auth.1.gz
+    file_info:
+      mode: 0644

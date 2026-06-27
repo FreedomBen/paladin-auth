@@ -1,0 +1,143 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# nfpm manifest for the paladin-auth-gtk Fedora (.rpm) package.
+#
+# Per docs/IMPLEMENTATION_PLAN_04_GTK.md §"Linux distribution and signing"
+# and the Milestone 7 packaging checklist, this manifest installs the
+# same payload as packaging/deb/paladin-auth-gtk.yaml (the release binary,
+# the freedesktop desktop entry, the AppStream metainfo, and the
+# hicolor icon set) on the canonical FHS paths the §11 packaging
+# dry-run validates against. Maintainer scripts are narrowly scoped
+# to refreshing two system-owned freedesktop caches under /usr/share
+# (mimeinfo.cache + icon-theme.cache); user vault state under
+# $XDG_DATA_HOME/paladin-auth/ is never created or altered by the package.
+#
+# Runtime baselines use the Fedora package names (`gtk4` and
+# `libadwaita`) but the same 4.16 / 1.6 version floors the build-
+# time gtk4 (v4_16) and libadwaita (v1_6) crate features enforce.
+# RPM's spec syntax accepts `pkg >= version` directly without
+# Debian's parenthesized form — that distinction is the entire
+# delta against packaging/deb/paladin-auth-gtk.yaml.
+#
+# The contract pinned by this file is covered by
+# crates/paladin-auth-gtk/tests/packaging_rpm_nfpm_manifest_logic.rs;
+# changes here that break that contract fail
+# `cargo test --workspace --all-targets` independently of whether
+# `nfpm` itself is installed on the runner.
+
+name: paladin-auth-gtk
+arch: amd64
+platform: linux
+
+# Inherits from `${PALADIN_AUTH_VERSION}` injected by the release pipeline
+# (see docs/IMPLEMENTATION_PLAN_04_GTK.md §"Reproducible builds"). Same
+# value the .deb manifest reads so the .deb and .rpm artifacts ship
+# under matching version strings tied to the same release tag.
+version: ${PALADIN_AUTH_VERSION}
+
+section: utils
+priority: optional
+
+maintainer: Benjamin Porter <ben@ameelio.org>
+vendor: tamx
+description: "Paladin Auth: Rust OTP authenticator (TOTP + HOTP) with CLI, TUI, and GTK front-ends"
+homepage: https://paladin-auth.tamx.org
+license: AGPL-3.0-or-later
+
+# Runtime baselines mirror the build-time gtk4 (v4_16) and libadwaita
+# (v1_6) crate features. The Fedora package names diverge from the
+# Debian ones (libgtk-4-1 / libadwaita-1-0) but the floors are the
+# same so users of either packaging land on a system whose libraries
+# match what paladin-auth-gtk was linked against.
+depends:
+  - gtk4 >= 4.16
+  - libadwaita >= 1.6
+
+contents:
+  # Release binary. mode: 0755 is required because nfpm defaults file
+  # mode to 0644, which would land a non-executable binary in /usr/bin.
+  - src: target/release/paladin-auth-gtk
+    dst: /usr/bin/paladin-auth-gtk
+    file_info:
+      mode: 0755
+
+  # Freedesktop .desktop entry. Validated by `desktop-file-validate`
+  # during the packaging dry-run; the in-tree contents are pinned by
+  # crates/paladin-auth-gtk/tests/desktop_entry_logic.rs.
+  - src: crates/paladin-auth-gtk/data/org.tamx.PaladinAuth.Gui.desktop
+    dst: /usr/share/applications/org.tamx.PaladinAuth.Gui.desktop
+    file_info:
+      mode: 0644
+
+  # AppStream metainfo. Validated by `appstreamcli validate --no-net`
+  # during the packaging dry-run; the in-tree contents are pinned by
+  # crates/paladin-auth-gtk/tests/metainfo_logic.rs.
+  - src: crates/paladin-auth-gtk/data/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml
+    dst: /usr/share/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml
+    file_info:
+      mode: 0644
+
+  # Hicolor application icons. Layout matches packaging/deb/paladin-auth-
+  # gtk.yaml byte-for-byte so Fedora and Debian users see an
+  # identical filesystem footprint after install.
+  - src: crates/paladin-auth-gtk/data/icons/hicolor/scalable/apps/org.tamx.PaladinAuth.Gui.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/org.tamx.PaladinAuth.Gui.svg
+    file_info:
+      mode: 0644
+  - src: crates/paladin-auth-gtk/data/icons/hicolor/symbolic/apps/org.tamx.PaladinAuth.Gui-symbolic.svg
+    dst: /usr/share/icons/hicolor/symbolic/apps/org.tamx.PaladinAuth.Gui-symbolic.svg
+    file_info:
+      mode: 0644
+  - src: crates/paladin-auth-gtk/data/icons/hicolor/16x16/apps/org.tamx.PaladinAuth.Gui.png
+    dst: /usr/share/icons/hicolor/16x16/apps/org.tamx.PaladinAuth.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-auth-gtk/data/icons/hicolor/24x24/apps/org.tamx.PaladinAuth.Gui.png
+    dst: /usr/share/icons/hicolor/24x24/apps/org.tamx.PaladinAuth.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-auth-gtk/data/icons/hicolor/32x32/apps/org.tamx.PaladinAuth.Gui.png
+    dst: /usr/share/icons/hicolor/32x32/apps/org.tamx.PaladinAuth.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-auth-gtk/data/icons/hicolor/48x48/apps/org.tamx.PaladinAuth.Gui.png
+    dst: /usr/share/icons/hicolor/48x48/apps/org.tamx.PaladinAuth.Gui.png
+    file_info:
+      mode: 0644
+  # 64 / 128 / 256 / 512 cover the sizes GNOME Shell's app-drawer and
+  # search results actually request — without them, Shell falls
+  # through to the scalable SVG via librsvg and the launcher glyph
+  # can render blank because the SVG's base64-embedded PNG payload
+  # fails GdkPixbuf's icon-theme load path.
+  - src: crates/paladin-auth-gtk/data/icons/hicolor/64x64/apps/org.tamx.PaladinAuth.Gui.png
+    dst: /usr/share/icons/hicolor/64x64/apps/org.tamx.PaladinAuth.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-auth-gtk/data/icons/hicolor/128x128/apps/org.tamx.PaladinAuth.Gui.png
+    dst: /usr/share/icons/hicolor/128x128/apps/org.tamx.PaladinAuth.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-auth-gtk/data/icons/hicolor/256x256/apps/org.tamx.PaladinAuth.Gui.png
+    dst: /usr/share/icons/hicolor/256x256/apps/org.tamx.PaladinAuth.Gui.png
+    file_info:
+      mode: 0644
+  - src: crates/paladin-auth-gtk/data/icons/hicolor/512x512/apps/org.tamx.PaladinAuth.Gui.png
+    dst: /usr/share/icons/hicolor/512x512/apps/org.tamx.PaladinAuth.Gui.png
+    file_info:
+      mode: 0644
+
+# Maintainer scripts. nfpm reads the referenced shell scripts at
+# package-build time and embeds them verbatim into the .rpm header
+# scripts. Both scripts are also referenced by packaging/deb/
+# paladin-auth-gtk.yaml so a single source of truth ships on .deb and
+# .rpm — see packaging/scripts/paladin-auth-gtk-postinstall.sh for the
+# pinned security posture (touches only /usr/share, never reads or
+# writes any $XDG_* or user-vault path, fail-soft on missing
+# helpers). Without these scriptlets, a freshly installed .rpm's
+# desktop entry shows up in GNOME Shell with a generic placeholder
+# icon until the user logs out and back in, because the in-memory
+# GtkIconTheme inside the running gnome-shell process never
+# rebuilds from the new on-disk icon-theme.cache.
+scripts:
+  postinstall: ./packaging/scripts/paladin-auth-gtk-postinstall.sh
+  postremove: ./packaging/scripts/paladin-auth-gtk-postremove.sh

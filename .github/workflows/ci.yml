@@ -18,7 +18,7 @@ jobs:
   clippy:
     name: cargo clippy
     runs-on: ubuntu-latest
-    # The workspace includes `paladin-gtk`, which binds `gtk4` `v4_16`
+    # The workspace includes `paladin-auth-gtk`, which binds `gtk4` `v4_16`
     # and `libadwaita` `v1_6` per docs/IMPLEMENTATION_PLAN_04_GTK.md
     # §"Dependencies (per §9)". The `ubuntu-24.04` image ships GTK 4.14
     # and libadwaita 1.5 — too old for those `v*` feature gates, so the
@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     # Same Fedora 42 container as `clippy` for the GTK 4.16 / libadwaita
     # 1.6 floor; additionally installs `xorg-x11-server-Xvfb` so
-    # `crates/paladin-gtk/tests/gtk_smoke.rs` runs under `xvfb-run`
+    # `crates/paladin-auth-gtk/tests/gtk_smoke.rs` runs under `xvfb-run`
     # instead of skipping. The §"Smoke test" bullet in
     # docs/IMPLEMENTATION_PLAN_04_GTK.md gates Milestone 7 sign-off on that
     # test being green.
@@ -97,11 +97,11 @@ jobs:
       - name: Install pinned cargo-public-api
         run: cargo install --locked 'cargo-public-api@^0.51'
       - name: Regenerate snapshot
-        run: cargo public-api -p paladin-core --simplified --color=never > /tmp/public-api.txt
+        run: cargo public-api -p paladin-auth-core --simplified --color=never > /tmp/public-api.txt
       - name: Diff against committed snapshot
         run: |
-          if ! diff -u crates/paladin-core/public-api.txt /tmp/public-api.txt; then
-            echo "::error::Public API surface changed. Update crates/paladin-core/public-api.txt or revert the change."
+          if ! diff -u crates/paladin-auth-core/public-api.txt /tmp/public-api.txt; then
+            echo "::error::Public API surface changed. Update crates/paladin-auth-core/public-api.txt or revert the change."
             exit 1
           fi
 
@@ -117,8 +117,8 @@ jobs:
     #   1. Builds the release binary with --release --locked (same flag
     #      set the §11.6 reproducibility gate locks in for the AppImage
     #      script via tests/packaging_reproducible_build_logic.rs).
-    #   2. Produces a .deb via the in-tree packaging/deb/paladin-gtk.yaml
-    #      nfpm manifest, then a .rpm via packaging/rpm/paladin-gtk.yaml.
+    #   2. Produces a .deb via the in-tree packaging/deb/paladin-auth-gtk.yaml
+    #      nfpm manifest, then a .rpm via packaging/rpm/paladin-auth-gtk.yaml.
     #   3. Extracts each artifact into a staging directory (dpkg-deb -x
     #      for the .deb, rpm2cpio | cpio for the .rpm) so the validators
     #      check the installed payload — not just the source-tree
@@ -142,23 +142,23 @@ jobs:
     # remote for Flatpak; linuxdeploy + linuxdeploy-plugin-gtk for
     # AppImage) that is out of scope for this contract. The Flatpak
     # manifest is already pinned by
-    # crates/paladin-gtk/tests/packaging_flatpak_manifest_logic.rs and
+    # crates/paladin-auth-gtk/tests/packaging_flatpak_manifest_logic.rs and
     # the AppImage assembly script by
-    # crates/paladin-gtk/tests/packaging_appimage_build_script_logic.rs;
+    # crates/paladin-auth-gtk/tests/packaging_appimage_build_script_logic.rs;
     # those text-level tests run on every push regardless of this job.
     #
     # Contract pinned by
-    # crates/paladin-gtk/tests/ci_packaging_dry_run_logic.rs.
+    # crates/paladin-auth-gtk/tests/ci_packaging_dry_run_logic.rs.
     container:
       image: fedora:42
     env:
-      # The nfpm manifests reference `${PALADIN_VERSION}` (see the
-      # `version: ${PALADIN_VERSION}` lines in both YAMLs). The
+      # The nfpm manifests reference `${PALADIN_AUTH_VERSION}` (see the
+      # `version: ${PALADIN_AUTH_VERSION}` lines in both YAMLs). The
       # release pipeline derives this from the release tag; the CI
       # dry-run uses a sentinel since no tag is in flight on a push /
       # PR run. The string only needs to be a syntactically valid
       # version — the actual workspace version stays authoritative.
-      PALADIN_VERSION: "0.0.1-ci-dry-run"
+      PALADIN_AUTH_VERSION: "0.0.1-ci-dry-run"
     steps:
       - name: Install system dependencies (GTK4 + libadwaita + extractors + validators + Rust)
         run: |
@@ -187,7 +187,7 @@ jobs:
         # --release for the release-profile binary, --locked for
         # reproducibility per DESIGN §11.6 (parity with the AppImage
         # script's `cargo build --release --locked` fallback).
-        run: cargo build --release --locked -p paladin-gtk
+        run: cargo build --release --locked -p paladin-auth-gtk
       - name: Build .deb via nfpm
         # `mkdir -p target/dist` must run first: nfpm v2.41.3's `-t`
         # auto-naming only triggers when `os.Stat` finds the target as
@@ -196,40 +196,40 @@ jobs:
         # on Linux.
         run: |
           mkdir -p target/dist
-          nfpm package -f packaging/deb/paladin-gtk.yaml -p deb -t target/dist/
+          nfpm package -f packaging/deb/paladin-auth-gtk.yaml -p deb -t target/dist/
       - name: Build .rpm via nfpm
         run: |
           mkdir -p target/dist
-          nfpm package -f packaging/rpm/paladin-gtk.yaml -p rpm -t target/dist/
+          nfpm package -f packaging/rpm/paladin-auth-gtk.yaml -p rpm -t target/dist/
       - name: Extract .deb payload into target/dist/deb-extracted/
         run: |
           mkdir -p target/dist/deb-extracted
-          DEB_FILE="$(ls target/dist/paladin-gtk_*.deb | head -n1)"
+          DEB_FILE="$(ls target/dist/paladin-auth-gtk_*.deb | head -n1)"
           dpkg-deb -x "${DEB_FILE}" target/dist/deb-extracted
       - name: Extract .rpm payload into target/dist/rpm-extracted/
         run: |
           mkdir -p target/dist/rpm-extracted
-          RPM_FILE="$(ls target/dist/paladin-gtk-*.rpm | head -n1)"
+          RPM_FILE="$(ls target/dist/paladin-auth-gtk-*.rpm | head -n1)"
           ( cd target/dist/rpm-extracted && rpm2cpio "../../../${RPM_FILE}" | cpio -idm )
       - name: Validate installed .desktop entry (from .deb payload)
         run: |
           desktop-file-validate \
-            target/dist/deb-extracted/usr/share/applications/org.tamx.Paladin.Gui.desktop
+            target/dist/deb-extracted/usr/share/applications/org.tamx.PaladinAuth.Gui.desktop
       - name: Validate installed AppStream metainfo (from .deb payload)
         # `--no-net` keeps the validator off the network so the job
         # never depends on external URLs being reachable. The
         # substantive schema / required-fields checks still run.
         run: |
           appstreamcli validate --no-net \
-            target/dist/deb-extracted/usr/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml
+            target/dist/deb-extracted/usr/share/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml
       - name: Validate installed .desktop entry (from .rpm payload)
         run: |
           desktop-file-validate \
-            target/dist/rpm-extracted/usr/share/applications/org.tamx.Paladin.Gui.desktop
+            target/dist/rpm-extracted/usr/share/applications/org.tamx.PaladinAuth.Gui.desktop
       - name: Validate installed AppStream metainfo (from .rpm payload)
         run: |
           appstreamcli validate --no-net \
-            target/dist/rpm-extracted/usr/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml
+            target/dist/rpm-extracted/usr/share/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml
 
   desktop-metainfo:
     name: desktop-file-validate + appstreamcli validate
@@ -237,7 +237,7 @@ jobs:
     # Per docs/IMPLEMENTATION_PLAN_04_GTK.md §"Linux desktop integration" /
     # §"Packaging (per §11)", the v0.2 GUI ships a freedesktop desktop
     # entry and an AppStream metainfo file under
-    # `crates/paladin-gtk/data/`. The §11 packaging dry-run validates
+    # `crates/paladin-auth-gtk/data/`. The §11 packaging dry-run validates
     # both with `desktop-file-validate` and the AppStream validator
     # respectively; this job runs the same checks on every push so a
     # malformed `.desktop` or metainfo file fails CI before it reaches
@@ -253,11 +253,11 @@ jobs:
       - name: Validate desktop entry
         run: |
           desktop-file-validate \
-            crates/paladin-gtk/data/org.tamx.Paladin.Gui.desktop
+            crates/paladin-auth-gtk/data/org.tamx.PaladinAuth.Gui.desktop
       - name: Validate AppStream metainfo
         # `--no-net` skips the URL-reachability checks so the
         # validator never depends on network access. The substantive
         # schema / required-fields checks still run.
         run: |
           appstreamcli validate --no-net \
-            crates/paladin-gtk/data/metainfo/org.tamx.Paladin.Gui.metainfo.xml
+            crates/paladin-auth-gtk/data/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml

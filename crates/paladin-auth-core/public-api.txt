@@ -1,0 +1,1178 @@
+pub mod paladin_auth_core
+pub mod paladin_auth_core::export
+pub struct paladin_auth_core::export::QrRenderOptions
+pub paladin_auth_core::export::QrRenderOptions::module_size_px: u32
+pub paladin_auth_core::export::QrRenderOptions::quiet_zone: bool
+impl paladin_auth_core::QrRenderOptions
+pub fn paladin_auth_core::QrRenderOptions::validate(&self) -> paladin_auth_core::Result<()>
+impl core::clone::Clone for paladin_auth_core::QrRenderOptions
+pub fn paladin_auth_core::QrRenderOptions::clone(&self) -> paladin_auth_core::QrRenderOptions
+impl core::cmp::Eq for paladin_auth_core::QrRenderOptions
+impl core::cmp::PartialEq for paladin_auth_core::QrRenderOptions
+pub fn paladin_auth_core::QrRenderOptions::eq(&self, other: &paladin_auth_core::QrRenderOptions) -> bool
+impl core::default::Default for paladin_auth_core::QrRenderOptions
+pub fn paladin_auth_core::QrRenderOptions::default() -> Self
+impl core::fmt::Debug for paladin_auth_core::QrRenderOptions
+pub fn paladin_auth_core::QrRenderOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::QrRenderOptions
+impl core::marker::StructuralPartialEq for paladin_auth_core::QrRenderOptions
+impl core::marker::Freeze for paladin_auth_core::QrRenderOptions
+impl core::marker::Send for paladin_auth_core::QrRenderOptions
+impl core::marker::Sync for paladin_auth_core::QrRenderOptions
+impl core::marker::Unpin for paladin_auth_core::QrRenderOptions
+impl core::marker::UnsafeUnpin for paladin_auth_core::QrRenderOptions
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::QrRenderOptions
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::QrRenderOptions
+pub fn paladin_auth_core::export::encrypted(vault: &paladin_auth_core::Vault, options: paladin_auth_core::EncryptionOptions) -> paladin_auth_core::Result<alloc::vec::Vec<u8>>
+pub fn paladin_auth_core::export::otpauth_list(vault: &paladin_auth_core::Vault) -> alloc::string::String
+pub fn paladin_auth_core::export::qr_ansi(account: &paladin_auth_core::Account) -> paladin_auth_core::Result<zeroize::Zeroizing<alloc::string::String>>
+pub fn paladin_auth_core::export::qr_png(account: &paladin_auth_core::Account, opts: &paladin_auth_core::QrRenderOptions) -> paladin_auth_core::Result<zeroize::Zeroizing<alloc::vec::Vec<u8>>>
+pub fn paladin_auth_core::export::qr_svg(account: &paladin_auth_core::Account, opts: &paladin_auth_core::QrRenderOptions) -> paladin_auth_core::Result<zeroize::Zeroizing<alloc::string::String>>
+pub mod paladin_auth_core::import
+pub enum paladin_auth_core::import::ImportFormat
+pub paladin_auth_core::import::ImportFormat::Aegis
+pub paladin_auth_core::import::ImportFormat::Otpauth
+pub paladin_auth_core::import::ImportFormat::PaladinAuth
+pub paladin_auth_core::import::ImportFormat::QrImage
+pub paladin_auth_core::import::ImportFormat::Unknown
+impl paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::import::ImportFormat::as_str(&self) -> &'static str
+impl core::clone::Clone for paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::import::ImportFormat::clone(&self) -> paladin_auth_core::import::ImportFormat
+impl core::cmp::Eq for paladin_auth_core::import::ImportFormat
+impl core::cmp::PartialEq for paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::import::ImportFormat::eq(&self, other: &paladin_auth_core::import::ImportFormat) -> bool
+impl core::fmt::Debug for paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::import::ImportFormat::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::import::ImportFormat::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_auth_core::import::ImportFormat
+impl core::marker::StructuralPartialEq for paladin_auth_core::import::ImportFormat
+impl core::marker::Freeze for paladin_auth_core::import::ImportFormat
+impl core::marker::Send for paladin_auth_core::import::ImportFormat
+impl core::marker::Sync for paladin_auth_core::import::ImportFormat
+impl core::marker::Unpin for paladin_auth_core::import::ImportFormat
+impl core::marker::UnsafeUnpin for paladin_auth_core::import::ImportFormat
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::import::ImportFormat
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::import::ImportFormat
+pub enum paladin_auth_core::import::PaladinAuthImportPrecheck
+pub paladin_auth_core::import::PaladinAuthImportPrecheck::NoPrompt
+pub paladin_auth_core::import::PaladinAuthImportPrecheck::PromptForPassphrase
+pub paladin_auth_core::import::PaladinAuthImportPrecheck::Reject(paladin_auth_core::PaladinAuthError)
+impl core::fmt::Debug for paladin_auth_core::PaladinAuthImportPrecheck
+pub fn paladin_auth_core::PaladinAuthImportPrecheck::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::PaladinAuthImportPrecheck
+impl core::marker::Send for paladin_auth_core::PaladinAuthImportPrecheck
+impl core::marker::Sync for paladin_auth_core::PaladinAuthImportPrecheck
+impl core::marker::Unpin for paladin_auth_core::PaladinAuthImportPrecheck
+impl core::marker::UnsafeUnpin for paladin_auth_core::PaladinAuthImportPrecheck
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::PaladinAuthImportPrecheck
+impl !core::panic::unwind_safe::UnwindSafe for paladin_auth_core::PaladinAuthImportPrecheck
+pub struct paladin_auth_core::import::ImportOptions
+pub paladin_auth_core::import::ImportOptions::format: core::option::Option<paladin_auth_core::import::ImportFormat>
+pub paladin_auth_core::import::ImportOptions::paladin_auth_passphrase: core::option::Option<secrecy::SecretString>
+impl core::default::Default for paladin_auth_core::ImportOptions
+pub fn paladin_auth_core::ImportOptions::default() -> paladin_auth_core::ImportOptions
+impl core::fmt::Debug for paladin_auth_core::ImportOptions
+pub fn paladin_auth_core::ImportOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::ImportOptions
+impl core::marker::Send for paladin_auth_core::ImportOptions
+impl core::marker::Sync for paladin_auth_core::ImportOptions
+impl core::marker::Unpin for paladin_auth_core::ImportOptions
+impl core::marker::UnsafeUnpin for paladin_auth_core::ImportOptions
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::ImportOptions
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::ImportOptions
+pub fn paladin_auth_core::import::aegis_plaintext(bytes: &[u8], import_time: std::time::SystemTime) -> paladin_auth_core::Result<alloc::vec::Vec<paladin_auth_core::ValidatedAccount>>
+pub fn paladin_auth_core::import::classify_paladin_auth_import_precheck(path: &std::path::Path, forced_format: core::option::Option<paladin_auth_core::import::ImportFormat>) -> paladin_auth_core::PaladinAuthImportPrecheck
+pub fn paladin_auth_core::import::detect(bytes: &[u8]) -> paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::import::from_bytes(bytes: &[u8], options: paladin_auth_core::ImportOptions, import_time: std::time::SystemTime) -> paladin_auth_core::Result<alloc::vec::Vec<paladin_auth_core::ValidatedAccount>>
+pub fn paladin_auth_core::import::from_file(path: &std::path::Path, options: paladin_auth_core::ImportOptions, import_time: std::time::SystemTime) -> paladin_auth_core::Result<alloc::vec::Vec<paladin_auth_core::ValidatedAccount>>
+pub fn paladin_auth_core::import::otpauth(bytes: &[u8], import_time: std::time::SystemTime) -> paladin_auth_core::Result<alloc::vec::Vec<paladin_auth_core::ValidatedAccount>>
+pub fn paladin_auth_core::import::paladin_auth(bytes: &[u8], passphrase: secrecy::SecretString) -> paladin_auth_core::Result<alloc::vec::Vec<paladin_auth_core::ValidatedAccount>>
+pub fn paladin_auth_core::import::qr_image(path: &std::path::Path, import_time: std::time::SystemTime) -> paladin_auth_core::Result<alloc::vec::Vec<paladin_auth_core::ValidatedAccount>>
+pub fn paladin_auth_core::import::qr_image_bytes(width: u32, height: u32, rgba: &[u8], import_time: std::time::SystemTime) -> paladin_auth_core::Result<alloc::vec::Vec<paladin_auth_core::ValidatedAccount>>
+pub fn paladin_auth_core::import::read_qr_image(path: &std::path::Path) -> paladin_auth_core::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn paladin_auth_core::import::read_qr_image_bytes(width: u32, height: u32, rgba: &[u8]) -> paladin_auth_core::Result<alloc::vec::Vec<alloc::string::String>>
+pub mod paladin_auth_core::policy
+pub mod paladin_auth_core::policy::auto_lock
+pub struct paladin_auth_core::policy::auto_lock::IdlePolicy
+impl paladin_auth_core::policy::auto_lock::IdlePolicy
+pub fn paladin_auth_core::policy::auto_lock::IdlePolicy::is_expired(deadline: std::time::Instant, now: std::time::Instant) -> bool
+pub fn paladin_auth_core::policy::auto_lock::IdlePolicy::next_deadline(now: std::time::Instant, is_encrypted: bool, settings: &paladin_auth_core::VaultSettings) -> core::option::Option<std::time::Instant>
+pub fn paladin_auth_core::policy::auto_lock::IdlePolicy::should_arm(is_encrypted: bool, settings: &paladin_auth_core::VaultSettings) -> bool
+impl core::marker::Freeze for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::Send for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::Sync for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::Unpin for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::UnsafeUnpin for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::policy::auto_lock::IdlePolicy
+pub mod paladin_auth_core::policy::clipboard_clear
+pub struct paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy::schedule(now: std::time::Instant, settings: &paladin_auth_core::VaultSettings) -> core::option::Option<(paladin_auth_core::policy::clipboard_clear::ClipboardClearToken, std::time::Instant)>
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy::should_clear(captured: &[u8], current: &[u8]) -> bool
+impl core::marker::Freeze for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Send for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Sync for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Unpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::UnsafeUnpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+pub struct paladin_auth_core::policy::clipboard_clear::ClipboardClearToken(_)
+impl paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::successor(self) -> Self
+impl core::clone::Clone for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::clone(&self) -> paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Eq for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Ord for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::cmp(&self, other: &paladin_auth_core::policy::clipboard_clear::ClipboardClearToken) -> core::cmp::Ordering
+impl core::cmp::PartialEq for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::eq(&self, other: &paladin_auth_core::policy::clipboard_clear::ClipboardClearToken) -> bool
+impl core::cmp::PartialOrd for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::partial_cmp(&self, other: &paladin_auth_core::policy::clipboard_clear::ClipboardClearToken) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::StructuralPartialEq for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Freeze for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Send for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Sync for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Unpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::UnsafeUnpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub mod paladin_auth_core::policy::hotp_reveal
+pub fn paladin_auth_core::policy::hotp_reveal::deadline(now: std::time::Instant) -> std::time::Instant
+pub struct paladin_auth_core::policy::ClipboardClearPolicy
+impl paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy::schedule(now: std::time::Instant, settings: &paladin_auth_core::VaultSettings) -> core::option::Option<(paladin_auth_core::policy::clipboard_clear::ClipboardClearToken, std::time::Instant)>
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy::should_clear(captured: &[u8], current: &[u8]) -> bool
+impl core::marker::Freeze for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Send for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Sync for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Unpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::UnsafeUnpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+pub struct paladin_auth_core::policy::ClipboardClearToken(_)
+impl paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::successor(self) -> Self
+impl core::clone::Clone for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::clone(&self) -> paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Eq for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Ord for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::cmp(&self, other: &paladin_auth_core::policy::clipboard_clear::ClipboardClearToken) -> core::cmp::Ordering
+impl core::cmp::PartialEq for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::eq(&self, other: &paladin_auth_core::policy::clipboard_clear::ClipboardClearToken) -> bool
+impl core::cmp::PartialOrd for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::partial_cmp(&self, other: &paladin_auth_core::policy::clipboard_clear::ClipboardClearToken) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::StructuralPartialEq for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Freeze for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Send for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Sync for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Unpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::UnsafeUnpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub struct paladin_auth_core::policy::IdlePolicy
+impl paladin_auth_core::policy::auto_lock::IdlePolicy
+pub fn paladin_auth_core::policy::auto_lock::IdlePolicy::is_expired(deadline: std::time::Instant, now: std::time::Instant) -> bool
+pub fn paladin_auth_core::policy::auto_lock::IdlePolicy::next_deadline(now: std::time::Instant, is_encrypted: bool, settings: &paladin_auth_core::VaultSettings) -> core::option::Option<std::time::Instant>
+pub fn paladin_auth_core::policy::auto_lock::IdlePolicy::should_arm(is_encrypted: bool, settings: &paladin_auth_core::VaultSettings) -> bool
+impl core::marker::Freeze for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::Send for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::Sync for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::Unpin for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::UnsafeUnpin for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::policy::auto_lock::IdlePolicy
+pub fn paladin_auth_core::policy::hotp_reveal_deadline(now: std::time::Instant) -> std::time::Instant
+pub enum paladin_auth_core::AccountKindInput
+pub paladin_auth_core::AccountKindInput::Hotp
+pub paladin_auth_core::AccountKindInput::Totp
+impl core::clone::Clone for paladin_auth_core::AccountKindInput
+pub fn paladin_auth_core::AccountKindInput::clone(&self) -> paladin_auth_core::AccountKindInput
+impl core::cmp::Eq for paladin_auth_core::AccountKindInput
+impl core::cmp::PartialEq for paladin_auth_core::AccountKindInput
+pub fn paladin_auth_core::AccountKindInput::eq(&self, other: &paladin_auth_core::AccountKindInput) -> bool
+impl core::default::Default for paladin_auth_core::AccountKindInput
+pub fn paladin_auth_core::AccountKindInput::default() -> paladin_auth_core::AccountKindInput
+impl core::fmt::Debug for paladin_auth_core::AccountKindInput
+pub fn paladin_auth_core::AccountKindInput::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::AccountKindInput
+impl core::marker::StructuralPartialEq for paladin_auth_core::AccountKindInput
+impl core::marker::Freeze for paladin_auth_core::AccountKindInput
+impl core::marker::Send for paladin_auth_core::AccountKindInput
+impl core::marker::Sync for paladin_auth_core::AccountKindInput
+impl core::marker::Unpin for paladin_auth_core::AccountKindInput
+impl core::marker::UnsafeUnpin for paladin_auth_core::AccountKindInput
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::AccountKindInput
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::AccountKindInput
+pub enum paladin_auth_core::AccountKindSummary
+pub paladin_auth_core::AccountKindSummary::Hotp
+pub paladin_auth_core::AccountKindSummary::Totp
+impl core::clone::Clone for paladin_auth_core::AccountKindSummary
+pub fn paladin_auth_core::AccountKindSummary::clone(&self) -> paladin_auth_core::AccountKindSummary
+impl core::cmp::Eq for paladin_auth_core::AccountKindSummary
+impl core::cmp::PartialEq for paladin_auth_core::AccountKindSummary
+pub fn paladin_auth_core::AccountKindSummary::eq(&self, other: &paladin_auth_core::AccountKindSummary) -> bool
+impl core::fmt::Debug for paladin_auth_core::AccountKindSummary
+pub fn paladin_auth_core::AccountKindSummary::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::AccountKindSummary
+impl core::marker::StructuralPartialEq for paladin_auth_core::AccountKindSummary
+impl core::marker::Freeze for paladin_auth_core::AccountKindSummary
+impl core::marker::Send for paladin_auth_core::AccountKindSummary
+impl core::marker::Sync for paladin_auth_core::AccountKindSummary
+impl core::marker::Unpin for paladin_auth_core::AccountKindSummary
+impl core::marker::UnsafeUnpin for paladin_auth_core::AccountKindSummary
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::AccountKindSummary
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::AccountKindSummary
+pub enum paladin_auth_core::AccountQuery
+pub paladin_auth_core::AccountQuery::IdPrefix
+pub paladin_auth_core::AccountQuery::IdPrefix::hex_prefix: alloc::string::String
+pub paladin_auth_core::AccountQuery::Search(alloc::string::String)
+impl core::clone::Clone for paladin_auth_core::AccountQuery
+pub fn paladin_auth_core::AccountQuery::clone(&self) -> paladin_auth_core::AccountQuery
+impl core::cmp::Eq for paladin_auth_core::AccountQuery
+impl core::cmp::PartialEq for paladin_auth_core::AccountQuery
+pub fn paladin_auth_core::AccountQuery::eq(&self, other: &paladin_auth_core::AccountQuery) -> bool
+impl core::fmt::Debug for paladin_auth_core::AccountQuery
+pub fn paladin_auth_core::AccountQuery::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_auth_core::AccountQuery
+impl core::marker::Freeze for paladin_auth_core::AccountQuery
+impl core::marker::Send for paladin_auth_core::AccountQuery
+impl core::marker::Sync for paladin_auth_core::AccountQuery
+impl core::marker::Unpin for paladin_auth_core::AccountQuery
+impl core::marker::UnsafeUnpin for paladin_auth_core::AccountQuery
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::AccountQuery
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::AccountQuery
+pub enum paladin_auth_core::Algorithm
+pub paladin_auth_core::Algorithm::Sha1
+pub paladin_auth_core::Algorithm::Sha256
+pub paladin_auth_core::Algorithm::Sha512
+impl paladin_auth_core::Algorithm
+pub const fn paladin_auth_core::Algorithm::as_str(self) -> &'static str
+impl bincode::enc::Encode for paladin_auth_core::Algorithm
+pub fn paladin_auth_core::Algorithm::encode<__E: bincode::enc::Encoder>(&self, encoder: &mut __E) -> core::result::Result<(), bincode::error::EncodeError>
+impl core::clone::Clone for paladin_auth_core::Algorithm
+pub fn paladin_auth_core::Algorithm::clone(&self) -> paladin_auth_core::Algorithm
+impl core::cmp::Eq for paladin_auth_core::Algorithm
+impl core::cmp::PartialEq for paladin_auth_core::Algorithm
+pub fn paladin_auth_core::Algorithm::eq(&self, other: &paladin_auth_core::Algorithm) -> bool
+impl core::default::Default for paladin_auth_core::Algorithm
+pub fn paladin_auth_core::Algorithm::default() -> paladin_auth_core::Algorithm
+impl core::fmt::Debug for paladin_auth_core::Algorithm
+pub fn paladin_auth_core::Algorithm::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_auth_core::Algorithm
+pub fn paladin_auth_core::Algorithm::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_auth_core::Algorithm
+pub fn paladin_auth_core::Algorithm::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_auth_core::Algorithm
+impl core::marker::StructuralPartialEq for paladin_auth_core::Algorithm
+impl<'__de, __Context> bincode::de::BorrowDecode<'__de, __Context> for paladin_auth_core::Algorithm
+pub fn paladin_auth_core::Algorithm::borrow_decode<__D: bincode::de::BorrowDecoder<'__de, Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl<__Context> bincode::de::Decode<__Context> for paladin_auth_core::Algorithm
+pub fn paladin_auth_core::Algorithm::decode<__D: bincode::de::Decoder<Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl core::marker::Freeze for paladin_auth_core::Algorithm
+impl core::marker::Send for paladin_auth_core::Algorithm
+impl core::marker::Sync for paladin_auth_core::Algorithm
+impl core::marker::Unpin for paladin_auth_core::Algorithm
+impl core::marker::UnsafeUnpin for paladin_auth_core::Algorithm
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::Algorithm
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::Algorithm
+pub enum paladin_auth_core::ErrorKind
+pub paladin_auth_core::ErrorKind::CounterOverflow
+pub paladin_auth_core::ErrorKind::DecryptFailed
+pub paladin_auth_core::ErrorKind::InvalidHeader
+pub paladin_auth_core::ErrorKind::InvalidPassphrase
+pub paladin_auth_core::ErrorKind::InvalidPayload
+pub paladin_auth_core::ErrorKind::InvalidState
+pub paladin_auth_core::ErrorKind::IoError
+pub paladin_auth_core::ErrorKind::KdfParamsOutOfBounds
+pub paladin_auth_core::ErrorKind::NoEntriesToImport
+pub paladin_auth_core::ErrorKind::SaveDurabilityUnconfirmed
+pub paladin_auth_core::ErrorKind::SaveNotCommitted
+pub paladin_auth_core::ErrorKind::TimeRange
+pub paladin_auth_core::ErrorKind::UnsafePermissions
+pub paladin_auth_core::ErrorKind::UnsupportedAegisEntryType
+pub paladin_auth_core::ErrorKind::UnsupportedEncryptedAegis
+pub paladin_auth_core::ErrorKind::UnsupportedFormatVersion
+pub paladin_auth_core::ErrorKind::UnsupportedImportFormat
+pub paladin_auth_core::ErrorKind::UnsupportedPlaintextVault
+pub paladin_auth_core::ErrorKind::ValidationError
+pub paladin_auth_core::ErrorKind::VaultExists
+pub paladin_auth_core::ErrorKind::VaultMissing
+pub paladin_auth_core::ErrorKind::WrongVaultLock
+impl paladin_auth_core::ErrorKind
+pub const fn paladin_auth_core::ErrorKind::as_str(self) -> &'static str
+impl core::clone::Clone for paladin_auth_core::ErrorKind
+pub fn paladin_auth_core::ErrorKind::clone(&self) -> paladin_auth_core::ErrorKind
+impl core::cmp::Eq for paladin_auth_core::ErrorKind
+impl core::cmp::PartialEq for paladin_auth_core::ErrorKind
+pub fn paladin_auth_core::ErrorKind::eq(&self, other: &paladin_auth_core::ErrorKind) -> bool
+impl core::fmt::Debug for paladin_auth_core::ErrorKind
+pub fn paladin_auth_core::ErrorKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_auth_core::ErrorKind
+pub fn paladin_auth_core::ErrorKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::ErrorKind
+impl core::marker::StructuralPartialEq for paladin_auth_core::ErrorKind
+impl core::marker::Freeze for paladin_auth_core::ErrorKind
+impl core::marker::Send for paladin_auth_core::ErrorKind
+impl core::marker::Sync for paladin_auth_core::ErrorKind
+impl core::marker::Unpin for paladin_auth_core::ErrorKind
+impl core::marker::UnsafeUnpin for paladin_auth_core::ErrorKind
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::ErrorKind
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::ErrorKind
+pub enum paladin_auth_core::IconHintInput
+pub paladin_auth_core::IconHintInput::Clear
+pub paladin_auth_core::IconHintInput::Default
+pub paladin_auth_core::IconHintInput::Slug(alloc::string::String)
+impl core::clone::Clone for paladin_auth_core::IconHintInput
+pub fn paladin_auth_core::IconHintInput::clone(&self) -> paladin_auth_core::IconHintInput
+impl core::cmp::Eq for paladin_auth_core::IconHintInput
+impl core::cmp::PartialEq for paladin_auth_core::IconHintInput
+pub fn paladin_auth_core::IconHintInput::eq(&self, other: &paladin_auth_core::IconHintInput) -> bool
+impl core::fmt::Debug for paladin_auth_core::IconHintInput
+pub fn paladin_auth_core::IconHintInput::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_auth_core::IconHintInput
+impl core::marker::Freeze for paladin_auth_core::IconHintInput
+impl core::marker::Send for paladin_auth_core::IconHintInput
+impl core::marker::Sync for paladin_auth_core::IconHintInput
+impl core::marker::Unpin for paladin_auth_core::IconHintInput
+impl core::marker::UnsafeUnpin for paladin_auth_core::IconHintInput
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::IconHintInput
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::IconHintInput
+pub enum paladin_auth_core::ImportConflict
+pub paladin_auth_core::ImportConflict::Append
+pub paladin_auth_core::ImportConflict::Replace
+pub paladin_auth_core::ImportConflict::Skip
+impl core::clone::Clone for paladin_auth_core::ImportConflict
+pub fn paladin_auth_core::ImportConflict::clone(&self) -> paladin_auth_core::ImportConflict
+impl core::cmp::Eq for paladin_auth_core::ImportConflict
+impl core::cmp::PartialEq for paladin_auth_core::ImportConflict
+pub fn paladin_auth_core::ImportConflict::eq(&self, other: &paladin_auth_core::ImportConflict) -> bool
+impl core::fmt::Debug for paladin_auth_core::ImportConflict
+pub fn paladin_auth_core::ImportConflict::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::ImportConflict
+impl core::marker::StructuralPartialEq for paladin_auth_core::ImportConflict
+impl core::marker::Freeze for paladin_auth_core::ImportConflict
+impl core::marker::Send for paladin_auth_core::ImportConflict
+impl core::marker::Sync for paladin_auth_core::ImportConflict
+impl core::marker::Unpin for paladin_auth_core::ImportConflict
+impl core::marker::UnsafeUnpin for paladin_auth_core::ImportConflict
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::ImportConflict
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::ImportConflict
+pub enum paladin_auth_core::ImportFormat
+pub paladin_auth_core::ImportFormat::Aegis
+pub paladin_auth_core::ImportFormat::Otpauth
+pub paladin_auth_core::ImportFormat::PaladinAuth
+pub paladin_auth_core::ImportFormat::QrImage
+pub paladin_auth_core::ImportFormat::Unknown
+impl paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::import::ImportFormat::as_str(&self) -> &'static str
+impl core::clone::Clone for paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::import::ImportFormat::clone(&self) -> paladin_auth_core::import::ImportFormat
+impl core::cmp::Eq for paladin_auth_core::import::ImportFormat
+impl core::cmp::PartialEq for paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::import::ImportFormat::eq(&self, other: &paladin_auth_core::import::ImportFormat) -> bool
+impl core::fmt::Debug for paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::import::ImportFormat::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::import::ImportFormat::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_auth_core::import::ImportFormat
+impl core::marker::StructuralPartialEq for paladin_auth_core::import::ImportFormat
+impl core::marker::Freeze for paladin_auth_core::import::ImportFormat
+impl core::marker::Send for paladin_auth_core::import::ImportFormat
+impl core::marker::Sync for paladin_auth_core::import::ImportFormat
+impl core::marker::Unpin for paladin_auth_core::import::ImportFormat
+impl core::marker::UnsafeUnpin for paladin_auth_core::import::ImportFormat
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::import::ImportFormat
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::import::ImportFormat
+pub enum paladin_auth_core::InitPrecheck
+pub paladin_auth_core::InitPrecheck::Clear
+pub paladin_auth_core::InitPrecheck::Existing
+pub paladin_auth_core::InitPrecheck::Propagate(paladin_auth_core::PaladinAuthError)
+impl core::fmt::Debug for paladin_auth_core::InitPrecheck
+pub fn paladin_auth_core::InitPrecheck::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::InitPrecheck
+impl core::marker::Send for paladin_auth_core::InitPrecheck
+impl core::marker::Sync for paladin_auth_core::InitPrecheck
+impl core::marker::Unpin for paladin_auth_core::InitPrecheck
+impl core::marker::UnsafeUnpin for paladin_auth_core::InitPrecheck
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::InitPrecheck
+impl !core::panic::unwind_safe::UnwindSafe for paladin_auth_core::InitPrecheck
+pub enum paladin_auth_core::PaladinAuthError
+pub paladin_auth_core::PaladinAuthError::CounterOverflow
+pub paladin_auth_core::PaladinAuthError::CounterOverflow::account: paladin_auth_core::AccountSummary
+pub paladin_auth_core::PaladinAuthError::DecryptFailed
+pub paladin_auth_core::PaladinAuthError::DestroyIoError
+pub paladin_auth_core::PaladinAuthError::DestroyIoError::backup_deleted: bool
+pub paladin_auth_core::PaladinAuthError::DestroyIoError::operation: &'static str
+pub paladin_auth_core::PaladinAuthError::DestroyIoError::primary_deleted: bool
+pub paladin_auth_core::PaladinAuthError::DestroyIoError::source: std::io::error::Error
+pub paladin_auth_core::PaladinAuthError::InvalidHeader
+pub paladin_auth_core::PaladinAuthError::InvalidPassphrase
+pub paladin_auth_core::PaladinAuthError::InvalidPassphrase::reason: &'static str
+pub paladin_auth_core::PaladinAuthError::InvalidPayload
+pub paladin_auth_core::PaladinAuthError::InvalidPayload::reason: &'static str
+pub paladin_auth_core::PaladinAuthError::InvalidState
+pub paladin_auth_core::PaladinAuthError::InvalidState::operation: &'static str
+pub paladin_auth_core::PaladinAuthError::InvalidState::state: &'static str
+pub paladin_auth_core::PaladinAuthError::IoError
+pub paladin_auth_core::PaladinAuthError::IoError::operation: &'static str
+pub paladin_auth_core::PaladinAuthError::IoError::source: std::io::error::Error
+pub paladin_auth_core::PaladinAuthError::KdfParamsOutOfBounds
+pub paladin_auth_core::PaladinAuthError::KdfParamsOutOfBounds::m_kib: u32
+pub paladin_auth_core::PaladinAuthError::KdfParamsOutOfBounds::p: u32
+pub paladin_auth_core::PaladinAuthError::KdfParamsOutOfBounds::t: u32
+pub paladin_auth_core::PaladinAuthError::NoEntriesToImport
+pub paladin_auth_core::PaladinAuthError::SaveDurabilityUnconfirmed
+pub paladin_auth_core::PaladinAuthError::SaveNotCommitted
+pub paladin_auth_core::PaladinAuthError::SaveNotCommitted::backup_path: core::option::Option<std::path::PathBuf>
+pub paladin_auth_core::PaladinAuthError::SaveNotCommitted::committed: bool
+pub paladin_auth_core::PaladinAuthError::TimeRange
+pub paladin_auth_core::PaladinAuthError::TimeRange::kind: paladin_auth_core::TimeRangeKind
+pub paladin_auth_core::PaladinAuthError::TimeRange::operation: &'static str
+pub paladin_auth_core::PaladinAuthError::UnsafePermissions
+pub paladin_auth_core::PaladinAuthError::UnsafePermissions::actual_mode: alloc::string::String
+pub paladin_auth_core::PaladinAuthError::UnsafePermissions::expected_mode: alloc::string::String
+pub paladin_auth_core::PaladinAuthError::UnsafePermissions::path: std::path::PathBuf
+pub paladin_auth_core::PaladinAuthError::UnsafePermissions::subject: paladin_auth_core::PermissionSubject
+pub paladin_auth_core::PaladinAuthError::UnsupportedAegisEntryType
+pub paladin_auth_core::PaladinAuthError::UnsupportedAegisEntryType::entry_type: alloc::string::String
+pub paladin_auth_core::PaladinAuthError::UnsupportedAegisEntryType::source_index: usize
+pub paladin_auth_core::PaladinAuthError::UnsupportedEncryptedAegis
+pub paladin_auth_core::PaladinAuthError::UnsupportedFormatVersion
+pub paladin_auth_core::PaladinAuthError::UnsupportedFormatVersion::format_ver: u8
+pub paladin_auth_core::PaladinAuthError::UnsupportedImportFormat
+pub paladin_auth_core::PaladinAuthError::UnsupportedImportFormat::format: alloc::string::String
+pub paladin_auth_core::PaladinAuthError::UnsupportedPlaintextVault
+pub paladin_auth_core::PaladinAuthError::ValidationError
+pub paladin_auth_core::PaladinAuthError::ValidationError::decoded_len: core::option::Option<usize>
+pub paladin_auth_core::PaladinAuthError::ValidationError::entry_type: core::option::Option<alloc::string::String>
+pub paladin_auth_core::PaladinAuthError::ValidationError::field: &'static str
+pub paladin_auth_core::PaladinAuthError::ValidationError::reason: alloc::string::String
+pub paladin_auth_core::PaladinAuthError::ValidationError::recommended_min: core::option::Option<usize>
+pub paladin_auth_core::PaladinAuthError::ValidationError::source_index: core::option::Option<usize>
+pub paladin_auth_core::PaladinAuthError::VaultExists
+pub paladin_auth_core::PaladinAuthError::VaultMissing
+pub paladin_auth_core::PaladinAuthError::WrongVaultLock
+pub paladin_auth_core::PaladinAuthError::WrongVaultLock::actual: paladin_auth_core::VaultMode
+pub paladin_auth_core::PaladinAuthError::WrongVaultLock::expected: paladin_auth_core::VaultMode
+impl paladin_auth_core::PaladinAuthError
+pub fn paladin_auth_core::PaladinAuthError::kind(&self) -> paladin_auth_core::ErrorKind
+impl core::error::Error for paladin_auth_core::PaladinAuthError
+pub fn paladin_auth_core::PaladinAuthError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for paladin_auth_core::PaladinAuthError
+pub fn paladin_auth_core::PaladinAuthError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_auth_core::PaladinAuthError
+pub fn paladin_auth_core::PaladinAuthError::fmt(&self, __formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::PaladinAuthError
+impl core::marker::Send for paladin_auth_core::PaladinAuthError
+impl core::marker::Sync for paladin_auth_core::PaladinAuthError
+impl core::marker::Unpin for paladin_auth_core::PaladinAuthError
+impl core::marker::UnsafeUnpin for paladin_auth_core::PaladinAuthError
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::PaladinAuthError
+impl !core::panic::unwind_safe::UnwindSafe for paladin_auth_core::PaladinAuthError
+pub enum paladin_auth_core::PaladinAuthImportPrecheck
+pub paladin_auth_core::PaladinAuthImportPrecheck::NoPrompt
+pub paladin_auth_core::PaladinAuthImportPrecheck::PromptForPassphrase
+pub paladin_auth_core::PaladinAuthImportPrecheck::Reject(paladin_auth_core::PaladinAuthError)
+impl core::fmt::Debug for paladin_auth_core::PaladinAuthImportPrecheck
+pub fn paladin_auth_core::PaladinAuthImportPrecheck::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::PaladinAuthImportPrecheck
+impl core::marker::Send for paladin_auth_core::PaladinAuthImportPrecheck
+impl core::marker::Sync for paladin_auth_core::PaladinAuthImportPrecheck
+impl core::marker::Unpin for paladin_auth_core::PaladinAuthImportPrecheck
+impl core::marker::UnsafeUnpin for paladin_auth_core::PaladinAuthImportPrecheck
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::PaladinAuthImportPrecheck
+impl !core::panic::unwind_safe::UnwindSafe for paladin_auth_core::PaladinAuthImportPrecheck
+pub enum paladin_auth_core::PermissionSubject
+pub paladin_auth_core::PermissionSubject::BackupFile
+pub paladin_auth_core::PermissionSubject::VaultDir
+pub paladin_auth_core::PermissionSubject::VaultFile
+impl paladin_auth_core::PermissionSubject
+pub const fn paladin_auth_core::PermissionSubject::as_str(self) -> &'static str
+impl core::clone::Clone for paladin_auth_core::PermissionSubject
+pub fn paladin_auth_core::PermissionSubject::clone(&self) -> paladin_auth_core::PermissionSubject
+impl core::cmp::Eq for paladin_auth_core::PermissionSubject
+impl core::cmp::PartialEq for paladin_auth_core::PermissionSubject
+pub fn paladin_auth_core::PermissionSubject::eq(&self, other: &paladin_auth_core::PermissionSubject) -> bool
+impl core::fmt::Debug for paladin_auth_core::PermissionSubject
+pub fn paladin_auth_core::PermissionSubject::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_auth_core::PermissionSubject
+pub fn paladin_auth_core::PermissionSubject::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::PermissionSubject
+impl core::marker::StructuralPartialEq for paladin_auth_core::PermissionSubject
+impl core::marker::Freeze for paladin_auth_core::PermissionSubject
+impl core::marker::Send for paladin_auth_core::PermissionSubject
+impl core::marker::Sync for paladin_auth_core::PermissionSubject
+impl core::marker::Unpin for paladin_auth_core::PermissionSubject
+impl core::marker::UnsafeUnpin for paladin_auth_core::PermissionSubject
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::PermissionSubject
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::PermissionSubject
+pub enum paladin_auth_core::SettingKey
+pub paladin_auth_core::SettingKey::AutoLockEnabled
+pub paladin_auth_core::SettingKey::AutoLockTimeoutSecs
+pub paladin_auth_core::SettingKey::ClipboardClearEnabled
+pub paladin_auth_core::SettingKey::ClipboardClearSecs
+impl paladin_auth_core::SettingKey
+pub const fn paladin_auth_core::SettingKey::dotted(self) -> &'static str
+impl core::clone::Clone for paladin_auth_core::SettingKey
+pub fn paladin_auth_core::SettingKey::clone(&self) -> paladin_auth_core::SettingKey
+impl core::cmp::Eq for paladin_auth_core::SettingKey
+impl core::cmp::PartialEq for paladin_auth_core::SettingKey
+pub fn paladin_auth_core::SettingKey::eq(&self, other: &paladin_auth_core::SettingKey) -> bool
+impl core::fmt::Debug for paladin_auth_core::SettingKey
+pub fn paladin_auth_core::SettingKey::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::SettingKey
+impl core::marker::StructuralPartialEq for paladin_auth_core::SettingKey
+impl core::marker::Freeze for paladin_auth_core::SettingKey
+impl core::marker::Send for paladin_auth_core::SettingKey
+impl core::marker::Sync for paladin_auth_core::SettingKey
+impl core::marker::Unpin for paladin_auth_core::SettingKey
+impl core::marker::UnsafeUnpin for paladin_auth_core::SettingKey
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::SettingKey
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::SettingKey
+pub enum paladin_auth_core::SettingPatch
+pub paladin_auth_core::SettingPatch::AutoLockEnabled(bool)
+pub paladin_auth_core::SettingPatch::AutoLockTimeoutSecs(u32)
+pub paladin_auth_core::SettingPatch::ClipboardClearEnabled(bool)
+pub paladin_auth_core::SettingPatch::ClipboardClearSecs(u32)
+impl core::clone::Clone for paladin_auth_core::SettingPatch
+pub fn paladin_auth_core::SettingPatch::clone(&self) -> paladin_auth_core::SettingPatch
+impl core::cmp::Eq for paladin_auth_core::SettingPatch
+impl core::cmp::PartialEq for paladin_auth_core::SettingPatch
+pub fn paladin_auth_core::SettingPatch::eq(&self, other: &paladin_auth_core::SettingPatch) -> bool
+impl core::fmt::Debug for paladin_auth_core::SettingPatch
+pub fn paladin_auth_core::SettingPatch::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::SettingPatch
+impl core::marker::StructuralPartialEq for paladin_auth_core::SettingPatch
+impl core::marker::Freeze for paladin_auth_core::SettingPatch
+impl core::marker::Send for paladin_auth_core::SettingPatch
+impl core::marker::Sync for paladin_auth_core::SettingPatch
+impl core::marker::Unpin for paladin_auth_core::SettingPatch
+impl core::marker::UnsafeUnpin for paladin_auth_core::SettingPatch
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::SettingPatch
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::SettingPatch
+pub enum paladin_auth_core::TimeRangeKind
+pub paladin_auth_core::TimeRangeKind::OutOfRange
+pub paladin_auth_core::TimeRangeKind::Overflow
+pub paladin_auth_core::TimeRangeKind::PreEpoch
+impl paladin_auth_core::TimeRangeKind
+pub const fn paladin_auth_core::TimeRangeKind::as_str(self) -> &'static str
+impl core::clone::Clone for paladin_auth_core::TimeRangeKind
+pub fn paladin_auth_core::TimeRangeKind::clone(&self) -> paladin_auth_core::TimeRangeKind
+impl core::cmp::Eq for paladin_auth_core::TimeRangeKind
+impl core::cmp::PartialEq for paladin_auth_core::TimeRangeKind
+pub fn paladin_auth_core::TimeRangeKind::eq(&self, other: &paladin_auth_core::TimeRangeKind) -> bool
+impl core::fmt::Debug for paladin_auth_core::TimeRangeKind
+pub fn paladin_auth_core::TimeRangeKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_auth_core::TimeRangeKind
+pub fn paladin_auth_core::TimeRangeKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::TimeRangeKind
+impl core::marker::StructuralPartialEq for paladin_auth_core::TimeRangeKind
+impl core::marker::Freeze for paladin_auth_core::TimeRangeKind
+impl core::marker::Send for paladin_auth_core::TimeRangeKind
+impl core::marker::Sync for paladin_auth_core::TimeRangeKind
+impl core::marker::Unpin for paladin_auth_core::TimeRangeKind
+impl core::marker::UnsafeUnpin for paladin_auth_core::TimeRangeKind
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::TimeRangeKind
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::TimeRangeKind
+pub enum paladin_auth_core::ValidationWarning
+pub paladin_auth_core::ValidationWarning::ShortSecret
+pub paladin_auth_core::ValidationWarning::ShortSecret::decoded_len: usize
+pub paladin_auth_core::ValidationWarning::ShortSecret::recommended_min: usize
+impl core::clone::Clone for paladin_auth_core::ValidationWarning
+pub fn paladin_auth_core::ValidationWarning::clone(&self) -> paladin_auth_core::ValidationWarning
+impl core::cmp::Eq for paladin_auth_core::ValidationWarning
+impl core::cmp::PartialEq for paladin_auth_core::ValidationWarning
+pub fn paladin_auth_core::ValidationWarning::eq(&self, other: &paladin_auth_core::ValidationWarning) -> bool
+impl core::fmt::Debug for paladin_auth_core::ValidationWarning
+pub fn paladin_auth_core::ValidationWarning::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_auth_core::ValidationWarning
+impl core::marker::Freeze for paladin_auth_core::ValidationWarning
+impl core::marker::Send for paladin_auth_core::ValidationWarning
+impl core::marker::Sync for paladin_auth_core::ValidationWarning
+impl core::marker::Unpin for paladin_auth_core::ValidationWarning
+impl core::marker::UnsafeUnpin for paladin_auth_core::ValidationWarning
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::ValidationWarning
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::ValidationWarning
+#[non_exhaustive] pub enum paladin_auth_core::VaultInit
+pub paladin_auth_core::VaultInit::Encrypted(paladin_auth_core::EncryptionOptions)
+pub paladin_auth_core::VaultInit::Plaintext
+impl core::fmt::Debug for paladin_auth_core::VaultInit
+pub fn paladin_auth_core::VaultInit::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::VaultInit
+impl core::marker::Send for paladin_auth_core::VaultInit
+impl core::marker::Sync for paladin_auth_core::VaultInit
+impl core::marker::Unpin for paladin_auth_core::VaultInit
+impl core::marker::UnsafeUnpin for paladin_auth_core::VaultInit
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::VaultInit
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::VaultInit
+#[non_exhaustive] pub enum paladin_auth_core::VaultLock
+pub paladin_auth_core::VaultLock::Encrypted(secrecy::SecretString)
+pub paladin_auth_core::VaultLock::Plaintext
+impl core::fmt::Debug for paladin_auth_core::VaultLock
+pub fn paladin_auth_core::VaultLock::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::VaultLock
+impl core::marker::Send for paladin_auth_core::VaultLock
+impl core::marker::Sync for paladin_auth_core::VaultLock
+impl core::marker::Unpin for paladin_auth_core::VaultLock
+impl core::marker::UnsafeUnpin for paladin_auth_core::VaultLock
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::VaultLock
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::VaultLock
+pub enum paladin_auth_core::VaultMode
+pub paladin_auth_core::VaultMode::Encrypted
+pub paladin_auth_core::VaultMode::Plaintext
+impl paladin_auth_core::VaultMode
+pub const fn paladin_auth_core::VaultMode::as_str(self) -> &'static str
+impl core::clone::Clone for paladin_auth_core::VaultMode
+pub fn paladin_auth_core::VaultMode::clone(&self) -> paladin_auth_core::VaultMode
+impl core::cmp::Eq for paladin_auth_core::VaultMode
+impl core::cmp::PartialEq for paladin_auth_core::VaultMode
+pub fn paladin_auth_core::VaultMode::eq(&self, other: &paladin_auth_core::VaultMode) -> bool
+impl core::fmt::Debug for paladin_auth_core::VaultMode
+pub fn paladin_auth_core::VaultMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_auth_core::VaultMode
+pub fn paladin_auth_core::VaultMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::VaultMode
+impl core::marker::StructuralPartialEq for paladin_auth_core::VaultMode
+impl core::marker::Freeze for paladin_auth_core::VaultMode
+impl core::marker::Send for paladin_auth_core::VaultMode
+impl core::marker::Sync for paladin_auth_core::VaultMode
+impl core::marker::Unpin for paladin_auth_core::VaultMode
+impl core::marker::UnsafeUnpin for paladin_auth_core::VaultMode
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::VaultMode
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::VaultMode
+pub enum paladin_auth_core::VaultStatus
+pub paladin_auth_core::VaultStatus::Encrypted
+pub paladin_auth_core::VaultStatus::Missing
+pub paladin_auth_core::VaultStatus::Plaintext
+impl core::clone::Clone for paladin_auth_core::VaultStatus
+pub fn paladin_auth_core::VaultStatus::clone(&self) -> paladin_auth_core::VaultStatus
+impl core::cmp::Eq for paladin_auth_core::VaultStatus
+impl core::cmp::PartialEq for paladin_auth_core::VaultStatus
+pub fn paladin_auth_core::VaultStatus::eq(&self, other: &paladin_auth_core::VaultStatus) -> bool
+impl core::fmt::Debug for paladin_auth_core::VaultStatus
+pub fn paladin_auth_core::VaultStatus::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::VaultStatus
+impl core::marker::StructuralPartialEq for paladin_auth_core::VaultStatus
+impl core::marker::Freeze for paladin_auth_core::VaultStatus
+impl core::marker::Send for paladin_auth_core::VaultStatus
+impl core::marker::Sync for paladin_auth_core::VaultStatus
+impl core::marker::Unpin for paladin_auth_core::VaultStatus
+impl core::marker::UnsafeUnpin for paladin_auth_core::VaultStatus
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::VaultStatus
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::VaultStatus
+pub struct paladin_auth_core::Account
+impl paladin_auth_core::Account
+pub fn paladin_auth_core::Account::algorithm(&self) -> paladin_auth_core::Algorithm
+pub fn paladin_auth_core::Account::counter(&self) -> core::option::Option<u64>
+pub fn paladin_auth_core::Account::created_at(&self) -> u64
+pub fn paladin_auth_core::Account::digits(&self) -> u8
+pub fn paladin_auth_core::Account::icon_hint(&self) -> core::option::Option<&str>
+pub fn paladin_auth_core::Account::id(&self) -> paladin_auth_core::AccountId
+pub fn paladin_auth_core::Account::issuer(&self) -> core::option::Option<&str>
+pub fn paladin_auth_core::Account::kind(&self) -> paladin_auth_core::AccountKindSummary
+pub fn paladin_auth_core::Account::label(&self) -> &str
+pub fn paladin_auth_core::Account::period(&self) -> core::option::Option<u32>
+pub fn paladin_auth_core::Account::summary(&self) -> paladin_auth_core::AccountSummary
+pub fn paladin_auth_core::Account::updated_at(&self) -> u64
+impl bincode::enc::Encode for paladin_auth_core::Account
+pub fn paladin_auth_core::Account::encode<__E: bincode::enc::Encoder>(&self, encoder: &mut __E) -> core::result::Result<(), bincode::error::EncodeError>
+impl core::clone::Clone for paladin_auth_core::Account
+pub fn paladin_auth_core::Account::clone(&self) -> paladin_auth_core::Account
+impl core::cmp::Eq for paladin_auth_core::Account
+impl core::cmp::PartialEq for paladin_auth_core::Account
+pub fn paladin_auth_core::Account::eq(&self, other: &paladin_auth_core::Account) -> bool
+impl core::fmt::Debug for paladin_auth_core::Account
+pub fn paladin_auth_core::Account::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_auth_core::Account
+impl<'__de, __Context> bincode::de::BorrowDecode<'__de, __Context> for paladin_auth_core::Account
+pub fn paladin_auth_core::Account::borrow_decode<__D: bincode::de::BorrowDecoder<'__de, Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl<__Context> bincode::de::Decode<__Context> for paladin_auth_core::Account
+pub fn paladin_auth_core::Account::decode<__D: bincode::de::Decoder<Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl core::marker::Freeze for paladin_auth_core::Account
+impl core::marker::Send for paladin_auth_core::Account
+impl core::marker::Sync for paladin_auth_core::Account
+impl core::marker::Unpin for paladin_auth_core::Account
+impl core::marker::UnsafeUnpin for paladin_auth_core::Account
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::Account
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::Account
+pub struct paladin_auth_core::AccountEdit
+pub paladin_auth_core::AccountEdit::icon_hint: core::option::Option<paladin_auth_core::IconHintInput>
+pub paladin_auth_core::AccountEdit::issuer: core::option::Option<core::option::Option<alloc::string::String>>
+pub paladin_auth_core::AccountEdit::label: core::option::Option<alloc::string::String>
+impl core::clone::Clone for paladin_auth_core::AccountEdit
+pub fn paladin_auth_core::AccountEdit::clone(&self) -> paladin_auth_core::AccountEdit
+impl core::default::Default for paladin_auth_core::AccountEdit
+pub fn paladin_auth_core::AccountEdit::default() -> paladin_auth_core::AccountEdit
+impl core::fmt::Debug for paladin_auth_core::AccountEdit
+pub fn paladin_auth_core::AccountEdit::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::AccountEdit
+impl core::marker::Send for paladin_auth_core::AccountEdit
+impl core::marker::Sync for paladin_auth_core::AccountEdit
+impl core::marker::Unpin for paladin_auth_core::AccountEdit
+impl core::marker::UnsafeUnpin for paladin_auth_core::AccountEdit
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::AccountEdit
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::AccountEdit
+pub struct paladin_auth_core::AccountId(_)
+impl paladin_auth_core::AccountId
+pub fn paladin_auth_core::AccountId::as_bytes(&self) -> &[u8; 16]
+pub fn paladin_auth_core::AccountId::new() -> Self
+pub fn paladin_auth_core::AccountId::to_hyphenated(&self) -> alloc::string::String
+impl bincode::enc::Encode for paladin_auth_core::AccountId
+pub fn paladin_auth_core::AccountId::encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> core::result::Result<(), bincode::error::EncodeError>
+impl core::clone::Clone for paladin_auth_core::AccountId
+pub fn paladin_auth_core::AccountId::clone(&self) -> paladin_auth_core::AccountId
+impl core::cmp::Eq for paladin_auth_core::AccountId
+impl core::cmp::PartialEq for paladin_auth_core::AccountId
+pub fn paladin_auth_core::AccountId::eq(&self, other: &paladin_auth_core::AccountId) -> bool
+impl core::default::Default for paladin_auth_core::AccountId
+pub fn paladin_auth_core::AccountId::default() -> Self
+impl core::fmt::Debug for paladin_auth_core::AccountId
+pub fn paladin_auth_core::AccountId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_auth_core::AccountId
+pub fn paladin_auth_core::AccountId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_auth_core::AccountId
+pub fn paladin_auth_core::AccountId::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_auth_core::AccountId
+impl core::marker::StructuralPartialEq for paladin_auth_core::AccountId
+impl<'de, C> bincode::de::BorrowDecode<'de, C> for paladin_auth_core::AccountId
+pub fn paladin_auth_core::AccountId::borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = C>>(decoder: &mut D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl<C> bincode::de::Decode<C> for paladin_auth_core::AccountId
+pub fn paladin_auth_core::AccountId::decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl core::marker::Freeze for paladin_auth_core::AccountId
+impl core::marker::Send for paladin_auth_core::AccountId
+impl core::marker::Sync for paladin_auth_core::AccountId
+impl core::marker::Unpin for paladin_auth_core::AccountId
+impl core::marker::UnsafeUnpin for paladin_auth_core::AccountId
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::AccountId
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::AccountId
+pub struct paladin_auth_core::AccountInput
+pub paladin_auth_core::AccountInput::algorithm: paladin_auth_core::Algorithm
+pub paladin_auth_core::AccountInput::counter: core::option::Option<u64>
+pub paladin_auth_core::AccountInput::digits: u8
+pub paladin_auth_core::AccountInput::icon_hint: paladin_auth_core::IconHintInput
+pub paladin_auth_core::AccountInput::issuer: core::option::Option<alloc::string::String>
+pub paladin_auth_core::AccountInput::kind: paladin_auth_core::AccountKindInput
+pub paladin_auth_core::AccountInput::label: alloc::string::String
+pub paladin_auth_core::AccountInput::period_secs: core::option::Option<u32>
+pub paladin_auth_core::AccountInput::secret: secrecy::SecretString
+impl core::marker::Freeze for paladin_auth_core::AccountInput
+impl core::marker::Send for paladin_auth_core::AccountInput
+impl core::marker::Sync for paladin_auth_core::AccountInput
+impl core::marker::Unpin for paladin_auth_core::AccountInput
+impl core::marker::UnsafeUnpin for paladin_auth_core::AccountInput
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::AccountInput
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::AccountInput
+pub struct paladin_auth_core::AccountSummary
+pub paladin_auth_core::AccountSummary::algorithm: paladin_auth_core::Algorithm
+pub paladin_auth_core::AccountSummary::counter: core::option::Option<u64>
+pub paladin_auth_core::AccountSummary::created_at: u64
+pub paladin_auth_core::AccountSummary::digits: u8
+pub paladin_auth_core::AccountSummary::icon_hint: core::option::Option<alloc::string::String>
+pub paladin_auth_core::AccountSummary::id: paladin_auth_core::AccountId
+pub paladin_auth_core::AccountSummary::issuer: core::option::Option<alloc::string::String>
+pub paladin_auth_core::AccountSummary::kind: paladin_auth_core::AccountKindSummary
+pub paladin_auth_core::AccountSummary::label: alloc::string::String
+pub paladin_auth_core::AccountSummary::period: core::option::Option<u32>
+pub paladin_auth_core::AccountSummary::updated_at: u64
+impl core::clone::Clone for paladin_auth_core::AccountSummary
+pub fn paladin_auth_core::AccountSummary::clone(&self) -> paladin_auth_core::AccountSummary
+impl core::cmp::Eq for paladin_auth_core::AccountSummary
+impl core::cmp::PartialEq for paladin_auth_core::AccountSummary
+pub fn paladin_auth_core::AccountSummary::eq(&self, other: &paladin_auth_core::AccountSummary) -> bool
+impl core::fmt::Debug for paladin_auth_core::AccountSummary
+pub fn paladin_auth_core::AccountSummary::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_auth_core::AccountSummary
+impl core::marker::Freeze for paladin_auth_core::AccountSummary
+impl core::marker::Send for paladin_auth_core::AccountSummary
+impl core::marker::Sync for paladin_auth_core::AccountSummary
+impl core::marker::Unpin for paladin_auth_core::AccountSummary
+impl core::marker::UnsafeUnpin for paladin_auth_core::AccountSummary
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::AccountSummary
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::AccountSummary
+pub struct paladin_auth_core::Argon2Params
+pub paladin_auth_core::Argon2Params::m_kib: u32
+pub paladin_auth_core::Argon2Params::p: u32
+pub paladin_auth_core::Argon2Params::t: u32
+impl paladin_auth_core::Argon2Params
+pub fn paladin_auth_core::Argon2Params::validate(&self) -> paladin_auth_core::Result<()>
+impl core::clone::Clone for paladin_auth_core::Argon2Params
+pub fn paladin_auth_core::Argon2Params::clone(&self) -> paladin_auth_core::Argon2Params
+impl core::cmp::Eq for paladin_auth_core::Argon2Params
+impl core::cmp::PartialEq for paladin_auth_core::Argon2Params
+pub fn paladin_auth_core::Argon2Params::eq(&self, other: &paladin_auth_core::Argon2Params) -> bool
+impl core::default::Default for paladin_auth_core::Argon2Params
+pub fn paladin_auth_core::Argon2Params::default() -> Self
+impl core::fmt::Debug for paladin_auth_core::Argon2Params
+pub fn paladin_auth_core::Argon2Params::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::Argon2Params
+impl core::marker::StructuralPartialEq for paladin_auth_core::Argon2Params
+impl core::marker::Freeze for paladin_auth_core::Argon2Params
+impl core::marker::Send for paladin_auth_core::Argon2Params
+impl core::marker::Sync for paladin_auth_core::Argon2Params
+impl core::marker::Unpin for paladin_auth_core::Argon2Params
+impl core::marker::UnsafeUnpin for paladin_auth_core::Argon2Params
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::Argon2Params
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::Argon2Params
+pub struct paladin_auth_core::ClipboardClearPolicy
+impl paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy::schedule(now: std::time::Instant, settings: &paladin_auth_core::VaultSettings) -> core::option::Option<(paladin_auth_core::policy::clipboard_clear::ClipboardClearToken, std::time::Instant)>
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy::should_clear(captured: &[u8], current: &[u8]) -> bool
+impl core::marker::Freeze for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Send for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Sync for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Unpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::UnsafeUnpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearPolicy
+pub struct paladin_auth_core::ClipboardClearToken(_)
+impl paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::successor(self) -> Self
+impl core::clone::Clone for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::clone(&self) -> paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Eq for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Ord for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::cmp(&self, other: &paladin_auth_core::policy::clipboard_clear::ClipboardClearToken) -> core::cmp::Ordering
+impl core::cmp::PartialEq for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::eq(&self, other: &paladin_auth_core::policy::clipboard_clear::ClipboardClearToken) -> bool
+impl core::cmp::PartialOrd for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::partial_cmp(&self, other: &paladin_auth_core::policy::clipboard_clear::ClipboardClearToken) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_auth_core::policy::clipboard_clear::ClipboardClearToken::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::StructuralPartialEq for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Freeze for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Send for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Sync for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Unpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::UnsafeUnpin for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::policy::clipboard_clear::ClipboardClearToken
+pub struct paladin_auth_core::Code
+pub paladin_auth_core::Code::code: alloc::string::String
+pub paladin_auth_core::Code::counter_used: core::option::Option<u64>
+pub paladin_auth_core::Code::seconds_remaining: core::option::Option<u32>
+pub paladin_auth_core::Code::valid_from: core::option::Option<u64>
+pub paladin_auth_core::Code::valid_until: core::option::Option<u64>
+impl core::clone::Clone for paladin_auth_core::Code
+pub fn paladin_auth_core::Code::clone(&self) -> paladin_auth_core::Code
+impl core::cmp::Eq for paladin_auth_core::Code
+impl core::cmp::PartialEq for paladin_auth_core::Code
+pub fn paladin_auth_core::Code::eq(&self, other: &paladin_auth_core::Code) -> bool
+impl core::fmt::Debug for paladin_auth_core::Code
+pub fn paladin_auth_core::Code::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_auth_core::Code
+impl core::marker::Freeze for paladin_auth_core::Code
+impl core::marker::Send for paladin_auth_core::Code
+impl core::marker::Sync for paladin_auth_core::Code
+impl core::marker::Unpin for paladin_auth_core::Code
+impl core::marker::UnsafeUnpin for paladin_auth_core::Code
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::Code
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::Code
+pub struct paladin_auth_core::DestroyReport
+pub paladin_auth_core::DestroyReport::backup_deleted: bool
+pub paladin_auth_core::DestroyReport::primary_deleted: bool
+impl core::clone::Clone for paladin_auth_core::DestroyReport
+pub fn paladin_auth_core::DestroyReport::clone(&self) -> paladin_auth_core::DestroyReport
+impl core::cmp::Eq for paladin_auth_core::DestroyReport
+impl core::cmp::PartialEq for paladin_auth_core::DestroyReport
+pub fn paladin_auth_core::DestroyReport::eq(&self, other: &paladin_auth_core::DestroyReport) -> bool
+impl core::fmt::Debug for paladin_auth_core::DestroyReport
+pub fn paladin_auth_core::DestroyReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::DestroyReport
+impl core::marker::StructuralPartialEq for paladin_auth_core::DestroyReport
+impl core::marker::Freeze for paladin_auth_core::DestroyReport
+impl core::marker::Send for paladin_auth_core::DestroyReport
+impl core::marker::Sync for paladin_auth_core::DestroyReport
+impl core::marker::Unpin for paladin_auth_core::DestroyReport
+impl core::marker::UnsafeUnpin for paladin_auth_core::DestroyReport
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::DestroyReport
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::DestroyReport
+pub struct paladin_auth_core::EncryptionOptions
+pub paladin_auth_core::EncryptionOptions::kdf_params: paladin_auth_core::Argon2Params
+pub paladin_auth_core::EncryptionOptions::passphrase: secrecy::SecretString
+impl paladin_auth_core::EncryptionOptions
+pub fn paladin_auth_core::EncryptionOptions::new(passphrase: secrecy::SecretString) -> paladin_auth_core::Result<Self>
+pub fn paladin_auth_core::EncryptionOptions::with_params(passphrase: secrecy::SecretString, kdf_params: paladin_auth_core::Argon2Params) -> paladin_auth_core::Result<Self>
+impl core::fmt::Debug for paladin_auth_core::EncryptionOptions
+pub fn paladin_auth_core::EncryptionOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::EncryptionOptions
+impl core::marker::Send for paladin_auth_core::EncryptionOptions
+impl core::marker::Sync for paladin_auth_core::EncryptionOptions
+impl core::marker::Unpin for paladin_auth_core::EncryptionOptions
+impl core::marker::UnsafeUnpin for paladin_auth_core::EncryptionOptions
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::EncryptionOptions
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::EncryptionOptions
+pub struct paladin_auth_core::IdlePolicy
+impl paladin_auth_core::policy::auto_lock::IdlePolicy
+pub fn paladin_auth_core::policy::auto_lock::IdlePolicy::is_expired(deadline: std::time::Instant, now: std::time::Instant) -> bool
+pub fn paladin_auth_core::policy::auto_lock::IdlePolicy::next_deadline(now: std::time::Instant, is_encrypted: bool, settings: &paladin_auth_core::VaultSettings) -> core::option::Option<std::time::Instant>
+pub fn paladin_auth_core::policy::auto_lock::IdlePolicy::should_arm(is_encrypted: bool, settings: &paladin_auth_core::VaultSettings) -> bool
+impl core::marker::Freeze for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::Send for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::Sync for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::Unpin for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::marker::UnsafeUnpin for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::policy::auto_lock::IdlePolicy
+pub struct paladin_auth_core::ImportOptions
+pub paladin_auth_core::ImportOptions::format: core::option::Option<paladin_auth_core::import::ImportFormat>
+pub paladin_auth_core::ImportOptions::paladin_auth_passphrase: core::option::Option<secrecy::SecretString>
+impl core::default::Default for paladin_auth_core::ImportOptions
+pub fn paladin_auth_core::ImportOptions::default() -> paladin_auth_core::ImportOptions
+impl core::fmt::Debug for paladin_auth_core::ImportOptions
+pub fn paladin_auth_core::ImportOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::ImportOptions
+impl core::marker::Send for paladin_auth_core::ImportOptions
+impl core::marker::Sync for paladin_auth_core::ImportOptions
+impl core::marker::Unpin for paladin_auth_core::ImportOptions
+impl core::marker::UnsafeUnpin for paladin_auth_core::ImportOptions
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::ImportOptions
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::ImportOptions
+pub struct paladin_auth_core::ImportReport
+pub paladin_auth_core::ImportReport::accounts: alloc::vec::Vec<paladin_auth_core::AccountId>
+pub paladin_auth_core::ImportReport::appended: usize
+pub paladin_auth_core::ImportReport::imported: usize
+pub paladin_auth_core::ImportReport::replaced: usize
+pub paladin_auth_core::ImportReport::skipped: usize
+pub paladin_auth_core::ImportReport::warnings: alloc::vec::Vec<paladin_auth_core::ImportWarning>
+impl core::clone::Clone for paladin_auth_core::ImportReport
+pub fn paladin_auth_core::ImportReport::clone(&self) -> paladin_auth_core::ImportReport
+impl core::cmp::Eq for paladin_auth_core::ImportReport
+impl core::cmp::PartialEq for paladin_auth_core::ImportReport
+pub fn paladin_auth_core::ImportReport::eq(&self, other: &paladin_auth_core::ImportReport) -> bool
+impl core::default::Default for paladin_auth_core::ImportReport
+pub fn paladin_auth_core::ImportReport::default() -> paladin_auth_core::ImportReport
+impl core::fmt::Debug for paladin_auth_core::ImportReport
+pub fn paladin_auth_core::ImportReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_auth_core::ImportReport
+impl core::marker::Freeze for paladin_auth_core::ImportReport
+impl core::marker::Send for paladin_auth_core::ImportReport
+impl core::marker::Sync for paladin_auth_core::ImportReport
+impl core::marker::Unpin for paladin_auth_core::ImportReport
+impl core::marker::UnsafeUnpin for paladin_auth_core::ImportReport
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::ImportReport
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::ImportReport
+pub struct paladin_auth_core::ImportWarning
+pub paladin_auth_core::ImportWarning::source_index: usize
+pub paladin_auth_core::ImportWarning::warning: paladin_auth_core::ValidationWarning
+impl core::clone::Clone for paladin_auth_core::ImportWarning
+pub fn paladin_auth_core::ImportWarning::clone(&self) -> paladin_auth_core::ImportWarning
+impl core::cmp::Eq for paladin_auth_core::ImportWarning
+impl core::cmp::PartialEq for paladin_auth_core::ImportWarning
+pub fn paladin_auth_core::ImportWarning::eq(&self, other: &paladin_auth_core::ImportWarning) -> bool
+impl core::fmt::Debug for paladin_auth_core::ImportWarning
+pub fn paladin_auth_core::ImportWarning::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_auth_core::ImportWarning
+impl core::marker::Freeze for paladin_auth_core::ImportWarning
+impl core::marker::Send for paladin_auth_core::ImportWarning
+impl core::marker::Sync for paladin_auth_core::ImportWarning
+impl core::marker::Unpin for paladin_auth_core::ImportWarning
+impl core::marker::UnsafeUnpin for paladin_auth_core::ImportWarning
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::ImportWarning
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::ImportWarning
+pub struct paladin_auth_core::QrRenderOptions
+pub paladin_auth_core::QrRenderOptions::module_size_px: u32
+pub paladin_auth_core::QrRenderOptions::quiet_zone: bool
+impl paladin_auth_core::QrRenderOptions
+pub fn paladin_auth_core::QrRenderOptions::validate(&self) -> paladin_auth_core::Result<()>
+impl core::clone::Clone for paladin_auth_core::QrRenderOptions
+pub fn paladin_auth_core::QrRenderOptions::clone(&self) -> paladin_auth_core::QrRenderOptions
+impl core::cmp::Eq for paladin_auth_core::QrRenderOptions
+impl core::cmp::PartialEq for paladin_auth_core::QrRenderOptions
+pub fn paladin_auth_core::QrRenderOptions::eq(&self, other: &paladin_auth_core::QrRenderOptions) -> bool
+impl core::default::Default for paladin_auth_core::QrRenderOptions
+pub fn paladin_auth_core::QrRenderOptions::default() -> Self
+impl core::fmt::Debug for paladin_auth_core::QrRenderOptions
+pub fn paladin_auth_core::QrRenderOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::QrRenderOptions
+impl core::marker::StructuralPartialEq for paladin_auth_core::QrRenderOptions
+impl core::marker::Freeze for paladin_auth_core::QrRenderOptions
+impl core::marker::Send for paladin_auth_core::QrRenderOptions
+impl core::marker::Sync for paladin_auth_core::QrRenderOptions
+impl core::marker::Unpin for paladin_auth_core::QrRenderOptions
+impl core::marker::UnsafeUnpin for paladin_auth_core::QrRenderOptions
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::QrRenderOptions
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::QrRenderOptions
+pub struct paladin_auth_core::Secret(_)
+impl bincode::enc::Encode for paladin_auth_core::Secret
+pub fn paladin_auth_core::Secret::encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> core::result::Result<(), bincode::error::EncodeError>
+impl core::clone::Clone for paladin_auth_core::Secret
+pub fn paladin_auth_core::Secret::clone(&self) -> paladin_auth_core::Secret
+impl core::cmp::Eq for paladin_auth_core::Secret
+impl core::cmp::PartialEq for paladin_auth_core::Secret
+pub fn paladin_auth_core::Secret::eq(&self, other: &Self) -> bool
+impl core::ops::drop::Drop for paladin_auth_core::Secret
+pub fn paladin_auth_core::Secret::drop(&mut self)
+impl zeroize::Zeroize for paladin_auth_core::Secret
+pub fn paladin_auth_core::Secret::zeroize(&mut self)
+impl<'de, C> bincode::de::BorrowDecode<'de, C> for paladin_auth_core::Secret
+pub fn paladin_auth_core::Secret::borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = C>>(decoder: &mut D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl<C> bincode::de::Decode<C> for paladin_auth_core::Secret
+pub fn paladin_auth_core::Secret::decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl core::marker::Freeze for paladin_auth_core::Secret
+impl core::marker::Send for paladin_auth_core::Secret
+impl core::marker::Sync for paladin_auth_core::Secret
+impl core::marker::Unpin for paladin_auth_core::Secret
+impl core::marker::UnsafeUnpin for paladin_auth_core::Secret
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::Secret
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::Secret
+pub struct paladin_auth_core::Store
+impl paladin_auth_core::Store
+pub fn paladin_auth_core::Store::create(path: &std::path::Path, init: paladin_auth_core::VaultInit) -> paladin_auth_core::Result<(paladin_auth_core::Vault, Self)>
+pub fn paladin_auth_core::Store::create_force(path: &std::path::Path, init: paladin_auth_core::VaultInit) -> paladin_auth_core::Result<(paladin_auth_core::Vault, Self)>
+pub fn paladin_auth_core::Store::open(path: &std::path::Path, lock: paladin_auth_core::VaultLock) -> paladin_auth_core::Result<(paladin_auth_core::Vault, Self)>
+impl core::fmt::Debug for paladin_auth_core::Store
+pub fn paladin_auth_core::Store::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl !core::marker::Freeze for paladin_auth_core::Store
+impl core::marker::Send for paladin_auth_core::Store
+impl !core::marker::Sync for paladin_auth_core::Store
+impl core::marker::Unpin for paladin_auth_core::Store
+impl core::marker::UnsafeUnpin for paladin_auth_core::Store
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::Store
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::Store
+pub struct paladin_auth_core::ValidatedAccount
+pub paladin_auth_core::ValidatedAccount::account: paladin_auth_core::Account
+pub paladin_auth_core::ValidatedAccount::warnings: alloc::vec::Vec<paladin_auth_core::ValidationWarning>
+impl core::fmt::Debug for paladin_auth_core::ValidatedAccount
+pub fn paladin_auth_core::ValidatedAccount::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::ValidatedAccount
+impl core::marker::Send for paladin_auth_core::ValidatedAccount
+impl core::marker::Sync for paladin_auth_core::ValidatedAccount
+impl core::marker::Unpin for paladin_auth_core::ValidatedAccount
+impl core::marker::UnsafeUnpin for paladin_auth_core::ValidatedAccount
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::ValidatedAccount
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::ValidatedAccount
+pub struct paladin_auth_core::Vault
+impl paladin_auth_core::Vault
+pub fn paladin_auth_core::Vault::accounts(&self) -> &[paladin_auth_core::Account]
+pub fn paladin_auth_core::Vault::add(&mut self, account: paladin_auth_core::Account) -> paladin_auth_core::AccountId
+pub fn paladin_auth_core::Vault::apply_setting_patch(&mut self, patch: paladin_auth_core::SettingPatch) -> paladin_auth_core::Result<()>
+pub fn paladin_auth_core::Vault::change_passphrase(&mut self, store: &paladin_auth_core::Store, options: paladin_auth_core::EncryptionOptions) -> paladin_auth_core::Result<()>
+pub fn paladin_auth_core::Vault::edit_account_metadata(&mut self, id: paladin_auth_core::AccountId, edit: paladin_auth_core::AccountEdit, now: std::time::SystemTime) -> paladin_auth_core::Result<()>
+pub fn paladin_auth_core::Vault::export_qr_ansi(&self, id: paladin_auth_core::AccountId) -> paladin_auth_core::Result<zeroize::Zeroizing<alloc::string::String>>
+pub fn paladin_auth_core::Vault::export_qr_png(&self, id: paladin_auth_core::AccountId, opts: &paladin_auth_core::QrRenderOptions) -> paladin_auth_core::Result<zeroize::Zeroizing<alloc::vec::Vec<u8>>>
+pub fn paladin_auth_core::Vault::export_qr_svg(&self, id: paladin_auth_core::AccountId, opts: &paladin_auth_core::QrRenderOptions) -> paladin_auth_core::Result<zeroize::Zeroizing<alloc::string::String>>
+pub fn paladin_auth_core::Vault::find_duplicate(&self, account: &paladin_auth_core::ValidatedAccount) -> core::option::Option<&paladin_auth_core::Account>
+pub fn paladin_auth_core::Vault::find_duplicate_after_edit(&self, id: paladin_auth_core::AccountId, edit: &paladin_auth_core::AccountEdit) -> core::option::Option<&paladin_auth_core::Account>
+pub fn paladin_auth_core::Vault::get(&self, id: paladin_auth_core::AccountId) -> core::option::Option<&paladin_auth_core::Account>
+pub fn paladin_auth_core::Vault::hotp_advance(&mut self, store: &paladin_auth_core::Store, id: paladin_auth_core::AccountId, now: std::time::SystemTime) -> paladin_auth_core::Result<paladin_auth_core::Code>
+pub fn paladin_auth_core::Vault::hotp_peek(&self, id: paladin_auth_core::AccountId) -> paladin_auth_core::Result<paladin_auth_core::Code>
+pub fn paladin_auth_core::Vault::import_accounts(&mut self, accounts: alloc::vec::Vec<paladin_auth_core::ValidatedAccount>, policy: paladin_auth_core::ImportConflict, now: std::time::SystemTime) -> paladin_auth_core::Result<paladin_auth_core::ImportReport>
+pub fn paladin_auth_core::Vault::is_encrypted(&self) -> bool
+pub fn paladin_auth_core::Vault::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = &paladin_auth_core::Account>
+pub fn paladin_auth_core::Vault::matching_accounts(&self, query: &paladin_auth_core::AccountQuery) -> alloc::vec::Vec<&paladin_auth_core::Account>
+pub fn paladin_auth_core::Vault::mutate_and_save<F, R>(&mut self, store: &paladin_auth_core::Store, mutator: F) -> paladin_auth_core::Result<R> where F: core::ops::function::FnOnce(&mut paladin_auth_core::Vault) -> paladin_auth_core::Result<R>
+pub fn paladin_auth_core::Vault::remove(&mut self, id: paladin_auth_core::AccountId) -> core::option::Option<paladin_auth_core::Account>
+pub fn paladin_auth_core::Vault::remove_passphrase(&mut self, store: &paladin_auth_core::Store) -> paladin_auth_core::Result<()>
+pub fn paladin_auth_core::Vault::rename(&mut self, id: paladin_auth_core::AccountId, label: &str, now: std::time::SystemTime) -> paladin_auth_core::Result<()>
+pub fn paladin_auth_core::Vault::save(&self, store: &paladin_auth_core::Store) -> paladin_auth_core::Result<()>
+pub fn paladin_auth_core::Vault::set_auto_lock_enabled(&mut self, enabled: bool)
+pub fn paladin_auth_core::Vault::set_auto_lock_timeout_secs(&mut self, secs: u32) -> paladin_auth_core::Result<()>
+pub fn paladin_auth_core::Vault::set_clipboard_clear_enabled(&mut self, enabled: bool)
+pub fn paladin_auth_core::Vault::set_clipboard_clear_secs(&mut self, secs: u32) -> paladin_auth_core::Result<()>
+pub fn paladin_auth_core::Vault::set_passphrase(&mut self, store: &paladin_auth_core::Store, options: paladin_auth_core::EncryptionOptions) -> paladin_auth_core::Result<()>
+pub fn paladin_auth_core::Vault::settings(&self) -> &paladin_auth_core::VaultSettings
+pub fn paladin_auth_core::Vault::shortest_unique_id_prefix(&self, id: paladin_auth_core::AccountId) -> core::option::Option<alloc::string::String>
+pub fn paladin_auth_core::Vault::summaries(&self) -> impl core::iter::traits::iterator::Iterator<Item = paladin_auth_core::AccountSummary> + '_
+pub fn paladin_auth_core::Vault::totp_code(&self, id: paladin_auth_core::AccountId, now: std::time::SystemTime) -> paladin_auth_core::Result<paladin_auth_core::Code>
+pub fn paladin_auth_core::Vault::totp_next_code(&self, id: paladin_auth_core::AccountId, now: std::time::SystemTime) -> paladin_auth_core::Result<paladin_auth_core::Code>
+impl core::fmt::Debug for paladin_auth_core::Vault
+pub fn paladin_auth_core::Vault::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_auth_core::Vault
+impl core::marker::Send for paladin_auth_core::Vault
+impl core::marker::Sync for paladin_auth_core::Vault
+impl core::marker::Unpin for paladin_auth_core::Vault
+impl core::marker::UnsafeUnpin for paladin_auth_core::Vault
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::Vault
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::Vault
+pub struct paladin_auth_core::VaultSettings
+impl paladin_auth_core::VaultSettings
+pub fn paladin_auth_core::VaultSettings::auto_lock_enabled(&self) -> bool
+pub fn paladin_auth_core::VaultSettings::auto_lock_timeout_secs(&self) -> u32
+pub fn paladin_auth_core::VaultSettings::clipboard_clear_enabled(&self) -> bool
+pub fn paladin_auth_core::VaultSettings::clipboard_clear_secs(&self) -> u32
+impl bincode::enc::Encode for paladin_auth_core::VaultSettings
+pub fn paladin_auth_core::VaultSettings::encode<__E: bincode::enc::Encoder>(&self, encoder: &mut __E) -> core::result::Result<(), bincode::error::EncodeError>
+impl core::clone::Clone for paladin_auth_core::VaultSettings
+pub fn paladin_auth_core::VaultSettings::clone(&self) -> paladin_auth_core::VaultSettings
+impl core::cmp::Eq for paladin_auth_core::VaultSettings
+impl core::cmp::PartialEq for paladin_auth_core::VaultSettings
+pub fn paladin_auth_core::VaultSettings::eq(&self, other: &paladin_auth_core::VaultSettings) -> bool
+impl core::default::Default for paladin_auth_core::VaultSettings
+pub fn paladin_auth_core::VaultSettings::default() -> Self
+impl core::fmt::Debug for paladin_auth_core::VaultSettings
+pub fn paladin_auth_core::VaultSettings::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_auth_core::VaultSettings
+impl core::marker::StructuralPartialEq for paladin_auth_core::VaultSettings
+impl<'__de, __Context> bincode::de::BorrowDecode<'__de, __Context> for paladin_auth_core::VaultSettings
+pub fn paladin_auth_core::VaultSettings::borrow_decode<__D: bincode::de::BorrowDecoder<'__de, Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl<__Context> bincode::de::Decode<__Context> for paladin_auth_core::VaultSettings
+pub fn paladin_auth_core::VaultSettings::decode<__D: bincode::de::Decoder<Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl core::marker::Freeze for paladin_auth_core::VaultSettings
+impl core::marker::Send for paladin_auth_core::VaultSettings
+impl core::marker::Sync for paladin_auth_core::VaultSettings
+impl core::marker::Unpin for paladin_auth_core::VaultSettings
+impl core::marker::UnsafeUnpin for paladin_auth_core::VaultSettings
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_auth_core::VaultSettings
+impl core::panic::unwind_safe::UnwindSafe for paladin_auth_core::VaultSettings
+pub const paladin_auth_core::AUTO_LOCK_SECS_MAX: u32
+pub const paladin_auth_core::AUTO_LOCK_SECS_MIN: u32
+pub const paladin_auth_core::CLIPBOARD_CLEAR_SECS_MAX: u32
+pub const paladin_auth_core::CLIPBOARD_CLEAR_SECS_MIN: u32
+pub const paladin_auth_core::DIGITS_DEFAULT: u8
+pub const paladin_auth_core::DIGITS_MAX: u8
+pub const paladin_auth_core::DIGITS_MIN: u8
+pub const paladin_auth_core::HOTP_REVEAL_SECS: u64
+pub const paladin_auth_core::QR_MODULE_SIZE_PX_DEFAULT: u32
+pub const paladin_auth_core::QR_MODULE_SIZE_PX_MAX: u32
+pub const paladin_auth_core::QR_MODULE_SIZE_PX_MIN: u32
+pub const paladin_auth_core::QR_RGBA_MAX_BYTES: usize
+pub const paladin_auth_core::TICK_INTERVAL_MS: u64
+pub const paladin_auth_core::TOTP_PERIOD_DEFAULT: u32
+pub const paladin_auth_core::TOTP_PERIOD_MAX: u32
+pub const paladin_auth_core::TOTP_PERIOD_MIN: u32
+pub fn paladin_auth_core::account_match_key(account: &paladin_auth_core::Account) -> alloc::string::String
+pub fn paladin_auth_core::account_matches_search(account: &paladin_auth_core::Account, query: &str) -> bool
+pub fn paladin_auth_core::classify_init_precheck(probe: paladin_auth_core::Result<paladin_auth_core::VaultStatus>) -> paladin_auth_core::InitPrecheck
+pub fn paladin_auth_core::classify_paladin_auth_import_precheck(path: &std::path::Path, forced_format: core::option::Option<paladin_auth_core::import::ImportFormat>) -> paladin_auth_core::PaladinAuthImportPrecheck
+pub fn paladin_auth_core::default_vault_path() -> paladin_auth_core::Result<std::path::PathBuf>
+pub fn paladin_auth_core::destroy_vault(path: &std::path::Path) -> paladin_auth_core::Result<paladin_auth_core::DestroyReport>
+pub fn paladin_auth_core::detect(bytes: &[u8]) -> paladin_auth_core::import::ImportFormat
+pub fn paladin_auth_core::format_create_vault_dir_error(err: &paladin_auth_core::PaladinAuthError, attempted_dir: &std::path::Path) -> core::option::Option<alloc::string::String>
+pub fn paladin_auth_core::format_destroy_warning(vault_path: &std::path::Path, backup_present: bool) -> alloc::string::String
+pub fn paladin_auth_core::format_init_force_warning(existing_vault: &std::path::Path) -> alloc::string::String
+pub fn paladin_auth_core::format_plaintext_export_warning() -> alloc::string::String
+pub fn paladin_auth_core::format_plaintext_qr_export_warning() -> alloc::string::String
+pub fn paladin_auth_core::format_plaintext_storage_warning() -> alloc::string::String
+pub fn paladin_auth_core::format_unsafe_permissions(err: &paladin_auth_core::PaladinAuthError) -> core::option::Option<alloc::string::String>
+pub fn paladin_auth_core::format_validation_warning(warning: &paladin_auth_core::ValidationWarning) -> alloc::string::String
+pub fn paladin_auth_core::hotp_reveal_deadline(now: std::time::Instant) -> std::time::Instant
+pub fn paladin_auth_core::inspect(path: &std::path::Path) -> paladin_auth_core::Result<paladin_auth_core::VaultStatus>
+pub fn paladin_auth_core::parse_account_query(query: &str) -> paladin_auth_core::Result<paladin_auth_core::AccountQuery>
+pub fn paladin_auth_core::parse_icon_hint_token(token: &str) -> core::result::Result<paladin_auth_core::IconHintInput, paladin_auth_core::PaladinAuthError>
+pub fn paladin_auth_core::parse_otpauth(uri: &str, import_time: std::time::SystemTime) -> core::result::Result<paladin_auth_core::ValidatedAccount, paladin_auth_core::PaladinAuthError>
+pub fn paladin_auth_core::parse_setting_key(key: &str) -> paladin_auth_core::Result<paladin_auth_core::SettingKey>
+pub fn paladin_auth_core::parse_setting_patch(key: &str, value: &str) -> paladin_auth_core::Result<paladin_auth_core::SettingPatch>
+pub fn paladin_auth_core::select_after_filter(prev: core::option::Option<paladin_auth_core::AccountId>, filtered: &[paladin_auth_core::AccountId]) -> core::option::Option<paladin_auth_core::AccountId>
+pub fn paladin_auth_core::summary_display_label(summary: &paladin_auth_core::AccountSummary) -> alloc::string::String
+pub fn paladin_auth_core::validate_account_edit(edit: &paladin_auth_core::AccountEdit, prior: &paladin_auth_core::Account, now: std::time::SystemTime) -> core::result::Result<(), paladin_auth_core::PaladinAuthError>
+pub fn paladin_auth_core::validate_icon_hint_slug(slug: &str) -> core::result::Result<paladin_auth_core::IconHintInput, paladin_auth_core::PaladinAuthError>
+pub fn paladin_auth_core::validate_label(raw: &str) -> core::result::Result<alloc::string::String, paladin_auth_core::PaladinAuthError>
+pub fn paladin_auth_core::validate_manual(input: paladin_auth_core::AccountInput, now: std::time::SystemTime) -> core::result::Result<paladin_auth_core::ValidatedAccount, paladin_auth_core::PaladinAuthError>
+pub fn paladin_auth_core::write_secret_file_atomic(path: &std::path::Path, content: &[u8]) -> paladin_auth_core::Result<()>
+pub type paladin_auth_core::Result<T> = core::result::Result<T, paladin_auth_core::PaladinAuthError>

@@ -1,0 +1,20 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
+---
+┌ Paladin Auth [plaintext] ────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ ▶ GitHub (ben-personal@example.co…    914 994  ██████░░░░   18s  ↪   255 062 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ Renamed to ben-personal@example.com                                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+─── styles ───
+(1..27, 0) " Paladin Auth [plaintext] " fg=Reset bg=Reset mod=BOLD
+(2..67, 3) "▶ GitHub (ben-personal@example.co…    914 994  ██████░░░░   18s  " fg=Reset bg=Reset mod=BOLD | REVERSED
+(67..78, 3) "↪   255 062" fg=Reset bg=Reset mod=BOLD | DIM | REVERSED

@@ -1,4 +1,4 @@
-# Dev-tooling versions pinned for the Paladin workspace.
+# Dev-tooling versions pinned for the Paladin Auth workspace.
 #
 # CI and local snapshots install the cargo subcommands listed here at the
 # pinned version so behavior does not float across releases. `xtask` is

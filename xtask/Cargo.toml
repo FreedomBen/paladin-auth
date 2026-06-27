@@ -34,16 +34,16 @@ clap = { version = "4.5", features = ["derive"] }
 
 # clap_mangen 0.2 tracks clap 4.x. Pinned at the minor used by the
 # Milestone 7 packaging pipeline; the in-tree contract tests assert
-# the resulting `paladin.1` / `paladin-tui.1` headers + section list
+# the resulting `paladin-auth.1` / `paladin-auth-tui.1` headers + section list
 # so a transitive bump that reshapes the output fails CI.
 clap_mangen = "0.2"
 
 # Reach into the frontend lib crates to recover their clap Commands.
-# `paladin-cli` exposes `lib.rs` per IMPLEMENTATION_PLAN_02_CLI.md
-# "Crate layout"; `paladin-tui` already does per
+# `paladin-auth-cli` exposes `lib.rs` per IMPLEMENTATION_PLAN_02_CLI.md
+# "Crate layout"; `paladin-auth-tui` already does per
 # IMPLEMENTATION_PLAN_03_TUI.md.
-paladin-cli = { path = "../crates/paladin-cli", version = "0.0.1" }
-paladin-tui = { path = "../crates/paladin-tui", version = "0.0.1" }
+paladin-auth-cli = { path = "../crates/paladin-auth-cli", version = "0.0.1" }
+paladin-auth-tui = { path = "../crates/paladin-auth-tui", version = "0.0.1" }
 
 # Gzip the rendered man pages before they land in the .rpm. Pinned at
 # the minor `flate2` tracked through the workspace's transitive deps

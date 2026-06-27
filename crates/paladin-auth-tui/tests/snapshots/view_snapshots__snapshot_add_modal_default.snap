@@ -1,0 +1,24 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: "render_to_text(&state, snapshot_now(), 80, 20)"
+---
+┌ Paladin Auth [plaintext] ────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────┌ Add account ─────────────────────────────────────────────────┐────── │
+│       │ Mode: ▶ Manual ◀     URI       QR                            │       │
+│       │                                                              │       │
+│       │ Label:      [  ]                                             │       │
+│       │ Issuer:     [  ]                                             │       │
+│       │ Secret:     [  ]                                             │       │
+│       │ Algorithm:  SHA1                                             │       │
+│       │ Digits:     6                                                │       │
+│       │ Kind:       TOTP                                             │       │
+│       │ Period (s): 30                                               │       │
+│       │ Icon hint:  [  ]                                             │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │       Tab cycles fields  ·  Enter submit  ·  Esc cancel      │       │
+│ ──────└──────────────────────────────────────────────────────────────┘────── │
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find     │
+└──────────────────────────────────────────────────────────────────────────────┘

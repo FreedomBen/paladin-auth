@@ -22,15 +22,15 @@ The approved design lives in `docs/DESIGN.md`, with staged plans in
 `docs/IMPLEMENTATION_PLAN_01_CORE.md`, `docs/IMPLEMENTATION_PLAN_02_CLI.md`,
 `docs/IMPLEMENTATION_PLAN_03_TUI.md`, and `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
 Follow `docs/DESIGN.md` as the source of truth. The Cargo workspace contains
-four members; `paladin-gtk` targets v0.2 but lands pure-logic scaffolding
-incrementally so the workspace shape and `paladin-core` API contract stay
+four members; `paladin-auth-gtk` targets v0.2 but lands pure-logic scaffolding
+incrementally so the workspace shape and `paladin-auth-core` API contract stay
 aligned:
 
 ```text
-crates/paladin-core/  # shared domain, OTP, storage, crypto, import/export
-crates/paladin-cli/   # `paladin` command
-crates/paladin-tui/   # terminal UI
-crates/paladin-gtk/   # GTK4 + libadwaita GUI (relm4; v0.2 target)
+crates/paladin-auth-core/  # shared domain, OTP, storage, crypto, import/export
+crates/paladin-auth-cli/   # `paladin-auth` command
+crates/paladin-auth-tui/   # terminal UI
+crates/paladin-auth-gtk/   # GTK4 + libadwaita GUI (relm4; v0.2 target)
 xtask/                # dev-tool version pins (dev-tools.toml)
 ```
 
@@ -45,16 +45,16 @@ the matching version on first invocation. The CI gates in
 - `cargo test --workspace --all-targets` - run all workspace tests.
 - `cargo deny check` - enforce dependency policy, including no network stack.
 - `cargo audit` - check Rust dependency advisories.
-- `cargo public-api -p paladin-core --simplified` - diff against the
-  committed `crates/paladin-core/public-api.txt` snapshot.
+- `cargo public-api -p paladin-auth-core --simplified` - diff against the
+  committed `crates/paladin-auth-core/public-api.txt` snapshot.
 
 ## Coding Style & Naming Conventions
 
 Use idiomatic Rust with `rustfmt`. New source files must include
 `// SPDX-License-Identifier: AGPL-3.0-or-later`, and every crate must set
 `license = "AGPL-3.0-or-later"`. Keep binaries thin: front ends may depend on
-`paladin-core`, but not on each other. Route shared behavior into
-`paladin-core`.
+`paladin-auth-core`, but not on each other. Route shared behavior into
+`paladin-auth-core`.
 
 Protect secrets with `Zeroize` and `secrecy::SecretString`; never add `Debug`
 output that can expose secret bytes.

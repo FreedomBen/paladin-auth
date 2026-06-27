@@ -1,22 +1,22 @@
-# Paladin
+# Paladin Auth
 
 A Rust OTP authenticator (TOTP + HOTP) with three front-ends sharing a
 common core library. Local-first, no telemetry, no network.
 
 | Crate          | Kind | Purpose                                                               |
 | -------------- | ---- | --------------------------------------------------------------------- |
-| `paladin-core` | lib  | Domain types, OTP primitives, vault storage, crypto, import/export    |
-| `paladin`      | bin  | CLI front-end (`crates/paladin-cli`)                                  |
-| `paladin-tui`  | bin  | Terminal UI (`crates/paladin-tui`) — `ratatui` + `crossterm`          |
-| `paladin-gtk`  | bin  | GTK4 + libadwaita GUI (`crates/paladin-gtk`) — `relm4`                |
+| `paladin-auth-core` | lib  | Domain types, OTP primitives, vault storage, crypto, import/export    |
+| `paladin-auth`      | bin  | CLI front-end (`crates/paladin-auth-cli`)                                  |
+| `paladin-auth-tui`  | bin  | Terminal UI (`crates/paladin-auth-tui`) — `ratatui` + `crossterm`          |
+| `paladin-auth-gtk`  | bin  | GTK4 + libadwaita GUI (`crates/paladin-auth-gtk`) — `relm4`                |
 
-Binaries depend only on `paladin-core` — they never reach into each
+Binaries depend only on `paladin-auth-core` — they never reach into each
 other. See [`docs/DESIGN.md`](docs/DESIGN.md) for the full design; it remains the
 source of truth for behavior and APIs.
 
 ## Status
 
-Paladin is currently under active development.  It's usable but may contain many bugs.  You're welcome to try it out, but always ensure you have a backup of your vault.  Once we're ready for beta testing, version number will increment to v0.1.x.
+Paladin Auth is currently under active development.  It's usable but may contain many bugs.  You're welcome to try it out, but always ensure you have a backup of your vault.  Once we're ready for beta testing, version number will increment to v0.1.x.
 
 ## Features
 
@@ -27,8 +27,8 @@ Paladin is currently under active development.  It's usable but may contain many
     every header byte bound as AAD.
 - **Standards-friendly imports:** `otpauth://` URIs (single or list),
   QR images (file or RGBA clipboard buffer), Aegis plaintext exports,
-  Paladin encrypted bundles. Imports validate fully and are atomic.
-- **Exports:** plaintext URI-list JSON or Paladin encrypted bundle, both
+  Paladin Auth encrypted bundles. Imports validate fully and are atomic.
+- **Exports:** plaintext URI-list JSON or Paladin Auth encrypted bundle, both
   refusing overwrite without `--force` and written `0600`.
 - **Opt-in hardening:** auto-lock and clipboard auto-clear, off by
   default and configurable per vault. CLI is stateless and never
@@ -45,54 +45,54 @@ v0.1 targets Linux. macOS and Windows are deferred to v0.2+
 
 ```sh
 # Create a new vault (empty passphrase prompt = plaintext mode).
-paladin init
+paladin-auth init
 
 # Add an account from an otpauth URI (or use --qr for an image, or
-# `paladin add` with no flags for an interactive prompt).
-paladin add --uri 'otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub'
+# `paladin-auth add` with no flags for an interactive prompt).
+paladin-auth add --uri 'otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub'
 
 # List, show the current code, or copy it to the clipboard.
-paladin list
-paladin show GitHub
-paladin copy GitHub
+paladin-auth list
+paladin-auth show GitHub
+paladin-auth copy GitHub
 
 # HOTP semantics: `show` and `copy` advance the counter and persist;
 # `peek` reads without mutating.
-paladin peek MyHotpAccount
+paladin-auth peek MyHotpAccount
 
 # Manage passphrase, settings, import / export.
-paladin passphrase set
-paladin settings set auto_lock.seconds 300
-paladin export --plaintext accounts.json
-paladin import accounts.json
+paladin-auth passphrase set
+paladin-auth settings set auto_lock.seconds 300
+paladin-auth export --plaintext accounts.json
+paladin-auth import accounts.json
 
-# Launch the TUI (execs `paladin-tui` with shared flags).
-paladin tui
+# Launch the TUI (execs `paladin-auth-tui` with shared flags).
+paladin-auth tui
 ```
 
-`paladin --help` and `paladin <command> --help` document every flag.
+`paladin-auth --help` and `paladin-auth <command> --help` document every flag.
 `--json` emits stable JSON envelopes per [`docs/DESIGN.md` §5](docs/DESIGN.md) for
 scripting; `--no-color` disables ANSI styling; `--vault <PATH>`
 overrides the default location.
 
 The default vault path follows XDG via `directories::ProjectDirs`
-(typically `~/.local/share/paladin/vault.bin` on Linux).
+(typically `~/.local/share/paladin-auth/vault.bin` on Linux).
 
-## Using `paladin-core` as a library
+## Using `paladin-auth-core` as a library
 
-`paladin-core` holds all of the domain logic: OTP generation
+`paladin-auth-core` holds all of the domain logic: OTP generation
 (TOTP / HOTP), vault storage in both plaintext and encrypted modes,
 Argon2id + XChaCha20-Poly1305 crypto, and the import / export
-pipelines. The three front-ends — `paladin`, `paladin-tui`, and
-`paladin-gtk` — are thin interfaces that delegate every operation to
+pipelines. The three front-ends — `paladin-auth`, `paladin-auth-tui`, and
+`paladin-auth-gtk` — are thin interfaces that delegate every operation to
 it; they hold no domain logic of their own, and the workspace enforces
 that they never reach into each other.
 
-This makes `paladin-core` a usable foundation for building alternative
+This makes `paladin-auth-core` a usable foundation for building alternative
 front-ends — a daemon, a browser-extension host, a different
 toolkit — without re-implementing OTP, vault storage, or crypto. The
 public API is snapshot-tested in
-[`crates/paladin-core/public-api.txt`](crates/paladin-core/public-api.txt)
+[`crates/paladin-auth-core/public-api.txt`](crates/paladin-auth-core/public-api.txt)
 and CI fails the build on any unreviewed diff, so downstream consumers
 get a stable surface to build against. See
 [`docs/DESIGN.md`](docs/DESIGN.md) for the full type and module
@@ -100,8 +100,8 @@ breakdown.
 
 ## Build dependencies
 
-Paladin needs a Rust toolchain plus a few system packages — `gcc`,
-`pkg-config`, `openssl-devel`, and (for `paladin-gtk`) GTK4 ≥ 4.16 and
+Paladin Auth needs a Rust toolchain plus a few system packages — `gcc`,
+`pkg-config`, `openssl-devel`, and (for `paladin-auth-gtk`) GTK4 ≥ 4.16 and
 libadwaita ≥ 1.6 development headers. The CI gate
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) builds inside a
 `fedora:42` container, which is the reference environment.
@@ -124,7 +124,7 @@ package names in
 [`docs/DESIGN.md` §11](docs/DESIGN.md) (`libgtk-4-dev (>= 4.16)`,
 `libadwaita-1-dev (>= 1.6)`, plus `gcc`, `pkg-config`, `libssl-dev`).
 Note that distributions whose stable channel ships GTK / libadwaita
-older than the 4.16 / 1.6 floor cannot build `paladin-gtk`.
+older than the 4.16 / 1.6 floor cannot build `paladin-auth-gtk`.
 
 ## Building
 
@@ -139,9 +139,9 @@ cargo test --workspace
 Per-crate builds:
 
 ```sh
-cargo run -p paladin-cli -- --help
-cargo run -p paladin-tui
-cargo run -p paladin-gtk     # requires GTK4 >= 4.16, libadwaita >= 1.6
+cargo run -p paladin-auth-cli -- --help
+cargo run -p paladin-auth-tui
+cargo run -p paladin-auth-gtk     # requires GTK4 >= 4.16, libadwaita >= 1.6
 ```
 
 ## CI gate
@@ -160,19 +160,19 @@ cargo audit
 
 `cargo deny` and `cargo audit` are pinned in
 [`xtask/dev-tools.toml`](xtask/dev-tools.toml). CI also runs
-`cargo public-api -p paladin-core --simplified` and fails the build on
+`cargo public-api -p paladin-auth-core --simplified` and fails the build on
 any diff against
-[`crates/paladin-core/public-api.txt`](crates/paladin-core/public-api.txt).
+[`crates/paladin-auth-core/public-api.txt`](crates/paladin-auth-core/public-api.txt).
 
 ## Project layout
 
 ```
 .
 ├── crates/
-│   ├── paladin-core/   # library: domain, OTP, storage, crypto, import/export
-│   ├── paladin-cli/    # `paladin` binary (stateless CLI)
-│   ├── paladin-tui/    # `paladin-tui` binary (ratatui)
-│   └── paladin-gtk/    # `paladin-gtk` binary (relm4 + libadwaita)
+│   ├── paladin-auth-core/   # library: domain, OTP, storage, crypto, import/export
+│   ├── paladin-auth-cli/    # `paladin-auth` binary (stateless CLI)
+│   ├── paladin-auth-tui/    # `paladin-auth-tui` binary (ratatui)
+│   └── paladin-auth-gtk/    # `paladin-auth-gtk` binary (relm4 + libadwaita)
 ├── xtask/              # workspace tooling (pinned dev-tools, package orchestration)
 ├── docs/DESIGN.md           # source of truth (locked sections approved 2026-05-04)
 ├── docs/IMPLEMENTATION_PLAN_01_CORE.md

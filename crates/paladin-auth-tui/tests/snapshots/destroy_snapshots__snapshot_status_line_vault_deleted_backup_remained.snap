@@ -1,0 +1,20 @@
+---
+source: crates/paladin-auth-tui/tests/destroy_snapshots.rs
+expression: "render_to_text(&state, 80, 16)"
+---
+┌ Paladin Auth — create vault ─────────────────────────────────────────────────┐
+│                                                                              │
+│  Vault: /home/u/.local/share/paladin-auth/vault.bin                          │
+│                                                                              │
+│  Choose vault protection:                                                    │
+│                                                                              │
+│  ▶ Encrypted (recommended) — protect this vault with a passphrase.           │
+│    Plaintext (insecure) — store secrets unencrypted on disk.                 │
+│                                                                              │
+│  ↑/↓ or j/k to select; Enter to continue; q or Esc to quit.                  │
+│                                                                              │
+│  Vault deleted (backup remained on disk).                                    │
+│                                                                              │
+│  Ctrl+Shift+D delete vault                                                   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

@@ -7,7 +7,7 @@
 //! `docker.io/goreleaser/nfpm` container under rootless podman, so no
 //! host nfpm install is required. The container reads
 //! `packaging/<format>/<frontend>.yaml`, substitutes
-//! `${PALADIN_VERSION}` from the env this process exports, and writes
+//! `${PALADIN_AUTH_VERSION}` from the env this process exports, and writes
 //! the resulting `.rpm` / `.deb` to `target/dist/`.
 
 use std::env;
@@ -25,34 +25,38 @@ use crate::man;
 /// member binaries and the `packaging/<format>/<name>.yaml` filenames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
+// Variants intentionally share the `PaladinAuth` prefix so they mirror the
+// `paladin-auth` / `paladin-auth-tui` / `paladin-auth-gtk` package and binary
+// names (see `package_name` / `cargo_package`).
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum Frontend {
-    Paladin,
-    PaladinTui,
-    PaladinGtk,
+    PaladinAuth,
+    PaladinAuthTui,
+    PaladinAuthGtk,
 }
 
 impl Frontend {
     fn package_name(self) -> &'static str {
         match self {
-            Self::Paladin => "paladin",
-            Self::PaladinTui => "paladin-tui",
-            Self::PaladinGtk => "paladin-gtk",
+            Self::PaladinAuth => "paladin-auth",
+            Self::PaladinAuthTui => "paladin-auth-tui",
+            Self::PaladinAuthGtk => "paladin-auth-gtk",
         }
     }
 
     /// Cargo workspace member name passed to `cargo build -p`. The
-    /// CLI's published name is `paladin` but its workspace member is
-    /// `paladin-cli`; the binary name and the package name diverge.
+    /// CLI's published name is `paladin-auth` but its workspace member is
+    /// `paladin-auth-cli`; the binary name and the package name diverge.
     fn cargo_package(self) -> &'static str {
         match self {
-            Self::Paladin => "paladin-cli",
-            Self::PaladinTui => "paladin-tui",
-            Self::PaladinGtk => "paladin-gtk",
+            Self::PaladinAuth => "paladin-auth-cli",
+            Self::PaladinAuthTui => "paladin-auth-tui",
+            Self::PaladinAuthGtk => "paladin-auth-gtk",
         }
     }
 
     fn ships_man_page(self) -> bool {
-        matches!(self, Self::Paladin | Self::PaladinTui)
+        matches!(self, Self::PaladinAuth | Self::PaladinAuthTui)
     }
 }
 
@@ -85,7 +89,7 @@ pub(crate) struct Args {
     #[arg(long, default_value = "rpm")]
     format: Format,
 
-    /// Version string interpolated into `${PALADIN_VERSION}` inside
+    /// Version string interpolated into `${PALADIN_AUTH_VERSION}` inside
     /// the nfpm manifest. Defaults to the workspace
     /// `[workspace.package].version` so a developer build inherits
     /// the same string the release pipeline would inject.
@@ -206,7 +210,7 @@ fn run_nfpm_in_container(
     cmd.arg("run").arg("--rm");
     cmd.arg("-v").arg(workspace_mount);
     cmd.arg("-w").arg("/workspace");
-    cmd.arg("-e").arg(format!("PALADIN_VERSION={version}"));
+    cmd.arg("-e").arg(format!("PALADIN_AUTH_VERSION={version}"));
     cmd.arg(&args.nfpm_image);
     cmd.arg("package");
     cmd.arg("-f")
@@ -286,48 +290,48 @@ mod tests {
 
     #[test]
     fn frontend_round_trip_value_enum() {
-        assert_eq!(Frontend::Paladin.package_name(), "paladin");
-        assert_eq!(Frontend::PaladinTui.package_name(), "paladin-tui");
-        assert_eq!(Frontend::PaladinGtk.package_name(), "paladin-gtk");
-        assert_eq!(Frontend::Paladin.cargo_package(), "paladin-cli");
-        assert_eq!(Frontend::PaladinTui.cargo_package(), "paladin-tui");
-        assert_eq!(Frontend::PaladinGtk.cargo_package(), "paladin-gtk");
+        assert_eq!(Frontend::PaladinAuth.package_name(), "paladin-auth");
+        assert_eq!(Frontend::PaladinAuthTui.package_name(), "paladin-auth-tui");
+        assert_eq!(Frontend::PaladinAuthGtk.package_name(), "paladin-auth-gtk");
+        assert_eq!(Frontend::PaladinAuth.cargo_package(), "paladin-auth-cli");
+        assert_eq!(Frontend::PaladinAuthTui.cargo_package(), "paladin-auth-tui");
+        assert_eq!(Frontend::PaladinAuthGtk.cargo_package(), "paladin-auth-gtk");
     }
 
     #[test]
     fn only_cli_and_tui_ship_man_pages() {
-        assert!(Frontend::Paladin.ships_man_page());
-        assert!(Frontend::PaladinTui.ships_man_page());
-        assert!(!Frontend::PaladinGtk.ships_man_page());
+        assert!(Frontend::PaladinAuth.ships_man_page());
+        assert!(Frontend::PaladinAuthTui.ships_man_page());
+        assert!(!Frontend::PaladinAuthGtk.ships_man_page());
     }
 
     #[test]
     fn manifest_path_matches_packaging_layout() {
         let workspace = PathBuf::from("/workspace-root");
-        let path = manifest_path(&workspace, Frontend::Paladin, Format::Rpm);
+        let path = manifest_path(&workspace, Frontend::PaladinAuth, Format::Rpm);
         assert_eq!(
             path,
-            PathBuf::from("/workspace-root/packaging/rpm/paladin.yaml")
+            PathBuf::from("/workspace-root/packaging/rpm/paladin-auth.yaml")
         );
-        let path = manifest_path(&workspace, Frontend::PaladinGtk, Format::Rpm);
+        let path = manifest_path(&workspace, Frontend::PaladinAuthGtk, Format::Rpm);
         assert_eq!(
             path,
-            PathBuf::from("/workspace-root/packaging/rpm/paladin-gtk.yaml")
+            PathBuf::from("/workspace-root/packaging/rpm/paladin-auth-gtk.yaml")
         );
-        let path = manifest_path(&workspace, Frontend::Paladin, Format::Deb);
+        let path = manifest_path(&workspace, Frontend::PaladinAuth, Format::Deb);
         assert_eq!(
             path,
-            PathBuf::from("/workspace-root/packaging/deb/paladin.yaml")
+            PathBuf::from("/workspace-root/packaging/deb/paladin-auth.yaml")
         );
-        let path = manifest_path(&workspace, Frontend::PaladinTui, Format::Deb);
+        let path = manifest_path(&workspace, Frontend::PaladinAuthTui, Format::Deb);
         assert_eq!(
             path,
-            PathBuf::from("/workspace-root/packaging/deb/paladin-tui.yaml")
+            PathBuf::from("/workspace-root/packaging/deb/paladin-auth-tui.yaml")
         );
-        let path = manifest_path(&workspace, Frontend::PaladinGtk, Format::Deb);
+        let path = manifest_path(&workspace, Frontend::PaladinAuthGtk, Format::Deb);
         assert_eq!(
             path,
-            PathBuf::from("/workspace-root/packaging/deb/paladin-gtk.yaml")
+            PathBuf::from("/workspace-root/packaging/deb/paladin-auth-gtk.yaml")
         );
     }
 

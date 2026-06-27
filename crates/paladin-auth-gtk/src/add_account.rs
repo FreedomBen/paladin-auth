@@ -1,0 +1,5096 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! Manual-path pure-logic state machine for `paladin-auth-gtk`'s
+//! `AddAccountComponent`.
+//!
+//! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! `AddAccountComponent`, the dialog presents three input sub-paths
+//! (manual fields, `otpauth://` URI paste, "scan from clipboard
+//! image"). The URI sub-path lives in [`crate::otpauth_uri_paste`],
+//! the QR sub-path lives in [`crate::qr_clipboard`], and the path-
+//! switch / duplicate-pending state machine lives in
+//! [`crate::secret_fields::AddSecretState`]. *This* module owns the
+//! widget-free manual-input projection plus the post-validate
+//! duplicate-detection and post-save-effect routing that the manual
+//! and URI sub-paths share.
+//!
+//! # Manual submit
+//!
+//! [`classify_manual_submit`] takes the widget's [`ManualFields`]
+//! bundle (label, issuer, secret, algorithm, digits, kind,
+//! `period_secs`, counter, icon-hint free-form text), parses the
+//! icon-hint token through [`paladin_auth_core::parse_icon_hint_token`],
+//! builds a [`paladin_auth_core::AccountInput`] (collapsing empty issuer
+//! to `None` and dropping the kind-irrelevant `period_secs` /
+//! `counter` so [`paladin_auth_core::validate_manual`]'s cross-checks
+//! never fire on well-formed widget input), and routes the call
+//! into:
+//!
+//! * [`ManualSubmitOutcome::Proceed`] carrying the validated account
+//!   plus any non-fatal [`paladin_auth_core::ValidationWarning`]s the
+//!   widget renders alongside the success outcome via
+//!   [`paladin_auth_core::format_validation_warning`].
+//! * [`ManualSubmitOutcome::InlineError`] carrying the typed §5
+//!   discriminator and pre-rendered body. Field-level parse errors
+//!   (invalid Base32, empty label, out-of-range digits / period,
+//!   malformed icon-hint slug) and any other `validation_error`
+//!   from core land here. The dialog stays open and the vault is
+//!   not mutated.
+//!
+//! # No widget input echo in [`InlineError`] bodies
+//!
+//! The [`InlineError::rendered`] body is produced by
+//! [`paladin_auth_core::PaladinAuthError::Display`], which by construction
+//! emits only the stable §5 `field` / `reason` wire codes — never
+//! the widget input (label, issuer, secret, slug, …). The pure-logic
+//! tests assert this invariant by threading distinctive marker
+//! substrings through widget input and verifying they never appear
+//! in the rendered body.
+//!
+//! # Duplicate detection
+//!
+//! [`classify_duplicate`] takes the validated account plus the
+//! `Option<AccountSummary>` from
+//! [`paladin_auth_core::Vault::find_duplicate`] and routes to:
+//!
+//! * [`DuplicateOutcome::Proceed`] when no collision exists; the
+//!   caller commits with `Vault::add` inside
+//!   `Vault::mutate_and_save`.
+//! * [`DuplicateOutcome::AwaitConfirmation`] when a duplicate exists;
+//!   the caller stages the validated account in
+//!   [`crate::secret_fields::AddSecretState::pending`] (the same
+//!   slot the URI sub-path uses), shows the existing
+//!   [`AccountSummary`] in the dialog, and consumes the staged
+//!   value via
+//!   [`crate::secret_fields::AddSecretState::consume_pending`] on
+//!   the "add anyway" confirmation.
+//!
+//! # Post-effect routing
+//!
+//! [`classify_add_post_effect_error`] maps the [`PaladinAuthError`] from
+//! a failed `Vault::mutate_and_save` onto the dialog's two-way
+//! routing decision (parity with [`crate::otpauth_uri_paste`]):
+//!
+//! * `save_durability_unconfirmed` →
+//!   [`AddPostEffectOutcome::KeepWithWarning`] (commit landed but
+//!   parent-fsync failed; the dialog reports success while surfacing
+//!   the warning beneath it).
+//! * Anything else (`save_not_committed`, `io_error`,
+//!   `validation_error`, …) → [`AddPostEffectOutcome::Inline`]
+//!   (commit never landed; the dialog stays open with the inline
+//!   rejection so the user can retry without losing the typed
+//!   buffer).
+
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::gtk;
+use relm4::prelude::*;
+use secrecy::SecretString;
+
+use paladin_auth_core::{
+    format_validation_warning, parse_icon_hint_token, validate_manual, Account, AccountId,
+    AccountInput, AccountKindInput, AccountSummary, Algorithm, ErrorKind, ImportConflict,
+    ImportReport, PaladinAuthError, Store, ValidatedAccount, ValidationWarning, Vault,
+};
+
+use crate::account_row::summary_display_label;
+use crate::qr_clipboard::QrImportSummary;
+use crate::secret_fields::{AddPath, AddSecretState, ClearReason};
+
+/// Per-keystroke reactive state for the non-secret manual entries.
+///
+/// Holds the live label / issuer / algorithm / digits / kind / TOTP
+/// period / HOTP counter / icon-hint text shadowed from the widget
+/// `AdwEntryRow` and selector widgets. Defaults match the CLI
+/// interactive `add` prompts (DESIGN §5 / `paladin-auth-cli/src/commands/add.rs`):
+/// TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0, and empty
+/// label / issuer / icon-hint (the empty icon-hint text collapses to
+/// [`paladin_auth_core::IconHintInput::Default`] through
+/// [`paladin_auth_core::parse_icon_hint_token`]).
+///
+/// Separate from [`ManualFields`] — which the widget builds *at
+/// submit time* by combining this draft with the
+/// [`crate::secret_fields::AddSecretState::manual_secret`] buffer —
+/// so the secret stays inside the [`crate::secret_fields::SecretEntry`]
+/// boundary until the user commits. Per-keystroke message routing
+/// for each field lands as additional [`AddAccountMsg`] variants in
+/// follow-up commits alongside the editable form widgets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualDraftState {
+    /// Live label entry text. Trimmed and length-validated by
+    /// [`validate_manual`] at submit time; the draft preserves the
+    /// user's whitespace so the cursor position does not jump.
+    pub label: String,
+    /// Live issuer entry text. Empty maps to `None` before being
+    /// passed to [`validate_manual`].
+    pub issuer: String,
+    /// HMAC algorithm selected by the algorithm dropdown.
+    pub algorithm: Algorithm,
+    /// OTP digit count from the digits spinner (`6..=8`).
+    pub digits: u8,
+    /// TOTP / HOTP kind selected by the kind switcher.
+    pub kind: AccountKindInput,
+    /// TOTP period in seconds. Consulted only when
+    /// `kind == AccountKindInput::Totp`; dropped before
+    /// [`validate_manual`] runs on the HOTP path so the cross-check
+    /// never fires.
+    pub period_secs: u32,
+    /// HOTP starting counter. Consulted only when
+    /// `kind == AccountKindInput::Hotp`; dropped before
+    /// [`validate_manual`] runs on the TOTP path.
+    pub counter: u64,
+    /// Free-form icon-hint entry text. Empty / `"none"` (any case) /
+    /// explicit slug parsing happens through
+    /// [`paladin_auth_core::parse_icon_hint_token`] at submit time so the
+    /// CLI / TUI add modals stay in parity.
+    pub icon_hint_text: String,
+}
+
+impl Default for ManualDraftState {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            issuer: String::new(),
+            algorithm: Algorithm::Sha1,
+            digits: 6,
+            kind: AccountKindInput::Totp,
+            period_secs: 30,
+            counter: 0,
+            icon_hint_text: String::new(),
+        }
+    }
+}
+
+impl ManualDraftState {
+    /// Construct a fresh manual draft on the CLI defaults (TOTP,
+    /// SHA1, 6 digits, 30 s period, HOTP counter 0, empty label /
+    /// issuer / icon-hint).
+    ///
+    /// Named constructor for the widget mount path so the call site
+    /// reads as `ManualDraftState::new()` alongside
+    /// [`AddDialogState::new`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Widget-side bundle of typed manual-add fields.
+///
+/// The widget shadows each entry into Paladin Auth-owned zeroizing
+/// buffers (see [`crate::secret_fields::AddSecretState`]) and copies
+/// the relevant text into this struct only at submit time. The
+/// Base32 secret travels as a [`SecretString`] so [`validate_manual`]
+/// can hand it through to core without an extra allocation; the
+/// caller drops the [`SecretString`] after the call returns,
+/// zeroizing the bytes in place.
+pub struct ManualFields {
+    /// Label entry text (trimmed and rejected for empty / overlong
+    /// by [`validate_manual`]).
+    pub label: String,
+    /// Issuer entry text. Empty maps to `None` before being passed
+    /// to [`validate_manual`].
+    pub issuer: String,
+    /// Base32 secret. Zeroized on drop via the `SecretString`'s
+    /// `ZeroizeOnDrop` impl.
+    pub secret: SecretString,
+    /// HMAC algorithm chosen by the algorithm selector.
+    pub algorithm: Algorithm,
+    /// OTP digit count chosen by the digits spinner (`6..=8`).
+    pub digits: u8,
+    /// TOTP / HOTP kind chosen by the kind selector.
+    pub kind: AccountKindInput,
+    /// TOTP period in seconds. Consulted only when `kind == Totp`;
+    /// dropped before being passed to [`validate_manual`] when
+    /// `kind == Hotp` so the cross-check never fires.
+    pub period_secs: u32,
+    /// HOTP starting counter. Consulted only when `kind == Hotp`;
+    /// dropped before being passed to [`validate_manual`] when
+    /// `kind == Totp`.
+    pub counter: u64,
+    /// Free-form icon-hint text. Empty / `"none"` (any case) /
+    /// explicit slug parsing happens through
+    /// [`parse_icon_hint_token`] (CLI / TUI parity).
+    pub icon_hint_text: String,
+}
+
+/// Build a [`ManualFields`] bundle from the live non-secret draft
+/// and the Paladin Auth-owned manual secret text.
+///
+/// The widget calls this at submit time to combine the
+/// [`ManualDraftState`] shadow (label / issuer / algorithm / digits /
+/// kind / period / counter / icon-hint) with the
+/// [`crate::secret_fields::SecretEntry::text`] of
+/// [`crate::secret_fields::AddSecretState::manual_secret`]. The
+/// draft is borrowed so a worker retry after `save_not_committed`
+/// can re-compose against the same typed values without losing the
+/// user's input; the non-secret fields are `Clone`d into the
+/// returned bundle. The secret is borrowed too — the caller hands a
+/// `&str` from the `SecretEntry`, and `compose_manual_fields` wraps
+/// it in a [`SecretString`] whose `ZeroizeOnDrop` impl wipes the
+/// bytes once the returned [`ManualFields`] drops.
+///
+/// Chain `compose_manual_fields(...).into()` into
+/// [`classify_manual_submit`] so the widget keeps the submit
+/// pipeline as `draft + secret → ManualFields → ManualSubmitOutcome`
+/// without intermediate re-packing. Mirror of the URI sub-path,
+/// where the widget reads `secret_state.uri_text.text()` straight
+/// into [`crate::otpauth_uri_paste::classify_uri_submit`].
+#[must_use]
+pub fn compose_manual_fields(draft: &ManualDraftState, secret: &str) -> ManualFields {
+    ManualFields {
+        label: draft.label.clone(),
+        issuer: draft.issuer.clone(),
+        secret: SecretString::from(secret.to_string()),
+        algorithm: draft.algorithm,
+        digits: draft.digits,
+        kind: draft.kind,
+        period_secs: draft.period_secs,
+        counter: draft.counter,
+        icon_hint_text: draft.icon_hint_text.clone(),
+    }
+}
+
+/// Pre-add outcome of manual-field submission.
+///
+/// See [`classify_manual_submit`]. The widget hands the validated
+/// account to [`paladin_auth_core::Vault::find_duplicate`] before
+/// committing; on a collision the account is staged in
+/// [`crate::secret_fields::AddSecretState::pending`] via
+/// [`classify_duplicate`].
+#[derive(Debug)]
+pub enum ManualSubmitOutcome {
+    /// [`validate_manual`] (or the earlier
+    /// [`parse_icon_hint_token`]) accepted the input. The carried
+    /// [`ValidatedAccount`] is the same shape the URI sub-path
+    /// produces, so the dialog's downstream duplicate-detection,
+    /// duplicate-confirm, and save wiring is shared.
+    Proceed(ValidatedAccount),
+    /// [`validate_manual`] (or [`parse_icon_hint_token`]) rejected
+    /// the input. The dialog stays open and renders the inline
+    /// error against the failing field.
+    InlineError(InlineError),
+}
+
+/// Parse the typed manual fields and classify the outcome.
+///
+/// 1. Normalize the icon-hint token through [`parse_icon_hint_token`];
+///    a malformed slug short-circuits as [`InlineError`] before
+///    [`validate_manual`] runs.
+/// 2. Build an [`AccountInput`], collapsing empty issuer to `None`
+///    and dropping `period_secs` / `counter` on the irrelevant kind
+///    so the cross-check in [`validate_manual`] never fires.
+/// 3. Run [`validate_manual`] over the input with the supplied
+///    `import_time` (the widget passes `SystemTime::now()` at
+///    submit time so the account's `created_at` / `updated_at`
+///    match the user's submit moment).
+///
+/// The carried [`InlineError`] never echoes widget input — its body
+/// comes from [`PaladinAuthError::Display`] which surfaces only the
+/// stable §5 `field` / `reason` codes.
+#[must_use]
+pub fn classify_manual_submit(
+    fields: ManualFields,
+    import_time: SystemTime,
+) -> ManualSubmitOutcome {
+    let icon_hint = match parse_icon_hint_token(&fields.icon_hint_text) {
+        Ok(hint) => hint,
+        Err(err) => return ManualSubmitOutcome::InlineError(InlineError::from_error(&err)),
+    };
+
+    let input = AccountInput {
+        label: fields.label,
+        issuer: if fields.issuer.is_empty() {
+            None
+        } else {
+            Some(fields.issuer)
+        },
+        secret: fields.secret,
+        algorithm: fields.algorithm,
+        digits: fields.digits,
+        kind: fields.kind,
+        period_secs: match fields.kind {
+            AccountKindInput::Totp => Some(fields.period_secs),
+            AccountKindInput::Hotp => None,
+        },
+        counter: match fields.kind {
+            AccountKindInput::Hotp => Some(fields.counter),
+            AccountKindInput::Totp => None,
+        },
+        icon_hint,
+    };
+
+    match validate_manual(input, import_time) {
+        Ok(validated) => ManualSubmitOutcome::Proceed(validated),
+        Err(err) => ManualSubmitOutcome::InlineError(InlineError::from_error(&err)),
+    }
+}
+
+/// Chained `compose_manual_fields → classify_manual_submit` against
+/// the live [`AddDialogState`].
+///
+/// The widget Save handler calls this on every click to drive the
+/// manual sub-path's validation pipeline as a single boundary —
+/// sourcing the non-secret fields from
+/// [`AddDialogState::manual_draft`] and the secret text from
+/// [`crate::secret_fields::AddSecretState::manual_secret`] via
+/// [`crate::secret_fields::SecretEntry::text`]. The borrow keeps
+/// the dialog state intact so a typed-but-rejected attempt can
+/// retry against the same buffers without losing the user's
+/// input.
+///
+/// The carried [`ManualSubmitOutcome`] is the same shape
+/// [`classify_manual_submit`] produces on its own:
+///
+/// * [`ManualSubmitOutcome::Proceed`] — validated account; the
+///   widget hands it to [`paladin_auth_core::Vault::find_duplicate`]
+///   plus [`classify_duplicate`] next to decide
+///   [`AddAccountMsg::SubmitProceed`] vs
+///   [`AddAccountMsg::StagePendingDuplicate`].
+/// * [`ManualSubmitOutcome::InlineError`] — typed §5 error body;
+///   the widget renders the rejection inline and leaves the form
+///   populated for retry.
+#[must_use]
+pub fn compose_manual_submit_outcome(
+    state: &AddDialogState,
+    now: SystemTime,
+) -> ManualSubmitOutcome {
+    let fields = compose_manual_fields(
+        state.manual_draft(),
+        state.secret_state().manual_secret.text(),
+    );
+    classify_manual_submit(fields, now)
+}
+
+/// Chained
+/// [`crate::otpauth_uri_paste::classify_uri_submit`] against the live
+/// [`AddDialogState`].
+///
+/// Parallel of [`compose_manual_submit_outcome`] on the URI sub-
+/// path. The widget Save handler calls this on every click to drive
+/// the URI validation pipeline as a single boundary, sourcing the
+/// URI text from
+/// [`crate::secret_fields::AddSecretState::uri_text`] via
+/// [`crate::secret_fields::SecretEntry::text`]. The borrow keeps
+/// the dialog state intact so a typed-but-rejected attempt can
+/// retry against the same buffer without losing the user's input.
+///
+/// The carried [`crate::otpauth_uri_paste::UriSubmitOutcome`] is
+/// the same shape
+/// [`crate::otpauth_uri_paste::classify_uri_submit`] produces on
+/// its own:
+///
+/// * [`crate::otpauth_uri_paste::UriSubmitOutcome::Proceed`] —
+///   validated account; the widget hands it to
+///   [`paladin_auth_core::Vault::find_duplicate`] plus
+///   [`classify_duplicate`] next to decide
+///   [`AddAccountMsg::SubmitProceed`] vs
+///   [`AddAccountMsg::StagePendingDuplicate`].
+/// * [`crate::otpauth_uri_paste::UriSubmitOutcome::InlineError`] —
+///   typed §5 error body; the widget renders the rejection inline
+///   and leaves the URI field populated for retry.
+#[must_use]
+pub fn compose_uri_submit_outcome(
+    state: &AddDialogState,
+    now: SystemTime,
+) -> crate::otpauth_uri_paste::UriSubmitOutcome {
+    crate::otpauth_uri_paste::classify_uri_submit(state.secret_state().uri_text.text(), now)
+}
+
+/// Unified validation outcome for the path-aware
+/// [`compose_submit_outcome`].
+///
+/// Collapses the structurally-identical
+/// [`ManualSubmitOutcome`] and
+/// [`crate::otpauth_uri_paste::UriSubmitOutcome`] into a single
+/// shape so the widget Save handler has one downstream branch
+/// regardless of which sub-path is active. Both per-path composers
+/// continue to return their own typed outcome — the unified enum
+/// is built by `compose_submit_outcome` at the boundary the widget
+/// consults.
+///
+/// Naming parallels [`crate::edit_dialog::SubmitOutcome`] on the
+/// edit path; each dialog scopes its own `SubmitOutcome` to its
+/// module so the variants stay narrow.
+///
+/// * [`SubmitOutcome::Proceed`] — validated account; the widget
+///   hands it to [`paladin_auth_core::Vault::find_duplicate`] plus
+///   [`classify_duplicate`] next to decide
+///   [`AddAccountMsg::SubmitProceed`] vs
+///   [`AddAccountMsg::StagePendingDuplicate`].
+/// * [`SubmitOutcome::InlineError`] — typed §5 error body; the
+///   widget renders the rejection inline against the active sub-
+///   path's failing field and leaves the form populated for retry.
+#[derive(Debug)]
+pub enum SubmitOutcome {
+    /// Validated account ready for the duplicate-detection pre-
+    /// flight, regardless of whether it was produced by the manual
+    /// or URI sub-path.
+    Proceed(ValidatedAccount),
+    /// Typed §5 inline error; the widget renders the rejection
+    /// against the active sub-path's failing field.
+    InlineError(InlineError),
+}
+
+/// Path-aware state-driven submit composer.
+///
+/// Dispatches to [`compose_manual_submit_outcome`] or
+/// [`compose_uri_submit_outcome`] based on
+/// [`crate::secret_fields::AddSecretState::active_path`] and
+/// rewraps the per-path outcome as the unified [`SubmitOutcome`]
+/// so the widget Save handler has a single downstream branch.
+/// Routing keys off `active_path` only — a populated buffer on
+/// the inactive sub-path is ignored, so a stale URI typed before
+/// the user switched back to the manual path cannot bypass the
+/// manual fields' validation.
+///
+/// The borrow keeps the dialog state intact so a typed-but-
+/// rejected attempt can retry against the same buffers without
+/// losing the user's input on either sub-path.
+#[must_use]
+pub fn compose_submit_outcome(state: &AddDialogState, now: SystemTime) -> SubmitOutcome {
+    match state.secret_state().active_path {
+        crate::secret_fields::AddPath::Manual => match compose_manual_submit_outcome(state, now) {
+            ManualSubmitOutcome::Proceed(validated) => SubmitOutcome::Proceed(validated),
+            ManualSubmitOutcome::InlineError(err) => SubmitOutcome::InlineError(err),
+        },
+        crate::secret_fields::AddPath::Uri => match compose_uri_submit_outcome(state, now) {
+            crate::otpauth_uri_paste::UriSubmitOutcome::Proceed(validated) => {
+                SubmitOutcome::Proceed(validated)
+            }
+            // The URI sub-path's [`crate::otpauth_uri_paste::InlineError`]
+            // is structurally identical to [`InlineError`] but a
+            // distinct type, so copy the fields rather than handing
+            // the value through directly.
+            crate::otpauth_uri_paste::UriSubmitOutcome::InlineError(err) => {
+                SubmitOutcome::InlineError(InlineError {
+                    kind: err.kind,
+                    rendered: err.rendered,
+                })
+            }
+        },
+        // The clipboard-QR page activates via its own page-local
+        // "Scan clipboard" action button rather than the shared
+        // Save submit, and `compose_save_button_sensitive` returns
+        // `false` for this path so the user cannot reach this arm
+        // through a click. Defensively returning a typed inline
+        // error (rather than panicking or proceeding) keeps the
+        // composer honest: any future caller that bypasses the
+        // sensitivity gate surfaces a benign rejection rather than
+        // a vault mutation it has no validated account for.
+        crate::secret_fields::AddPath::Qr => SubmitOutcome::InlineError(InlineError {
+            kind: paladin_auth_core::ErrorKind::InvalidState,
+            rendered: "QR clipboard scan uses its own activation button".to_string(),
+        }),
+    }
+}
+
+/// Post-validate duplicate-detection routing decision.
+///
+/// See [`classify_duplicate`]. The carried `ValidatedAccount` on
+/// [`AwaitConfirmation`](DuplicateOutcome::AwaitConfirmation) is the
+/// pending validated account staged in
+/// [`crate::secret_fields::AddSecretState::pending`] for the "add
+/// anyway" confirmation round trip.
+#[derive(Debug)]
+pub enum DuplicateOutcome {
+    /// No collision; commit with `Vault::add` inside
+    /// `Vault::mutate_and_save`.
+    Proceed(ValidatedAccount),
+    /// Collision detected; show the existing summary in the dialog
+    /// and stage the pending validated account in
+    /// [`crate::secret_fields::AddSecretState::pending`] for the
+    /// "add anyway" confirmation. The duplicate-allowed path
+    /// consumes the staged value via
+    /// [`crate::secret_fields::AddSecretState::consume_pending`]
+    /// (CLI parity with `--allow-duplicate`, appending a new account
+    /// that shares the `(secret, issuer, label)` triple).
+    AwaitConfirmation {
+        /// Existing account that collided. The widget renders its
+        /// display label and metadata so the user can confirm the
+        /// collision before electing "add anyway".
+        existing: AccountSummary,
+        /// Pending validated account staged in the
+        /// [`crate::secret_fields::AddSecretState::pending`] slot.
+        validated: ValidatedAccount,
+    },
+}
+
+/// Classify the [`paladin_auth_core::Vault::find_duplicate`] result for
+/// the pre-mutation pre-flight.
+///
+/// `existing` is the return value of
+/// [`paladin_auth_core::Vault::find_duplicate`] (`Some(account.summary())`
+/// on collision, `None` otherwise). Routing rule:
+///
+/// * `None` → [`DuplicateOutcome::Proceed`]: commit the validated
+///   account.
+/// * `Some(existing)` → [`DuplicateOutcome::AwaitConfirmation`]:
+///   stage the validated account and prompt the user.
+#[must_use]
+pub fn classify_duplicate(
+    validated: ValidatedAccount,
+    existing: Option<AccountSummary>,
+) -> DuplicateOutcome {
+    match existing {
+        None => DuplicateOutcome::Proceed(validated),
+        Some(existing) => DuplicateOutcome::AwaitConfirmation {
+            existing,
+            validated,
+        },
+    }
+}
+
+/// Save-click outcome from the path-aware submit composer chained
+/// through duplicate detection.
+///
+/// Collapses [`SubmitOutcome`] and [`DuplicateOutcome`] into a
+/// single shape so the widget Save handler has one downstream
+/// branch covering the full pre-mutation pipeline:
+///
+/// * [`SaveClickOutcome::Proceed`] — validated account ready for
+///   insertion via `Vault::mutate_and_save(|v| v.add(account))`.
+///   The widget dispatches [`AddAccountMsg::SubmitProceed`].
+/// * [`SaveClickOutcome::AwaitConfirmation`] — `(secret, issuer,
+///   label)` collision detected by [`Vault::find_duplicate`]. The
+///   widget renders the existing summary alongside the "add
+///   anyway?" prompt and dispatches
+///   [`AddAccountMsg::StagePendingDuplicate`] to park the pending
+///   in [`crate::secret_fields::AddSecretState::pending`].
+/// * [`SaveClickOutcome::InlineError`] — typed §5 inline error
+///   surfaced by [`compose_submit_outcome`] before the duplicate
+///   check runs. The widget renders the rejection against the
+///   active sub-path's failing field and leaves the form populated
+///   for retry.
+///
+/// Naming parallels [`SubmitOutcome`] / [`DuplicateOutcome`] on
+/// the per-stage layer; this enum is the unified projection the
+/// widget consults once per Save click.
+#[derive(Debug)]
+pub enum SaveClickOutcome {
+    /// Validated account ready for insertion via
+    /// `Vault::mutate_and_save(|v| v.add(account))`.
+    Proceed(ValidatedAccount),
+    /// `Vault::find_duplicate` returned a collision. Threads the
+    /// existing summary plus the pending validated account so the
+    /// widget can render the "add anyway?" prompt and park the
+    /// pending via
+    /// [`crate::secret_fields::AddSecretState::replace_pending`].
+    AwaitConfirmation {
+        /// Existing account that collided. The widget renders its
+        /// display label and metadata so the user can confirm the
+        /// collision before electing "add anyway".
+        existing: AccountSummary,
+        /// Pending validated account staged in the
+        /// [`crate::secret_fields::AddSecretState::pending`] slot.
+        validated: ValidatedAccount,
+    },
+    /// Typed §5 inline error; the widget renders the rejection
+    /// against the active sub-path's failing field. Surfaced
+    /// before the duplicate check runs so a typed-but-rejected
+    /// attempt never consults the vault.
+    InlineError(InlineError),
+}
+
+/// Path-aware Save-click composer chaining [`compose_submit_outcome`]
+/// with [`paladin_auth_core::Vault::find_duplicate`] + [`classify_duplicate`].
+///
+/// The widget Save handler calls this once per click to drive the
+/// full pre-mutation pipeline as a single boundary — the unified
+/// [`SaveClickOutcome`] keeps the downstream dispatch
+/// (`SubmitProceed` vs `StagePendingDuplicate` vs inline render) a
+/// one-shot match without re-deriving the validation or
+/// duplicate-detection decision elsewhere.
+///
+/// Routing rules:
+///
+/// * Typed inline error from [`compose_submit_outcome`] →
+///   [`SaveClickOutcome::InlineError`]. The vault is **not**
+///   consulted, so a typed-but-rejected attempt never runs the
+///   duplicate check.
+/// * `Proceed(validated)` from [`compose_submit_outcome`] →
+///   [`paladin_auth_core::Vault::find_duplicate`] is consulted; the
+///   `Option<&Account>` collapses to `Option<AccountSummary>` for
+///   [`classify_duplicate`], which routes to
+///   [`SaveClickOutcome::Proceed`] (no collision) or
+///   [`SaveClickOutcome::AwaitConfirmation`] (collision).
+///
+/// The borrow keeps the dialog state intact so a typed-but-
+/// rejected attempt can retry against the same buffers without
+/// losing the user's input on either sub-path. The vault is
+/// borrowed shared because
+/// [`paladin_auth_core::Vault::find_duplicate`] is read-only — the
+/// mutation lives later in the
+/// `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(account))`
+/// worker once the widget dispatches `SubmitProceed`.
+#[must_use]
+pub fn compose_save_click_outcome(
+    state: &AddDialogState,
+    vault: &Vault,
+    now: SystemTime,
+) -> SaveClickOutcome {
+    match compose_submit_outcome(state, now) {
+        SubmitOutcome::InlineError(err) => SaveClickOutcome::InlineError(err),
+        SubmitOutcome::Proceed(validated) => {
+            let existing = vault.find_duplicate(&validated).map(Account::summary);
+            match classify_duplicate(validated, existing) {
+                DuplicateOutcome::Proceed(validated) => SaveClickOutcome::Proceed(validated),
+                DuplicateOutcome::AwaitConfirmation {
+                    existing,
+                    validated,
+                } => SaveClickOutcome::AwaitConfirmation {
+                    existing,
+                    validated,
+                },
+            }
+        }
+    }
+}
+
+/// Post-effect routing decision for a failed
+/// `Vault::mutate_and_save(|v| { v.add(validated.account); … })`.
+///
+/// See [`classify_add_post_effect_error`].
+#[derive(Debug, Clone)]
+pub enum AddPostEffectOutcome {
+    /// `save_not_committed`, `io_error`, or any other typed error
+    /// other than `save_durability_unconfirmed`. The vault was not
+    /// mutated (or the rollback inside core has already restored
+    /// it). The dialog stays open and surfaces the inline error.
+    Inline(InlineError),
+    /// `save_durability_unconfirmed` — the add committed to disk but
+    /// the parent-directory `fsync` failed. The dialog can close the
+    /// success path and surface the durability warning beneath the
+    /// post-add counts panel.
+    KeepWithWarning(InlineWarning),
+}
+
+/// Classify a [`paladin_auth_core::Vault::mutate_and_save`] failure into
+/// an [`AddPostEffectOutcome`].
+///
+/// Routes `save_durability_unconfirmed` to
+/// [`AddPostEffectOutcome::KeepWithWarning`] and falls back to
+/// [`AddPostEffectOutcome::Inline`] for every other typed variant so
+/// the dialog never silently transitions out on a failure (parity
+/// with the URI sub-path's
+/// [`crate::otpauth_uri_paste::classify_uri_add_error`]).
+#[must_use]
+pub fn classify_add_post_effect_error(err: &PaladinAuthError) -> AddPostEffectOutcome {
+    match err.kind() {
+        ErrorKind::SaveDurabilityUnconfirmed => {
+            AddPostEffectOutcome::KeepWithWarning(InlineWarning::from_error(err))
+        }
+        _ => AddPostEffectOutcome::Inline(InlineError::from_error(err)),
+    }
+}
+
+/// Bundle of inputs the GTK add worker consumes by value.
+///
+/// `AppModel::update` builds this from the live `Unlocked` `(Vault,
+/// Store)` pair plus the [`ValidatedAccount::account`] extracted from
+/// either [`classify_manual_submit`]'s `Proceed` arm or
+/// [`crate::otpauth_uri_paste::classify_uri_submit`]'s `Proceed` arm
+/// (the URI sub-path shares the same downstream commit path). The
+/// dialog retains the [`ValidatedAccount::warnings`] in its own
+/// reactive state so they can be rendered on the success path; the
+/// worker is concerned only with the commit itself.
+///
+/// Consumed by value so `gio::spawn_blocking(move || run_add_worker(
+/// input))` moves the live pair into the worker thread without
+/// keeping `AppModel` in `Unlocked` for the duration of the save
+/// call. The same pair returns from the worker on every branch so
+/// `AppModel::update` can reinstall it before applying the UI
+/// outcome.
+///
+/// `Clone` / `PartialEq` are deliberately not derived: [`Store`]
+/// holds non-`Clone` filesystem state, [`Account`] holds zeroizing
+/// secret bytes, and `AppModel::update` consumes the input exactly
+/// once when it moves it into the `gio::spawn_blocking` closure.
+#[derive(Debug)]
+pub struct AddWorkerInput {
+    /// Live vault from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// into the worker so `mutate_and_save` can borrow it mutably
+    /// without keeping `AppModel` in `Unlocked` for the duration of
+    /// the save call.
+    pub vault: Vault,
+    /// Live store from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// alongside `vault` so the same `(Vault, Store)` pair returns
+    /// from the worker even on typed failure.
+    pub store: Store,
+    /// Validated account extracted from
+    /// [`ValidatedAccount::account`]. The id stamped at validation
+    /// time is preserved through [`Vault::add`] so the worker can
+    /// surface it back to the dialog on
+    /// [`AddWorkerEffect::Success`] without scanning the vault.
+    pub account: Account,
+}
+
+/// Outcome of [`run_add_worker`] for `AppModel::update` to apply.
+///
+/// `Success` indicates the add committed and the row appears in the
+/// visible account list (the carried [`AccountId`] lets the dialog /
+/// list highlight or scroll to the new row without re-scanning the
+/// vault). `Failure` wraps the [`AddPostEffectOutcome`] from
+/// [`classify_add_post_effect_error`] so the dialog can re-render
+/// the inline error / durability warning without re-deriving the
+/// routing decision off the [`PaladinAuthError`].
+#[derive(Debug, Clone)]
+pub enum AddWorkerEffect {
+    /// `Vault::mutate_and_save(|v| { v.add(account); … })` returned
+    /// `Ok(())`. The dialog dismisses itself and the new row appears
+    /// in the visible account list. The carried [`AccountId`] is the
+    /// id stamped on the [`Account`] at validation time (preserved
+    /// by [`Vault::add`]).
+    Success {
+        /// Stable id of the just-inserted account.
+        account_id: AccountId,
+    },
+    /// `Vault::mutate_and_save(|v| { v.add(account); … })` returned a
+    /// typed failure. The carried [`AddPostEffectOutcome`] tells the
+    /// dialog whether to stay open with an inline error
+    /// (`save_not_committed`, `io_error`, defensive
+    /// `validation_error` / `invalid_state` / …) or report success
+    /// with an attached durability warning
+    /// (`save_durability_unconfirmed`).
+    Failure(AddPostEffectOutcome),
+}
+
+/// Bundle returned by [`run_add_worker`].
+///
+/// Carries the live `(Vault, Store)` pair on every branch so
+/// `AppModel::update` can reinstall it before applying the UI
+/// outcome — `Vault::mutate_and_save` already restores the snapshot
+/// on `save_not_committed`, so the returned vault is the
+/// authoritative post-effect state regardless of the
+/// [`AddWorkerEffect`] variant. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Vault interaction" > "Every worker returns `(Vault, Store,
+/// EffectOutcome)`".
+///
+/// `Clone` / `PartialEq` are deliberately not derived for the same
+/// reason as on [`AddWorkerInput`].
+#[derive(Debug)]
+pub struct AddWorkerCompletion {
+    /// Routed effect for `AppModel::update` to apply to the dialog.
+    pub effect: AddWorkerEffect,
+    /// Live vault after the `mutate_and_save` call. On
+    /// [`AddWorkerEffect::Success`] the targeted account is present;
+    /// on [`AddWorkerEffect::Failure`] the vault is whatever
+    /// `mutate_and_save` rolled back to (pre-commit snapshot for
+    /// `save_not_committed`; post-commit state with the new account
+    /// for `save_durability_unconfirmed`; pre-call state for
+    /// defensive `validation_error` / `invalid_state` cases).
+    pub vault: Vault,
+    /// Live store moved through unchanged so `AppModel::update` can
+    /// reinstall the `(Vault, Store)` pair after the worker returns.
+    pub store: Store,
+}
+
+/// Synchronous body of the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.add(...))` add worker fired by
+/// `AppModel::update` from
+/// `AppMsg::AddAccountAction(AddAccountOutput::Submit{Manual,Uri})`.
+///
+/// Consumes the [`AddWorkerInput`] by value, captures the
+/// [`AccountId`] off the [`Account`] before it moves into the
+/// closure, runs `vault.mutate_and_save(&store, |v| { v.add(account);
+/// Ok(()) })`, and bundles the outcome into an
+/// [`AddWorkerCompletion`] via [`classify_add_post_effect_error`].
+/// The live `(Vault, Store)` pair is always returned so `AppModel`
+/// reinstalls it regardless of the typed effect — `mutate_and_save`
+/// is authoritative for the rollback / durability-unconfirmed
+/// semantics per docs/DESIGN.md §4.3.
+///
+/// The duplicate-detection pre-flight ([`classify_duplicate`]) runs
+/// at the dialog layer before this worker is dispatched; an "add
+/// anyway" confirmation consumes the staged validated account from
+/// [`crate::secret_fields::AddSecretState::pending`] and the worker
+/// commits it without re-checking. The worker therefore makes no
+/// duplicate decisions — it commits whatever account the dialog
+/// hands it, in lockstep with the CLI's `--allow-duplicate` /
+/// "add anyway" semantics.
+///
+/// Extracting the worker body as a pure function lets
+/// `AppModel::update`'s closure stay a thin
+/// `gio::spawn_blocking(move || run_add_worker(input))` while the
+/// real `mutate_and_save` call stays unit-testable in
+/// `tests/add_account_logic.rs` against tempfile-backed plaintext
+/// vaults — no GTK / libadwaita main loop required. The
+/// `AppModel::update` wire-up and the `apply_add_*` reinstall
+/// helpers land in follow-up commits alongside the `UnlockedBusy`
+/// worker infrastructure.
+#[must_use]
+pub fn run_add_worker(input: AddWorkerInput) -> AddWorkerCompletion {
+    let AddWorkerInput {
+        mut vault,
+        store,
+        account,
+    } = input;
+    let account_id = account.id();
+    let effect = match vault.mutate_and_save(&store, |v| {
+        v.add(account);
+        Ok(())
+    }) {
+        Ok(()) => AddWorkerEffect::Success { account_id },
+        Err(err) => AddWorkerEffect::Failure(classify_add_post_effect_error(&err)),
+    };
+    AddWorkerCompletion {
+        effect,
+        vault,
+        store,
+    }
+}
+
+/// Input bundle for [`run_qr_worker`].
+///
+/// Symmetric partner of [`AddWorkerInput`] on the clipboard-QR sub-
+/// path. The manual / URI sub-paths submit a single
+/// [`ValidatedAccount`] through [`AddWorkerInput::account`]; the QR
+/// sub-path submits a batch — `paladin_auth_core::import::qr_image_bytes`
+/// returns `Vec<ValidatedAccount>` regardless of QR count, and the
+/// worker merges the entire batch under
+/// [`crate::qr_clipboard::CLIPBOARD_QR_CONFLICT_POLICY`]
+/// (`ImportConflict::Skip` per §6).
+///
+/// `Clone` / `PartialEq` are deliberately not derived: [`Store`]
+/// holds non-`Clone` filesystem state, [`ValidatedAccount`] holds
+/// zeroizing secret bytes, and `AppModel::update` consumes the
+/// input exactly once when it moves it into the
+/// `gio::spawn_blocking` closure.
+#[derive(Debug)]
+pub struct QrWorkerInput {
+    /// Live vault from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// into the worker so `mutate_and_save` can borrow it mutably
+    /// without keeping `AppModel` in `Unlocked` for the duration of
+    /// the save call.
+    pub vault: Vault,
+    /// Live store from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// alongside `vault` so the same `(Vault, Store)` pair returns
+    /// from the worker even on typed failure.
+    pub store: Store,
+    /// Decoded import batch. Comes from
+    /// [`crate::qr_clipboard::decode_clipboard_qr`], which forwards
+    /// the raw RGBA buffer through
+    /// [`paladin_auth_core::import::qr_image_bytes`]; one entry per
+    /// successfully-decoded QR. Always merged under
+    /// [`crate::qr_clipboard::CLIPBOARD_QR_CONFLICT_POLICY`].
+    pub accounts: Vec<ValidatedAccount>,
+    /// Merge timestamp. Threaded through
+    /// [`paladin_auth_core::Vault::import_accounts`] so the in-vault
+    /// `updated_at` for any replaced row (if a future caller swaps
+    /// the policy off `Skip`) matches the user-visible decode time
+    /// rather than the QR worker's spawn time.
+    pub import_time: SystemTime,
+}
+
+/// Outcome of [`run_qr_worker`] for `AppModel::update` to apply.
+///
+/// `Success(report)` indicates the import committed and the
+/// visible account list should be refreshed; the carried
+/// [`ImportReport`] supplies the §6 counts (`imported`, `skipped`,
+/// `replaced`, `appended`) and the `Vec<ImportWarning>` the dialog
+/// surfaces on the counts panel. `AppModel` projects the report
+/// through [`QrImportSummary::from_report`] before dispatching the
+/// [`AddAccountMsg::QrSuccess(summary)`] message into the dialog.
+///
+/// `Failure(outcome)` wraps the [`AddPostEffectOutcome`] from
+/// [`classify_add_post_effect_error`] so the dialog can re-render
+/// the inline error / durability warning without re-deriving the
+/// routing decision off the [`PaladinAuthError`] — shared with
+/// [`AddWorkerEffect::Failure`] on the manual / URI side because
+/// the post-save rollback / durability-unconfirmed semantics are
+/// identical regardless of the input batch shape.
+#[derive(Debug, Clone)]
+pub enum QrWorkerEffect {
+    /// `Vault::mutate_and_save(|v| v.import_accounts(...))` returned
+    /// `Ok(report)`. The dialog parks the projected
+    /// [`QrImportSummary`] on
+    /// [`AddDialogState::qr_success_counts`] and renders the post-
+    /// success counts panel.
+    Success(ImportReport),
+    /// `Vault::mutate_and_save(|v| v.import_accounts(...))` returned
+    /// a typed failure. The carried [`AddPostEffectOutcome`] tells
+    /// the dialog whether to stay open with an inline error
+    /// (`save_not_committed`, `io_error`, defensive
+    /// `validation_error` / `invalid_state` / …) or report success
+    /// with an attached durability warning
+    /// (`save_durability_unconfirmed`).
+    Failure(AddPostEffectOutcome),
+}
+
+/// Bundle returned by [`run_qr_worker`].
+///
+/// Carries the live `(Vault, Store)` pair on every branch so
+/// `AppModel::update` can reinstall it before applying the UI
+/// outcome — `Vault::mutate_and_save` already restores the snapshot
+/// on `save_not_committed`, so the returned vault is the
+/// authoritative post-effect state regardless of the
+/// [`QrWorkerEffect`] variant. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Vault interaction" > "Every worker returns `(Vault, Store,
+/// EffectOutcome)`".
+///
+/// Symmetric partner of [`AddWorkerCompletion`] on the QR sub-path.
+/// `Clone` / `PartialEq` are deliberately not derived for the same
+/// reason as on [`QrWorkerInput`].
+#[derive(Debug)]
+pub struct QrWorkerCompletion {
+    /// Routed effect for `AppModel::update` to apply to the dialog.
+    pub effect: QrWorkerEffect,
+    /// Live vault after the `mutate_and_save` call. On
+    /// [`QrWorkerEffect::Success`] every non-skipped account in the
+    /// input batch is present; on [`QrWorkerEffect::Failure`] the
+    /// vault is whatever `mutate_and_save` rolled back to
+    /// (pre-commit snapshot for `save_not_committed`; post-commit
+    /// state with the merged accounts for
+    /// `save_durability_unconfirmed`; pre-call state for defensive
+    /// `validation_error` / `invalid_state` cases).
+    pub vault: Vault,
+    /// Live store moved through unchanged so `AppModel::update` can
+    /// reinstall the `(Vault, Store)` pair after the worker returns.
+    pub store: Store,
+}
+
+/// Synchronous body of the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.import_accounts(...))` clipboard-QR
+/// worker fired by `AppModel::update` from the
+/// `AddAccountOutput::SubmitQr` boundary (lands in a follow-up
+/// commit alongside the `AppModel`-side handler).
+///
+/// Consumes the [`QrWorkerInput`] by value, calls
+/// `vault.mutate_and_save(&store, |v| v.import_accounts(accounts,
+/// CLIPBOARD_QR_CONFLICT_POLICY, import_time))`, and bundles the
+/// outcome into a [`QrWorkerCompletion`] via
+/// [`classify_add_post_effect_error`]. The live `(Vault, Store)`
+/// pair is always returned so `AppModel` reinstalls it regardless
+/// of the typed effect — `mutate_and_save` is authoritative for
+/// the rollback / durability-unconfirmed semantics per
+/// docs/DESIGN.md §4.3.
+///
+/// The clipboard-image-read pre-flight
+/// ([`crate::qr_clipboard::decode_clipboard_qr`]) runs at the
+/// `AppModel` layer before this worker is dispatched; an
+/// `Err(...)` from the pre-flight (no clipboard image, decode
+/// failure, zero decoded QRs, validation rejection) surfaces
+/// inline in the Add dialog without reaching the worker, so the
+/// worker therefore makes no decode decisions — it merges whatever
+/// `Vec<ValidatedAccount>` the caller hands it under the fixed
+/// `Skip` policy.
+///
+/// Extracting the worker body as a pure function lets
+/// `AppModel::update`'s closure stay a thin
+/// `gio::spawn_blocking(move || run_qr_worker(input))` while the
+/// real `mutate_and_save` call stays unit-testable against
+/// tempfile-backed plaintext vaults — no GTK / libadwaita main
+/// loop required.
+#[must_use]
+pub fn run_qr_worker(input: QrWorkerInput) -> QrWorkerCompletion {
+    let QrWorkerInput {
+        mut vault,
+        store,
+        accounts,
+        import_time,
+    } = input;
+    let effect = match vault.mutate_and_save(&store, |v| {
+        v.import_accounts(accounts, ImportConflict::Skip, import_time)
+    }) {
+        Ok(report) => QrWorkerEffect::Success(report),
+        Err(err) => QrWorkerEffect::Failure(classify_add_post_effect_error(&err)),
+    };
+    QrWorkerCompletion {
+        effect,
+        vault,
+        store,
+    }
+}
+
+/// Inline-error projection for `AddAccountComponent`'s manual /
+/// duplicate-detection / save paths.
+///
+/// Carries the stable §5 [`ErrorKind`] for instrumentation and the
+/// pre-rendered body for display. The body comes from
+/// [`PaladinAuthError::Display`], which surfaces only `field` / `reason`
+/// wire codes — widget input (label, issuer, secret, slug, …) is
+/// never included.
+#[derive(Debug, Clone)]
+pub struct InlineError {
+    /// Stable §5 [`ErrorKind`] discriminator copied from
+    /// [`PaladinAuthError::kind`].
+    pub kind: ErrorKind,
+    /// Display body. Renders through [`std::fmt::Display`] so the
+    /// wording stays in sync with the CLI / TUI verbatim.
+    pub rendered: String,
+}
+
+impl InlineError {
+    /// Build an [`InlineError`] from a [`PaladinAuthError`].
+    #[must_use]
+    pub fn from_error(err: &PaladinAuthError) -> Self {
+        Self {
+            kind: err.kind(),
+            rendered: err.to_string(),
+        }
+    }
+
+    /// Build an [`InlineError`] from a
+    /// [`crate::qr_clipboard::QrPreflightError`].
+    ///
+    /// The live `AppModel::update` clipboard-QR handler calls this
+    /// to convert the QR sub-path's typed preflight error into the
+    /// Clone-friendly [`InlineError`] that crosses the
+    /// [`AddAccountMsg::RenderInlineError`] boundary into the
+    /// dialog. `kind` comes from
+    /// [`crate::qr_clipboard::QrPreflightError::kind`] (stable §5
+    /// discriminator) and `rendered` comes from the preflight
+    /// error's [`std::fmt::Display`] (the same body the underlying
+    /// `QrLayoutError` / `DownloadMismatch` / `PaladinAuthError` would
+    /// render, prefixed by the preflight category where the wrapper
+    /// adds context).
+    ///
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent`
+    /// QR clipboard image path" L2836, the four user-visible
+    /// categories (no image, image-decode failure, zero decoded
+    /// QRs, invalid payload) surface inline through this converter
+    /// without mutating vault state.
+    #[must_use]
+    pub fn from_qr_preflight_error(err: &crate::qr_clipboard::QrPreflightError) -> Self {
+        Self {
+            kind: err.kind(),
+            rendered: err.to_string(),
+        }
+    }
+}
+
+/// Routing decision for `AppMsg::QrClipboardLoaded`.
+///
+/// `AppModel::update` calls [`route_qr_clipboard_loaded`] on the
+/// `Result<Vec<ValidatedAccount>, QrPreflightError>` produced by the
+/// live `gdk::Clipboard::read_texture_async` →
+/// [`crate::qr_clipboard::classify_layout_preflight`] →
+/// [`crate::qr_clipboard::compose_qr_decode_outcome`] →
+/// [`crate::qr_clipboard::classify_qr_outcome`] pipeline. The two
+/// variants name the only two follow-up actions:
+///
+/// * [`Self::InlineError`] — forward the typed preflight error to
+///   the still-mounted [`AddAccountComponent`] via
+///   [`AddAccountMsg::RenderInlineError`]. Never spawns a worker;
+///   never mutates vault state.
+/// * [`Self::SpawnWorker`] — hand the decoded batch to the
+///   [`crate::app::state::compose_qr_worker_input`] +
+///   [`crate::app::state::apply_submit_add_inplace`] +
+///   `gio::spawn_blocking` [`run_qr_worker`] pipeline (mirror of
+///   the manual / URI Save-click worker spawn, but with a
+///   `Vec<ValidatedAccount>` batch instead of a single `Account`).
+///
+/// Symmetric partner of the manual / URI sub-paths' inline-error
+/// vs. proceed routing — the live handler matches on this enum to
+/// stay a thin shell around tested pure-logic helpers.
+#[derive(Debug)]
+pub enum QrClipboardLoadedDispatch {
+    /// The preflight pipeline rejected the clipboard capture (no
+    /// image, oversized layout, GDK download mismatch, or decoder
+    /// failure). The carried [`InlineError`] is the projection
+    /// `AppModel` emits through [`AddAccountMsg::RenderInlineError`]
+    /// so the dialog renders the typed body via
+    /// [`compose_inline_error_body`] / [`compose_inline_error_revealed`].
+    InlineError(InlineError),
+    /// The preflight pipeline produced a decoded batch. The carried
+    /// `Vec<ValidatedAccount>` is what `AppModel` hands to
+    /// [`crate::app::state::compose_qr_worker_input`] before
+    /// spawning [`run_qr_worker`] on `gio::spawn_blocking`.
+    SpawnWorker(Vec<ValidatedAccount>),
+}
+
+/// Route a clipboard-QR preflight result into the AppModel-side
+/// dispatch decision.
+///
+/// Pure-logic projection invoked from the
+/// `AppMsg::QrClipboardLoaded` handler in `AppModel::update`. The
+/// `Err` arm projects the typed [`crate::qr_clipboard::QrPreflightError`]
+/// through [`InlineError::from_qr_preflight_error`] so the dialog's
+/// inline-error rendering reuses the same converter the existing
+/// `inline_error_from_qr_preflight_*` tests cover; the `Ok` arm
+/// passes the decoded batch through unchanged so the worker
+/// dispatch can run [`crate::app::state::compose_qr_worker_input`]
+/// against the live `(Vault, Store)` pair.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+/// clipboard image path", the four user-visible failure categories
+/// (no clipboard image, oversized layout, decoder failure, invalid
+/// payload) surface inline through this helper without mutating
+/// vault state; the success path threads through the worker pipeline
+/// to merge the batch under
+/// [`crate::qr_clipboard::CLIPBOARD_QR_CONFLICT_POLICY`].
+#[must_use]
+pub fn route_qr_clipboard_loaded(
+    result: std::result::Result<Vec<ValidatedAccount>, crate::qr_clipboard::QrPreflightError>,
+) -> QrClipboardLoadedDispatch {
+    match result {
+        Ok(accounts) => QrClipboardLoadedDispatch::SpawnWorker(accounts),
+        Err(err) => {
+            QrClipboardLoadedDispatch::InlineError(InlineError::from_qr_preflight_error(&err))
+        }
+    }
+}
+
+/// Durability-warning projection for the post-effect `Add` path.
+///
+/// Returned by [`classify_add_post_effect_error`] on
+/// `save_durability_unconfirmed`: the add committed to disk, but the
+/// parent-directory `fsync` failed, so the dialog reports the success
+/// outcome while surfacing this warning beneath it.
+#[derive(Debug, Clone)]
+pub struct InlineWarning {
+    /// Stable §5 [`ErrorKind`] discriminator — always
+    /// [`ErrorKind::SaveDurabilityUnconfirmed`] in current code.
+    pub kind: ErrorKind,
+    /// Display body. Renders through [`std::fmt::Display`] so the
+    /// wording stays in sync with the CLI / TUI verbatim.
+    pub rendered: String,
+}
+
+impl InlineWarning {
+    /// Build an [`InlineWarning`] from a [`PaladinAuthError`].
+    #[must_use]
+    pub fn from_error(err: &PaladinAuthError) -> Self {
+        Self {
+            kind: err.kind(),
+            rendered: err.to_string(),
+        }
+    }
+}
+
+/// Inbound messages handled by `AddAccountComponent`.
+///
+/// Symmetric partner of [`crate::edit_dialog::EditDialogMsg`]
+/// on the add path. Pinned as a typed enum so future Component
+/// scaffolding (manual / URI / QR input plumbing, switching path,
+/// duplicate prompt, etc.) can land as additional variants without
+/// an `_` catch-all in the dispatch silently swallowing them.
+///
+/// Initial milestone defines only the
+/// [`AddAccountMsg::WorkerFailed`] variant so
+/// [`crate::app::state::add_dialog_msg_after`] has a typed message
+/// to forward into the live `AddAccountComponent` after the
+/// `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.add(account); … )` worker reports
+/// a failure. The Component-side `apply_msg` routing for this
+/// variant — the dialog-body re-render that attaches the inline
+/// error / durability warning — lands in a follow-up commit
+/// alongside the `AddAccountComponent` scaffold itself; for now
+/// the variant exists so the dispatch path can build cleanly
+/// while the rendering side catches up (parity with the rename
+/// staged rollout in commit `ae8fd44`).
+#[derive(Debug, Clone)]
+pub enum AddAccountMsg {
+    /// Cancel button activation. [`apply_msg`] forwards
+    /// [`AddAccountOutput::Cancel`] so `AppModel` can drop the
+    /// live [`AddAccountComponent`] controller and remove its
+    /// widget from the content tree.
+    Cancel,
+    /// `AppModel` pushes the typed [`AddPostEffectOutcome`] back
+    /// to the dialog after the
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
+    /// worker reports a failure. Symmetric partner of
+    /// [`crate::edit_dialog::EditDialogMsg::WorkerCompleted`] on
+    /// the add path: where the edit variant carries the typed
+    /// [`crate::edit_dialog::PostEffectOutcome`], the add
+    /// variant carries the typed [`AddPostEffectOutcome`] so the
+    /// dialog's handler can route `Inline` (render the typed
+    /// inline error and keep the form populated for retry) or
+    /// `KeepWithWarning` (attach the durability warning to the
+    /// body) in one `apply_msg` arm.
+    WorkerFailed(AddPostEffectOutcome),
+    /// Internal Save-clicked routing produced by the widget once
+    /// [`classify_manual_submit`] / [`crate::otpauth_uri_paste::classify_uri_submit`]
+    /// returned `Proceed` and [`classify_duplicate`] reported a
+    /// non-collision `Proceed(ValidatedAccount)`. Carries the
+    /// validated [`Account`] so [`apply_msg`] can forward
+    /// [`AddAccountOutput::Submit`] to `AppModel` without re-running
+    /// the validation pipeline. The [`Account`]'s secret is wrapped
+    /// in [`paladin_auth_core::Secret`] (which is `ZeroizeOnDrop`) so the
+    /// message stays compliant with §"Secret entry handling" when it
+    /// crosses the Component boundary.
+    ///
+    /// The duplicate-collision "add anyway" path uses
+    /// [`Self::ConfirmAddAnyway`] instead — that variant sources the
+    /// account from
+    /// [`crate::secret_fields::AddSecretState::pending`] (parked by
+    /// [`Self::StagePendingDuplicate`]) rather than from the widget,
+    /// so a stray Save click cannot bypass the parked-pending
+    /// invariant.
+    SubmitProceed {
+        /// Validated account ready for insertion via
+        /// `Vault::mutate_and_save(|v| v.add(account))`. The
+        /// stable id stamped at validation time is preserved
+        /// through [`Vault::add`] and surfaces on
+        /// [`AddWorkerEffect::Success`].
+        account: Account,
+    },
+    /// `AdwViewSwitcher` selection between the manual / URI sub-
+    /// paths. [`apply_msg`] delegates to
+    /// [`crate::secret_fields::AddSecretState::switch_path`], which
+    /// is a no-op on same-path re-entry and otherwise wipes the
+    /// leaving path's secret buffer and drops any pending duplicate-
+    /// add staged for the prior path. The decision is dialog-local —
+    /// no [`AddAccountOutput`] is emitted; `AppModel` only sees the
+    /// path that was active when the user pressed Save.
+    SwitchPath(AddPath),
+    /// Per-keystroke shadow of the non-secret label entry into
+    /// [`ManualDraftState::label`].
+    ///
+    /// Carries a plain `String` from the GTK [`gtk::EntryBuffer`] at
+    /// the §8 UI boundary; the bytes are not secret-bearing (the
+    /// `validate_manual` field-name `label` rule rejects empty /
+    /// overlong but the label itself is rendered to the user as a
+    /// row title once committed). [`apply_msg`] replaces (does not
+    /// append) the prior shadow so the draft stays in lockstep with
+    /// the visible entry text. Dialog-local — no [`AddAccountOutput`]
+    /// is emitted.
+    ManualLabelChanged(String),
+    /// Per-keystroke shadow of the non-secret issuer entry into
+    /// [`ManualDraftState::issuer`].
+    ///
+    /// Sibling of [`Self::ManualLabelChanged`] on the issuer field.
+    /// Carries a plain `String` from the GTK [`gtk::EntryBuffer`] at
+    /// the §8 UI boundary; the bytes are not secret-bearing — the
+    /// issuer is rendered alongside the row label once committed and
+    /// participates in the issuer / label match-key
+    /// [`paladin_auth_core::account_matches_search`] uses. Empty issuer
+    /// maps to `None` at submit time inside
+    /// [`classify_manual_submit`]; the draft preserves the user's
+    /// whitespace so the cursor position does not jump. [`apply_msg`]
+    /// replaces (does not append) the prior shadow. Dialog-local —
+    /// no [`AddAccountOutput`] is emitted.
+    ManualIssuerChanged(String),
+    /// Algorithm dropdown selection shadowed into
+    /// [`ManualDraftState::algorithm`].
+    ///
+    /// Sibling of [`Self::ManualLabelChanged`] on the algorithm
+    /// dropdown. Carries the typed [`Algorithm`] enum rather than a
+    /// raw string because the `AdwComboRow` model is built from the
+    /// fixed `{Sha1, Sha256, Sha512}` set; the widget maps the
+    /// selected index back to the enum before dispatching so
+    /// [`apply_msg`] never has to re-parse a label. [`apply_msg`]
+    /// replaces the prior shadow on every selection. Dialog-local —
+    /// no [`AddAccountOutput`] is emitted.
+    ManualAlgorithmChanged(Algorithm),
+    /// OTP digit count from the digits spinner shadowed into
+    /// [`ManualDraftState::digits`].
+    ///
+    /// Sibling of [`Self::ManualAlgorithmChanged`] on the digits
+    /// spinner. The widget configures the `AdwSpinRow` adjustment to
+    /// `6..=8` so dispatch normally only carries valid values, but
+    /// [`apply_msg`] does **not** re-clamp — the draft preserves
+    /// whatever value arrives so [`validate_manual`] at Save time can
+    /// surface the typed `digits` inline error if a test driver or a
+    /// future misuse path slips an out-of-range value through.
+    /// Dialog-local — no [`AddAccountOutput`] is emitted.
+    ManualDigitsChanged(u8),
+    /// TOTP / HOTP switcher selection shadowed into
+    /// [`ManualDraftState::kind`].
+    ///
+    /// Sibling of [`Self::ManualAlgorithmChanged`] on the kind
+    /// switcher. The widget swaps the period spinner for the counter
+    /// spinner (and vice versa) on every `#[watch]` re-render keyed
+    /// off this field. [`apply_msg`] does **not** clear the sibling
+    /// `period_secs` / `counter` buffers — [`classify_manual_submit`]
+    /// at Save time already drops the irrelevant value based on
+    /// `kind`, so a toggle-and-toggle-back preserves the user's prior
+    /// typing in both fields. Dialog-local — no [`AddAccountOutput`]
+    /// is emitted.
+    ManualKindChanged(AccountKindInput),
+    /// TOTP period (seconds) from the period spinner shadowed into
+    /// [`ManualDraftState::period_secs`].
+    ///
+    /// Sibling of [`Self::ManualDigitsChanged`] on the period
+    /// spinner. The widget configures the `AdwSpinRow` adjustment to
+    /// the §5 valid range so dispatch normally only carries valid
+    /// values, but [`apply_msg`] does **not** re-clamp — the draft
+    /// preserves whatever value arrives so [`validate_manual`] at
+    /// Save time can surface the typed `period_secs` inline error.
+    /// The field is consulted only when `kind == AccountKindInput::Totp`
+    /// (see [`classify_manual_submit`]) but the draft preserves it
+    /// regardless so a kind round trip does not lose the user's
+    /// typing. Dialog-local — no [`AddAccountOutput`] is emitted.
+    ManualPeriodChanged(u32),
+    /// HOTP starting counter from the counter spinner shadowed into
+    /// [`ManualDraftState::counter`].
+    ///
+    /// Sibling of [`Self::ManualPeriodChanged`] on the counter
+    /// spinner. The full `u64` range is accepted verbatim —
+    /// [`validate_manual`] at Save time owns any range checks. The
+    /// field is consulted only when `kind == AccountKindInput::Hotp`
+    /// (see [`classify_manual_submit`]) but the draft preserves it
+    /// regardless so a kind round trip does not lose the user's
+    /// typing. Dialog-local — no [`AddAccountOutput`] is emitted.
+    ManualCounterChanged(u64),
+    /// Per-keystroke shadow of the non-secret icon-hint entry into
+    /// [`ManualDraftState::icon_hint_text`].
+    ///
+    /// Sibling of [`Self::ManualLabelChanged`] on the icon-hint
+    /// field. Carries a plain `String` from the GTK
+    /// [`gtk::EntryBuffer`] at the §8 UI boundary; the bytes are not
+    /// secret-bearing. Parsing of `"none"` (any case) / explicit
+    /// slugs lives in [`paladin_auth_core::parse_icon_hint_token`] at
+    /// Save time inside [`classify_manual_submit`], so [`apply_msg`]
+    /// preserves the typed text verbatim — including whitespace and
+    /// arbitrary case — so the parse happens once at the boundary the
+    /// CLI / TUI also use. [`apply_msg`] replaces (does not append)
+    /// the prior shadow. Dialog-local — no [`AddAccountOutput`] is
+    /// emitted.
+    ManualIconHintChanged(String),
+    /// Per-keystroke shadow of the manual Base32 secret entry into
+    /// the Paladin Auth-owned [`crate::secret_fields::SecretEntry`] inside
+    /// [`crate::secret_fields::AddSecretState::manual_secret`].
+    ///
+    /// Carries a plain `String` rather than [`secrecy::SecretString`]
+    /// because the GTK [`gtk::EntryBuffer`] is the unavoidable §8 UI
+    /// boundary: the bytes arrive as a `GString` from
+    /// [`gtk::Editable::text`] and live transiently in the relm4
+    /// channel before [`apply_msg`] shadows them into the
+    /// [`crate::secret_fields::SecretEntry`]. Once the handler
+    /// returns, the `String` drops and only the `Zeroizing<String>`
+    /// copy in [`AddDialogState::secret_state`] survives. Mirror of
+    /// [`crate::unlock_dialog::UnlockDialogMsg::PassphraseChanged`]
+    /// on the add path.
+    ManualSecretChanged(String),
+    /// Per-keystroke shadow of the `otpauth://` URI entry into the
+    /// Paladin Auth-owned [`crate::secret_fields::SecretEntry`] inside
+    /// [`crate::secret_fields::AddSecretState::uri_text`].
+    ///
+    /// Secret-bearing because the URI embeds the Base32 secret per
+    /// §"Secret entry handling": the same `String`-at-the-UI-boundary,
+    /// `Zeroizing<String>`-in-the-canonical-home contract applies
+    /// here as for [`Self::ManualSecretChanged`].
+    UriTextChanged(String),
+    /// The widget pre-ran [`classify_duplicate`] and observed
+    /// [`DuplicateOutcome::AwaitConfirmation`]; the pending
+    /// [`ValidatedAccount`] is staged in
+    /// [`crate::secret_fields::AddSecretState::pending`] so the
+    /// "add anyway?" confirmation prompt can render. The
+    /// destructured `{ account, warnings }` shape sidesteps the
+    /// missing `Clone` impl on [`ValidatedAccount`] — both fields
+    /// are `Clone` individually so [`AddAccountMsg`]'s `Clone`
+    /// derive stays intact. [`apply_msg`] reconstructs a
+    /// [`ValidatedAccount`] from the carried fields before handing
+    /// it to
+    /// [`crate::secret_fields::AddSecretState::replace_pending`].
+    ///
+    /// Dialog-local — no [`AddAccountOutput`] is emitted. The
+    /// duplicate-confirm round trip stays inside the dialog until
+    /// the user confirms (via [`Self::ConfirmAddAnyway`], which
+    /// consumes the pending and forwards
+    /// [`AddAccountOutput::Submit`]) or cancels (via
+    /// [`Self::Cancel`], which drops the pending).
+    StagePendingDuplicate {
+        /// Validated account ready for insertion via
+        /// `Vault::mutate_and_save(|v| v.add(account))` once the
+        /// user confirms "add anyway". Stored together with
+        /// `warnings` in a reconstructed [`ValidatedAccount`]
+        /// inside [`crate::secret_fields::AddSecretState::pending`].
+        account: Account,
+        /// Non-fatal warnings collected during validation (e.g.
+        /// [`ValidationWarning::ShortSecret`]). Threaded through
+        /// with `account` so the dialog can render them alongside
+        /// the duplicate-confirm prompt without re-running
+        /// [`validate_manual`].
+        warnings: Vec<ValidationWarning>,
+        /// Colliding existing account reported by
+        /// [`paladin_auth_core::Vault::find_duplicate`]. Threaded through
+        /// so the "Add anyway?" prompt can render the existing
+        /// account's display label / issuer alongside the pending
+        /// validated account. [`apply_msg`] stores it in
+        /// [`AddDialogState::pending_duplicate_existing`] so the
+        /// widget view (a `#[watch]` over that slot) reads it
+        /// without re-querying the vault.
+        existing: AccountSummary,
+    },
+    /// "Add anyway" confirmation from the duplicate-collision modal.
+    /// [`apply_msg`] consumes the pending [`ValidatedAccount`] out of
+    /// [`crate::secret_fields::AddSecretState::pending`] via
+    /// [`crate::secret_fields::AddSecretState::consume_pending`] —
+    /// which also wipes the manual / URI shadow buffers — and
+    /// forwards the carried [`Account`] as
+    /// [`AddAccountOutput::Submit`] so `AppModel::update` can spawn
+    /// the `gio::spawn_blocking Vault::mutate_and_save(|v|
+    /// v.add(account))` worker. CLI parity with `--allow-duplicate`
+    /// and TUI parity with `Effect::AddAnyway`.
+    ///
+    /// Defensive: a dispatch with no pending parked is a no-op (no
+    /// output, no state change) so a stray click cannot punch through
+    /// to the worker without a validated account in hand.
+    ConfirmAddAnyway,
+    /// "Cancel" response from the duplicate-collision
+    /// [`adw::AlertDialog`]. Drops the pending
+    /// [`paladin_auth_core::ValidatedAccount`] out of
+    /// [`crate::secret_fields::AddSecretState::pending`] and clears
+    /// [`AddDialogState::pending_duplicate_existing`] so a
+    /// subsequent Save click starts from a clean projection — but
+    /// emits **no** [`AddAccountOutput`] so the parent
+    /// [`AddAccountComponent`] stays open. The user is returned to
+    /// the manual / URI form with the typed buffers intact so they
+    /// can edit the colliding field and retry without re-entering
+    /// everything.
+    ///
+    /// Mirror of [`crate::init_dialog::InitDialogMsg::ForceCancelClicked`]
+    /// on the add path: the in-modal Cancel response stays
+    /// dialog-local and is distinct from [`Self::Cancel`] (which
+    /// closes the whole add dialog by emitting
+    /// [`AddAccountOutput::Cancel`]).
+    ///
+    /// Defensive: a stray dispatch with no pending parked is a
+    /// benign no-op (no output, no state change beyond
+    /// re-confirming the empty slots).
+    DismissDuplicateAlert,
+    /// Typed §5 inline-error projection produced by the widget when
+    /// [`compose_save_click_outcome`] returned
+    /// [`SaveClickOutcome::InlineError`] — the active sub-path's
+    /// pre-effect validation or duplicate-detection pipeline
+    /// rejected the Save click. [`apply_msg`] stores the carried
+    /// [`InlineError`] in [`AddDialogState::inline_error`] so the
+    /// dialog body's `#[watch]` over [`AddDialogState::inline_error`]
+    /// can render the typed body against the failing field.
+    /// Dialog-local — no [`AddAccountOutput`] is emitted; the
+    /// rejection stays inside the dialog until the user fixes the
+    /// failing field and re-submits. Mirror of
+    /// [`crate::unlock_dialog::UnlockDialogState::set_inline_error`]
+    /// on the add path; pairs with [`Self::WorkerFailed`] which
+    /// covers post-effect (`Vault::mutate_and_save`) failures
+    /// instead.
+    RenderInlineError(InlineError),
+    /// Parent-driven worker-in-flight latch flipped by `AppModel`
+    /// when it enters / leaves the `Unlocked → UnlockedBusy` window
+    /// around the `gio::spawn_blocking Vault::mutate_and_save(|v|
+    /// v.add(...))` worker.
+    ///
+    /// [`apply_msg`] writes the boolean into
+    /// [`AddDialogState::busy`] so [`compose_save_button_sensitive`]
+    /// can dim the shared Save footer (and any per-path activation
+    /// button) for the worker's lifetime, matching the
+    /// §"In-flight effect ownership" rule that mutating dialog
+    /// submit buttons stay disabled while the parent owns the live
+    /// `(Vault, Store)` pair. Dialog-local — no [`AddAccountOutput`]
+    /// is emitted (the parent already knows it kicked the worker
+    /// off; the message exists so the dialog observes the same flip
+    /// `AccountListMsg::SetBusy` drives on the row factory).
+    SetBusy(bool),
+    /// Window-close / parent-navigation / modal-dismissal
+    /// dispatch, distinct from the explicit Cancel button.
+    ///
+    /// [`apply_msg`] routes this through the same centralized
+    /// dismissal helper as [`Self::Cancel`] (wipe the manual / URI
+    /// shadow buffers via
+    /// [`crate::secret_fields::ClearReason::Close`], drop any
+    /// pending duplicate-add, drain the colliding-summary
+    /// projection) and emits the typed
+    /// [`AddAccountOutput::Close`] so `AppModel` can tell the two
+    /// dismissal sources apart in the
+    /// `AppMsg::AddAccountAction(...)` dispatch. The split mirrors
+    /// the [`crate::secret_fields::ClearReason`] split between
+    /// `Cancel` and `Close`: both wipe the secret state but they
+    /// stay distinct so future telemetry / smoke markers can
+    /// attribute the dismissal source without a heuristic.
+    Close,
+    /// Shared Save-button activation at the dialog footer covering
+    /// the manual and URI sub-paths.
+    ///
+    /// The widget cannot run [`compose_save_click_outcome`] on its
+    /// own — the composer borrows `&Vault` for the duplicate-
+    /// detection pre-flight and the dialog never owns the live
+    /// `(Vault, Store)` pair. [`apply_msg`] therefore forwards
+    /// [`AddAccountOutput::RequestSaveClick`] up to `AppModel`,
+    /// which reads the cached state via `controller.model()`,
+    /// runs [`compose_save_click_outcome(state, &vault, now)`], and
+    /// dispatches the resulting [`AddAccountMsg`] back via
+    /// `controller.emit(...)`. The shared pipeline keeps both
+    /// sub-paths converging on a single
+    /// [`AddAccountOutput::Submit`] boundary per
+    /// `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `AddAccountComponent` shared shell L2161.
+    ///
+    /// Dialog-local side effects are deliberately minimal — the
+    /// parent's compose result is authoritative for whether prior
+    /// pending state should drain, so the arm only forwards the
+    /// request without mutating `manual_draft`, `secret_state`,
+    /// `pending_duplicate_existing`, or `inline_error`. Pinned by
+    /// the `tests/add_account_logic.rs::apply_msg_save_clicked_*`
+    /// invariants.
+    SaveClicked,
+    /// Clipboard-QR sub-path activation button on the
+    /// `AdwViewStack`'s "Scan" page.
+    ///
+    /// The Save submit at the dialog footer covers the manual and
+    /// URI sub-paths through [`compose_save_click_outcome`], but
+    /// the QR path activates differently: it reads a `gdk::Texture`
+    /// from the GDK clipboard, allocates a `width * height * 4`
+    /// straight RGBA8 buffer, downloads via `gdk::TextureDownloader`
+    /// set to `gdk::MemoryFormat::R8g8b8a8`, and calls
+    /// [`crate::qr_clipboard::decode_clipboard_qr`] before handing
+    /// the resulting `Vec<ValidatedAccount>` to a
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v| v.import_accounts(...))`
+    /// worker (parity with §6's
+    /// [`paladin_auth_core::ImportConflict::Skip`] policy). Because the
+    /// activation owns its own pipeline, the QR page hides the
+    /// shared Save submit (see `compose_save_button_sensitive`'s
+    /// `AddPath::Qr => false` arm) and presents this page-local
+    /// "Scan clipboard" button instead.
+    ///
+    /// [`apply_msg`] emits
+    /// [`AddAccountOutput::RequestScanClipboard`] without mutating
+    /// dialog state so the parent can drive the clipboard read
+    /// against the live `(Vault, Store)` pair. The follow-up
+    /// `AppModel`-side handler reads the GDK clipboard, runs the
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v|
+    /// v.import_accounts(...))` worker, and routes success /
+    /// failure back through [`Self::QrSuccess`] /
+    /// [`Self::WorkerFailed`]. Pinned by
+    /// `tests/add_account_logic.rs::apply_msg_scan_clipboard_clicked_emits_request_scan_clipboard_output`.
+    ScanClipboardClicked,
+    /// Clipboard-QR worker reported a successful import. `AppModel`
+    /// extracts the [`QrImportSummary`] from the worker's
+    /// [`paladin_auth_core::ImportReport`] via
+    /// [`QrImportSummary::from_report`] and forwards it through
+    /// this variant so the dialog can park the counts on
+    /// [`AddDialogState::qr_success_counts`] and render the post-
+    /// success counts panel.
+    ///
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `AddAccountComponent` shared shell L2230: successful QR adds
+    /// keep the dialog open on the counts panel (imported /
+    /// skipped / warnings) until the user dismisses it, distinct
+    /// from manual / URI adds which dismiss via toast on success.
+    ///
+    /// [`apply_msg`] drops any prior pre-effect [`InlineError`] and
+    /// post-effect [`AddPostEffectOutcome`] before parking the
+    /// counts so the panel renders against a clean dialog body.
+    /// Dialog-local — no [`AddAccountOutput`] is emitted; the
+    /// parent already knows the worker landed.
+    QrSuccess(QrImportSummary),
+    /// User clicked Dismiss on the post-success counts panel. The
+    /// arm drains [`AddDialogState::qr_success_counts`] so the
+    /// widget's `#[watch]` binding re-renders without the panel.
+    /// The dialog stays open so the user can chain another import
+    /// or switch sub-paths without re-opening Add.
+    ///
+    /// Defensive: a stray dispatch on a dialog that has not seen a
+    /// QR success is a benign no-op (no output, no state change).
+    DismissQrCountsPanel,
+}
+
+/// Outbound messages emitted by [`AddAccountComponent`] back to
+/// `AppModel`.
+///
+/// Symmetric partner of [`crate::edit_dialog::EditDialogOutput`]
+/// on the add path. Pinned as a typed enum so future Component
+/// scaffolding (manual / URI / QR submit variants) can land as
+/// additional variants without an `_` catch-all in the dispatch
+/// silently swallowing them.
+///
+/// `Cancel` dismisses the dialog; `Submit` ships the validated
+/// [`Account`] to `AppModel` so the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.add(account))` worker can run.
+/// `RequestScanClipboard` is the QR sub-path's wake-up signal —
+/// `AppModel` reads `gdk::Display::default().clipboard()`, validates
+/// the texture layout via [`crate::qr_clipboard::prepare_rgba_layout`],
+/// downloads through `gdk::TextureDownloader` with
+/// `gdk::MemoryFormat::R8g8b8a8`, and dispatches the
+/// `gio::spawn_blocking Vault::mutate_and_save(|v|
+/// v.import_accounts(...))` worker — the dialog never owns the
+/// `(Vault, Store)` pair, so the request has no payload.
+#[derive(Debug, Clone)]
+pub enum AddAccountOutput {
+    /// User dismissed the dialog without saving. `AppModel` drops
+    /// the live [`AddAccountComponent`] controller and removes its
+    /// widget from the content tree.
+    Cancel,
+    /// Window-close / parent-navigation / modal-dismissal pathway
+    /// distinct from the explicit Cancel button. `AppModel` drops
+    /// the live [`AddAccountComponent`] controller the same way it
+    /// does on [`Self::Cancel`]; the variant stays distinct so the
+    /// `AppMsg::AddAccountAction(...)` dispatch can keep an
+    /// explicit per-source arm rather than relying on a `_`
+    /// catch-all that would silently swallow a future Close-only
+    /// behavior (e.g. surfacing a "Discard draft?" prompt before
+    /// dismissal).
+    Close,
+    /// Save button pressed with a validated account from either the
+    /// manual or URI sub-path. The widget pre-runs
+    /// [`classify_manual_submit`] / [`crate::otpauth_uri_paste::classify_uri_submit`]
+    /// and [`classify_duplicate`] on the main thread so this
+    /// variant only fires once a `Proceed` outcome (or a consumed
+    /// "add anyway" duplicate) is in hand. `AppModel` hands the
+    /// pair to the `gio::spawn_blocking
+    /// Vault::mutate_and_save(|v| v.add(account))` worker via
+    /// [`crate::app::state::compose_add_worker_input`].
+    Submit {
+        /// Validated account ready for insertion. The id stamped
+        /// at validation time is preserved through [`Vault::add`]
+        /// so the worker can surface it back to the dialog on
+        /// [`AddWorkerEffect::Success`] without scanning the
+        /// vault.
+        account: Account,
+    },
+    /// Shared Save-button activation request — the dialog's footer
+    /// Save button was clicked and the parent must run
+    /// [`compose_save_click_outcome`] against the live
+    /// `(Vault, Store)` pair on its behalf.
+    ///
+    /// `AppModel` reads the cached dialog state via the live
+    /// `Controller<AddAccountComponent>`'s
+    /// [`relm4::ComponentController::model`], borrows the live
+    /// vault from `self.vault`, runs the composer with
+    /// [`SystemTime::now`] (captured at the dispatch site so a
+    /// long worker queue cannot stamp a stale `Code.timestamp`),
+    /// and dispatches the resulting [`AddAccountMsg`] back via
+    /// `controller.emit(save_click_outcome_to_msg(outcome))`. The
+    /// `RequestSaveClick` variant carries no payload because the
+    /// parent has direct read access to the live state via
+    /// `ComponentController::model`; the message is the wake-up
+    /// signal, not the data carrier.
+    ///
+    /// `AppModel` defensively no-ops this dispatch when the cached
+    /// `(Vault, Store)` pair is unavailable (`UnlockedBusy`,
+    /// `Locked`, `Missing`, `StartupError`) so a stray Save click
+    /// during a worker round trip cannot punch through to a
+    /// duplicate check the live state cannot answer.
+    RequestSaveClick,
+    /// Page-local "Scan clipboard" activation request emitted by
+    /// the QR sub-path. The dialog cannot drive the clipboard read
+    /// itself: the live `gdk::Display` / `gdk::Clipboard` /
+    /// `gdk::TextureDownloader` round-trip and the
+    /// `Vault::mutate_and_save(|v| v.import_accounts(...))` worker
+    /// both belong to the parent. `AppModel` reads
+    /// `gdk::Display::default().clipboard()`, validates the texture
+    /// layout via [`crate::qr_clipboard::prepare_rgba_layout`],
+    /// downloads through a `gdk::TextureDownloader` set to
+    /// `gdk::MemoryFormat::R8g8b8a8`, hands the buffer to
+    /// [`crate::qr_clipboard::decode_clipboard_qr`], and dispatches
+    /// [`crate::add_account::run_qr_worker`] on
+    /// `gio::spawn_blocking`. Success returns through
+    /// [`AddAccountMsg::QrSuccess`]; failure routes through
+    /// [`AddAccountMsg::WorkerFailed`].
+    ///
+    /// Symmetric partner of [`Self::RequestSaveClick`]: a payload-
+    /// less wake-up signal the parent fulfils against its live
+    /// `(Vault, Store)` pair. `AppModel` defensively no-ops this
+    /// dispatch when the cached pair is unavailable
+    /// (`UnlockedBusy`, `Locked`, `Missing`, `StartupError`) so a
+    /// stray click during a worker round trip cannot trigger a
+    /// second concurrent merge.
+    RequestScanClipboard,
+}
+
+/// Construction parameters for [`AddAccountComponent`].
+///
+/// Mirrors the shape of [`crate::edit_dialog::EditDialogInit`]
+/// but carries the vault path rather than a target account — the
+/// add dialog creates a *new* account rather than mutating an
+/// existing one. The path is retained on `self` so the smoke test
+/// marker ([`format_add_dialog_marker`]) can render it for the
+/// `xvfb-run` integration test that will land alongside the
+/// header-bar `+` button wiring.
+#[derive(Debug, Clone)]
+pub struct AddAccountInit {
+    /// Vault path the dialog will commit a new account into. Cloned
+    /// from `AppModel::state` at mount time so a mid-flight
+    /// passphrase-transition or lock cannot retarget the dialog.
+    pub vault_path: PathBuf,
+}
+
+/// Stable stdout prefix the smoke test in `tests/gtk_smoke.rs`
+/// greps for to prove [`AddAccountComponent`] mounted under
+/// `xvfb-run`.
+///
+/// Symmetric partner of
+/// [`crate::edit_dialog::EDIT_DIALOG_MARKER_PREFIX`]; the
+/// literal is pinned by `tests/add_account_logic.rs` so the
+/// pure-logic projection and the smoke marker never drift.
+pub const ADD_DIALOG_MARKER_PREFIX: &str = "paladin-auth-gtk: add_dialog_path=";
+
+/// Render the stdout marker the smoke test greps for after the
+/// header-bar `+` button mounts the [`AddAccountComponent`].
+///
+/// Symmetric partner of
+/// [`crate::edit_dialog::format_edit_dialog_marker`]. The marker
+/// carries the resolved vault path so a future
+/// `tests/gtk_smoke.rs` variant can assert that the dialog mounted
+/// against the same path the startup probes resolved.
+#[must_use]
+pub fn format_add_dialog_marker(path: &Path) -> String {
+    format!("{ADD_DIALOG_MARKER_PREFIX}{}", path.display())
+}
+
+/// Render the body shown in the "Add anyway?" `AdwAlertDialog` when
+/// [`paladin_auth_core::Vault::find_duplicate`] matched an existing
+/// account on the `(secret, issuer, label)` triple.
+///
+/// The widget binds the `AdwAlertDialog` body to this helper, fed by
+/// [`AddDialogState::pending_duplicate_existing`]. Wording mirrors
+/// the CLI's `duplicate_account` text — `"account already exists
+/// with the same (secret, issuer, label): <label>"` — but omits the
+/// front-end-specific action hint: the CLI appends `"(re-run with
+/// --allow-duplicate to add anyway)"`, the TUI appends `"(press
+/// Enter to add anyway)"`, and the GTK side surfaces the action
+/// through the `AdwAlertDialog` button label (`"Add anyway"`) rather
+/// than the body text. Keeping the body neutral lets a future GTK
+/// theme rebind the confirm gesture without re-wording the prompt.
+///
+/// The carried [`AccountSummary`] routes through
+/// [`crate::account_row::summary_display_label`] — the same projection
+/// the visible row label uses — so the colliding row's display name
+/// in the prompt matches what the user already sees in the account
+/// list. `Some("")` issuers collapse to the bare-label form for
+/// parity with [`crate::account_row::summary_display_label`].
+#[must_use]
+pub fn format_duplicate_confirm_body(existing: &AccountSummary) -> String {
+    format!(
+        "account already exists with the same (secret, issuer, label): {}",
+        summary_display_label(existing),
+    )
+}
+
+/// Render the non-fatal [`ValidationWarning`]s carried by the pending
+/// [`ValidatedAccount`] for display beneath
+/// [`format_duplicate_confirm_body`] in the "Add anyway?"
+/// `AdwAlertDialog` body.
+///
+/// Each warning routes through [`paladin_auth_core::format_validation_warning`]
+/// so the wording stays in sync with the CLI / TUI verbatim, then
+/// receives a `"warning: "` prefix so the line is unambiguously a
+/// warning rather than a continuation of the duplicate-collision
+/// statement above it. Multiple warnings join with `\n` (one per line)
+/// because the `AdwAlertDialog` body has no single-line constraint —
+/// in contrast with the TUI's `; ` join in
+/// `paladin-auth-tui/src/app/reducer.rs`, which is forced single-line by
+/// the status-bar widget.
+///
+/// An empty `warnings` slice returns the empty string so the widget
+/// can skip the secondary body line entirely without an `if !warnings.is_empty()`
+/// guard around the helper itself; the widget's downstream
+/// `if !body.is_empty()` check keeps the modal body free of a stray
+/// trailing newline when no warnings are pending.
+#[must_use]
+pub fn format_pending_warnings_body(warnings: &[ValidationWarning]) -> String {
+    warnings
+        .iter()
+        .map(|w| format!("warning: {}", format_validation_warning(w)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Render the full "Add anyway?" `AdwAlertDialog` body by joining
+/// [`format_duplicate_confirm_body`] above
+/// [`format_pending_warnings_body`] with a blank-line separator.
+///
+/// The widget binds the modal body to this composer, fed by
+/// [`AddDialogState::pending_duplicate_existing`] (the colliding
+/// summary) and [`crate::secret_fields::AddSecretState::pending`]'s
+/// `warnings` (the non-fatal warnings collected during validation of
+/// the would-be insertion). The composer is a thin one-liner over
+/// the two underlying format helpers — no re-derivation — so the
+/// `\n\n` separator (blank line between the duplicate statement and
+/// the warning lines) is the only decision that lives at this layer.
+///
+/// An empty `warnings` slice collapses the trailing block entirely:
+/// the body is exactly [`format_duplicate_confirm_body`] verbatim
+/// so the `AdwAlertDialog` body does not render a stray trailing
+/// newline when no warnings are pending. The widget therefore does
+/// not need a `if !warnings.is_empty()` guard around the helper
+/// call — the composer absorbs that condition.
+#[must_use]
+pub fn format_duplicate_alert_body(
+    existing: &AccountSummary,
+    warnings: &[ValidationWarning],
+) -> String {
+    let confirm = format_duplicate_confirm_body(existing);
+    if warnings.is_empty() {
+        confirm
+    } else {
+        format!("{confirm}\n\n{}", format_pending_warnings_body(warnings))
+    }
+}
+
+/// State-driven projection that bundles
+/// [`AddDialogState::pending_duplicate_existing`] and
+/// [`AddDialogState::pending_validation_warnings`] into the
+/// rendered "Add anyway?" `AdwAlertDialog` body, or `None` when no
+/// duplicate-collision Save click is in flight.
+///
+/// Returns `Some(format_duplicate_alert_body(existing, warnings))`
+/// while a [`SaveClickOutcome::AwaitConfirmation`] is parked (both
+/// halves of the duplicate-collision projection populate together
+/// via [`AddAccountMsg::StagePendingDuplicate`]), and `None` once
+/// either half drains — [`AddAccountMsg::Cancel`],
+/// [`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+/// [`AddAccountMsg::SwitchPath`] all drain in lockstep so the modal
+/// disappears the moment the user moves on.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the modal's visibility and body text instead of reaching
+/// across both accessors and re-running the
+/// [`format_duplicate_alert_body`] composer inline. Pure — borrows
+/// the state and constructs a fresh `String` per call without
+/// mutating any field.
+#[must_use]
+pub fn compose_pending_duplicate_alert_body(state: &AddDialogState) -> Option<String> {
+    let existing = state.pending_duplicate_existing()?;
+    Some(format_duplicate_alert_body(
+        existing,
+        state.pending_validation_warnings(),
+    ))
+}
+
+/// Render the fixed `"Add anyway?"` heading shown atop the
+/// duplicate-collision `AdwAlertDialog`.
+///
+/// The heading takes no state arguments: it is the question the
+/// modal asks the user, and the descriptive details (the colliding
+/// account label and any pending validation warnings) are carried
+/// by [`format_duplicate_alert_body`] beneath it. Surfacing it
+/// through a helper rather than a bare string literal keeps the
+/// wording in one place so any future copy change (e.g. for i18n)
+/// has a single edit site shared by the widget binding and the
+/// snapshot tests in `tests/add_account_logic.rs`.
+///
+/// Partner of [`format_duplicate_alert_body`] (the modal body),
+/// [`format_duplicate_confirm_body`] (the collision statement
+/// inside the body), and [`format_pending_warnings_body`] (the
+/// warning lines beneath the statement); together they cover the
+/// full `AdwAlertDialog` content.
+#[must_use]
+pub fn format_duplicate_alert_heading() -> &'static str {
+    "Add anyway?"
+}
+
+/// State-driven projection of the duplicate-collision
+/// `AdwAlertDialog` heading, or `None` when no
+/// duplicate-collision Save click is in flight.
+///
+/// Returns `Some(format_duplicate_alert_heading())` while a
+/// [`SaveClickOutcome::AwaitConfirmation`] is parked (the colliding
+/// summary populates [`AddDialogState::pending_duplicate_existing`]
+/// via [`AddAccountMsg::StagePendingDuplicate`]), and `None` once
+/// the slot drains — [`AddAccountMsg::Cancel`],
+/// [`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+/// [`AddAccountMsg::SwitchPath`] all drain in lockstep with the
+/// body projection so the modal disappears the moment the user
+/// moves on.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the modal's heading visibility and text instead of
+/// reaching across `pending_duplicate_existing()` inline alongside
+/// [`compose_pending_duplicate_alert_body`]. Pure — borrows the
+/// state and returns the `'static` heading string without
+/// allocating; sibling projection of
+/// [`compose_pending_duplicate_alert_body`] (the body) so the
+/// widget can `#[watch]` both halves of the modal content in
+/// lockstep.
+#[must_use]
+pub fn compose_pending_duplicate_alert_heading(state: &AddDialogState) -> Option<&'static str> {
+    state
+        .pending_duplicate_existing()
+        .map(|_| format_duplicate_alert_heading())
+}
+
+/// Render the fixed `"Add anyway"` label for the destructive
+/// affordance on the duplicate-collision `AdwAlertDialog`.
+///
+/// The label is the confirm response the user clicks to consume
+/// the parked [`paladin_auth_core::ValidatedAccount`] and forward
+/// [`AddAccountOutput::Submit`] to the
+/// `Vault::mutate_and_save(|v| v.add(account))` worker. Surfacing
+/// it through a helper rather than a bare string literal keeps the
+/// wording in one place so the widget binding, the dialog body's
+/// docstrings (which reference "Add anyway" verbatim), and the
+/// snapshot tests in `tests/add_account_logic.rs` stay in sync.
+///
+/// Partner of [`format_duplicate_alert_heading`] (the modal's
+/// question heading) and [`format_duplicate_alert_body`] (the
+/// descriptive body between them); together they cover the three
+/// user-visible regions of the `AdwAlertDialog`.
+#[must_use]
+pub fn format_duplicate_alert_confirm_label() -> &'static str {
+    "Add anyway"
+}
+
+/// State-driven projection of the duplicate-collision
+/// `AdwAlertDialog` confirm-button label, or `None` when no
+/// duplicate-collision Save click is in flight.
+///
+/// Returns `Some(format_duplicate_alert_confirm_label())` while a
+/// [`SaveClickOutcome::AwaitConfirmation`] is parked (the colliding
+/// summary populates [`AddDialogState::pending_duplicate_existing`]
+/// via [`AddAccountMsg::StagePendingDuplicate`]), and `None` once
+/// the slot drains — [`AddAccountMsg::Cancel`],
+/// [`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+/// [`AddAccountMsg::SwitchPath`] all drain in lockstep with the
+/// heading / body projections so the confirm button disappears the
+/// moment the user moves on.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the confirm button's text and visibility instead of
+/// reaching across `pending_duplicate_existing()` inline alongside
+/// [`compose_pending_duplicate_alert_heading`] /
+/// [`compose_pending_duplicate_alert_body`]. Pure — borrows the
+/// state and returns the `'static` label string without
+/// allocating; sibling projection of the heading / body composers
+/// so the widget can `#[watch]` every region of the
+/// `AdwAlertDialog` in lockstep.
+#[must_use]
+pub fn compose_pending_duplicate_alert_confirm_label(
+    state: &AddDialogState,
+) -> Option<&'static str> {
+    state
+        .pending_duplicate_existing()
+        .map(|_| format_duplicate_alert_confirm_label())
+}
+
+/// Render the fixed `"Cancel"` label for the non-destructive
+/// affordance on the duplicate-collision `AdwAlertDialog`.
+///
+/// The label is the cancel response the user clicks to back out
+/// of the duplicate-confirmation prompt without consuming the
+/// parked [`paladin_auth_core::ValidatedAccount`] — the dialog stays
+/// open with the manual / URI fields populated so the user can
+/// edit and retry without losing the in-flight draft. Surfacing
+/// the wording through a helper rather than a bare string literal
+/// keeps it in one place shared by the widget binding and the
+/// snapshot tests in `tests/add_account_logic.rs`.
+///
+/// Partner of [`format_duplicate_alert_heading`] (the modal's
+/// question heading), [`format_duplicate_alert_body`] (the
+/// descriptive body), and [`format_duplicate_alert_confirm_label`]
+/// (the destructive affordance); together they cover the four
+/// user-visible regions of the `AdwAlertDialog`.
+#[must_use]
+pub fn format_duplicate_alert_cancel_label() -> &'static str {
+    "Cancel"
+}
+
+/// State-driven projection of the duplicate-collision
+/// `AdwAlertDialog` cancel-button label, or `None` when no
+/// duplicate-collision Save click is in flight.
+///
+/// Returns `Some(format_duplicate_alert_cancel_label())` while a
+/// [`SaveClickOutcome::AwaitConfirmation`] is parked (the colliding
+/// summary populates [`AddDialogState::pending_duplicate_existing`]
+/// via [`AddAccountMsg::StagePendingDuplicate`]), and `None` once
+/// the slot drains — [`AddAccountMsg::Cancel`],
+/// [`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+/// [`AddAccountMsg::SwitchPath`] all drain in lockstep with the
+/// heading / body / confirm-label projections so the cancel button
+/// disappears the moment the user moves on.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the cancel button's text and visibility instead of
+/// reaching across `pending_duplicate_existing()` inline alongside
+/// [`compose_pending_duplicate_alert_heading`] /
+/// [`compose_pending_duplicate_alert_body`] /
+/// [`compose_pending_duplicate_alert_confirm_label`]. Pure —
+/// borrows the state and returns the `'static` label string
+/// without allocating; sibling projection of the other three
+/// composers so the widget can `#[watch]` every region of the
+/// `AdwAlertDialog` in lockstep.
+#[must_use]
+pub fn compose_pending_duplicate_alert_cancel_label(
+    state: &AddDialogState,
+) -> Option<&'static str> {
+    state
+        .pending_duplicate_existing()
+        .map(|_| format_duplicate_alert_cancel_label())
+}
+
+/// State-driven projection of whether the duplicate-collision
+/// `AdwAlertDialog` is currently shown.
+///
+/// Returns `true` while a [`SaveClickOutcome::AwaitConfirmation`]
+/// is parked (the colliding summary populates
+/// [`AddDialogState::pending_duplicate_existing`] via
+/// [`AddAccountMsg::StagePendingDuplicate`]), and `false` once the
+/// slot drains — [`AddAccountMsg::Cancel`],
+/// [`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+/// [`AddAccountMsg::SwitchPath`] all drain in lockstep with the
+/// heading / body / confirm-label / cancel-label projections so
+/// the modal disappears the moment the user moves on.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the `AdwAlertDialog`'s `set_visible:` /
+/// `.present()` / `.close()` transition instead of inspecting the
+/// content projections' `Option`-ness inline alongside
+/// [`compose_pending_duplicate_alert_heading`] /
+/// [`compose_pending_duplicate_alert_body`] /
+/// [`compose_pending_duplicate_alert_confirm_label`] /
+/// [`compose_pending_duplicate_alert_cancel_label`]. Pure —
+/// borrows the state and returns a `bool` without allocating;
+/// sibling of those four `Option`-returning content projections so
+/// the widget can `#[watch]` every region of the
+/// `AdwAlertDialog` in lockstep.
+#[must_use]
+pub fn compose_pending_duplicate_alert_visible(state: &AddDialogState) -> bool {
+    state.pending_duplicate_existing().is_some()
+}
+
+/// State-driven projection of the durability-warning body the
+/// widget renders beneath the post-add counts panel after a
+/// `KeepWithWarning` worker completion, or `None` for any other
+/// state (no worker run yet, or the most recent failure was an
+/// `Inline` error rather than a durability warning).
+///
+/// Returns `Some(warning.rendered.as_str())` while
+/// [`AddDialogState::worker_outcome`] is
+/// [`AddPostEffectOutcome::KeepWithWarning`] (the
+/// `save_durability_unconfirmed` post-commit-but-fsync-failed
+/// case), and `None` for both the no-worker-yet state and the
+/// [`AddPostEffectOutcome::Inline`] retry path. The latter is
+/// rendered through a separate projection so the widget can attach
+/// the inline error to the failing field's row without the
+/// durability warning leaking in alongside it.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the warning row's visibility and body text instead of
+/// pattern-matching on [`AddDialogState::worker_outcome`] inline.
+/// Pure — borrows the state and returns a borrowed `&str` without
+/// allocating; the rendered body lives on the parked
+/// [`InlineWarning`] and stays alive as long as the state does.
+#[must_use]
+pub fn compose_post_effect_warning_body(state: &AddDialogState) -> Option<&str> {
+    match state.worker_outcome()? {
+        AddPostEffectOutcome::KeepWithWarning(warning) => Some(warning.rendered.as_str()),
+        AddPostEffectOutcome::Inline(_) => None,
+    }
+}
+
+/// State-driven projection of whether the durability-warning
+/// `AdwBanner` (or equivalent revealed-row) is currently animated
+/// in beneath the post-add counts panel.
+///
+/// Returns `true` while [`AddDialogState::worker_outcome`] is
+/// [`AddPostEffectOutcome::KeepWithWarning`] (the
+/// `save_durability_unconfirmed` post-commit-but-fsync-failed
+/// case), and `false` for both the no-worker-yet state and the
+/// [`AddPostEffectOutcome::Inline`] retry path. Mirrors the
+/// partitioning of [`AddPostEffectOutcome`] applied by
+/// [`compose_post_effect_warning_body`] so the two projections flip
+/// together on the same `WorkerFailed` / `SubmitProceed` dispatches
+/// — `set_revealed: true` paired with the `Some(body)` body, and
+/// `set_revealed: false` paired with `None` when retry clears
+/// [`AddDialogState::worker_outcome`].
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the `AdwBanner::set_revealed:` animation instead of
+/// re-deriving the routing decision against
+/// [`AddDialogState::worker_outcome`] inline. Pure — borrows the
+/// state and returns a `bool` without allocating; sibling of
+/// [`compose_post_effect_warning_body`] (the body text) so the
+/// widget can `#[watch]` every region of the durability-warning
+/// row in lockstep.
+#[must_use]
+pub fn compose_post_effect_warning_revealed(state: &AddDialogState) -> bool {
+    matches!(
+        state.worker_outcome(),
+        Some(AddPostEffectOutcome::KeepWithWarning(_))
+    )
+}
+
+/// State-driven projection of the post-effect inline-error body the
+/// widget renders beneath the form for retry after an
+/// [`AddPostEffectOutcome::Inline`] worker completion, or `None` for
+/// any other state (no worker run yet, or the most recent failure
+/// was a durability warning rather than an inline error).
+///
+/// Returns `Some(inline.rendered.as_str())` while
+/// [`AddDialogState::worker_outcome`] is
+/// [`AddPostEffectOutcome::Inline`] (the `save_not_committed` /
+/// `io_error` / post-effect `validation_error` retry path), and
+/// `None` for both the no-worker-yet state and the
+/// [`AddPostEffectOutcome::KeepWithWarning`] success-with-warning
+/// path. The latter is rendered through
+/// [`compose_post_effect_warning_body`] so the widget can attach
+/// the durability warning beneath the post-add counts panel
+/// without the inline error leaking in alongside it.
+///
+/// Symmetric partner of [`compose_post_effect_warning_body`]: the
+/// two projections partition [`AddDialogState::worker_outcome`]
+/// across the [`AddPostEffectOutcome`] variants so the widget
+/// binds one `#[watch]` per dialog region (inline error beneath
+/// the form, durability warning beneath the post-add panel).
+/// Pure — borrows the state and returns a borrowed `&str` without
+/// allocating; the rendered body lives on the parked
+/// [`InlineError`] and stays alive as long as the state does.
+#[must_use]
+pub fn compose_post_effect_inline_error_body(state: &AddDialogState) -> Option<&str> {
+    match state.worker_outcome()? {
+        AddPostEffectOutcome::Inline(inline) => Some(inline.rendered.as_str()),
+        AddPostEffectOutcome::KeepWithWarning(_) => None,
+    }
+}
+
+/// Heading rendered atop the clipboard-QR post-success counts panel.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AddAccountComponent` shared shell L2230, the counts panel keeps
+/// imported / skipped / warning counts visible until the user
+/// dismisses it. The heading is a fixed string so the wording stays
+/// pinned by the `format_qr_counts_panel_heading_is_non_empty` test.
+#[must_use]
+pub fn format_qr_counts_panel_heading() -> &'static str {
+    "QR import complete"
+}
+
+/// Label rendered on the Dismiss button of the clipboard-QR post-
+/// success counts panel.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AddAccountComponent` shared shell L2230, the user dismisses the
+/// panel via an explicit click that routes through
+/// [`AddAccountMsg::DismissQrCountsPanel`]; the button label is
+/// rendered through this helper so the wording stays pinned by the
+/// `format_qr_counts_panel_dismiss_label_is_non_empty` test.
+#[must_use]
+pub fn format_qr_counts_panel_dismiss_label() -> &'static str {
+    "Dismiss"
+}
+
+/// Format the "Imported: N" row of the clipboard-QR post-success
+/// counts panel.
+///
+/// Pure helper so the widget renders the imported count verbatim
+/// without re-deriving the label string at the binding site.
+#[must_use]
+pub fn format_qr_counts_panel_imported_label(count: usize) -> String {
+    format!("Imported: {count}")
+}
+
+/// Format the "Skipped: N" row of the clipboard-QR post-success
+/// counts panel.
+#[must_use]
+pub fn format_qr_counts_panel_skipped_label(count: usize) -> String {
+    format!("Skipped: {count}")
+}
+
+/// Format the "Warnings: N" row of the clipboard-QR post-success
+/// counts panel.
+#[must_use]
+pub fn format_qr_counts_panel_warnings_label(count: usize) -> String {
+    format!("Warnings: {count}")
+}
+
+/// State-driven projection of whether the clipboard-QR post-success
+/// counts panel is currently visible.
+///
+/// Returns `true` while [`AddDialogState::qr_success_counts`] is
+/// populated and `false` otherwise. The widget binds a `#[watch]`
+/// over this projection to drive the panel container's visibility
+/// instead of pattern-matching on the slot inline. Sibling of
+/// [`compose_qr_counts_panel_imported_label`] /
+/// [`compose_qr_counts_panel_skipped_label`] /
+/// [`compose_qr_counts_panel_warnings_label`] so the visibility
+/// and the per-row labels flip together on the same
+/// [`AddAccountMsg::QrSuccess`] / [`AddAccountMsg::DismissQrCountsPanel`]
+/// dispatches.
+#[must_use]
+pub fn compose_qr_counts_panel_visible(state: &AddDialogState) -> bool {
+    state.qr_success_counts().is_some()
+}
+
+/// State-driven projection of the "Imported: N" row label, or `None`
+/// when the panel is hidden.
+///
+/// Returns `Some(format_qr_counts_panel_imported_label(n))` while
+/// [`AddDialogState::qr_success_counts`] is populated. Pairs with
+/// [`compose_qr_counts_panel_skipped_label`] /
+/// [`compose_qr_counts_panel_warnings_label`] so the three rows
+/// stay in lockstep.
+#[must_use]
+pub fn compose_qr_counts_panel_imported_label(state: &AddDialogState) -> Option<String> {
+    state
+        .qr_success_counts()
+        .map(|s| format_qr_counts_panel_imported_label(s.imported))
+}
+
+/// State-driven projection of the "Skipped: N" row label, or `None`
+/// when the panel is hidden.
+#[must_use]
+pub fn compose_qr_counts_panel_skipped_label(state: &AddDialogState) -> Option<String> {
+    state
+        .qr_success_counts()
+        .map(|s| format_qr_counts_panel_skipped_label(s.skipped))
+}
+
+/// State-driven projection of the "Warnings: N" row label, or `None`
+/// when the panel is hidden.
+#[must_use]
+pub fn compose_qr_counts_panel_warnings_label(state: &AddDialogState) -> Option<String> {
+    state
+        .qr_success_counts()
+        .map(|s| format_qr_counts_panel_warnings_label(s.warnings))
+}
+
+/// State-driven projection of whether the post-effect inline-error
+/// row the widget renders beneath the form for retry is revealed.
+///
+/// Returns `true` while [`AddDialogState::worker_outcome`] is
+/// [`AddPostEffectOutcome::Inline`] (the `save_not_committed` /
+/// `io_error` / post-effect `validation_error` retry path), and
+/// `false` for both the no-worker-yet state and the
+/// [`AddPostEffectOutcome::KeepWithWarning`] success-with-warning
+/// path (which the widget reveals through
+/// [`compose_post_effect_warning_revealed`] instead so the
+/// inline-error row never animates in alongside the durability
+/// banner).
+///
+/// Sibling of [`compose_post_effect_inline_error_body`] (the body
+/// text) so the widget can `#[watch]` both the revealed bool and
+/// the body string against the same [`AddDialogState::worker_outcome`]
+/// slot in lockstep — the row flips visible alongside the rendered
+/// body and animates back out the moment `SubmitProceed` drains the
+/// slot. Mirrors the durability-warning side's
+/// [`compose_post_effect_warning_revealed`] /
+/// [`compose_post_effect_warning_body`] pairing across the two
+/// [`AddPostEffectOutcome`] variants, and the pre-effect side's
+/// [`compose_inline_error_revealed`] / [`compose_inline_error_body`]
+/// pairing keyed off [`AddDialogState::inline_error`].
+///
+/// Pure — borrows the state and returns a `bool` without allocating.
+#[must_use]
+pub fn compose_post_effect_inline_error_revealed(state: &AddDialogState) -> bool {
+    matches!(
+        state.worker_outcome(),
+        Some(AddPostEffectOutcome::Inline(_))
+    )
+}
+
+/// State-driven projection of the pre-effect inline-error body the
+/// widget renders against the failing sub-path's row after a Save
+/// click that produced [`SaveClickOutcome::InlineError`], or `None`
+/// when no rejection is parked.
+///
+/// Returns `Some(inline.rendered.as_str())` while
+/// [`AddDialogState::inline_error`] is populated (typed §5
+/// validation rejection from the most recent Save click), and
+/// `None` for the fresh-dialog state and after any successor
+/// message clears it (per-field [`AddAccountMsg::Manual*Changed`] /
+/// [`AddAccountMsg::UriTextChanged`] / sub-path
+/// [`AddAccountMsg::SwitchPath`] / [`AddAccountMsg::SubmitProceed`]
+/// / [`AddAccountMsg::ConfirmAddAnyway`] /
+/// [`AddAccountMsg::StagePendingDuplicate`] all drain in lockstep
+/// so the inline error disappears the moment the user retypes the
+/// failing field or moves past the rejection).
+///
+/// Sibling of [`compose_post_effect_inline_error_body`] on the
+/// pre-effect side: that projection drives the same widget region
+/// from [`AddDialogState::worker_outcome`]'s
+/// [`AddPostEffectOutcome::Inline`] variant after the
+/// `Vault::mutate_and_save` worker reports a failure. The two are
+/// rendered at the same dialog region but read from independent
+/// slots — `SubmitProceed` clears both before the worker runs, so
+/// they are never both populated against the same Save click.
+/// Pure — borrows the state and returns a borrowed `&str` without
+/// allocating; the rendered body lives on the parked
+/// [`InlineError`] and stays alive as long as the state does.
+#[must_use]
+pub fn compose_inline_error_body(state: &AddDialogState) -> Option<&str> {
+    state.inline_error().map(|err| err.rendered.as_str())
+}
+
+/// State-driven projection of whether the pre-effect inline-error
+/// row the widget renders against the failing sub-path is revealed.
+///
+/// Returns `true` when [`AddDialogState::inline_error`] is populated
+/// (typed §5 validation rejection from the most recent Save click,
+/// staged through [`AddAccountMsg::RenderInlineError`]) and `false`
+/// for the fresh-dialog state and after any successor message clears
+/// the slot ([`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`],
+/// [`AddAccountMsg::StagePendingDuplicate`], the per-field
+/// [`AddAccountMsg::Manual*Changed`] / [`AddAccountMsg::UriTextChanged`]
+/// edits, and the sub-path [`AddAccountMsg::SwitchPath`] transition —
+/// matching the drain points pinned by `compose_inline_error_body`).
+///
+/// Sibling of [`compose_inline_error_body`] (the body text) so the
+/// widget can `#[watch]` both the revealed bool and the body string
+/// against the same slot in lockstep — the row flips visible
+/// alongside the rendered body and animates back out the moment the
+/// drain message lands. Mirrors the post-effect side's
+/// [`compose_post_effect_warning_revealed`] /
+/// [`compose_post_effect_warning_body`] pairing, except this slot is
+/// keyed off [`AddDialogState::inline_error`] rather than
+/// [`AddDialogState::worker_outcome`].
+///
+/// Pure — borrows the state and returns a `bool` without allocating.
+#[must_use]
+pub fn compose_inline_error_revealed(state: &AddDialogState) -> bool {
+    state.inline_error().is_some()
+}
+
+/// State-driven projection of the active sub-path the widget binds
+/// to drive its `AdwViewSwitcher` between the manual, URI, and
+/// (forthcoming) QR sub-stack pages.
+///
+/// Returns [`crate::secret_fields::AddPath::Manual`] for a freshly
+/// opened dialog (matching the CLI / TUI `add` defaults) and
+/// follows every [`AddAccountMsg::SwitchPath`] dispatch in lockstep
+/// with [`crate::secret_fields::AddSecretState::switch_path`]'s
+/// buffer-clear semantics — the projection flips the visible page
+/// at the same moment the secret-bearing buffers for the path
+/// being left zero out.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the `AdwViewSwitcher`'s selected page instead of reaching
+/// across `state.secret_state().active_path` inline. Pure — borrows
+/// the state and returns the `Copy` enum value without allocating.
+///
+/// Sibling of the body / error / warning projections
+/// ([`compose_inline_error_body`],
+/// [`compose_post_effect_inline_error_body`],
+/// [`compose_post_effect_warning_body`],
+/// [`compose_pending_duplicate_alert_body`]): together they cover
+/// every `#[watch]`-driven region the dialog body needs to keep in
+/// sync with [`AddDialogState`] without the widget pattern-matching
+/// on raw state fields.
+#[must_use]
+pub fn compose_active_path(state: &AddDialogState) -> crate::secret_fields::AddPath {
+    state.secret_state().active_path
+}
+
+/// Render the fixed display label for an [`crate::secret_fields::AddPath`].
+///
+/// Returns `"Manual"` for [`crate::secret_fields::AddPath::Manual`]
+/// and `"URI"` for [`crate::secret_fields::AddPath::Uri`]. The
+/// labels feed both the `AdwViewSwitcher` page titles (each sub-
+/// stack page binds the matching label) and the state-driven
+/// [`compose_active_path_label`] projection. Surfacing the wording
+/// through this helper keeps it in one place shared by the widget
+/// binding and the snapshot tests in `tests/add_account_logic.rs`.
+///
+/// Pure — takes the enum value by `Copy` and returns a `'static`
+/// string. Sibling of [`format_duplicate_alert_heading`] /
+/// [`format_duplicate_alert_body`] /
+/// [`format_duplicate_alert_confirm_label`] /
+/// [`format_duplicate_alert_cancel_label`] on the sub-path-label
+/// side; together they cover every fixed display string the
+/// dialog renders.
+#[must_use]
+pub fn format_add_path_label(path: crate::secret_fields::AddPath) -> &'static str {
+    match path {
+        crate::secret_fields::AddPath::Manual => "Manual",
+        crate::secret_fields::AddPath::Uri => "URI",
+        crate::secret_fields::AddPath::Qr => "Scan clipboard",
+    }
+}
+
+/// State-driven projection of the currently-active sub-path's
+/// display label.
+///
+/// Returns [`format_add_path_label`] of [`compose_active_path`],
+/// so the projection flips between `"Manual"` and `"URI"` in
+/// lockstep with the `AdwViewSwitcher` page selection. Lets the
+/// widget bind a single `#[watch]` over the projection anywhere it
+/// names the current sub-path (e.g. a header subtitle or status
+/// line beside the switcher) instead of pattern-matching on the
+/// raw [`crate::secret_fields::AddPath`] enum inline.
+///
+/// Pure — borrows the state and returns a `'static` string without
+/// allocating; sibling of [`compose_active_path`] on the display-
+/// label projection side.
+#[must_use]
+pub fn compose_active_path_label(state: &AddDialogState) -> &'static str {
+    format_add_path_label(compose_active_path(state))
+}
+
+/// Render the fixed `AdwViewStack` page name (machine-readable
+/// slug) for an [`crate::secret_fields::AddPath`].
+///
+/// Returns `"manual"` for [`crate::secret_fields::AddPath::Manual`]
+/// and `"uri"` for [`crate::secret_fields::AddPath::Uri`]. The
+/// slugs feed `AdwViewStack::set_visible_child_name` (the
+/// machine-readable key the switcher uses to address each
+/// sub-stack page) and the state-driven [`compose_active_path_name`]
+/// projection. Surfacing the slug through this helper keeps it in
+/// one place shared by the widget binding and the snapshot tests
+/// in `tests/add_account_logic.rs`, and pins it as distinct from
+/// the display label so a future caller cannot accidentally pass
+/// the localized / capitalized label string as the stack key.
+///
+/// Pure — takes the enum value by `Copy` and returns a `'static`
+/// string. Sibling of [`format_add_path_label`] on the page-name
+/// side; together they cover both the display label and the
+/// machine-readable slug for every sub-path.
+#[must_use]
+pub fn format_add_path_name(path: crate::secret_fields::AddPath) -> &'static str {
+    match path {
+        crate::secret_fields::AddPath::Manual => "manual",
+        crate::secret_fields::AddPath::Uri => "uri",
+        crate::secret_fields::AddPath::Qr => "qr",
+    }
+}
+
+/// Inverse of [`format_add_path_name`].
+///
+/// The `AddAccountComponent` widget body mounts each sub-path on the
+/// `AdwViewStack` keyed by the slug `format_add_path_name` emits, and
+/// wires `AdwViewStack::connect_visible_child_notify` to translate the
+/// notified `visible_child_name()` back into an
+/// [`crate::secret_fields::AddPath`] so it can dispatch
+/// [`AddAccountMsg::SwitchPath`]. That dispatch is the only path that
+/// reaches [`crate::secret_fields::AddSecretState::switch_path`], which
+/// owns the §"Secret entry handling" contract that switching sub-pages
+/// wipes the leaving path's hidden secret-bearing buffer (manual Base32
+/// secret / URI text) and drops any pending duplicate-add
+/// [`paladin_auth_core::ValidatedAccount`] before the entering page becomes
+/// active.
+///
+/// Accepts exactly the slugs `format_add_path_name` emits — `"manual"`,
+/// `"uri"`, `"qr"`. Anything else (empty, capitalized, whitespace-padded,
+/// case-folded variants, or unknown slugs) returns [`None`] so a future
+/// renamed / mistyped page or accidental display-label hand-off cannot
+/// silently bypass the secret-buffer wipe. Callers route a [`None`]
+/// result as a no-op rather than dispatching a fallback `SwitchPath`,
+/// which mirrors the `AdwViewStack` widget's behavior of refusing to
+/// surface an unknown child name as a visible-child notify.
+///
+/// Pure — borrows the input slug and returns [`Option`]; sibling of
+/// [`format_add_path_name`] on the parser side.
+#[must_use]
+pub fn parse_add_path_name(slug: &str) -> Option<crate::secret_fields::AddPath> {
+    match slug {
+        "manual" => Some(crate::secret_fields::AddPath::Manual),
+        "uri" => Some(crate::secret_fields::AddPath::Uri),
+        "qr" => Some(crate::secret_fields::AddPath::Qr),
+        _ => None,
+    }
+}
+
+/// Fixed iteration order the widget uses to add the manual / URI
+/// sub-paths to the `AdwViewStack`.
+///
+/// Returns `[AddPath::Manual, AddPath::Uri]` so the widget can loop
+/// over the slice, calling [`format_add_path_name`] for the
+/// machine-readable page key and [`format_add_path_label`] for the
+/// `AdwViewSwitcher` display label on each iteration. Pinning the
+/// order through a helper matches the
+/// [`crate::secret_fields::AddSecretState::active_path`] default of
+/// [`crate::secret_fields::AddPath::Manual`] on a freshly-opened
+/// dialog (so the switcher opens on the page the user will see
+/// first) and keeps the page-add loop and the snapshot tests in
+/// `tests/add_account_logic.rs` aligned against a single source of
+/// truth so a future enum addition cannot land an unrouted page on
+/// the `AdwViewStack`.
+///
+/// Pure — returns a `'static` slice without allocating. Sibling of
+/// [`format_add_path_label`] and [`format_add_path_name`] on the
+/// page-iteration-order side; together the three helpers cover the
+/// full wiring the widget needs to build the sub-path switcher.
+#[must_use]
+pub fn format_add_path_order() -> &'static [crate::secret_fields::AddPath] {
+    &[
+        crate::secret_fields::AddPath::Manual,
+        crate::secret_fields::AddPath::Uri,
+        crate::secret_fields::AddPath::Qr,
+    ]
+}
+
+/// State-driven projection of the currently-active sub-path's
+/// `AdwViewStack` page name (machine-readable slug).
+///
+/// Returns [`format_add_path_name`] of [`compose_active_path`], so
+/// the projection flips between `"manual"` and `"uri"` in lockstep
+/// with the `AdwViewSwitcher` page selection. Lets the widget bind
+/// a single `#[watch]` over the projection to drive
+/// `AdwViewStack::set_visible_child_name` instead of pattern-
+/// matching on the raw [`crate::secret_fields::AddPath`] enum inline.
+///
+/// Sibling of [`compose_active_path_label`] on the page-name side:
+/// the label is the human-readable wording (`"Manual"` / `"URI"`)
+/// and the name is the lowercased slug (`"manual"` / `"uri"`). Both
+/// projections flip together off [`compose_active_path`] so the
+/// widget's `#[watch]`-driven page title and visible-child binding
+/// stay in lockstep with the active sub-path.
+///
+/// Pure — borrows the state and returns a `'static` string without
+/// allocating.
+#[must_use]
+pub fn compose_active_path_name(state: &AddDialogState) -> &'static str {
+    format_add_path_name(compose_active_path(state))
+}
+
+/// State-driven projection of whether the manual sub-path's TOTP
+/// period spinbutton row is visible.
+///
+/// Returns `true` while [`ManualDraftState::kind`] is
+/// [`AccountKindInput::Totp`] (the default for a freshly opened
+/// dialog, matching CLI / TUI `add` parity) and `false` once the
+/// user selects HOTP via [`AddAccountMsg::ManualKindChanged`]. The
+/// partner [`compose_manual_counter_visible`] projection (which
+/// lands in a follow-up commit) flips in lockstep so exactly one
+/// of the two kind-specific rows is visible at any given moment.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the period row's `set_visible:` instead of pattern-
+/// matching on [`ManualDraftState::kind`] inline. Pure — borrows
+/// the state and returns a `bool` without allocating; sibling of
+/// the path / error / warning / alert composers so the widget can
+/// `#[watch]` every state-driven region of the dialog in lockstep.
+#[must_use]
+pub fn compose_manual_period_secs_visible(state: &AddDialogState) -> bool {
+    matches!(state.manual_draft().kind, AccountKindInput::Totp)
+}
+
+/// State-driven projection of the manual sub-path's TOTP period
+/// spinbutton value, surfaced as the `f64` that `AdwSpinRow::set_value`
+/// expects.
+///
+/// Returns the current [`ManualDraftState::period_secs`] cast to
+/// `f64` — `30.0` on a freshly-opened dialog (CLI / TUI default
+/// period), and the post-`AddAccountMsg::ManualPeriodChanged` value
+/// on every subsequent dispatch. The value persists across the kind
+/// dropdown's TOTP/HOTP toggles so the period row, when re-revealed
+/// by [`compose_manual_period_secs_visible`], restores the user's
+/// prior selection instead of snapping back to the default.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the period row's `AdwSpinRow::set_value:` instead of casting
+/// [`ManualDraftState::period_secs`] inline against the live state.
+/// Sibling of [`compose_manual_period_secs_visible`] on the period-
+/// row value side: the visibility projection gates whether the row
+/// is rendered, while this projection drives the value it shows.
+/// Pure — borrows the state and returns an `f64` without allocating.
+#[must_use]
+pub fn compose_manual_period_secs_value(state: &AddDialogState) -> f64 {
+    f64::from(state.manual_draft().period_secs)
+}
+
+/// Fixed `(lower, upper, step_increment)` tuple the widget hands to
+/// `gtk::Adjustment::new` for the manual sub-path's TOTP period
+/// `AdwSpinRow`.
+///
+/// Returns
+/// `(f64::from(paladin_auth_core::TOTP_PERIOD_MIN), f64::from(paladin_auth_core::TOTP_PERIOD_MAX), 1.0)`
+/// — the §5 / §6 validated range for TOTP period seconds, with the
+/// `1.0` step pinned because the period-seconds domain is integer-
+/// only. The spinner cannot express a value outside this range, so a
+/// click on the Save button always carries a value
+/// [`paladin_auth_core::validate_manual`] accepts on the period axis;
+/// out-of-range values can still arrive through a future test driver
+/// or misuse path, so [`validate_manual`] still owns the boundary
+/// rejection.
+///
+/// Pure — returns a `(f64, f64, f64)` tuple without allocating.
+/// Sibling of [`format_manual_digits_adjustment`] on the TOTP-period
+/// side; together with [`compose_manual_period_secs_value`] they
+/// cover both the dynamic value the spinner reads and the static
+/// bounds the spinner enforces.
+#[must_use]
+pub fn format_manual_period_adjustment() -> (f64, f64, f64) {
+    (
+        f64::from(paladin_auth_core::TOTP_PERIOD_MIN),
+        f64::from(paladin_auth_core::TOTP_PERIOD_MAX),
+        1.0,
+    )
+}
+
+/// State-driven projection of whether the manual sub-path's HOTP
+/// counter spinbutton row is visible.
+///
+/// Returns `true` while [`ManualDraftState::kind`] is
+/// [`AccountKindInput::Hotp`] and `false` otherwise (including the
+/// fresh-dialog default, which is TOTP per CLI / TUI `add` parity).
+/// Sibling of [`compose_manual_period_secs_visible`]: the two
+/// projections flip in lockstep so exactly one of the kind-specific
+/// rows is visible at any given moment, which the widget relies on
+/// to lay out the form without an empty gap or two rows competing
+/// for the same slot.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the counter row's `set_visible:` instead of pattern-
+/// matching on [`ManualDraftState::kind`] inline. Pure — borrows
+/// the state and returns a `bool` without allocating.
+#[must_use]
+pub fn compose_manual_counter_visible(state: &AddDialogState) -> bool {
+    matches!(state.manual_draft().kind, AccountKindInput::Hotp)
+}
+
+/// State-driven projection of the manual sub-path's HOTP counter
+/// spinbutton value, surfaced as the `f64` that `AdwSpinRow::set_value`
+/// expects.
+///
+/// Returns the current [`ManualDraftState::counter`] cast to `f64` —
+/// `0.0` on a freshly-opened dialog (CLI / TUI default counter), and
+/// the post-`AddAccountMsg::ManualCounterChanged` value on every
+/// subsequent dispatch. The value persists across the kind dropdown's
+/// TOTP/HOTP toggles so the counter row, when re-revealed by
+/// [`compose_manual_counter_visible`], restores the user's prior
+/// selection instead of snapping back to the default.
+///
+/// The full `u64` range is accepted verbatim by the underlying
+/// [`AddAccountMsg::ManualCounterChanged`] dispatch; the cast to
+/// `f64` here matches `AdwSpinRow::set_value`'s signature and is
+/// lossless for every counter value below `2^53`. Spinning past
+/// that threshold is the user's prerogative — the projection
+/// reflects the stored counter without rejecting the cast — and the
+/// downstream Save-time [`validate_manual`] check still owns range
+/// rejection.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the counter row's `AdwSpinRow::set_value:` instead of
+/// casting [`ManualDraftState::counter`] inline against the live
+/// state. Sibling of [`compose_manual_counter_visible`] on the
+/// counter-row value side: the visibility projection gates whether
+/// the row is rendered, while this projection drives the value it
+/// shows. Mirror of [`compose_manual_period_secs_value`] on the
+/// HOTP-specific row. Pure — borrows the state and returns an `f64`
+/// without allocating.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn compose_manual_counter_value(state: &AddDialogState) -> f64 {
+    state.manual_draft().counter as f64
+}
+
+/// Fixed `(lower, upper, step_increment)` tuple the widget hands to
+/// `gtk::Adjustment::new` for the manual sub-path's HOTP counter
+/// `AdwSpinRow`.
+///
+/// Returns `(0.0, 9_007_199_254_740_992.0, 1.0)` — the §5 / §6
+/// non-negative counter minimum, the f64 safe-integer maximum
+/// (`2^53`, the largest value the spinner's `u64 → f64` cast in
+/// [`compose_manual_counter_value`] preserves losslessly), and the
+/// `1.0` integer step because the counter domain is integer-only.
+/// Spinning past `2^53` would lose precision in the cast, so the
+/// spinner caps there even though [`paladin_auth_core::validate_manual`]
+/// accepts the full `u64` range verbatim — a direct dispatch through
+/// [`AddAccountMsg::ManualCounterChanged`] still permits any `u64`,
+/// matching the "user's prerogative" behavior
+/// [`compose_manual_counter_value`] documents on the post-`2^53`
+/// path. Out-of-range values arriving through a future test driver
+/// or misuse path are still owned by [`validate_manual`].
+///
+/// Pure — returns a `(f64, f64, f64)` tuple without allocating.
+/// Sibling of [`format_manual_digits_adjustment`] and
+/// [`format_manual_period_adjustment`] on the HOTP-counter side;
+/// together with [`compose_manual_counter_value`] they cover both
+/// the dynamic value the spinner reads and the static bounds the
+/// spinner enforces.
+#[must_use]
+pub fn format_manual_counter_adjustment() -> (f64, f64, f64) {
+    (0.0, 9_007_199_254_740_992.0, 1.0)
+}
+
+/// State-driven projection of the manual sub-path's OTP digits
+/// spinbutton value, surfaced as the `f64` that `AdwSpinRow::set_value`
+/// expects.
+///
+/// Returns the current [`ManualDraftState::digits`] cast to `f64` —
+/// `6.0` on a freshly-opened dialog (CLI / TUI default digits), and
+/// the post-`AddAccountMsg::ManualDigitsChanged` value on every
+/// subsequent dispatch. The §5 / §6 range is `6..=8`, lossless under
+/// `u8 → f64`, and the digits row is always visible (regardless of
+/// the TOTP/HOTP kind), so this projection has no visibility sibling
+/// to pair with.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the digits row's `AdwSpinRow::set_value:` instead of casting
+/// [`ManualDraftState::digits`] inline against the live state. Mirror
+/// of [`compose_manual_period_secs_value`] and
+/// [`compose_manual_counter_value`] on the always-visible digits row.
+/// Pure — borrows the state and returns an `f64` without allocating.
+#[must_use]
+pub fn compose_manual_digits_value(state: &AddDialogState) -> f64 {
+    f64::from(state.manual_draft().digits)
+}
+
+/// Fixed `(lower, upper, step_increment)` tuple the widget hands to
+/// `gtk::Adjustment::new` for the manual sub-path's digits
+/// `AdwSpinRow`.
+///
+/// Returns
+/// `(f64::from(paladin_auth_core::DIGITS_MIN), f64::from(paladin_auth_core::DIGITS_MAX), 1.0)`
+/// — the §5 / §6 validated range for OTP digit counts, with the
+/// `1.0` step pinned because the digits domain is integer-only. The
+/// spinner cannot express a value outside this range, so a click on
+/// the Save button always carries a value
+/// [`paladin_auth_core::validate_manual`] accepts on the digits axis;
+/// out-of-range values can still arrive through a future test driver
+/// or misuse path, so [`validate_manual`] still owns the boundary
+/// rejection.
+///
+/// Pure — returns a `(f64, f64, f64)` tuple without allocating.
+/// Sibling of [`compose_manual_digits_value`] on the spinner-
+/// adjustment side; together they cover both the dynamic value the
+/// spinner reads and the static bounds the spinner enforces.
+#[must_use]
+pub fn format_manual_digits_adjustment() -> (f64, f64, f64) {
+    (
+        f64::from(paladin_auth_core::DIGITS_MIN),
+        f64::from(paladin_auth_core::DIGITS_MAX),
+        1.0,
+    )
+}
+
+/// Render the fixed `gtk::DropDown` selected index for an
+/// [`AccountKindInput`].
+///
+/// Returns `0` for [`AccountKindInput::Totp`] and `1` for
+/// [`AccountKindInput::Hotp`] — the kind dropdown's
+/// `gtk::StringList` model is populated in enum-declaration order
+/// (TOTP first, HOTP second). The indices feed
+/// `gtk::DropDown::set_selected` and the state-driven
+/// [`compose_manual_kind_selected`] projection. Surfacing the index
+/// through this helper keeps it in one place shared by the widget
+/// binding and the snapshot tests in `tests/add_account_logic.rs`,
+/// and pins the model ordering against a single source of truth so
+/// a future caller cannot accidentally introduce drift.
+///
+/// Pure — takes the enum value by `Copy` and returns a `u32`.
+/// Sibling of [`format_add_path_name`] on the dropdown-selection
+/// side; both functions pin a widget-property mapping for an enum.
+#[must_use]
+pub fn format_manual_kind_selected(kind: AccountKindInput) -> u32 {
+    match kind {
+        AccountKindInput::Totp => 0,
+        AccountKindInput::Hotp => 1,
+    }
+}
+
+/// Inverse of [`format_manual_kind_selected`]: map the kind
+/// dropdown's `gtk::DropDown::selected()` index back to the typed
+/// [`AccountKindInput`].
+///
+/// Returns `Some(AccountKindInput::Totp)` for index `0`,
+/// `Some(AccountKindInput::Hotp)` for index `1`, and `None` for
+/// every other value (including `gtk::INVALID_LIST_POSITION` =
+/// `u32::MAX`, which `gtk::DropDown::selected()` returns when no row
+/// is selected). The widget's `connect_selected_notify` signal calls
+/// this helper before dispatching
+/// [`AddAccountMsg::ManualKindChanged`], so a stray selection beyond
+/// the known model rows skips the dispatch rather than silently
+/// mapping to a fallback variant.
+///
+/// Pure — takes a `u32` by `Copy` and returns an `Option`. Sibling of
+/// [`format_manual_kind_selected`]; together they round-trip every
+/// variant so a future enum addition / reorder surfaces as a failing
+/// test rather than a silent misroute.
+#[must_use]
+pub fn parse_manual_kind_from_selected(selected: u32) -> Option<AccountKindInput> {
+    match selected {
+        0 => Some(AccountKindInput::Totp),
+        1 => Some(AccountKindInput::Hotp),
+        _ => None,
+    }
+}
+
+/// Fixed `gtk::StringList` model labels for the manual sub-path's
+/// TOTP/HOTP kind dropdown, in the same enum-declaration order that
+/// [`format_manual_kind_selected`] indexes (TOTP first, HOTP second).
+///
+/// Returns the slice the widget hands to `gtk::StringList::new` to
+/// populate the dropdown's model; the human-readable wording
+/// (`"TOTP"` / `"HOTP"`) mirrors the TUI add view (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) so the kind dropdown looks
+/// the same across the two front-ends. Pairing the labels and the
+/// index-map helper in one module pins the model ordering against a
+/// single source of truth so a future enum addition / reorder cannot
+/// leave the dropdown's selected index pointing at the wrong row.
+///
+/// Pure — returns a `'static` slice without allocating. Sibling of
+/// [`format_manual_kind_selected`] on the dropdown-labels side; both
+/// helpers cover one half of the dropdown's wiring (the model
+/// labels and the selected index) and stay aligned by construction.
+#[must_use]
+pub fn format_manual_kind_labels() -> &'static [&'static str] {
+    &["TOTP", "HOTP"]
+}
+
+/// State-driven projection of the manual sub-path's TOTP/HOTP kind
+/// dropdown's `gtk::DropDown::set_selected` index.
+///
+/// Returns [`format_manual_kind_selected`] of
+/// [`ManualDraftState::kind`], so the projection flips between `0`
+/// and `1` in lockstep with `AddAccountMsg::ManualKindChanged`
+/// dispatches. The widget binds a single `#[watch]` over the
+/// projection to drive `set_selected:` instead of pattern-matching
+/// on [`ManualDraftState::kind`] inline.
+///
+/// Mirror of [`compose_active_path_name`] on the kind-dropdown
+/// side: both projections route an enum through a sibling
+/// `format_*` helper to a widget-property u32 / slug. Pure —
+/// borrows the state and returns a `u32` without allocating.
+#[must_use]
+pub fn compose_manual_kind_selected(state: &AddDialogState) -> u32 {
+    format_manual_kind_selected(state.manual_draft().kind)
+}
+
+/// Render the fixed `gtk::DropDown` selected index for an
+/// [`Algorithm`].
+///
+/// Returns `0` for [`Algorithm::Sha1`] (the RFC 6238 default), `1`
+/// for [`Algorithm::Sha256`], and `2` for [`Algorithm::Sha512`] —
+/// the algorithm dropdown's `gtk::StringList` model is populated in
+/// enum-declaration order (SHA-1 first, SHA-256 second, SHA-512
+/// third). The indices feed `gtk::DropDown::set_selected` and the
+/// state-driven [`compose_manual_algorithm_selected`] projection.
+/// Surfacing the index through this helper keeps it in one place
+/// shared by the widget binding and the snapshot tests in
+/// `tests/add_account_logic.rs`, and pins the model ordering
+/// against a single source of truth so a future caller cannot
+/// accidentally introduce drift.
+///
+/// Pure — takes the enum value by `Copy` and returns a `u32`.
+/// Sibling of [`format_manual_kind_selected`] on the algorithm-
+/// dropdown side; both functions pin a widget-property mapping for
+/// an enum.
+#[must_use]
+pub fn format_manual_algorithm_selected(algorithm: Algorithm) -> u32 {
+    match algorithm {
+        Algorithm::Sha1 => 0,
+        Algorithm::Sha256 => 1,
+        Algorithm::Sha512 => 2,
+    }
+}
+
+/// Inverse of [`format_manual_algorithm_selected`]: map the algorithm
+/// dropdown's `gtk::DropDown::selected()` index back to the typed
+/// [`Algorithm`].
+///
+/// Returns `Some(Algorithm::Sha1)` for index `0`,
+/// `Some(Algorithm::Sha256)` for index `1`,
+/// `Some(Algorithm::Sha512)` for index `2`, and `None` for every
+/// other value (including `gtk::INVALID_LIST_POSITION` = `u32::MAX`,
+/// which `gtk::DropDown::selected()` returns when no row is
+/// selected). Sibling of [`parse_manual_kind_from_selected`] on the
+/// algorithm dropdown side; together they round-trip every variant
+/// so a future enum addition / reorder surfaces as a failing test
+/// rather than a silent misroute.
+///
+/// Pure — takes a `u32` by `Copy` and returns an `Option`.
+#[must_use]
+pub fn parse_manual_algorithm_from_selected(selected: u32) -> Option<Algorithm> {
+    match selected {
+        0 => Some(Algorithm::Sha1),
+        1 => Some(Algorithm::Sha256),
+        2 => Some(Algorithm::Sha512),
+        _ => None,
+    }
+}
+
+/// Fixed `gtk::StringList` model labels for the manual sub-path's
+/// algorithm dropdown, in the same enum-declaration order that
+/// [`format_manual_algorithm_selected`] indexes (SHA-1 first, SHA-256
+/// second, SHA-512 third).
+///
+/// Returns the slice the widget hands to `gtk::StringList::new` to
+/// populate the dropdown's model; the human-readable wording
+/// (`"SHA1"` / `"SHA256"` / `"SHA512"`) mirrors the TUI add view (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) so the algorithm dropdown
+/// looks the same across the two front-ends. Pairing the labels and
+/// the index-map helper in one module pins the model ordering
+/// against a single source of truth so a future enum addition /
+/// reorder cannot leave the dropdown's selected index pointing at the
+/// wrong row.
+///
+/// Pure — returns a `'static` slice without allocating. Sibling of
+/// [`format_manual_kind_labels`] on the algorithm-dropdown side;
+/// together they cover both dropdowns' label / selected-index wiring
+/// and stay aligned by construction.
+#[must_use]
+pub fn format_manual_algorithm_labels() -> &'static [&'static str] {
+    &["SHA1", "SHA256", "SHA512"]
+}
+
+/// State-driven projection of the manual sub-path's algorithm
+/// dropdown's `gtk::DropDown::set_selected` index.
+///
+/// Returns [`format_manual_algorithm_selected`] of
+/// [`ManualDraftState::algorithm`], so the projection flips between
+/// `0` / `1` / `2` in lockstep with
+/// `AddAccountMsg::ManualAlgorithmChanged` dispatches. The widget
+/// binds a single `#[watch]` over the projection to drive
+/// `set_selected:` instead of pattern-matching on
+/// [`ManualDraftState::algorithm`] inline.
+///
+/// Mirror of [`compose_manual_kind_selected`] on the algorithm-
+/// dropdown side: both projections route an enum through a sibling
+/// `format_*` helper to a widget-property u32. Pure — borrows the
+/// state and returns a `u32` without allocating.
+#[must_use]
+pub fn compose_manual_algorithm_selected(state: &AddDialogState) -> u32 {
+    format_manual_algorithm_selected(state.manual_draft().algorithm)
+}
+
+/// State-driven projection of the manual sub-path's label entry
+/// text, surfaced as the borrowed `&str` that `gtk::EditableLabel`'s
+/// or `gtk::Entry`'s `set_text:` expects.
+///
+/// Returns the current [`ManualDraftState::label`] as a borrowed
+/// `&str` — `""` on a freshly-opened dialog (CLI / TUI default), and
+/// the post-`AddAccountMsg::ManualLabelChanged` value on every
+/// subsequent dispatch. The value persists across the kind
+/// dropdown's TOTP/HOTP toggles so the entry retains the user's
+/// in-progress typing across kind changes.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the label entry's `set_text:` instead of borrowing
+/// [`ManualDraftState::label`] inline against the live state.
+/// Sibling of [`compose_save_button_sensitive`] on the label-buffer
+/// text side: an empty label is exactly the condition the Save-
+/// button gate rejects on the manual path. Pure — borrows the
+/// state and returns a borrowed `&str` without allocating.
+#[must_use]
+pub fn compose_manual_label_text(state: &AddDialogState) -> &str {
+    &state.manual_draft().label
+}
+
+/// State-driven projection of the manual sub-path's issuer-entry
+/// buffer text, surfaced as the borrowed `&str` that
+/// `gtk::EditableLabel::set_text:` (or `gtk::Entry::set_text:`)
+/// expects.
+///
+/// Returns the live contents of
+/// [`ManualDraftState::issuer`] as a borrowed
+/// `&str` — `""` on a freshly-opened dialog (the §4.1 domain model
+/// treats issuer as optional, and the CLI / TUI add forms default it
+/// to absent), and the post-[`AddAccountMsg::ManualIssuerChanged`]
+/// value on every subsequent dispatch. The value persists across the
+/// kind dropdown's TOTP/HOTP toggles so the entry retains the user's
+/// in-progress typing across kind changes.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the issuer entry's `set_text:` instead of borrowing
+/// [`ManualDraftState::issuer`] inline against the live state.
+/// Sibling of [`compose_manual_label_text`] on the issuer-buffer
+/// side; unlike the label buffer, an empty issuer is valid input
+/// (the manual submit pipeline interprets empty as `None` per §4.1),
+/// so the [`compose_save_button_sensitive`] gate ignores it. Pure —
+/// borrows the state and returns a borrowed `&str` without
+/// allocating.
+#[must_use]
+pub fn compose_manual_issuer_text(state: &AddDialogState) -> &str {
+    &state.manual_draft().issuer
+}
+
+/// State-driven projection of the manual sub-path's icon-hint-entry
+/// buffer text, surfaced as the borrowed `&str` that
+/// `gtk::EditableLabel::set_text:` (or `gtk::Entry::set_text:`)
+/// expects.
+///
+/// Returns the live contents of
+/// [`ManualDraftState::icon_hint_text`] as a borrowed `&str` — `""`
+/// on a freshly-opened dialog (the §4.1 domain model treats the icon
+/// hint as optional, and the CLI / TUI add forms default it to
+/// absent), and the post-[`AddAccountMsg::ManualIconHintChanged`]
+/// value on every subsequent dispatch. The value persists across the
+/// kind dropdown's TOTP/HOTP toggles so the entry retains the user's
+/// in-progress typing across kind changes.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the icon-hint entry's `set_text:` instead of borrowing
+/// [`ManualDraftState::icon_hint_text`] inline against the live
+/// state. The raw entry text (not the post-
+/// [`paladin_auth_core::parse_icon_hint_token`] slug) is what the entry
+/// shows so the user can keep typing; the parse-and-classify step
+/// runs downstream inside [`compose_manual_fields`] /
+/// [`classify_manual_submit`]. Sibling of [`compose_manual_label_text`]
+/// and [`compose_manual_issuer_text`] on the icon-hint-buffer side;
+/// unlike the label buffer, an empty hint is valid input
+/// ([`paladin_auth_core::parse_icon_hint_token`] treats empty / `default`
+/// as "use the inferred icon" and `none` as "force the placeholder"),
+/// so the [`compose_save_button_sensitive`] gate ignores it. Pure —
+/// borrows the state and returns a borrowed `&str` without
+/// allocating.
+#[must_use]
+pub fn compose_manual_icon_hint_text(state: &AddDialogState) -> &str {
+    &state.manual_draft().icon_hint_text
+}
+
+/// State-driven projection of whether the Save button's
+/// `set_sensitive:` is `true` — i.e. whether the active sub-path
+/// has the minimum required input for a click to reach the
+/// validation pipeline.
+///
+/// Routing rule:
+///
+/// * [`crate::secret_fields::AddPath::Manual`] → both the manual
+///   draft label *and* the manual secret buffer must be non-empty.
+///   Either alone is not enough: validation cannot complete without
+///   both, and the duplicate / Base32 / length-cap rejections lie
+///   downstream once the click reaches [`compose_save_click_outcome`].
+/// * [`crate::secret_fields::AddPath::Uri`] → the URI text buffer
+///   must be non-empty. The manual draft fields are not consulted
+///   on this path, so a pre-existing manual label / secret cannot
+///   lift the URI path's gate.
+///
+/// Lets the widget bind a single `#[watch] set_sensitive:` over the
+/// projection so a totally-empty form cannot reach the validation
+/// pipeline through a click. Mirror of
+/// [`crate::unlock_dialog::UnlockDialogState::submit_button_sensitive`]
+/// on the add path; typed-but-invalid input (malformed Base32,
+/// malformed `otpauth://` URI, length-cap violations) still flows
+/// through [`compose_inline_error_body`] once the click is allowed
+/// through. Pure — borrows the state and returns a `bool` without
+/// allocating.
+#[must_use]
+pub fn compose_save_button_sensitive(state: &AddDialogState) -> bool {
+    // Short-circuit: a save worker in flight blocks every path's
+    // Save click regardless of the per-path intrinsic gate so the
+    // user cannot kick off a second `Vault::mutate_and_save` while
+    // the prior one still owns the live `(Vault, Store)` pair per
+    // `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    // `AppModel` flips this via `AddAccountMsg::SetBusy(bool)`
+    // around the `gio::spawn_blocking` worker, the same way
+    // `sync_account_list_busy` drives `AccountListMsg::SetBusy`.
+    if state.is_busy() {
+        return false;
+    }
+    match state.secret_state().active_path {
+        crate::secret_fields::AddPath::Manual => {
+            !state.manual_draft().label.is_empty() && !state.secret_state().manual_secret.is_empty()
+        }
+        crate::secret_fields::AddPath::Uri => !state.secret_state().uri_text.is_empty(),
+        // The clipboard-QR page activates via its own page-local
+        // "Scan clipboard" action button rather than the shared
+        // Save submit at the dialog footer. Keeping the shared
+        // button greyed out on this path steers the user toward
+        // the page-local action and prevents the shared submit
+        // pipeline from being entered on a path that does not
+        // consume it.
+        crate::secret_fields::AddPath::Qr => false,
+    }
+}
+
+/// Fixed display label for the page-local "Scan clipboard" button
+/// mounted on the `AdwViewStack`'s `AddPath::Qr` page.
+///
+/// Returns the static string the button renders. The wording is
+/// pinned through this helper so the GTK label, the
+/// `format_add_path_label(AddPath::Qr)` page name, and the
+/// `manual/MANUAL_TEST_PLAN.md` Add-via-clipboard-image checklist
+/// items stay aligned against a single source of truth — a future
+/// copy change cannot drift the activation surface silently.
+///
+/// Pure — returns a `'static str` without allocating. Mirror of
+/// [`format_add_dialog_save_label`] on the page-local activation
+/// side: the QR page hides the shared Save submit (see
+/// [`compose_save_button_sensitive`]'s `AddPath::Qr => false` arm)
+/// and presents this label on its own button instead.
+#[must_use]
+pub fn format_scan_clipboard_button_label() -> &'static str {
+    "Scan clipboard"
+}
+
+/// State-driven projection of whether the page-local
+/// `AddPath::Qr` "Scan clipboard" button's `set_sensitive:` is
+/// `true`.
+///
+/// Routing rule:
+///
+/// * An in-flight save / open / passphrase / import / export
+///   worker owns the live `(Vault, Store)` pair (per
+///   `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership")
+///   and short-circuits the button to insensitive even on the QR
+///   sub-path — mirror of [`compose_save_button_sensitive`]'s
+///   busy gate.
+/// * Otherwise the button activates only while
+///   [`crate::secret_fields::AddSecretState::active_path`] is
+///   [`crate::secret_fields::AddPath::Qr`]. The Manual and URI
+///   sub-paths reach the activation pipeline through the shared
+///   Save submit at the dialog footer, and the QR page-local
+///   activation must stay dim on those sub-paths so a stray click
+///   cannot fire the clipboard-image-read path outside its page.
+///
+/// Lets the widget bind a single `#[watch] set_sensitive:` over
+/// the projection so a sub-path switch or a busy latch flip
+/// re-renders the button without inspecting the state inline.
+/// Pure — borrows the state and returns a `bool` without
+/// allocating; sibling of [`compose_save_button_sensitive`] on the
+/// page-local activation side.
+#[must_use]
+pub fn compose_scan_clipboard_button_sensitive(state: &AddDialogState) -> bool {
+    if state.is_busy() {
+        return false;
+    }
+    matches!(
+        state.secret_state().active_path,
+        crate::secret_fields::AddPath::Qr
+    )
+}
+
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// label `AdwEntryRow::set_title`.
+///
+/// Returns the static title string `AdwEntryRow` renders as the
+/// floating label above the entry. The wording (`"Label"`) mirrors
+/// the TUI add view's `"Label:"` row (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwEntryRow`
+/// renders its title as a floating label rather than as a prefix.
+/// Pinning the title through a helper keeps the
+/// GTK / TUI wording aligned against a single source of truth so a
+/// future copy change cannot diverge silently.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_kind_labels`] and [`format_manual_algorithm_labels`]
+/// on the label-entry-title side; the trio covers one half of the
+/// manual sub-path's static wording (entry titles and dropdown
+/// labels) and stays aligned against the TUI by construction.
+#[must_use]
+pub fn format_manual_label_title() -> &'static str {
+    "Label"
+}
+
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// issuer `AdwEntryRow::set_title`.
+///
+/// Returns the static title string `AdwEntryRow` renders as the
+/// floating label above the entry. The wording (`"Issuer"`) mirrors
+/// the TUI add view's `"Issuer:"` row (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwEntryRow`
+/// renders its title as a floating label rather than as a prefix.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_label_title`] on the issuer-entry-title side; the
+/// pair pins the manual sub-path's plain-text entry titles against
+/// the TUI wording in one module.
+#[must_use]
+pub fn format_manual_issuer_title() -> &'static str {
+    "Issuer"
+}
+
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// secret `AdwPasswordEntryRow::set_title`.
+///
+/// Returns the static title string `AdwPasswordEntryRow` renders as
+/// the floating label above the entry. The wording (`"Secret"`)
+/// mirrors the TUI add view's `"Secret:"` row (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because the password
+/// entry row renders its title as a floating label rather than as a
+/// prefix. The Base32 secret text itself never routes through this
+/// helper; it stays inside the Paladin Auth-owned `Zeroizing` buffer in
+/// [`crate::secret_fields::AddSecretState::manual_secret`].
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_label_title`] and [`format_manual_issuer_title`]
+/// on the secret-entry-title side; the trio pins the manual sub-
+/// path's text-entry row titles against the TUI wording in one
+/// module.
+#[must_use]
+pub fn format_manual_secret_title() -> &'static str {
+    "Secret"
+}
+
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// icon-hint `AdwEntryRow::set_title`.
+///
+/// Returns the static title string `AdwEntryRow` renders as the
+/// floating label above the entry. The wording (`"Icon hint"`)
+/// mirrors the TUI add view's `"Icon hint:"` row (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwEntryRow`
+/// renders its title as a floating label rather than as a prefix.
+/// The icon-hint slug parsing (empty / `"none"` (any case) / explicit
+/// slug) happens through [`paladin_auth_core::parse_icon_hint_token`] at
+/// submit time; this helper covers only the row's static title
+/// wording.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_label_title`], [`format_manual_issuer_title`],
+/// and [`format_manual_secret_title`] on the icon-hint-entry-title
+/// side; the quartet pins the manual sub-path's text-entry row
+/// titles against the TUI wording in one module.
+#[must_use]
+pub fn format_manual_icon_hint_title() -> &'static str {
+    "Icon hint"
+}
+
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// kind `AdwComboRow::set_title`.
+///
+/// Returns the static title string `AdwComboRow` renders as the
+/// floating label above the dropdown. The wording (`"Kind"`) mirrors
+/// the TUI add view's `"Kind:"` row (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwComboRow`
+/// renders its title as a floating label rather than as a prefix.
+/// The TOTP / HOTP dropdown items themselves come from
+/// [`format_manual_kind_labels`]; this helper covers only the row's
+/// static title wording so the model and the title stay aligned
+/// against a single source of truth.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_kind_labels`] and [`format_manual_kind_selected`]
+/// on the kind-row-title side; together they cover the row's title,
+/// dropdown items, and selected index against a single source of
+/// truth in one module.
+#[must_use]
+pub fn format_manual_kind_title() -> &'static str {
+    "Kind"
+}
+
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// algorithm `AdwComboRow::set_title`.
+///
+/// Returns the static title string `AdwComboRow` renders as the
+/// floating label above the dropdown. The wording (`"Algorithm"`)
+/// mirrors the TUI add view's `"Algorithm:"` row (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwComboRow`
+/// renders its title as a floating label rather than as a prefix.
+/// The SHA1 / SHA256 / SHA512 dropdown items themselves come from
+/// [`format_manual_algorithm_labels`]; this helper covers only the
+/// row's static title wording so the model and the title stay
+/// aligned against a single source of truth.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_kind_title`], [`format_manual_algorithm_labels`],
+/// and [`format_manual_algorithm_selected`] on the algorithm-row-
+/// title side; together they cover the row's title, dropdown items,
+/// and selected index in one module.
+#[must_use]
+pub fn format_manual_algorithm_title() -> &'static str {
+    "Algorithm"
+}
+
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// digits `AdwSpinRow::set_title`.
+///
+/// Returns the static title string `AdwSpinRow` renders as the
+/// floating label above the spinner. The wording (`"Digits"`)
+/// mirrors the TUI add view's `"Digits:"` row (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwSpinRow`
+/// renders its title as a floating label rather than as a prefix.
+/// The spinner's `(lower, upper, step)` adjustment comes from
+/// [`format_manual_digits_adjustment`]; this helper covers only the
+/// row's static title wording so the adjustment and the title stay
+/// aligned against a single source of truth.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_kind_title`], [`format_manual_algorithm_title`],
+/// and [`format_manual_digits_adjustment`] on the digits-row-title
+/// side; together they cover the row's title, adjustment range, and
+/// reactive value (via [`compose_manual_digits_value`]) in one
+/// module.
+#[must_use]
+pub fn format_manual_digits_title() -> &'static str {
+    "Digits"
+}
+
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// TOTP period `AdwSpinRow::set_title`.
+///
+/// Returns the static title string `AdwSpinRow` renders as the
+/// floating label above the spinner. The wording (`"Period (s)"`)
+/// mirrors the TUI add view's `"Period (s):"` row built by
+/// `period_or_counter_field` (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwSpinRow`
+/// renders its title as a floating label rather than as a prefix.
+/// The `(s)` unit hint stays — the TUI keeps it because the user is
+/// editing a duration in seconds, and the GTK row inherits the same
+/// disambiguation so a future copy change cannot diverge silently.
+/// The row is visible only on the TOTP kind (driven by
+/// [`compose_manual_period_secs_visible`]); the spinner's
+/// `(lower, upper, step)` adjustment comes from
+/// [`format_manual_period_adjustment`].
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_digits_title`] and
+/// [`format_manual_period_adjustment`] on the period-row-title side.
+#[must_use]
+pub fn format_manual_period_title() -> &'static str {
+    "Period (s)"
+}
+
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// HOTP counter `AdwSpinRow::set_title`.
+///
+/// Returns the static title string `AdwSpinRow` renders as the
+/// floating label above the spinner. The wording (`"Counter"`)
+/// mirrors the TUI add view's `"Counter:"` row built by
+/// `period_or_counter_field` (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwSpinRow`
+/// renders its title as a floating label rather than as a prefix.
+/// No unit hint — the HOTP counter is a dimensionless event count,
+/// same as the TUI's bare `"Counter:"` wording. The row is visible
+/// only on the HOTP kind (driven by
+/// [`compose_manual_counter_visible`]); the spinner's
+/// `(lower, upper, step)` adjustment comes from
+/// [`format_manual_counter_adjustment`].
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_period_title`] and
+/// [`format_manual_counter_adjustment`] on the counter-row-title
+/// side; the pair pins the kind-switched period-or-counter slot's
+/// title against the TUI wording.
+#[must_use]
+pub fn format_manual_counter_title() -> &'static str {
+    "Counter"
+}
+
+/// Fixed `set_label` attribute the widget hands to the dialog's
+/// header `gtk::Label`.
+///
+/// Returns the static title string the dialog renders at the top
+/// of its body. The wording (`"Add account"`) mirrors the TUI add
+/// view's `" Add account "` block title built by `render` (see
+/// `crates/paladin-auth-tui/src/view/add.rs`) — the TUI's surrounding
+/// spaces are its block-padding convention and drop out because
+/// `gtk::Label` renders the bare text without padding. Pinning
+/// the title through a helper keeps the GTK / TUI wording aligned
+/// against a single source of truth so a future copy change cannot
+/// diverge silently.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// the `format_manual_*_title` helpers on the dialog-header side;
+/// together they cover the dialog header label and the manual
+/// sub-path's per-row title attributes.
+#[must_use]
+pub fn format_add_dialog_title() -> &'static str {
+    "Add account"
+}
+
+/// Fixed `"Cancel"` label the widget hands to the Add account
+/// dialog's footer Cancel `gtk::Button::set_label`.
+///
+/// The label is the non-destructive affordance the user clicks to
+/// dismiss the dialog without committing a new account. Wording is
+/// the fixed GNOME-convention `"Cancel"` — surfaced through a
+/// helper so the string lives in one place shared by the widget
+/// binding and the pure-logic tests in `tests/add_account_logic.rs`.
+/// Distinct from [`format_duplicate_alert_cancel_label`] (the
+/// duplicate-collision `AdwAlertDialog`'s cancel response): the two
+/// buttons live on different surfaces and pinning each behind its
+/// own helper lets a future copy change land on one without
+/// silently moving the other.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_add_dialog_title`] on the dialog-chrome side; together
+/// they cover the dialog's header label and its footer cancel
+/// button.
+#[must_use]
+pub fn format_add_dialog_cancel_label() -> &'static str {
+    "Cancel"
+}
+
+/// Fixed `"Save"` label the widget will hand to the Add account
+/// dialog's footer primary `gtk::Button::set_label` once the
+/// Save button lands in the view alongside the already-extracted
+/// [`compose_save_button_sensitive`] sensitivity projection.
+///
+/// The label is the destructive-on-success affordance the user
+/// clicks to commit a new account via `Vault::mutate_and_save`,
+/// gated by [`compose_save_button_sensitive`] so totally-empty
+/// forms cannot reach the validation pipeline through a click.
+/// Wording matches the `docs/IMPLEMENTATION_PLAN_04_GTK.md` Add /
+/// Rename `Save / Cancel buttons` convention; the function name
+/// keeps the `save` role abstractly (mirroring
+/// [`compose_save_button_sensitive`] and
+/// [`compose_save_click_outcome`]) while the returned string is
+/// the user-visible wording. Pinning the wording behind a helper
+/// keeps it in one place shared by the widget binding and the
+/// pure-logic tests in `tests/add_account_logic.rs`.
+///
+/// Distinct from [`format_duplicate_alert_confirm_label`] (the
+/// duplicate-collision `AdwAlertDialog`'s destructive response,
+/// `"Add anyway"`): the two buttons live on different surfaces
+/// and a future copy change might diverge between the dialog
+/// footer and the alert-dialog response.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_add_dialog_cancel_label`] on the footer-button side;
+/// the pair pins the dialog's two footer buttons against a single
+/// source of truth.
+#[must_use]
+pub fn format_add_dialog_save_label() -> &'static str {
+    "Save"
+}
+
+/// Fixed `title` attribute the widget will hand to the URI
+/// sub-path's `AdwEntryRow::set_title` once the editable URI
+/// sub-page lands in the view alongside the already-extracted
+/// [`compose_uri_submit_outcome`] validation projection.
+///
+/// Returns the static title string `AdwEntryRow` renders as the
+/// floating label above the entry. The wording (`"otpauth:// URI"`)
+/// names the URL scheme the user is expected to paste so the row
+/// reads distinctly from the `AdwViewSwitcher` page tab (which is
+/// labeled `"URI"` via [`format_add_path_label`] of
+/// [`crate::secret_fields::AddPath::Uri`]). Pinning the row title
+/// behind its own helper lets a future copy change land on the
+/// row without silently moving the tab label or the
+/// machine-readable slug returned by [`format_add_path_name`].
+///
+/// No TUI parity: the TUI add view renders the manual fields
+/// unconditionally regardless of `AddMode`, so there is no TUI
+/// URI-row wording to mirror — the `returns_*` form of the
+/// pure-logic test pins the wording directly in
+/// `tests/add_account_logic.rs` (mirroring the
+/// `format_duplicate_alert_*_label_returns_*` pattern).
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// the `format_manual_*_title` helpers on the URI-sub-path-title
+/// side; together they cover the per-row title attribute for
+/// every editable row in the dialog.
+#[must_use]
+pub fn format_uri_text_title() -> &'static str {
+    "otpauth:// URI"
+}
+
+/// State-driven projection of the URI sub-path's `AdwEntryRow`
+/// buffer text, surfaced as the borrowed `&str` that
+/// `adw::EntryRow::set_text:` (the `#[watch]`-driven binding the
+/// widget layer attaches to the URI page's entry row) expects.
+///
+/// Returns the live contents of
+/// [`crate::secret_fields::AddSecretState::uri_text`] as a borrowed
+/// `&str` — `""` on a freshly-opened dialog ([`AddSecretState::default`]
+/// seeds the URI buffer at the empty string), the post-
+/// [`AddAccountMsg::UriTextChanged`] value on every subsequent
+/// dispatch, and `""` again after the §"Secret entry handling"
+/// clears (`Cancel`, `SwitchPath` away from the URI page, `Close`,
+/// `SubmitProceed`, `ConfirmAddAnyway`, and auto-lock route through
+/// [`AddSecretState::clear_for`] / [`AddSecretState::switch_path`]
+/// to wipe the Paladin Auth-owned `Zeroizing<String>` and zeroize the
+/// bytes).
+///
+/// Sibling of [`compose_manual_label_text`] /
+/// [`compose_manual_issuer_text`] / [`compose_manual_icon_hint_text`]
+/// on the URI-sub-path-text side; together they cover the per-row
+/// text projection for every editable row in the dialog. The URI
+/// row is the only buffer whose underlying storage is a
+/// [`crate::secret_fields::SecretEntry`] (the URI bytes embed the
+/// user's Base32 secret), so the projection reads
+/// `state.secret_state().uri_text.text()` straight rather than
+/// re-shadowing into a separate `AddDialogState` field.
+///
+/// Pure — borrows the state and returns a borrowed `&str` without
+/// allocating.
+#[must_use]
+pub fn compose_uri_text_value(state: &AddDialogState) -> &str {
+    state.secret_state().uri_text.text()
+}
+
+/// Body text for the `AdwToast` raised on the
+/// [`AddWorkerEffect::Success`] branch.
+///
+/// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// `AddAccountComponent` shared shell ("Keep successful manual and
+/// URI additions consistent with §7: refresh the list from the
+/// returned vault, close the dialog, and surface a status / toast
+/// confirmation."). The widget layer raises the toast on the
+/// `adw::ToastOverlay` after the dispatch drops the dialog and the
+/// new row appears in `AccountListComponent` through
+/// `AccountListMsg::Refresh`. Sibling of
+/// [`crate::edit_dialog::format_edit_dialog_success_toast`] /
+/// [`crate::remove_dialog::format_remove_dialog_success_toast`] on
+/// the toast-body-text side.
+///
+/// The wording is intentionally generic so the toast does not need
+/// to carry the new account's display label across the worker
+/// boundary — the freshly inserted row is already visible in the
+/// list, and the toast is a confirmation that the save committed
+/// rather than a recap of which account was added.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_add_dialog_success_toast() -> &'static str {
+    "Account added."
+}
+
+/// Apply an inbound [`AddAccountMsg`] and return the optional
+/// [`AddAccountOutput`] the widget layer should forward to
+/// `AppModel`.
+///
+/// Symmetric partner of [`crate::edit_dialog::apply_msg`] on the
+/// add path. Pulled out of [`AddAccountComponent::update`] so the
+/// routing decision stays unit-testable in
+/// `tests/add_account_logic.rs` without spinning up GTK.
+///
+/// Initial milestone handles three variants:
+///
+/// * [`AddAccountMsg::Cancel`] → `Some(AddAccountOutput::Cancel)`.
+///   The dialog dismisses; `AppModel` drops the controller.
+/// * [`AddAccountMsg::WorkerFailed`] → `None`. The typed
+///   [`AddPostEffectOutcome`] is consumed by the dialog to re-
+///   render the inline error / durability warning; it never
+///   bubbles back to `AppModel`. The rendering side lands in a
+///   follow-up commit alongside the editable form widgets.
+/// * [`AddAccountMsg::SubmitProceed`] →
+///   `Some(AddAccountOutput::Submit { account })`. The widget pre-
+///   runs [`classify_manual_submit`] /
+///   [`crate::otpauth_uri_paste::classify_uri_submit`] and
+///   [`classify_duplicate`] on the main thread; this arm only
+///   forwards the validated [`Account`] once a `Proceed` outcome
+///   is in hand, so `AppModel::update`'s submit handler does not
+///   re-derive the validation pipeline.
+/// * [`AddAccountMsg::ConfirmAddAnyway`] →
+///   `Some(AddAccountOutput::Submit { account })` sourced from
+///   the pending [`ValidatedAccount`] parked by
+///   [`AddAccountMsg::StagePendingDuplicate`]. The arm consumes
+///   the pending via
+///   [`crate::secret_fields::AddSecretState::consume_pending`]
+///   (which also wipes the manual / URI shadow buffers) and is a
+///   defensive no-op when no pending is parked.
+///
+/// Reactive state owned by the live [`AddAccountComponent`].
+///
+/// Symmetric partner of
+/// [`crate::edit_dialog::EditDialogState`] on the add path: the
+/// only field at present is `worker_outcome`, the typed
+/// [`AddPostEffectOutcome`] from the most recent
+/// `Vault::mutate_and_save` worker completion. The widget view
+/// matches on [`Self::worker_outcome`] so the dialog body can route
+/// `Inline` (render the typed inline error and keep the form
+/// populated for retry) or `KeepWithWarning` (attach the durability
+/// warning) without re-deriving the routing decision.
+///
+/// Cleared by [`apply_msg`] on every fresh
+/// [`AddAccountMsg::SubmitProceed`] so a retry never renders stale
+/// post-effect text alongside the live attempt. The
+/// draft-text / manual-fields / URI / QR sub-path state lands as
+/// additional fields in follow-up commits alongside the editable
+/// form widgets.
+#[derive(Default)]
+pub struct AddDialogState {
+    /// Latest [`AddPostEffectOutcome`] from a completed
+    /// `Vault::mutate_and_save` add worker.
+    ///
+    /// `None` between a dialog open and the first worker
+    /// completion, and re-cleared by every
+    /// [`AddAccountMsg::SubmitProceed`] so a retry does not render
+    /// stale text from a previous worker attempt.
+    worker_outcome: Option<AddPostEffectOutcome>,
+    /// Paladin Auth-owned secret-bearing state for the manual / URI sub-
+    /// paths plus the duplicate-collision pending slot.
+    ///
+    /// Embedded so the dialog's path selector, secret-buffer shadows,
+    /// and "add anyway" confirmation share a single state machine
+    /// with the rest of the component layer
+    /// ([`crate::secret_fields::AddSecretState`]). The default
+    /// construction opens on [`crate::secret_fields::AddPath::Manual`]
+    /// with empty buffers and no pending duplicate — see
+    /// [`crate::secret_fields::AddSecretState::new`].
+    ///
+    /// Not `Debug` because [`crate::secret_fields::SecretEntry`]
+    /// deliberately opts out of `Debug` so a stray `dbg!` cannot leak
+    /// the manual Base32 secret or the `otpauth://` URI text through
+    /// the error log.
+    secret_state: AddSecretState,
+    /// Non-secret live state for the manual sub-path's editable
+    /// fields. Holds the label / issuer / algorithm / digits / kind /
+    /// TOTP period / HOTP counter / icon-hint text shadow that the
+    /// widget combines with
+    /// [`crate::secret_fields::AddSecretState::manual_secret`] to
+    /// build a [`ManualFields`] bundle at submit time. Defaults to
+    /// the CLI manual-add defaults (TOTP, SHA1, 6 digits, 30 s
+    /// period, HOTP counter 0).
+    manual_draft: ManualDraftState,
+    /// Typed §5 inline-error projection from the most recent Save
+    /// click that produced [`SaveClickOutcome::InlineError`].
+    ///
+    /// `None` between dialog open and the first rejected Save
+    /// click. Mutated through
+    /// [`AddAccountMsg::RenderInlineError`] so the widget view
+    /// (a `#[watch]` over [`Self::inline_error`]) can attach the
+    /// `error` CSS class to the failing sub-path's row and render
+    /// the typed body verbatim. Mirror of
+    /// [`crate::unlock_dialog::UnlockDialogState::inline_error`]
+    /// on the add path; pairs with the post-effect
+    /// [`Self::worker_outcome`] slot which handles `Vault::mutate_and_save`
+    /// failures instead of the pre-effect validation pipeline.
+    inline_error: Option<InlineError>,
+    /// Colliding [`AccountSummary`] staged by the most recent Save
+    /// click that produced [`SaveClickOutcome::AwaitConfirmation`].
+    ///
+    /// `None` between dialog open and the first duplicate-collision
+    /// Save click, and re-cleared on dialog dismissal / path switch
+    /// / submit so the "Add anyway?" prompt only renders the
+    /// existing summary that is currently in flight. The widget
+    /// view (a `#[watch]` over [`Self::pending_duplicate_existing`])
+    /// reads `AccountSummary::label` / `AccountSummary::issuer` to
+    /// name the colliding account in the confirmation modal.
+    ///
+    /// Pairs with [`crate::secret_fields::AddSecretState::pending`]:
+    /// the pending [`paladin_auth_core::ValidatedAccount`] is the
+    /// would-be insertion, and this slot is the existing account
+    /// it would collide with. Both slots are populated by the same
+    /// `StagePendingDuplicate` dispatch and drained together on
+    /// `ConfirmAddAnyway` / `Cancel` / `SwitchPath`.
+    ///
+    /// Populating wiring lands in a follow-up commit alongside an
+    /// extension to [`AddAccountMsg::StagePendingDuplicate`] that
+    /// carries the `existing: AccountSummary` field across the
+    /// Component boundary.
+    pending_duplicate_existing: Option<AccountSummary>,
+    /// Worker-in-flight latch flipped by [`AddAccountMsg::SetBusy`]
+    /// when `AppModel` enters / leaves the
+    /// `Unlocked → UnlockedBusy` window around the
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
+    /// worker.
+    ///
+    /// Surfaces through [`Self::is_busy`] so
+    /// [`compose_save_button_sensitive`] can dim the shared Save
+    /// footer (and any per-path activation button) while a save is
+    /// in flight, matching the §"In-flight effect ownership" rule
+    /// ("mutating dialog submit buttons … are disabled and show
+    /// the active spinner / busy affordance for the current
+    /// surface"). Per-dialog mirror of the
+    /// [`crate::account_list::BusyFlag`] latch that
+    /// `AccountListComponent` uses for its row affordances.
+    busy: bool,
+    /// Counts panel parked by the most recent clipboard-QR
+    /// import worker completion, or `None` if no QR success is
+    /// currently surfaced.
+    ///
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `AddAccountComponent` shared shell L2230: a successful
+    /// clipboard-QR add keeps the dialog open on a counts panel
+    /// (imported / skipped / warnings) until the user dismisses
+    /// it, unlike the manual / URI add paths which dismiss via
+    /// toast on success. This slot survives between the QR worker
+    /// completion and the user's explicit
+    /// [`AddAccountMsg::DismissQrCountsPanel`] click.
+    ///
+    /// Drained on dialog dismissal ([`AddAccountMsg::Cancel`],
+    /// [`AddAccountMsg::Close`]), on a leaving sub-path transition
+    /// ([`AddAccountMsg::SwitchPath`] off the QR page), and on the
+    /// explicit Dismiss click so the panel does not survive across
+    /// dialog opens or unrelated sub-paths.
+    qr_success_counts: Option<QrImportSummary>,
+}
+
+impl AddDialogState {
+    /// Construct an empty state for a freshly-opened dialog.
+    ///
+    /// No worker has run yet, so [`Self::worker_outcome`] returns
+    /// `None`. Mirror of [`crate::edit_dialog::EditDialogState::new`]
+    /// on the add path; pre-populated dialog state lands as
+    /// additional construction arguments when the editable manual /
+    /// URI / QR sub-paths are wired in follow-up commits.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Latest [`AddPostEffectOutcome`] from a completed
+    /// `Vault::mutate_and_save` add worker, or `None` if no worker
+    /// has reported back yet (or a fresh submit has cleared it).
+    ///
+    /// The widget view matches on this so the body can route
+    /// `Inline` (render the typed inline error) or
+    /// `KeepWithWarning` (attach the durability warning) without
+    /// re-deriving the typed routing decision.
+    #[must_use]
+    pub fn worker_outcome(&self) -> Option<&AddPostEffectOutcome> {
+        self.worker_outcome.as_ref()
+    }
+
+    /// Read-only view of the dialog's secret-bearing state.
+    ///
+    /// Exposes the active sub-path, the manual / URI secret-shadow
+    /// buffers, and the duplicate-collision pending slot so the
+    /// widget view and integration tests can observe the dialog's
+    /// secret state without owning a mutable handle. Mutation lands
+    /// through dedicated [`AddAccountMsg`] arms in follow-up
+    /// commits.
+    #[must_use]
+    pub fn secret_state(&self) -> &AddSecretState {
+        &self.secret_state
+    }
+
+    /// Read-only view of the manual sub-path's live draft state.
+    ///
+    /// Exposes the non-secret label / issuer / algorithm / digits /
+    /// kind / period / counter / icon-hint shadow so the widget view
+    /// and integration tests can observe the live form values
+    /// without owning a mutable handle. Per-field mutation lands
+    /// through dedicated [`AddAccountMsg`] arms in follow-up
+    /// commits.
+    #[must_use]
+    pub fn manual_draft(&self) -> &ManualDraftState {
+        &self.manual_draft
+    }
+
+    /// Typed §5 inline-error projection from the most recent Save
+    /// click, or `None` if the dialog has not yet seen a rejected
+    /// Save click (or a successor message has cleared it).
+    ///
+    /// The widget binds a `#[watch]` over this so the dialog body
+    /// can render the typed error against the failing sub-path's
+    /// row. Returns the same projection
+    /// [`AddAccountMsg::RenderInlineError`] last stored.
+    #[must_use]
+    pub fn inline_error(&self) -> Option<&InlineError> {
+        self.inline_error.as_ref()
+    }
+
+    /// Colliding [`AccountSummary`] staged by the most recent
+    /// `SaveClickOutcome::AwaitConfirmation`, or `None` if the
+    /// dialog has not yet seen a duplicate-collision Save click.
+    ///
+    /// The widget binds a `#[watch]` over this so the "Add anyway?"
+    /// modal can render the colliding account's display label and
+    /// issuer alongside the pending validated account staged in
+    /// [`crate::secret_fields::AddSecretState::pending`].
+    #[must_use]
+    pub fn pending_duplicate_existing(&self) -> Option<&AccountSummary> {
+        self.pending_duplicate_existing.as_ref()
+    }
+
+    /// Predicate the widget `update()` post-routing branch checks
+    /// before presenting the duplicate-confirmation
+    /// [`adw::AlertDialog`]. Returns `true` when a
+    /// [`SaveClickOutcome::AwaitConfirmation`] is parked — both
+    /// halves of the duplicate-collision projection are populated:
+    /// the validated account in
+    /// [`crate::secret_fields::AddSecretState::pending`] and the
+    /// colliding [`AccountSummary`] in
+    /// [`Self::pending_duplicate_existing`].
+    ///
+    /// Mirror of
+    /// [`crate::init_dialog::InitDialogState::has_pending_force`] on
+    /// the add path. Pairs with the
+    /// [`should_present_duplicate_alert`] free function the
+    /// widget's `update()` consults so the present-once-on-stage
+    /// guard cannot accidentally re-fire on subsequent dispatches.
+    #[must_use]
+    pub fn has_pending_duplicate_for_alert(&self) -> bool {
+        self.pending_duplicate_existing.is_some() && self.secret_state.pending.is_some()
+    }
+
+    /// Non-fatal [`ValidationWarning`]s carried by the pending
+    /// [`ValidatedAccount`] staged in
+    /// [`crate::secret_fields::AddSecretState::pending`], or an
+    /// empty slice if no pending value is parked.
+    ///
+    /// Sibling of [`Self::pending_duplicate_existing`] on the
+    /// warnings-projection side: the existing summary names the
+    /// colliding account and these warnings describe the would-be
+    /// insertion. The widget binds a `#[watch]` over this slice to
+    /// feed [`format_pending_warnings_body`] /
+    /// [`format_duplicate_alert_body`] for the "Add anyway?" modal
+    /// body, so it never has to reach across the
+    /// [`crate::secret_fields::AddSecretState`] boundary to read
+    /// the warnings off the pending [`ValidatedAccount`].
+    ///
+    /// Drains to the empty slice in lockstep with
+    /// [`Self::pending_duplicate_existing`]: both halves populate
+    /// together (on [`AddAccountMsg::StagePendingDuplicate`]) and
+    /// drain together (on [`AddAccountMsg::Cancel`],
+    /// [`AddAccountMsg::SubmitProceed`],
+    /// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+    /// [`AddAccountMsg::SwitchPath`]).
+    #[must_use]
+    pub fn pending_validation_warnings(&self) -> &[ValidationWarning] {
+        self.secret_state
+            .pending
+            .as_ref()
+            .map_or(&[], |p| p.warnings.as_slice())
+    }
+
+    /// Read-only view of the worker-in-flight latch flipped by
+    /// [`AddAccountMsg::SetBusy`].
+    ///
+    /// Returns `true` while `AppModel` owns the live `(Vault, Store)`
+    /// pair in a `gio::spawn_blocking Vault::mutate_and_save` add
+    /// worker and `false` otherwise. The widget binds a `#[watch]`
+    /// over this through [`compose_save_button_sensitive`] so the
+    /// shared Save footer (and the per-path activation button) dim
+    /// in lockstep with the parent's busy gate.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        self.busy
+    }
+
+    /// Counts surfaced by the most recent successful clipboard-QR
+    /// add, or `None` if no QR success is currently parked.
+    ///
+    /// Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `AddAccountComponent` shared shell L2230 (post-success counts
+    /// panel). The widget binds a `#[watch]` over this through
+    /// [`compose_qr_counts_panel_visible`] /
+    /// [`compose_qr_counts_panel_imported_label`] /
+    /// [`compose_qr_counts_panel_skipped_label`] /
+    /// [`compose_qr_counts_panel_warnings_label`] so the counts
+    /// panel renders the live numbers until the user dismisses it
+    /// via [`AddAccountMsg::DismissQrCountsPanel`].
+    #[must_use]
+    pub fn qr_success_counts(&self) -> Option<&QrImportSummary> {
+        self.qr_success_counts.as_ref()
+    }
+}
+
+/// Map a [`SaveClickOutcome`] from [`compose_save_click_outcome`]
+/// to the corresponding [`AddAccountMsg`] the widget should
+/// dispatch through `relm4::ComponentSender::input`.
+///
+/// Lets the widget Save handler stay a one-shot routing block —
+/// `sender.input(save_click_outcome_to_msg(compose_save_click_outcome(...)))`
+/// — without re-deriving the per-variant `AddAccountMsg` shape
+/// inline. The mapping is:
+///
+/// * [`SaveClickOutcome::Proceed`] →
+///   [`AddAccountMsg::SubmitProceed`] carrying the validated
+///   [`Account`]. The `warnings` are dropped here because the
+///   dialog dismisses on success; warnings render alongside the
+///   post-save toast off the [`AddAccountOutput::Submit`]
+///   boundary via [`paladin_auth_core::format_validation_warning`].
+/// * [`SaveClickOutcome::AwaitConfirmation`] →
+///   [`AddAccountMsg::StagePendingDuplicate`] carrying the
+///   validated [`Account`], [`ValidationWarning`]s, and the
+///   colliding [`AccountSummary`]. Both halves of the collision
+///   projection thread through so [`apply_msg`] can park them in
+///   [`crate::secret_fields::AddSecretState::pending`] +
+///   [`AddDialogState::pending_duplicate_existing`].
+/// * [`SaveClickOutcome::InlineError`] →
+///   [`AddAccountMsg::RenderInlineError`]. The typed §5 body
+///   lands in [`AddDialogState::inline_error`] for the widget
+///   `#[watch]` binding to render.
+///
+/// Pure — moves the [`SaveClickOutcome`] by value and constructs
+/// the matching [`AddAccountMsg`] without consulting external
+/// state. The composer / dispatch pair stays unit-testable in
+/// `tests/add_account_logic.rs` without GTK.
+#[must_use]
+pub fn save_click_outcome_to_msg(outcome: SaveClickOutcome) -> AddAccountMsg {
+    match outcome {
+        SaveClickOutcome::Proceed(validated) => AddAccountMsg::SubmitProceed {
+            account: validated.account,
+        },
+        SaveClickOutcome::AwaitConfirmation {
+            existing,
+            validated,
+        } => AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing,
+        },
+        SaveClickOutcome::InlineError(err) => AddAccountMsg::RenderInlineError(err),
+    }
+}
+
+/// Predicate the widget `update()` post-routing branch checks
+/// before presenting the duplicate-collision [`adw::AlertDialog`].
+///
+/// Returns `true` iff the most recent dispatch was
+/// [`AddAccountMsg::StagePendingDuplicate`] **and** the resulting
+/// state reports
+/// [`AddDialogState::has_pending_duplicate_for_alert`] — both
+/// halves of the duplicate-collision projection are populated
+/// (the validated account in
+/// [`crate::secret_fields::AddSecretState::pending`] and the
+/// colliding [`AccountSummary`] in
+/// [`AddDialogState::pending_duplicate_existing`]).
+///
+/// Mirror of [`crate::init_dialog`]'s
+/// `was_worker_destructive && state.has_pending_force()` guard on
+/// the add path. The "newly arrived" half (`was_stage_pending`)
+/// keeps the alert from re-presenting on every subsequent edit
+/// dispatch (`ManualLabelChanged`, etc.) that leaves the pending
+/// slot populated; the state-side half
+/// ([`AddDialogState::has_pending_duplicate_for_alert`]) prevents
+/// a stale captured discriminant from firing against an
+/// already-drained state.
+///
+/// Pure — borrows the state read-only and consults the captured
+/// discriminant flag the widget passes down. Unit-testable in
+/// `tests/add_account_logic.rs` without GTK.
+#[must_use]
+pub fn should_present_duplicate_alert(was_stage_pending: bool, state: &AddDialogState) -> bool {
+    was_stage_pending && state.has_pending_duplicate_for_alert()
+}
+
+/// Per-message routing decisions for [`AddAccountComponent`].
+///
+/// Draft-changed / duplicate-confirm routing land in follow-up
+/// commits as additional variants are added to [`AddAccountMsg`] /
+/// [`AddAccountOutput`]. Mirror of
+/// [`crate::edit_dialog::apply_msg`] on the add path: the per-
+/// message decisions stay co-located with the state struct so a
+/// future refactor cannot silently reorder them.
+//
+// `clippy::too_many_lines` is allowed for the same reason it's
+// allowed on `app::model::update`: this is a dispatch table whose
+// per-arm clarity matters more than function length, and each arm
+// already delegates to small, unit-tested helpers (`AddSecretState`
+// methods, `compose_*` composers) elsewhere.
+#[allow(clippy::too_many_lines)]
+#[must_use]
+pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAccountOutput> {
+    match msg {
+        AddAccountMsg::Cancel => {
+            // DESIGN §8: secret fields clear on cancel. Wipe the
+            // manual / URI shadow buffers and drop any pending
+            // duplicate-add before emitting the output so the
+            // secrets are not live between this return and
+            // `AppModel` dropping the controller. The let-binding
+            // names the returned `Option<Box<ValidatedAccount>>`
+            // so the prior pending (if any) drops at the end of
+            // this arm — `paladin_auth_core::Secret`'s `ZeroizeOnDrop`
+            // wipes the carried bytes.
+            let _dropped_pending = state.secret_state.clear_for(ClearReason::Cancel);
+            // Paired with the pending-slot drop above: drain the
+            // colliding-summary projection so a follow-up open
+            // does not render a stale existing summary against a
+            // fresh empty pending.
+            state.pending_duplicate_existing = None;
+            // Drain the QR post-success counts panel so a follow-up
+            // dialog open starts on a clean body — the panel is
+            // dialog-local UI state, not vault state, so dismissal
+            // must drop it alongside the secret-bearing buffers.
+            state.qr_success_counts = None;
+            Some(AddAccountOutput::Cancel)
+        }
+        AddAccountMsg::WorkerFailed(outcome) => {
+            // Drain any prior QR counts panel so the fresh post-effect
+            // body renders alone. Two QR-sub-path edge cases are
+            // covered here:
+            //
+            // * `Inline` (e.g. `save_not_committed`): the vault rolled
+            //   back so there are no fresh imported accounts to count;
+            //   leaving a stale panel from an earlier scan would
+            //   render alongside the inline error and mislead the
+            //   user about the latest attempt.
+            // * `KeepWithWarning` (`save_durability_unconfirmed`):
+            //   `Vault::mutate_and_save` commits past the mutation point
+            //   but discards the closure's `ImportReport`, so the
+            //   dialog has no fresh counts to show. The durability
+            //   warning renders via `post_effect_warning_label`
+            //   against the still-mounted dialog body — that surface
+            //   is the "counts panel" the spec
+            //   (docs/IMPLEMENTATION_PLAN_04_GTK.md §"`AddAccountComponent`
+            //   QR clipboard image path") routes the warning to.
+            //
+            // Mirror of the `QrSuccess` arm's `worker_outcome = None`
+            // drop, run the other direction. Manual / URI sub-paths
+            // never set `qr_success_counts` so this is a no-op there.
+            state.qr_success_counts = None;
+            state.worker_outcome = Some(outcome);
+            None
+        }
+        AddAccountMsg::SubmitProceed { account } => {
+            // Clear any prior worker outcome so the body does not
+            // render stale post-effect text alongside the live
+            // retry. The fresh worker run is authoritative for the
+            // next routing decision.
+            state.worker_outcome = None;
+            // SubmitProceed only arrives after a successful
+            // validation pipeline (`compose_save_click_outcome`
+            // returned `Proceed`), so any prior inline_error from
+            // an earlier rejected Save click is stale — drop it
+            // defensively so the dialog body cannot render stale
+            // pre-effect text alongside the live worker attempt.
+            state.inline_error = None;
+            // DESIGN §8: secret fields clear on submit. The
+            // validated `Account` already carries its `Secret` in
+            // `ZeroizeOnDrop` form across the Component boundary,
+            // but the manual / URI shadow buffers and any pending
+            // duplicate slot in `secret_state` are *not* consumed
+            // by the output — wipe them here so the buffers are
+            // empty before the worker spawns.
+            let _dropped_pending = state.secret_state.clear_for(ClearReason::Submit);
+            // Paired with the pending-slot drop above: drain the
+            // colliding-summary projection so a follow-up open
+            // does not render a stale existing summary.
+            state.pending_duplicate_existing = None;
+            Some(AddAccountOutput::Submit { account })
+        }
+        AddAccountMsg::SwitchPath(to) => {
+            // Detect an actual sub-path transition (versus an
+            // idempotent same-path re-entry) before calling
+            // [`AddSecretState::switch_path`], which early-returns
+            // on same-path entry. Mirror the early-return guard
+            // here so the inline-error / pending-duplicate drop
+            // both key off the same condition the secret-state
+            // layer already uses.
+            let path_changed = state.secret_state.active_path != to;
+            // Let-binding the returned `Option<Box<ValidatedAccount>>`
+            // so the prior pending duplicate (if any) drops at the
+            // end of this arm — the secret bytes inside the
+            // `ValidatedAccount` zero out via
+            // `paladin_auth_core::Secret`'s `ZeroizeOnDrop` impl.
+            let _dropped_pending = state.secret_state.switch_path(to);
+            if path_changed {
+                // A typed §5 rejection from
+                // [`SaveClickOutcome::InlineError`] is always
+                // specific to the leaving sub-path's failing field
+                // (manual label / secret / icon-hint, or URI text);
+                // it is not applicable to the entering path. Drop
+                // it so the new path starts fresh — symmetric with
+                // the pending-duplicate drop above.
+                state.inline_error = None;
+                // Paired with the pending-slot drop above: drain
+                // the colliding-summary projection so the new path
+                // does not render a stale existing summary against
+                // a fresh empty pending.
+                state.pending_duplicate_existing = None;
+                // The QR post-success counts panel is QR-specific
+                // UI state; leaving the QR sub-path drains it so
+                // the manual / URI pages do not render an irrelevant
+                // counts row. Same-path re-entry leaves the panel
+                // intact — the `path_changed` guard above mirrors
+                // the secret-state same-path no-op rule.
+                state.qr_success_counts = None;
+            }
+            None
+        }
+        AddAccountMsg::ManualLabelChanged(text) => {
+            state.manual_draft.label = text;
+            // User-edit invalidates any prior Save-click rejection
+            // against the manual sub-path; the same clearing
+            // semantic as the secret-bearing arms applies to every
+            // non-secret manual draft field — see the doc on
+            // [`AddDialogState::inline_error`].
+            state.inline_error = None;
+            None
+        }
+        AddAccountMsg::ManualIssuerChanged(text) => {
+            state.manual_draft.issuer = text;
+            state.inline_error = None;
+            None
+        }
+        AddAccountMsg::ManualAlgorithmChanged(algorithm) => {
+            state.manual_draft.algorithm = algorithm;
+            state.inline_error = None;
+            None
+        }
+        AddAccountMsg::ManualDigitsChanged(digits) => {
+            state.manual_draft.digits = digits;
+            state.inline_error = None;
+            None
+        }
+        AddAccountMsg::ManualKindChanged(kind) => {
+            state.manual_draft.kind = kind;
+            state.inline_error = None;
+            None
+        }
+        AddAccountMsg::ManualPeriodChanged(period_secs) => {
+            state.manual_draft.period_secs = period_secs;
+            state.inline_error = None;
+            None
+        }
+        AddAccountMsg::ManualCounterChanged(counter) => {
+            state.manual_draft.counter = counter;
+            state.inline_error = None;
+            None
+        }
+        AddAccountMsg::ManualIconHintChanged(text) => {
+            state.manual_draft.icon_hint_text = text;
+            state.inline_error = None;
+            None
+        }
+        AddAccountMsg::ManualSecretChanged(text) => {
+            state.secret_state.manual_secret.set(&text);
+            // Retyping the failing secret invalidates the prior
+            // Save-click rejection — drop the inline error so the
+            // dialog body stops rendering stale text against the
+            // live buffer. Mirror of
+            // `UnlockDialogState::set_passphrase` clearing
+            // `inline_error` on the encrypted-vault path.
+            state.inline_error = None;
+            None
+        }
+        AddAccountMsg::UriTextChanged(text) => {
+            state.secret_state.uri_text.set(&text);
+            // Retyping the failing URI invalidates the prior
+            // Save-click rejection — drop the inline error so the
+            // dialog body stops rendering stale text against the
+            // live buffer. Mirror of
+            // `Self::ManualSecretChanged` on the URI sub-path.
+            state.inline_error = None;
+            None
+        }
+        AddAccountMsg::StagePendingDuplicate {
+            account,
+            warnings,
+            existing,
+        } => {
+            // Reconstruct the `ValidatedAccount` from its destructured
+            // fields — the variant carries `{ account, warnings }`
+            // rather than `(ValidatedAccount)` because
+            // `ValidatedAccount` is intentionally not `Clone` while
+            // `AddAccountMsg` derives `Clone`. The let-binding names
+            // the returned `Option<Box<ValidatedAccount>>` so any
+            // prior pending drops at the end of this arm — its
+            // secret bytes zero out via `paladin_auth_core::Secret`'s
+            // `ZeroizeOnDrop` impl.
+            let _dropped_prior = state
+                .secret_state
+                .replace_pending(ValidatedAccount { account, warnings });
+            // Store the colliding summary alongside the pending
+            // validated account so the "Add anyway?" prompt can
+            // render both halves of the collision without
+            // re-querying the vault.
+            state.pending_duplicate_existing = Some(existing);
+            // The arm is reached only after validation succeeded
+            // (the pending is a `ValidatedAccount`) and
+            // `Vault::find_duplicate` reported a collision — drop
+            // any prior validation inline_error so the "Add anyway?"
+            // prompt renders cleanly.
+            state.inline_error = None;
+            None
+        }
+        AddAccountMsg::ConfirmAddAnyway => {
+            // Defensive: no pending → no output. The widget should
+            // only dispatch this after `StagePendingDuplicate` parked
+            // a value, but a stray click cannot punch through to the
+            // `(Vault, Store)` worker without an account in hand.
+            let validated = state.secret_state.consume_pending()?;
+            // Clear any prior worker outcome so the body does not
+            // render stale post-effect text alongside the live
+            // worker attempt. Symmetric with the `SubmitProceed`
+            // arm — both enter the worker through the same
+            // `AddAccountOutput::Submit` boundary.
+            state.worker_outcome = None;
+            // Drop any stale inline_error before the submit
+            // boundary; the user confirmed past the duplicate
+            // prompt, so a pre-effect validation rejection from an
+            // earlier Save attempt is no longer applicable.
+            // Symmetric with the `SubmitProceed` arm.
+            state.inline_error = None;
+            // Paired with the `consume_pending` drain above: drop
+            // the colliding-summary projection so the post-confirm
+            // state has neither half of the duplicate-collision
+            // projection.
+            state.pending_duplicate_existing = None;
+            Some(AddAccountOutput::Submit {
+                account: validated.account,
+            })
+        }
+        AddAccountMsg::DismissDuplicateAlert => {
+            // In-modal Cancel response on the duplicate-collision
+            // `adw::AlertDialog`. Drop the pending validated account
+            // and the colliding-summary projection so a subsequent
+            // Save click starts from a clean state, but do NOT
+            // emit `AddAccountOutput::Cancel` — the parent
+            // `AddAccountComponent` stays open and the user is
+            // returned to the manual / URI form with their typed
+            // buffers intact so they can edit and retry.
+            //
+            // Distinct from [`AddAccountMsg::Cancel`] (which closes
+            // the whole dialog and wipes the §"Secret entry
+            // handling" buffers via `clear_for`). `drop_pending`
+            // (not `consume_pending`) only drains the
+            // `Box<ValidatedAccount>` slot — the manual Base32 and
+            // URI shadow buffers stay populated so the user can
+            // edit the colliding field without re-entering
+            // everything. The §"Secret entry handling" clear
+            // boundaries are Submit / Cancel / Close / auto-lock,
+            // not dismiss-alert. The let-binding names the
+            // returned `Option<Box<ValidatedAccount>>` so the
+            // prior pending drops at the end of this arm (zeroize
+            // via `paladin_auth_core::Secret`'s `ZeroizeOnDrop`).
+            //
+            // Defensive: a stray dispatch with no pending parked is
+            // a benign no-op (no output, no state change beyond
+            // re-confirming the empty slots).
+            let _dropped_pending = state.secret_state.drop_pending();
+            state.pending_duplicate_existing = None;
+            None
+        }
+        AddAccountMsg::RenderInlineError(err) => {
+            // Replace any prior projection so the dialog never
+            // renders stale text from an earlier Save click. The
+            // widget computes [`compose_save_click_outcome`] on
+            // every click; the rejection stays inline so the user
+            // can retry without losing the in-flight buffers.
+            state.inline_error = Some(err);
+            None
+        }
+        AddAccountMsg::SetBusy(busy) => {
+            // Parent-driven flag flip — the worker spawn site in
+            // `AppModel` brackets the `gio::spawn_blocking
+            // Vault::mutate_and_save(|v| v.add(...))` call with
+            // `SetBusy(true)` / `SetBusy(false)` so
+            // `compose_save_button_sensitive` dims the shared Save
+            // footer (and any per-path activation button) while the
+            // worker owns the live `(Vault, Store)` pair. Idempotent
+            // — a same-value flip is a benign no-op (no allocation,
+            // no extra view tick beyond the `#[watch]` binding's
+            // own change detection). Dialog-local — the parent
+            // already knows it kicked the worker off, so no output
+            // is forwarded.
+            state.busy = busy;
+            None
+        }
+        AddAccountMsg::Close => {
+            // Window-close / parent-navigation / modal-dismissal
+            // dispatch, sibling of
+            // [`AddAccountMsg::Cancel`]. Both arms wipe the secret
+            // state through [`AddSecretState::clear_for`] and drain
+            // the colliding-summary projection so the dialog opens
+            // clean on the next mount; the distinction is the
+            // [`ClearReason`] passed through (so the secret-fields
+            // layer's clear hook can attribute the dismissal source
+            // without a heuristic) and the typed output variant
+            // forwarded to `AppModel` so the
+            // `AppMsg::AddAccountAction(...)` dispatch can keep an
+            // explicit per-source arm. The let-binding names the
+            // returned `Option<Box<ValidatedAccount>>` so the prior
+            // pending (if any) drops at the end of this arm —
+            // `paladin_auth_core::Secret`'s `ZeroizeOnDrop` wipes the
+            // carried bytes.
+            let _dropped_pending = state.secret_state.clear_for(ClearReason::Close);
+            state.pending_duplicate_existing = None;
+            // Mirror of the Cancel arm: drain the QR counts panel so
+            // the next dialog open starts on a clean body.
+            state.qr_success_counts = None;
+            Some(AddAccountOutput::Close)
+        }
+        AddAccountMsg::SaveClicked => {
+            // Shared Save-button activation. The widget cannot
+            // call [`compose_save_click_outcome`] itself —
+            // `&Vault` is parent-owned — so the arm forwards
+            // [`AddAccountOutput::RequestSaveClick`] up to
+            // `AppModel`. The parent reads the cached dialog
+            // state via `ComponentController::model`, borrows the
+            // live vault, runs the composer with
+            // [`SystemTime::now`] captured at dispatch time, and
+            // dispatches the resulting [`AddAccountMsg`] back via
+            // `controller.emit(save_click_outcome_to_msg(outcome))`.
+            //
+            // The arm is deliberately side-effect-free on the
+            // dialog state: the parent's compose result is the
+            // single source of truth for whether prior
+            // `manual_draft` / `secret_state` / pending /
+            // `inline_error` slots should drain, so the arm only
+            // forwards the request without mutating them. Pinned
+            // by the `apply_msg_save_clicked_*` tests in
+            // `tests/add_account_logic.rs`.
+            Some(AddAccountOutput::RequestSaveClick)
+        }
+        AddAccountMsg::ScanClipboardClicked => {
+            // Symmetric partner of the `SaveClicked` arm above: the
+            // dialog cannot drive the GDK clipboard read or the
+            // `Vault::mutate_and_save(|v| v.import_accounts(...))`
+            // worker itself (the live `(Vault, Store)` pair lives
+            // on `AppModel`), so the arm forwards the page-local
+            // activation up to the parent without mutating state.
+            // `AppModel` reads `gdk::Display::default().clipboard()`,
+            // runs `crate::qr_clipboard::prepare_rgba_layout`,
+            // downloads via `gdk::TextureDownloader` set to
+            // `gdk::MemoryFormat::R8g8b8a8`, and dispatches the QR
+            // worker on `gio::spawn_blocking`. Success / failure
+            // route back through `AddAccountMsg::QrSuccess` /
+            // `AddAccountMsg::WorkerFailed`. Pinned by
+            // `apply_msg_scan_clipboard_clicked_emits_request_scan_clipboard_output` /
+            // `apply_msg_scan_clipboard_clicked_preserves_active_path` /
+            // `apply_msg_scan_clipboard_clicked_does_not_disturb_manual_or_uri_buffers`.
+            Some(AddAccountOutput::RequestScanClipboard)
+        }
+        AddAccountMsg::QrSuccess(summary) => {
+            // Clear any prior pre-effect inline_error and post-
+            // effect worker_outcome so the freshly-rendered counts
+            // panel does not sit alongside stale text from an
+            // earlier failed Save click or a stale durability
+            // warning. Mirror of the `SubmitProceed` /
+            // `ConfirmAddAnyway` drops, but the success surface
+            // here is the counts panel rather than the parent's
+            // toast — so the dialog stays open and the slot is
+            // populated before returning.
+            state.inline_error = None;
+            state.worker_outcome = None;
+            state.qr_success_counts = Some(summary);
+            None
+        }
+        AddAccountMsg::DismissQrCountsPanel => {
+            // Defensive: assigning `None` is idempotent so a stray
+            // click on an already-empty slot is a benign no-op.
+            // The widget's #[watch] over `qr_success_counts`
+            // collapses the panel as soon as this returns.
+            state.qr_success_counts = None;
+            None
+        }
+    }
+}
+
+/// Widget-bearing dialog for the header-bar `+` button.
+///
+/// Mounts a vertical layout with a heading naming the add flow and
+/// a Cancel button that forwards [`AddAccountOutput::Cancel`] so
+/// `AppModel` can dismiss the dialog. The editable manual / URI /
+/// QR sub-paths, the Save button, and the `Vault::mutate_and_save(
+/// |v| v.add(...))` worker land in follow-up commits alongside the
+/// header-bar wiring per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Component tree" > `AddAccountComponent`.
+///
+/// Symmetric partner of [`crate::edit_dialog::EditDialogComponent`]
+/// for the add path. The Component is `pub` so the future header-
+/// bar wiring commit can mount it from `AppModel::update`'s
+/// `AppMsg::OpenAddDialog` arm without re-declaring the widget
+/// shape.
+pub struct AddAccountComponent {
+    /// Construction parameters retained on `self` so future message
+    /// handlers can read the resolved vault path. Held by value so
+    /// the dialog never re-resolves the path mid-flight.
+    init: AddAccountInit,
+    /// Reactive state owned by the dialog. Carries the latest
+    /// [`AddPostEffectOutcome`] from the `Vault::mutate_and_save`
+    /// add worker plus the manual / URI / QR draft buffers so the
+    /// view can route inline-error / durability-warning rendering.
+    ///
+    /// Crate-public so `AppModel::update` can peek through
+    /// `ComponentController::model` and call
+    /// [`compose_save_click_outcome`] against the live state on
+    /// the shared Save click compose request
+    /// (`AddAccountOutput::RequestSaveClick`). Keeping the field
+    /// pub(crate) instead of public means the GTK / libadwaita
+    /// crate boundary still owns the dialog state — only the
+    /// in-crate `AppModel` reads it, not downstream consumers.
+    pub(crate) state: AddDialogState,
+    /// Reference-counted handle to the root [`gtk::Box`] so the
+    /// duplicate-collision [`adw::AlertDialog`] presented by
+    /// [`Self::present_duplicate_alert`] can use it as a
+    /// presentation parent (`AdwDialog::present` walks up to the
+    /// active [`adw::ApplicationWindow`] from any descendant).
+    /// Mirror of
+    /// [`crate::init_dialog::InitDialogComponent::root_box`] on the
+    /// add path. `gtk::Box` is a `GObject`, so cloning just bumps
+    /// the reference count rather than duplicating the widget.
+    root_box: gtk::Box,
+}
+
+/// Pure-logic key dispatcher for the bubble-phase
+/// `gtk::EventControllerKey` attached to the dialog root by
+/// [`wire_dismiss_controller`].
+///
+/// Returns `true` only for a bare Escape press — any chord
+/// modifier (CTRL / ALT / SHIFT / SUPER / HYPER / META) or any
+/// other key propagates untouched so the focused entry,
+/// dropdown, or Save button keeps its own keyboard handling.
+/// Caps Lock is treated as a toggle bit rather than a held
+/// modifier, so Escape still dismisses with Caps Lock on.
+///
+/// Pure logic so the dispatch table can be pinned by unit tests
+/// without a display server. Mirrors
+/// [`crate::account_list::dispatch_search_entry_to_list_nav`].
+#[must_use]
+pub fn dispatch_root_dismiss_key(keyval: gtk::gdk::Key, mods: gtk::gdk::ModifierType) -> bool {
+    let disallowed = gtk::gdk::ModifierType::CONTROL_MASK
+        | gtk::gdk::ModifierType::ALT_MASK
+        | gtk::gdk::ModifierType::SHIFT_MASK
+        | gtk::gdk::ModifierType::SUPER_MASK
+        | gtk::gdk::ModifierType::HYPER_MASK
+        | gtk::gdk::ModifierType::META_MASK;
+    if mods.intersects(disallowed) {
+        return false;
+    }
+    matches!(keyval, gtk::gdk::Key::Escape)
+}
+
+/// Install a bubble-phase [`gtk::EventControllerKey`] on the
+/// dialog root that posts [`AddAccountMsg::Cancel`] when the
+/// user presses a bare Escape.
+///
+/// Bubble (default) phase means focused child widgets see the
+/// key event first; only an unconsumed press bubbles up to this
+/// dispatcher. That keeps Escape from being stolen out from
+/// under any sub-control that might want to handle it locally
+/// (e.g. a future inline-error dismissal) while still making the
+/// dialog dismissable from any focused widget.
+///
+/// Routing `AddAccountMsg::Cancel` matches the existing Cancel
+/// button (`cancel_button.connect_clicked` in the view! macro),
+/// so the secret-buffer wipe and `AddAccountOutput::Cancel`
+/// forwarding flow through `apply_msg`'s single Cancel arm
+/// regardless of dismissal source.
+///
+/// Pure side-effect helper: the controller is owned by the
+/// widget tree so callers don't need to retain a handle.
+fn wire_dismiss_controller(root: &gtk::Box, sender: &ComponentSender<AddAccountComponent>) {
+    let controller = gtk::EventControllerKey::new();
+    let dismiss_sender = sender.clone();
+    // `Sender::send` is used instead of `ComponentSender::input`
+    // (which `.expect`s on a closed channel) so a stray key-pressed
+    // signal after the controller is dropped — e.g.
+    // `lock_on_auto_lock_expiry` taking the dialog into
+    // `UnlockedDiscards.modal` — is a benign no-op rather than a
+    // process abort. See `import_dialog`'s Cancel button for the
+    // canonical comment.
+    controller.connect_key_pressed(move |_, keyval, _, mods| {
+        if dispatch_root_dismiss_key(keyval, mods) {
+            let _ = dismiss_sender.input_sender().send(AddAccountMsg::Cancel);
+            return gtk::glib::Propagation::Stop;
+        }
+        gtk::glib::Propagation::Proceed
+    });
+    root.add_controller(controller);
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for AddAccountComponent {
+    type Init = AddAccountInit;
+    type Input = AddAccountMsg;
+    type Output = AddAccountOutput;
+
+    view! {
+        #[root]
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            set_spacing: 18,
+            set_margin_start: 18,
+            set_margin_end: 18,
+            set_margin_bottom: 18,
+            set_hexpand: true,
+            set_vexpand: true,
+
+            gtk::Label {
+                set_label: format_add_dialog_title(),
+                set_xalign: 0.0,
+                add_css_class: "title-2",
+            },
+
+            // The three sub-path pages share one `adw::ViewStack`
+            // so the `AdwViewSwitcherBar` below toggles between
+            // them. The manual page below now carries the editable
+            // form rows; the URI and QR pages stay as empty
+            // placeholders until their follow-up commits land —
+            // mounting them as named pages now is what makes
+            // `connect_visible_child_notify` routable, which in
+            // turn carries the L2122 contract that switching
+            // pages wipes the leaving path's hidden secret-bearing
+            // buffer via `AddSecretState::switch_path`.
+            #[name = "view_stack"]
+            adw::ViewStack {
+                set_hexpand: true,
+                set_vexpand: true,
+
+                add_titled_with_icon[
+                    Some(format_add_path_name(AddPath::Manual)),
+                    format_add_path_label(AddPath::Manual),
+                    "document-edit-symbolic",
+                ] = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 12,
+
+                    // Identity group: label + issuer + icon hint.
+                    // Non-secret entries — the §8 secret-buffer
+                    // contract applies to the Base32 secret only.
+                    // Every keystroke shadows into
+                    // `ManualDraftState` so retry / cancel flows
+                    // see the live typed text.
+                    adw::PreferencesGroup {
+                        #[name = "manual_label_row"]
+                        add = &adw::EntryRow {
+                            set_title: format_manual_label_title(),
+                            // `Sender::send` is used instead of
+                            // `ComponentSender::input` (which
+                            // `.expect`s on a closed channel) so a
+                            // stray callback after the controller
+                            // is dropped — e.g.
+                            // `lock_on_auto_lock_expiry` taking the
+                            // dialog into `UnlockedDiscards.modal`
+                            // — is a benign no-op rather than a
+                            // process abort. See `import_dialog`'s
+                            // Cancel button for the canonical
+                            // comment.
+                            connect_changed[sender] => move |entry| {
+                                let _ = sender.input_sender().send(
+                                    AddAccountMsg::ManualLabelChanged(entry.text().to_string()),
+                                );
+                            },
+                        },
+                        #[name = "manual_issuer_row"]
+                        add = &adw::EntryRow {
+                            set_title: format_manual_issuer_title(),
+                            // See the manual-label `connect_changed` comment.
+                            connect_changed[sender] => move |entry| {
+                                let _ = sender.input_sender().send(
+                                    AddAccountMsg::ManualIssuerChanged(entry.text().to_string()),
+                                );
+                            },
+                        },
+                        #[name = "manual_icon_hint_row"]
+                        add = &adw::EntryRow {
+                            set_title: format_manual_icon_hint_title(),
+                            // See the manual-label `connect_changed` comment.
+                            connect_changed[sender] => move |entry| {
+                                let _ = sender.input_sender().send(
+                                    AddAccountMsg::ManualIconHintChanged(
+                                        entry.text().to_string(),
+                                    ),
+                                );
+                            },
+                        },
+                    },
+
+                    // Secret group: Base32 OTP secret behind an
+                    // `adw::PasswordEntryRow` so the bytes are
+                    // obscured at the visible UI boundary. The
+                    // keystroke shadow lands in the Paladin Auth-owned
+                    // `SecretEntry` inside `secret_state.manual_secret`
+                    // per §"Secret entry handling".
+                    adw::PreferencesGroup {
+                        #[name = "manual_secret_row"]
+                        add = &adw::PasswordEntryRow {
+                            set_title: format_manual_secret_title(),
+                            // See the manual-label `connect_changed` comment.
+                            connect_changed[sender] => move |entry| {
+                                let _ = sender.input_sender().send(
+                                    AddAccountMsg::ManualSecretChanged(entry.text().to_string()),
+                                );
+                            },
+                        },
+                    },
+
+                    // Kind / algorithm / digits group. The kind and
+                    // algorithm dropdowns drive `set_selected` via
+                    // `#[watch]` projections so the visible dropdown
+                    // tracks `ManualDraftState`. The
+                    // `connect_selected_notify` signals map the
+                    // index back to the typed enum through the
+                    // `parse_manual_kind_from_selected` /
+                    // `parse_manual_algorithm_from_selected`
+                    // inverses; an out-of-range selection routes as
+                    // `None` and the dispatch arm leaves the draft
+                    // untouched.
+                    adw::PreferencesGroup {
+                        #[name = "manual_kind_row"]
+                        add = &adw::ComboRow {
+                            set_title: format_manual_kind_title(),
+                            set_model: Some(&gtk::StringList::new(
+                                format_manual_kind_labels(),
+                            )),
+                            #[watch]
+                            set_selected: compose_manual_kind_selected(&model.state),
+                            // See the manual-label `connect_changed` comment.
+                            connect_selected_notify[sender] => move |combo| {
+                                if let Some(kind) =
+                                    parse_manual_kind_from_selected(combo.selected())
+                                {
+                                    let _ = sender
+                                        .input_sender()
+                                        .send(AddAccountMsg::ManualKindChanged(kind));
+                                }
+                            },
+                        },
+                        #[name = "manual_algorithm_row"]
+                        add = &adw::ComboRow {
+                            set_title: format_manual_algorithm_title(),
+                            set_model: Some(&gtk::StringList::new(
+                                format_manual_algorithm_labels(),
+                            )),
+                            #[watch]
+                            set_selected: compose_manual_algorithm_selected(&model.state),
+                            // See the manual-label `connect_changed` comment.
+                            connect_selected_notify[sender] => move |combo| {
+                                if let Some(algorithm) =
+                                    parse_manual_algorithm_from_selected(combo.selected())
+                                {
+                                    let _ = sender.input_sender().send(
+                                        AddAccountMsg::ManualAlgorithmChanged(algorithm),
+                                    );
+                                }
+                            },
+                        },
+                        #[name = "manual_digits_row"]
+                        add = &adw::SpinRow {
+                            set_title: format_manual_digits_title(),
+                            set_adjustment: Some(&{
+                                let (lower, upper, step) =
+                                    format_manual_digits_adjustment();
+                                gtk::Adjustment::new(
+                                    compose_manual_digits_value(&model.state),
+                                    lower,
+                                    upper,
+                                    step,
+                                    step,
+                                    0.0,
+                                )
+                            }),
+                            #[watch]
+                            set_value: compose_manual_digits_value(&model.state),
+                            // See the manual-label `connect_changed` comment.
+                            connect_changed[sender] => move |spin| {
+                                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                                let digits = spin.value() as u8;
+                                let _ = sender
+                                    .input_sender()
+                                    .send(AddAccountMsg::ManualDigitsChanged(digits));
+                            },
+                        },
+                    },
+
+                    // Kind-conditional group: TOTP period or HOTP
+                    // counter, never both. The
+                    // `compose_manual_period_secs_visible` /
+                    // `compose_manual_counter_visible` projections
+                    // are mutually exclusive per the existing pure-
+                    // logic invariant; the `#[watch]` bindings let
+                    // the relm4 view tick toggle visibility on
+                    // every kind flip without rebuilding the row.
+                    adw::PreferencesGroup {
+                        #[name = "manual_period_row"]
+                        add = &adw::SpinRow {
+                            set_title: format_manual_period_title(),
+                            set_adjustment: Some(&{
+                                let (lower, upper, step) =
+                                    format_manual_period_adjustment();
+                                gtk::Adjustment::new(
+                                    compose_manual_period_secs_value(&model.state),
+                                    lower,
+                                    upper,
+                                    step,
+                                    step,
+                                    0.0,
+                                )
+                            }),
+                            #[watch]
+                            set_value: compose_manual_period_secs_value(&model.state),
+                            #[watch]
+                            set_visible: compose_manual_period_secs_visible(&model.state),
+                            // See the manual-label `connect_changed` comment.
+                            connect_changed[sender] => move |spin| {
+                                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                                let period = spin.value() as u32;
+                                let _ = sender
+                                    .input_sender()
+                                    .send(AddAccountMsg::ManualPeriodChanged(period));
+                            },
+                        },
+                        #[name = "manual_counter_row"]
+                        add = &adw::SpinRow {
+                            set_title: format_manual_counter_title(),
+                            set_adjustment: Some(&{
+                                let (lower, upper, step) =
+                                    format_manual_counter_adjustment();
+                                gtk::Adjustment::new(
+                                    compose_manual_counter_value(&model.state),
+                                    lower,
+                                    upper,
+                                    step,
+                                    step,
+                                    0.0,
+                                )
+                            }),
+                            #[watch]
+                            set_value: compose_manual_counter_value(&model.state),
+                            #[watch]
+                            set_visible: compose_manual_counter_visible(&model.state),
+                            // See the manual-label `connect_changed` comment.
+                            connect_changed[sender] => move |spin| {
+                                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                                let counter = spin.value() as u64;
+                                let _ = sender
+                                    .input_sender()
+                                    .send(AddAccountMsg::ManualCounterChanged(counter));
+                            },
+                        },
+                    },
+                },
+
+                add_titled_with_icon[
+                    Some(format_add_path_name(AddPath::Uri)),
+                    format_add_path_label(AddPath::Uri),
+                    "insert-link-symbolic",
+                ] = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 12,
+
+                    // URI sub-path: single `adw::EntryRow` for the
+                    // `otpauth://` string. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
+                    // §"Component tree" > `AddAccountComponent` and
+                    // §"Secret entry handling", every keystroke
+                    // shadows into
+                    // `AddSecretState::uri_text` (a Paladin Auth-owned
+                    // `SecretEntry` whose bytes zeroize on drop /
+                    // `take` / `set`) through the `UriTextChanged`
+                    // dispatch — the URI text embeds the user's
+                    // Base32 secret, so it must follow the same
+                    // §8 clear-on-cancel / clear-on-switch-path
+                    // contract the manual Base32 secret already
+                    // follows. The `#[watch] set_text:` binding
+                    // reads `compose_uri_text_value(&model.state)`
+                    // so programmatic clears
+                    // (`Cancel` / `SwitchPath` / `Close` /
+                    // `SubmitProceed` / `ConfirmAddAnyway` /
+                    // auto-lock all route through
+                    // `AddSecretState::clear_for` /
+                    // `switch_path`) flush back to the visible
+                    // entry. On Save, `compose_submit_outcome`
+                    // dispatches to `compose_uri_submit_outcome`
+                    // which threads
+                    // `state.secret_state().uri_text.text()`
+                    // through `paladin_auth_core::parse_otpauth` —
+                    // synchronous on the main thread (no I/O,
+                    // cheap) — and the resulting
+                    // `ValidatedAccount` flows through the same
+                    // `Vault::find_duplicate` / "add anyway" /
+                    // `Vault::mutate_and_save` insertion path
+                    // the manual form already uses.
+                    adw::PreferencesGroup {
+                        #[name = "uri_text_row"]
+                        add = &adw::EntryRow {
+                            set_title: format_uri_text_title(),
+                            #[watch]
+                            set_text: compose_uri_text_value(&model.state),
+                            // See the manual-label `connect_changed` comment.
+                            connect_changed[sender] => move |entry| {
+                                let _ = sender.input_sender().send(
+                                    AddAccountMsg::UriTextChanged(entry.text().to_string()),
+                                );
+                            },
+                        },
+                    },
+                },
+
+                add_titled_with_icon[
+                    Some(format_add_path_name(AddPath::Qr)),
+                    format_add_path_label(AddPath::Qr),
+                    "camera-photo-symbolic",
+                ] = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 12,
+
+                    // Page-local "Scan clipboard" activation button.
+                    // The shared Save submit at the dialog footer is
+                    // dimmed on the QR sub-path (see
+                    // `compose_save_button_sensitive`'s
+                    // `AddPath::Qr => false` arm); this button drives
+                    // the clipboard-image-read pipeline instead.
+                    //
+                    // The click dispatches `AddAccountMsg::ScanClipboardClicked`
+                    // into `apply_msg`, which forwards an
+                    // `AddAccountOutput::RequestScanClipboard` to
+                    // `AppModel`. The parent reads the GDK
+                    // clipboard via `gdk::Display::default().clipboard()`,
+                    // downloads the texture through
+                    // `gdk::TextureDownloader` set to
+                    // `gdk::MemoryFormat::R8g8b8a8`, runs
+                    // `crate::qr_clipboard::decode_clipboard_qr`,
+                    // and dispatches the QR worker against the
+                    // live `(Vault, Store)` pair — the dialog
+                    // never owns that pair.
+                    //
+                    // Sensitivity binds through
+                    // `compose_scan_clipboard_button_sensitive`,
+                    // which short-circuits on `state.is_busy()` and
+                    // otherwise activates only on the QR sub-path.
+                    // The `AdwViewStack` already hides this page
+                    // when the active path is Manual / URI, so the
+                    // page-relative sensitivity check is a
+                    // belt-and-braces gate against a stray
+                    // programmatic dispatch (e.g. accelerator) that
+                    // would bypass the visible-page filter.
+                    #[name = "scan_clipboard_button"]
+                    gtk::Button {
+                        set_label: format_scan_clipboard_button_label(),
+                        add_css_class: "suggested-action",
+                        set_halign: gtk::Align::Center,
+                        #[watch]
+                        set_sensitive: compose_scan_clipboard_button_sensitive(&model.state),
+                        // See the manual-label `connect_changed` comment.
+                        connect_clicked[sender] => move |_| {
+                            let _ = sender
+                                .input_sender()
+                                .send(AddAccountMsg::ScanClipboardClicked);
+                        },
+                    },
+                },
+
+                // State-driven binding: any programmatic state
+                // change (e.g. `Cancel` clearing draft state, a
+                // future deep-link, or a unit-test-driven
+                // dispatch) flips the visible page through the
+                // `compose_active_path_name` projection so the
+                // widget and the pure-logic state stay in lockstep.
+                #[watch]
+                set_visible_child_name: compose_active_path_name(&model.state),
+
+                // User-driven binding: clicking a different tab
+                // in the switcher fires `notify::visible-child`
+                // on the stack. `parse_add_path_name` is the exact
+                // inverse of the `format_add_path_name` slugs the
+                // `add_titled_with_icon` calls above used, so an
+                // unknown / case-folded / whitespace-padded slug
+                // routes as `None` rather than silently
+                // dispatching a fallback `SwitchPath`. The pure-
+                // logic `apply_msg(AddAccountMsg::SwitchPath)` arm
+                // then runs `AddSecretState::switch_path`, which
+                // wipes the leaving path's hidden secret-bearing
+                // buffer (manual Base32 / URI text) and drops any
+                // pending duplicate-add `ValidatedAccount` per the
+                // §"Secret entry handling" contract.
+                // See the manual-label `connect_changed` comment.
+                connect_visible_child_notify[sender] => move |stack| {
+                    if let Some(name) = stack.visible_child_name() {
+                        if let Some(path) = parse_add_path_name(name.as_str()) {
+                            let _ = sender
+                                .input_sender()
+                                .send(AddAccountMsg::SwitchPath(path));
+                        }
+                    }
+                },
+            },
+
+            #[name = "view_switcher_bar"]
+            adw::ViewSwitcherBar {
+                set_stack: Some(&view_stack),
+                set_reveal: true,
+            },
+
+            // Pre-effect inline error surface. Populated by
+            // `AddAccountMsg::RenderInlineError` when
+            // `compose_save_click_outcome` returns
+            // `SaveClickOutcome::InlineError` — typed §5 rejections
+            // from `classify_manual_submit`, `classify_uri_submit`,
+            // or the QR path's no-image / decode-failure / zero-QR
+            // / invalid-payload arms. The `error` CSS class matches
+            // the edit / remove / unlock dialogs' inline-error
+            // styling. Drained by `apply_msg` on the next user
+            // edit (any `Manual*Changed` / `UriTextChanged` arm),
+            // on `SwitchPath` across sub-paths, on `SubmitProceed`
+            // / `ConfirmAddAnyway`, and on `Cancel` / `Close`, so
+            // the projection collapses back to hidden the moment
+            // the rejection is no longer applicable. Pinned by
+            // `tests/add_account_logic.rs::compose_inline_error_body_*`
+            // and `compose_inline_error_revealed_*`.
+            #[name = "inline_error_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: compose_inline_error_body(&model.state).unwrap_or(""),
+                #[watch]
+                set_visible: compose_inline_error_revealed(&model.state),
+            },
+
+            // Post-effect inline error surface. Populated by
+            // `AddAccountMsg::WorkerFailed(AddPostEffectOutcome::Inline)`
+            // when `Vault::mutate_and_save(|v| v.add(...))` returned
+            // `save_not_committed`, defensive `validation_error` /
+            // `invalid_state` / `io_error`, etc. The
+            // `Vault::mutate_and_save` snapshot already rolled the
+            // pre-attempt state back so the just-inserted account
+            // is gone from `Vault::iter()`; the dialog stays open
+            // with the typed body so the user can retry without
+            // losing the in-flight buffers. Mutually exclusive with
+            // `post_effect_warning_label` below — `KeepWithWarning`
+            // surfaces there instead. Pinned by
+            // `tests/add_account_logic.rs::compose_post_effect_inline_error_body_*`
+            // and `compose_post_effect_inline_error_revealed_*`.
+            #[name = "post_effect_inline_error_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: compose_post_effect_inline_error_body(&model.state)
+                    .unwrap_or(""),
+                #[watch]
+                set_visible: compose_post_effect_inline_error_revealed(&model.state),
+            },
+
+            // Post-effect durability warning surface. Populated by
+            // `AddAccountMsg::WorkerFailed(AddPostEffectOutcome::KeepWithWarning)`
+            // when `Vault::mutate_and_save(|v| v.add(...))` returned
+            // `save_durability_unconfirmed` — the inserted account
+            // is in memory and matches the committed on-disk state,
+            // but the parent-directory fsync could not be confirmed.
+            // The `warning` CSS class paints the text advisory amber
+            // rather than destructive red so the user reads it as a
+            // committed-but-uncertain notice. Mutually exclusive
+            // with `post_effect_inline_error_label` above — the
+            // `Inline` branch routes to the error label instead.
+            // Pinned by
+            // `tests/add_account_logic.rs::compose_post_effect_warning_body_*`
+            // and `compose_post_effect_warning_revealed_*`.
+            #[name = "post_effect_warning_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "warning",
+                #[watch]
+                set_label: compose_post_effect_warning_body(&model.state).unwrap_or(""),
+                #[watch]
+                set_visible: compose_post_effect_warning_revealed(&model.state),
+            },
+
+            gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 6,
+                set_halign: gtk::Align::End,
+
+                #[name = "cancel_button"]
+                gtk::Button {
+                    set_label: format_add_dialog_cancel_label(),
+                    // See the manual-label `connect_changed` comment.
+                    connect_clicked[sender] => move |_| {
+                        let _ = sender.input_sender().send(AddAccountMsg::Cancel);
+                    },
+                },
+
+                // Shared Save button at the dialog footer; covers
+                // both the manual and URI sub-paths through the
+                // unified pipeline. Sensitivity is bound through
+                // `compose_save_button_sensitive`, which short-
+                // circuits on `state.is_busy()` (parent flips it
+                // via `AddAccountMsg::SetBusy` around the
+                // `gio::spawn_blocking` worker) and otherwise
+                // returns `false` for the QR path so the user
+                // is steered toward the page-local Scan
+                // activation. Click forwards
+                // `AddAccountMsg::SaveClicked`, which emits
+                // `AddAccountOutput::RequestSaveClick`; `AppModel`
+                // composes against the live `(Vault, Store)` pair
+                // and dispatches the routed `AddAccountMsg` back
+                // via `controller.emit(save_click_outcome_to_msg(
+                // outcome))`. Per `docs/IMPLEMENTATION_PLAN_04_GTK.md`
+                // §"Component tree" > `AddAccountComponent`
+                // shared shell L2161.
+                #[name = "save_button"]
+                gtk::Button {
+                    set_label: format_add_dialog_save_label(),
+                    add_css_class: "suggested-action",
+                    #[watch]
+                    set_sensitive: compose_save_button_sensitive(&model.state),
+                    // See the manual-label `connect_changed` comment.
+                    connect_clicked[sender] => move |_| {
+                        let _ = sender.input_sender().send(AddAccountMsg::SaveClicked);
+                    },
+                },
+            },
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let root_box = root.clone();
+        let model = AddAccountComponent {
+            init,
+            state: AddDialogState::new(),
+            root_box,
+        };
+        let widgets = view_output!();
+        // Wire the Escape-dismiss key controller after
+        // `view_output!()` so the root widget tree is realized
+        // and the focused-child-first bubble phase has a parent
+        // to bubble into. Matches the Cancel button's
+        // `AddAccountMsg::Cancel` dispatch so the wipe / forward
+        // path is single-sourced through `apply_msg`.
+        wire_dismiss_controller(&model.root_box, &sender);
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        // Capture whether this dispatch is the
+        // duplicate-collision stage signal *before* `apply_msg`
+        // consumes the message, so the post-routing branch below
+        // can react after the validated account and the colliding
+        // summary have been parked. Mirror of
+        // [`crate::init_dialog::InitDialogComponent::update`]'s
+        // `was_worker_destructive` snapshot.
+        let was_stage_pending = matches!(msg, AddAccountMsg::StagePendingDuplicate { .. });
+
+        if let Some(output) = apply_msg(&mut self.state, msg) {
+            // Ignore send failures: if `AppModel` has already dropped
+            // the controller (e.g. window closed mid-click), there's
+            // nothing left to dismiss.
+            let _ = sender.output(output);
+        }
+
+        // After `apply_msg` parks the duplicate-collision pending,
+        // present the duplicate-confirmation [`adw::AlertDialog`]
+        // worded by [`format_duplicate_alert_heading`] /
+        // [`format_duplicate_alert_body`] (which threads the
+        // staged warnings through [`format_pending_warnings_body`]
+        // → [`paladin_auth_core::format_validation_warning`]). Response
+        // callbacks dispatch back through the same sender so
+        // `apply_msg` remains the single routing entry point for
+        // both `ConfirmAddAnyway` (consumes the pending and
+        // submits) and `DismissDuplicateAlert` (drops the pending
+        // and returns to the form).
+        if should_present_duplicate_alert(was_stage_pending, &self.state) {
+            self.present_duplicate_alert(&sender);
+        }
+    }
+}
+
+impl AddAccountComponent {
+    /// Resolved vault path the dialog was mounted against. Used by
+    /// the smoke-test marker ([`format_add_dialog_marker`]) and by
+    /// future submit handlers that need to thread the path into
+    /// the `Vault::mutate_and_save(|v| v.add(...))` worker.
+    #[must_use]
+    pub fn vault_path(&self) -> &Path {
+        &self.init.vault_path
+    }
+
+    /// Read-only view of the dialog's reactive state.
+    ///
+    /// Lets the future widget view bind `#[watch]` projections
+    /// against [`AddDialogState::worker_outcome`] without exposing
+    /// the field directly. Integration tests can use this to assert
+    /// post-worker state without driving the `gio::spawn_blocking`
+    /// boundary.
+    #[must_use]
+    pub fn state(&self) -> &AddDialogState {
+        &self.state
+    }
+
+    /// Construct and present the duplicate-collision
+    /// [`adw::AlertDialog`] worded by the pinned format helpers.
+    ///
+    /// The alert is built fresh each presentation so heading /
+    /// body / button labels resolve through
+    /// [`format_duplicate_alert_heading`] /
+    /// [`format_duplicate_alert_body`] /
+    /// [`format_duplicate_alert_confirm_label`] /
+    /// [`format_duplicate_alert_cancel_label`] without re-binding
+    /// stateful widgets across presentations. The `add-anyway`
+    /// response is styled `suggested-action` (the user confirmed
+    /// past the duplicate-collision warning; this is not a
+    /// destructive replace, it is an explicit "append a duplicate"
+    /// confirmation matching the CLI `--allow-duplicate` flag).
+    /// The `cancel` response is the default and is invoked on
+    /// Escape / outside-click via `set_close_response`. Both
+    /// responses dispatch the matching [`AddAccountMsg`] through
+    /// `sender` so [`apply_msg`] remains the single routing entry
+    /// point.
+    ///
+    /// Mirror of
+    /// [`crate::init_dialog::InitDialogComponent::present_destructive_alert`]
+    /// on the add path.
+    fn present_duplicate_alert(&self, sender: &ComponentSender<Self>) {
+        let body = compose_pending_duplicate_alert_body(&self.state).unwrap_or_default();
+        let alert = adw::AlertDialog::new(Some(format_duplicate_alert_heading()), Some(&body));
+        let cancel_id = "cancel";
+        let confirm_id = "add-anyway";
+        alert.add_response(cancel_id, format_duplicate_alert_cancel_label());
+        alert.add_response(confirm_id, format_duplicate_alert_confirm_label());
+        alert.set_response_appearance(confirm_id, adw::ResponseAppearance::Suggested);
+        alert.set_default_response(Some(cancel_id));
+        alert.set_close_response(cancel_id);
+
+        let confirm_id_owned = confirm_id.to_string();
+        let sender = sender.clone();
+        // See the manual-label `connect_changed` comment — route
+        // the alert response through `Sender::send` so a stray
+        // response after the parent controller has been torn down
+        // is a benign no-op.
+        alert.connect_response(None, move |_dialog, response| {
+            if response == confirm_id_owned {
+                let _ = sender.input_sender().send(AddAccountMsg::ConfirmAddAnyway);
+            } else {
+                let _ = sender
+                    .input_sender()
+                    .send(AddAccountMsg::DismissDuplicateAlert);
+            }
+        });
+
+        alert.present(Some(&self.root_box));
+    }
+}

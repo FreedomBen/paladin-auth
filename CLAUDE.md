@@ -22,18 +22,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Implementation in progress.** The design was approved 2026-05-04. The workspace is live with four members (`crates/paladin-core`, `crates/paladin-cli`, `crates/paladin-tui`, `crates/paladin-gtk`). `docs/IMPLEMENTATION_PLAN_01_CORE.md` and `docs/IMPLEMENTATION_PLAN_02_CLI.md` are complete; `docs/IMPLEMENTATION_PLAN_03_TUI.md` (v0.1) and `docs/IMPLEMENTATION_PLAN_04_GTK.md` (v0.2 Milestone 7) are both active workstreams. The GTK release target remains v0.2 per `docs/DESIGN.md` §13, but pure-logic scaffolding for it lands incrementally so the workspace shape and `paladin-core` API contract stay aligned. `docs/DESIGN.md` remains the source of truth for behavior and APIs; do not invent file paths, types, or APIs that aren't grounded in it.
+**Implementation in progress.** The design was approved 2026-05-04. The workspace is live with four members (`crates/paladin-auth-core`, `crates/paladin-auth-cli`, `crates/paladin-auth-tui`, `crates/paladin-auth-gtk`). `docs/IMPLEMENTATION_PLAN_01_CORE.md` and `docs/IMPLEMENTATION_PLAN_02_CLI.md` are complete; `docs/IMPLEMENTATION_PLAN_03_TUI.md` (v0.1) and `docs/IMPLEMENTATION_PLAN_04_GTK.md` (v0.2 Milestone 7) are both active workstreams. The GTK release target remains v0.2 per `docs/DESIGN.md` §13, but pure-logic scaffolding for it lands incrementally so the workspace shape and `paladin-auth-core` API contract stay aligned. `docs/DESIGN.md` remains the source of truth for behavior and APIs; do not invent file paths, types, or APIs that aren't grounded in it.
 
 ## What this is
 
-A Rust OTP authenticator (TOTP + HOTP) with three front-ends — CLI (`paladin`), TUI (`paladin-tui`), and GTK4 GUI (`paladin-gtk`) — sharing a common `paladin-core` library. AGPL-3.0-or-later.
+A Rust OTP authenticator (TOTP + HOTP) with three front-ends — CLI (`paladin-auth`), TUI (`paladin-auth-tui`), and GTK4 GUI (`paladin-auth-gtk`) — sharing a common `paladin-auth-core` library. AGPL-3.0-or-later.
 
 ## Architectural rules (locked in by design)
 
-- **Cargo workspace, four crates:** `paladin-core` (lib: domain, OTP, storage, crypto, import/export) and three binaries. **Binaries depend only on `paladin-core` — they never reach into each other.** `paladin tui` is a thin exec wrapper around `paladin-tui`, not a re-implementation.
+- **Cargo workspace, four crates:** `paladin-auth-core` (lib: domain, OTP, storage, crypto, import/export) and three binaries. **Binaries depend only on `paladin-auth-core` — they never reach into each other.** `paladin-auth tui` is a thin exec wrapper around `paladin-auth-tui`, not a re-implementation.
 - **Two vault modes are first-class:** plaintext and encrypted. Mode transitions are always explicit user commands; never silently downgrade. Plaintext mode still enforces `0600` file / `0700` parent dir / atomic writes / `.bak` preservation.
 - **Encrypted vault:** Argon2id (m=64 MiB, t=3, p=1 defaults, header-tunable) → 32-byte key → XChaCha20-Poly1305 AEAD. Every header byte after the magic (`format_ver`, `mode`, `kdf_id`, Argon2 params, `salt`, `aead_id`, `nonce`) is bound as AEAD AAD. Vault encoding is `bincode` (private format, not for interop).
-- **HOTP CLI semantics:** `show` and `copy` **advance** the counter and persist to disk before returning. `peek` does not advance. Mirror this in `paladin-core`: `hotp_advance` persists, `hotp_peek` and `totp_code` do not mutate.
+- **HOTP CLI semantics:** `show` and `copy` **advance** the counter and persist to disk before returning. `peek` does not advance. Mirror this in `paladin-auth-core`: `hotp_advance` persists, `hotp_peek` and `totp_code` do not mutate.
 - **CLI is stateless:** open → operate → close, every command. Auto-lock and clipboard-clear are TUI/GUI-only and **opt-in**. The CLI ignores `clipboard.clear_enabled`.
 - **Memory hygiene:** all secrets through `Zeroize` / `secrecy::SecretString`. No `Debug` impls that leak bytes — assert with derive audits.
 - **No network, no telemetry.** Enforced via `cargo deny` policy.
@@ -45,7 +45,7 @@ AGPL-3.0-or-later. New source files carry `// SPDX-License-Identifier: AGPL-3.0-
 
 ## Commands
 
-CI gates per `docs/DESIGN.md` §10 and `.github/workflows/ci.yml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`, `cargo deny check`, `cargo audit`. CI also runs a `cargo public-api` snapshot diff against `crates/paladin-core/public-api.txt`. Tests must cover RFC 6238 / RFC 4226 vectors, both-mode vault round-trip, AAD tamper detection (flip any header byte → fail), file-permission enforcement, passphrase transition rollback, and zeroize-on-drop. Use `assert_cmd` for CLI integration and `insta` golden snapshots for TUI.
+CI gates per `docs/DESIGN.md` §10 and `.github/workflows/ci.yml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`, `cargo deny check`, `cargo audit`. CI also runs a `cargo public-api` snapshot diff against `crates/paladin-auth-core/public-api.txt`. Tests must cover RFC 6238 / RFC 4226 vectors, both-mode vault round-trip, AAD tamper detection (flip any header byte → fail), file-permission enforcement, passphrase transition rollback, and zeroize-on-drop. Use `assert_cmd` for CLI integration and `insta` golden snapshots for TUI.
 
 ## When in doubt
 

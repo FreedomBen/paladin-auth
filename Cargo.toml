@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/paladin-core",
-    "crates/paladin-cli",
-    "crates/paladin-tui",
-    "crates/paladin-gtk",
+    "crates/paladin-auth-core",
+    "crates/paladin-auth-cli",
+    "crates/paladin-auth-tui",
+    "crates/paladin-auth-gtk",
     "xtask",
 ]
 
@@ -13,9 +13,9 @@ version = "0.0.1"
 edition = "2021"
 rust-version = "1.94"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/FreedomBen/paladin"
-homepage = "https://paladin.tamx.org"
-description = "Paladin: Rust OTP authenticator (TOTP + HOTP) with CLI, TUI, and GTK front-ends"
+repository = "https://github.com/FreedomBen/paladin-auth"
+homepage = "https://paladin-auth.tamx.org"
+description = "Paladin Auth: Rust OTP authenticator (TOTP + HOTP) with CLI, TUI, and GTK front-ends"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -27,8 +27,8 @@ module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
-# `PaladinError` is the §5 unified error surface re-exported on the
-# §4.7 frozen public API. Boxing every `Result<T, PaladinError>` to
+# `PaladinAuthError` is the §5 unified error surface re-exported on the
+# §4.7 frozen public API. Boxing every `Result<T, PaladinAuthError>` to
 # satisfy this lint would change ~215 call sites, perturb the public
 # surface, and add an allocation to every fallible path.
 result_large_err = "allow"

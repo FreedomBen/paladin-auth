@@ -1,0 +1,24 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: "render_to_text(&state, snapshot_now(), 80, 20)"
+---
+┌ Paladin Auth [plaintext] ────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ ▶ GitH┌ Edit account ────────────────────────────────────────────────┐55 062 │
+│       │ Editing the following account:                               │       │
+│       │ GitHub:ben@example.com                                       │       │
+│       │                                                              │       │
+│       │ Label:      [ ben@example.com ]                              │       │
+│       │ Issuer:     [ GitHub ]                                       │       │
+│       │ Icon hint:    Leave unchanged      Default from issuer       │       │
+│       │ Slug:       [ github ]                                       │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │      Tab/Shift-Tab cycle  ·  Enter submit  ·  Esc cancel     │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find     │
+└──────────────────────────────────────────────────────────────────────────────┘

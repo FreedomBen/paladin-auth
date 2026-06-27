@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `cargo xtask man` — render `paladin.1` and `paladin-tui.1` via
+//! `cargo xtask man` — render `paladin-auth.1` and `paladin-auth-tui.1` via
 //! `clap_mangen` from the live clap Commands.
 //!
-//! Output lands at `target/man/paladin.1` and
-//! `target/man/paladin-tui.1`. The packaging pipeline gzips each file
+//! Output lands at `target/man/paladin-auth.1` and
+//! `target/man/paladin-auth-tui.1`. The packaging pipeline gzips each file
 //! (`xtask::package`) before handing it to `nfpm`, matching the
 //! `/usr/share/man/man1/<name>.1.gz` paths in
-//! `packaging/rpm/paladin.yaml` and `packaging/rpm/paladin-tui.yaml`.
+//! `packaging/rpm/paladin-auth.yaml` and `packaging/rpm/paladin-auth-tui.yaml`.
 
 use std::error::Error;
 use std::fs;
@@ -15,17 +15,17 @@ use std::path::{Path, PathBuf};
 
 /// Front-ends whose clap Commands xtask renders man pages for.
 ///
-/// `paladin-gtk` is intentionally absent — the GUI does not ship a man
+/// `paladin-auth-gtk` is intentionally absent — the GUI does not ship a man
 /// page (its discoverability surface is the `AppStream` metainfo / desktop
 /// entry instead, validated by the `desktop-metainfo` job).
 const FRONTENDS: &[Frontend] = &[
     Frontend {
-        binary: "paladin",
-        command: paladin_cli::clap_command,
+        binary: "paladin-auth",
+        command: paladin_auth_cli::clap_command,
     },
     Frontend {
-        binary: "paladin-tui",
-        command: paladin_tui::clap_command,
+        binary: "paladin-auth-tui",
+        command: paladin_auth_tui::clap_command,
     },
 ];
 

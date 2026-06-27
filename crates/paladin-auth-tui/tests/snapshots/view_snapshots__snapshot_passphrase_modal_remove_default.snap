@@ -1,0 +1,24 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: "render_to_text(&state, snapshot_now(), 80, 20)"
+---
+┌ Paladin Auth [plaintext] ────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│       ┌ Remove passphrase ───────────────────────────────────────────┐       │
+│       │ Removes the passphrase and stores plaintext.                 │       │
+│       │                                                              │       │
+│       │ WARNING: Plaintext storage keeps account secrets unencrypted │       │
+│       │ on disk. The vault file is restricted to your user account   │       │
+│       │ (mode 0600), but anyone with read access to that file or its │       │
+│       │ backups can recover every secret. Use an encrypted vault     │       │
+│       │ unless you fully accept this risk.                           │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │                 Enter confirm  ·  Esc cancel                 │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find     │
+└──────────────────────────────────────────────────────────────────────────────┘

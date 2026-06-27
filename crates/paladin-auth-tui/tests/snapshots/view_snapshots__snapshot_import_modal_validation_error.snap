@@ -1,0 +1,24 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: rendered
+---
+┌ Paladin Auth [plaintext] ────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│                                                                              │
+│   ┌ Import accounts ─────────────────────────────────────────────────────┐   │
+│   │ Source:      [  ]                                                    │   │
+│   │                                                                      │   │
+│   │ Format:      ▶ Auto ◀    Otpauth      Aegis      Paladin Auth      Q │   │
+│   │                                                                      │   │
+│   │ On conflict: ▶ Skip ◀    Replace      Append                         │   │
+│   │                                                                      │   │
+│   │ validation error: secret: bad_base32                                 │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │           Tab cycles fields  ·  Enter submit  ·  Esc cancel          │   │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find     │
+└──────────────────────────────────────────────────────────────────────────────┘

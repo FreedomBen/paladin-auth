@@ -1711,7 +1711,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
-name = "paladin-cli"
+name = "paladin-auth-cli"
 version = "0.0.1"
 dependencies = [
  "arboard",
@@ -1719,7 +1719,7 @@ dependencies = [
  "clap",
  "image",
  "insta",
- "paladin-core",
+ "paladin-auth-core",
  "predicates",
  "qrcode",
  "quick-xml",
@@ -1734,7 +1734,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "paladin-core"
+name = "paladin-auth-core"
 version = "0.0.1"
 dependencies = [
  "argon2",
@@ -1764,14 +1764,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "paladin-gtk"
+name = "paladin-auth-gtk"
 version = "0.0.1"
 dependencies = [
  "clap",
  "glib-build-tools",
  "gtk4",
  "libadwaita",
- "paladin-core",
+ "paladin-auth-core",
  "relm4",
  "secrecy",
  "tempfile",
@@ -1779,7 +1779,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "paladin-tui"
+name = "paladin-auth-tui"
 version = "0.0.1"
 dependencies = [
  "arboard",
@@ -1788,7 +1788,7 @@ dependencies = [
  "crossterm",
  "image",
  "insta",
- "paladin-core",
+ "paladin-auth-core",
  "qrcode",
  "ratatui",
  "rqrr",
@@ -3466,8 +3466,8 @@ dependencies = [
  "clap",
  "clap_mangen",
  "flate2",
- "paladin-cli",
- "paladin-tui",
+ "paladin-auth-cli",
+ "paladin-auth-tui",
  "tempfile",
 ]
 

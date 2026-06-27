@@ -1,8 +1,0 @@
----
-source: crates/paladin-cli/tests/cli_json_snapshots.rs
-expression: parse_stderr_json(&assert)
----
-{
-  "error_kind": "unsupported_format_version",
-  "format_ver": 2
-}

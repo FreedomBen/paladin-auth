@@ -1,0 +1,16 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: "render_to_text(&state, snapshot_now(), 80, 12)"
+---
+┌ Paladin Auth — startup error ────────────────────────────────────────────────┐
+│                                                                              │
+│  Vault path: /var/lib/paladin-auth/vault.bin                                 │
+│                                                                              │
+│  unsafe permissions on /var/lib/paladin-auth/vault.bin: vault directory      │
+│  mode 0755, expected 0700.                                                   │
+│  Run: chmod 0700 /var/lib/paladin-auth/vault.bin                             │
+│                                                                              │
+│  Press Esc, q, or Ctrl-C to quit.                                            │
+│  Ctrl+Shift+D delete vault                                                   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

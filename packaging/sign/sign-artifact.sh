@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# minisign artifact-signing wrapper for the paladin release pipeline.
+# minisign artifact-signing wrapper for the paladin-auth release pipeline.
 #
 # Per docs/DESIGN.md §11.6 ("Signatures") and docs/IMPLEMENTATION_PLAN_04_GTK.md
 # Milestone 7 checklist entry "Sign .deb, .rpm, and AppImage with
@@ -18,7 +18,7 @@
 #     prompt. CI mounts both env vars; local dry-runs may set them
 #     by hand.
 #   * The trusted-comment string written into the .minisig payload
-#     defaults to "<artifact-basename> signed by paladin release
+#     defaults to "<artifact-basename> signed by paladin-auth release
 #     pipeline" but the release pipeline can override it via
 #     MINISIGN_TRUSTED_COMMENT (typically used to embed the release
 #     tag).
@@ -48,7 +48,7 @@
 #   MINISIGN_TRUSTED_COMMENT   Optional. Override for the trusted
 #                              comment minisign writes into the
 #                              .minisig payload. Defaults to
-#                              "<artifact-basename> signed by paladin
+#                              "<artifact-basename> signed by paladin-auth
 #                              release pipeline".
 #
 # Inputs (CLI):
@@ -66,7 +66,7 @@
 #                https://jedisct1.github.io/minisign/.
 #
 # Contract pinned by
-#   crates/paladin-gtk/tests/packaging_signing_script_logic.rs
+#   crates/paladin-auth-gtk/tests/packaging_signing_script_logic.rs
 
 set -euo pipefail
 
@@ -93,7 +93,7 @@ fi
 # verifier output is readable. The release pipeline overrides it
 # with the release-tag string.
 ARTIFACT_BASENAME="$(basename "${ARTIFACT}")"
-TRUSTED_COMMENT="${MINISIGN_TRUSTED_COMMENT:-${ARTIFACT_BASENAME} signed by paladin release pipeline}"
+TRUSTED_COMMENT="${MINISIGN_TRUSTED_COMMENT:-${ARTIFACT_BASENAME} signed by paladin-auth release pipeline}"
 
 # Pipe MINISIGN_PASSWORD through stdin when set so the signing
 # step runs non-interactively in CI. The two-line input shape

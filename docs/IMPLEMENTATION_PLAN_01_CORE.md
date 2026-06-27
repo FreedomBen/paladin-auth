@@ -1,4 +1,4 @@
-# Implementation Plan 01 — `paladin-core`
+# Implementation Plan 01 — `paladin-auth-core`
 
 Source of truth: [DESIGN.md](DESIGN.md) §3, §4, §5 error taxonomy,
 §8–§11, §12 Milestones 0–3, and §14.
@@ -8,7 +8,7 @@ there. Internal module paths below are scoped implementation details.
 
 ## Scope
 
-`paladin-core` is the shared library all three binaries depend on. It owns:
+`paladin-auth-core` is the shared library all three binaries depend on. It owns:
 
 - The domain model (§4.1).
 - OTP generation (§4.2).
@@ -18,17 +18,17 @@ there. Internal module paths below are scoped implementation details.
 - Import / export (§4.6).
 - The public API sketched in §4.7.
 
-Binaries depend **only** on `paladin-core`. Anything reused across two front-ends
+Binaries depend **only** on `paladin-auth-core`. Anything reused across two front-ends
 must live here, not in a sibling crate.
 
 ## Crate layout
 
 ```
-crates/paladin-core/
+crates/paladin-auth-core/
 ├── Cargo.toml            # license = "AGPL-3.0-or-later"; opt-in features for test-fault-injection / zeroize-witness / serde
 ├── src/
 │   ├── lib.rs            # re-exports public surface from §4.7
-│   ├── error.rs          # PaladinError + Result alias; carries core-returnable §5 error_kind values verbatim so the CLI can emit them under --json without renaming or mapping
+│   ├── error.rs          # PaladinAuthError + Result alias; carries core-returnable §5 error_kind values verbatim so the CLI can emit them under --json without renaming or mapping
 │   ├── vault.rs          # Vault impl: add/remove/iter/rename/edit_account_metadata/import_accounts/totp_code/totp_next_code/hotp_*; save/mutate_and_save; is_encrypted() mode getter; passphrase set/change/remove transitions with rollback; AccountSummary projection via summaries()/Account::summary()
 │   ├── text.rs           # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning helpers (CLI / TUI / GUI parity); fixture-pinned wording
 │   ├── ui_contract.rs    # HOTP_REVEAL_SECS, QR_RGBA_MAX_BYTES, TICK_INTERVAL_MS (250 ms TOTP gauge / clipboard-staleness tick shared by TUI + GTK), AUTO_LOCK_SECS_MIN/MAX (30 / 86_400), CLIPBOARD_CLEAR_SECS_MIN/MAX (5 / 600). All shared front-end constants live here so TUI / GUI never hard-code them.
@@ -50,10 +50,10 @@ crates/paladin-core/
 │   │   └── mod.rs        # otpauth:// parser + emitter (round-trip + edge cases live in tests/proptest_uri_base32.rs)
 │   ├── storage/
 │   │   ├── mod.rs        # Store, default_vault_path, atomic-write pipeline, .bak rotation, write_secret_file_atomic (0600 export output; no .bak), classify_init_precheck() + InitPrecheck enum shared by CLI init and GUI InitDialog
-│   │   ├── header.rs     # PALADIN\0 magic, format_ver, mode, KDF/AEAD ids, AAD
+│   │   ├── header.rs     # PALAUTH\0 magic, format_ver, mode, KDF/AEAD ids, AAD
 │   │   ├── payload.rs    # bincode v2 VaultPayload encode/decode (16 MiB cap)
 │   │   ├── path.rs       # ProjectDirs data_dir resolver + vault.bin filename
-│   │   ├── fault.rs      # save-pipeline fault injection (test-fault-injection cargo feature only; honors PALADIN_FAULT_INJECT=pre_commit|post_commit|csprng_read|kdf_allocation); production builds compile the hook checks away to no-op stubs
+│   │   ├── fault.rs      # save-pipeline fault injection (test-fault-injection cargo feature only; honors PALADIN_AUTH_FAULT_INJECT=pre_commit|post_commit|csprng_read|kdf_allocation); production builds compile the hook checks away to no-op stubs
 │   │   ├── perms_unix.rs # 0600/0700 enforcement (Linux v0.1)
 │   │   └── perms_other.rs # Stubs for non-Unix targets
 │   ├── crypto/
@@ -70,15 +70,15 @@ crates/paladin-core/
 │   ├── import/
 │   │   ├── mod.rs        # importer namespace + ImportFormat enum + detect()
 │   │   ├── facade.rs     # public from_bytes / from_file facade with auto-detection + forced-format sanity check (unsupported_import_format if a forced format conflicts with detect())
-│   │   ├── precheck.rs   # classify_paladin_import_precheck — header-only inspection so front-ends know whether to prompt for a Paladin bundle passphrase before invoking from_file
+│   │   ├── precheck.rs   # classify_paladin_auth_import_precheck — header-only inspection so front-ends know whether to prompt for a Paladin Auth bundle passphrase before invoking from_file
 │   │   ├── otpauth.rs    # URI / line-list / JSON-array (handles Gnome plaintext)
 │   │   ├── aegis.rs      # plaintext JSON; encrypted returns unsupported error
-│   │   ├── paladin.rs    # Paladin bundle import; plaintext returns unsupported
+│   │   ├── paladin-auth.rs    # Paladin Auth bundle import; plaintext returns unsupported
 │   │   └── qr.rs         # rqrr + image
 │   └── export/
 │       ├── mod.rs            # facade
 │       ├── otpauth_list.rs   # newline-separated otpauth:// URIs (Gnome Authenticator–compatible)
-│       └── encrypted.rs      # Paladin encrypted bundle
+│       └── encrypted.rs      # Paladin Auth encrypted bundle
 └── tests/
     ├── common/mod.rs                    # shared test helpers (tempdirs, fixture builders, in-memory Store wiring) — referenced via `mod common;` from every integration test
     ├── rfc_vectors.rs                   # RFC 6238 App. B (digits × algorithm cross-product), RFC 4226 App. D, HOTP counter-0 baseline, HOTP MAX-1 → MAX → overflow chain; Argon2id + XChaCha20-Poly1305 known-answer vectors
@@ -115,14 +115,14 @@ crates/paladin-core/
     ├── import_facade.rs                 # from_bytes / from_file public facade incl. forced-format vs detected-format conflict (unsupported_import_format)
     ├── import_otpauth.rs
     ├── import_aegis.rs
-    ├── import_paladin.rs
+    ├── import_paladin_auth.rs
     ├── import_precheck.rs               # shared CLI / TUI / GUI encrypted-bundle prompt classifier
     ├── import_qr.rs
     ├── export_encrypted.rs              # encrypted bundle export round-trip
     ├── export_encrypted_fresh_material.rs # every export creates a fresh salt + nonce; never re-uses prior bytes
     ├── export_otpauth_list.rs           # newline-separated otpauth:// URI list writer
-    ├── error_display.rs                 # PaladinError Display impl: stable text for every variant
-    ├── error_serde.rs                   # PaladinError JSON envelope shape (per §5)
+    ├── error_display.rs                 # PaladinAuthError Display impl: stable text for every variant
+    ├── error_serde.rs                   # PaladinAuthError JSON envelope shape (per §5)
     ├── error_matrix.rs                  # one test per §5 core-returnable error_kind asserting kind + every stable extra field
     ├── display_impls.rs                 # Display impls for public types (no secret bytes leak)
     ├── text_formatters.rs               # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning text fixtures
@@ -133,7 +133,7 @@ crates/paladin-core/
     ├── trybuild/account_not_serialize.rs     # compile-fail fixture: `serde_json::to_string(&Account)` must not compile
     ├── trybuild/secret_not_debug.rs          # compile-fail fixture: `format!("{:?}", Secret)` must not compile
     ├── trybuild/secret_not_serialize.rs      # compile-fail fixture: `serde_json::to_string(&Secret)` must not compile
-    ├── no_network.rs                     # source / metadata guard proving production paladin-core has no network API or network-stack deps
+    ├── no_network.rs                     # source / metadata guard proving production paladin-auth-core has no network API or network-stack deps
     ├── fault_injection.rs                # cross-save-site coverage for the test-fault-injection feature
     └── zeroize_witness.rs                # controlled zeroize assertions via the zeroize-witness feature
 ```
@@ -144,18 +144,18 @@ Each step lands as its own commit. Tests come first.
 
 ### Phase A — Scaffolding (Milestone 0)
 
-- [x] Create virtual workspace `Cargo.toml` (members: `paladin-core` only at
+- [x] Create virtual workspace `Cargo.toml` (members: `paladin-auth-core` only at
   this point; binaries added in their own plans). Populate
   `[workspace.package]` with the shared metadata required by §11
   (`license = "AGPL-3.0-or-later"`, `edition`, `rust-version`,
-  `repository = "https://github.com/FreedomBen/paladin"`,
-  `homepage = "https://paladin.tamx.org"`, `description`) so binary crates
+  `repository = "https://github.com/FreedomBen/paladin-auth"`,
+  `homepage = "https://paladin-auth.tamx.org"`, `description`) so binary crates
   added later can inherit it via per-field Cargo inheritance
   (`description.workspace = true`,
   `license.workspace = true`, `edition.workspace = true`,
   `rust-version.workspace = true`, `repository.workspace = true`,
   `homepage.workspace = true`).
-- [x] Create `rust-toolchain.toml` and `crates/paladin-core/Cargo.toml`;
+- [x] Create `rust-toolchain.toml` and `crates/paladin-auth-core/Cargo.toml`;
   the crate manifest pulls each shared metadata field from the
   workspace via per-field Cargo inheritance (`description.workspace = true`
   and the matching lines for `license`, `edition`, `rust-version`,
@@ -168,7 +168,7 @@ Each step lands as its own commit. Tests come first.
   (`cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
   `cargo deny check`, `cargo audit`) — the §12 Milestone 0 README deliverable.
 - [x] Document that `default_vault_path()` uses
-  `ProjectDirs::from("", "", "paladin")`, then appends `vault.bin` under the
+  `ProjectDirs::from("", "", "paladin-auth")`, then appends `vault.bin` under the
   returned `data_dir()`.
 - [x] Add SPDX header to every source file.
 - [x] Wire `cargo deny` policy for dependency license / advisory checks and
@@ -258,7 +258,7 @@ Each step lands as its own commit. Tests come first.
   slugs with `validation_error` (`field: "icon_hint"`). Co-locate the
   test fixtures with `tests/prompt_input.rs` so CLI add prompts and
   TUI / GUI add modals share the same input grammar.
-- [x] Define `error.rs` `PaladinError` to carry only the core-returnable
+- [x] Define `error.rs` `PaladinAuthError` to carry only the core-returnable
   §5 kinds: `validation_error`, `invalid_passphrase`, `invalid_state`,
   `vault_missing`, `vault_exists`, `unsafe_permissions`, `wrong_vault_lock`,
   `decrypt_failed`, `invalid_header`, `invalid_payload`,
@@ -312,7 +312,7 @@ Each step lands as its own commit. Tests come first.
 ### Phase D — `otpauth://` parser/emitter (Milestone 1, part 3)
 
 - [x] Tests: scheme/type case-insensitivity; non-`otpauth://` schemes
-  (e.g. `https://`, `mailto:`, `paladin://`) rejected with
+  (e.g. `https://`, `mailto:`, `paladin-auth://`) rejected with
   `validation_error` before any further parsing; required label trimming +
   percent-decoding; first-`:` issuer split + issuer-rule normalization;
   base32 RFC 4648 with optional `=` padding; algorithm/digits/period defaults
@@ -451,7 +451,7 @@ Each step lands as its own commit. Tests come first.
   before staging the new tempfile so a hostile symlink at `vault.bin`
   cannot capture the rename target.
 - [x] Tests: `default_vault_path()` calls
-  `ProjectDirs::from("", "", "paladin")`, appends `vault.bin` under the
+  `ProjectDirs::from("", "", "paladin-auth")`, appends `vault.bin` under the
   returned `data_dir()` location from §4.3, and surfaces `io_error` with
   `operation: "resolve_default_vault_path"` if the platform path cannot be
   resolved.
@@ -494,7 +494,7 @@ Each step lands as its own commit. Tests come first.
   `operation: "unsupported_platform_permissions"`),
   atomic-write pipeline.
 - [x] Implement `default_vault_path()` in `storage::path` with
-  `ProjectDirs::from("", "", "paladin")` so presentation crates do not
+  `ProjectDirs::from("", "", "paladin-auth")` so presentation crates do not
   duplicate `ProjectDirs` logic.
 - [x] Implement `inspect(path)` (header probe, no decryption, no perms check).
 - [x] Tests: `classify_init_precheck` truth table —
@@ -510,7 +510,7 @@ Each step lands as its own commit. Tests come first.
   front end share one truth table.
 - [x] Implement `classify_init_precheck(probe: Result<VaultStatus>) ->
   InitPrecheck` plus `pub enum InitPrecheck { Clear, Existing,
-  Propagate(PaladinError) }` in `storage/mod.rs`. Re-export both at the
+  Propagate(PaladinAuthError) }` in `storage/mod.rs`. Re-export both at the
   crate root.
 - [x] Implement `create_force(path, init)` in `storage` per the §5 init
   clobber sequence.
@@ -518,7 +518,7 @@ Each step lands as its own commit. Tests come first.
   vault save pipeline's tempfile / chmod `0600` / fsync / rename /
   parent-fsync pieces without the vault-specific header, permissions
   enforcement, or `.bak` rotation.
-- [x] Implement `format_unsafe_permissions(&PaladinError) -> Option<String>`
+- [x] Implement `format_unsafe_permissions(&PaladinAuthError) -> Option<String>`
   per §4.7, sourcing all wording from the `unsafe_permissions` fields so
   CLI, TUI, and GUI never diverge.
 - [x] Tests: `format_init_force_warning(path)` returns text that names
@@ -562,7 +562,7 @@ Each step lands as its own commit. Tests come first.
   One named test row per region, each asserting `open` returns the
   discriminating error kind and never returns a vault. The expected kind
   per region:
-  - `magic` (8 bytes, `PALADIN\0`): flip any byte → `invalid_header`
+  - `magic` (8 bytes, `PALAUTH\0`): flip any byte → `invalid_header`
     (the magic is checked before AEAD decode, so this is a header
     rejection, not `decrypt_failed`).
   - `format_ver` (1 byte): flip to `0` or to a value `> 1` →
@@ -592,7 +592,7 @@ Each step lands as its own commit. Tests come first.
   not a panic.
 - [x] Tests: published crypto known-answer vectors (KATs) — Argon2id
   derives the expected 32-byte AEAD key for a fixed passphrase / salt /
-  parameter fixture using the exact crate configuration Paladin wires, and
+  parameter fixture using the exact crate configuration Paladin Auth wires, and
   XChaCha20-Poly1305 encrypts/decrypts a fixed key / 24-byte nonce / AAD /
   plaintext fixture to the expected ciphertext and tag. Expected bytes are
   committed fixture constants from named external references (for example
@@ -840,7 +840,7 @@ Each step lands as its own commit. Tests come first.
   - `CLIPBOARD_CLEAR_SECS_MIN == 5`, `CLIPBOARD_CLEAR_SECS_MAX == 600`
   Each constant is `pub` re-exported at the crate root; the test
   asserts both the value and that it is reachable through
-  `paladin_core::HOTP_REVEAL_SECS` etc. so a refactor that moves
+  `paladin_auth_core::HOTP_REVEAL_SECS` etc. so a refactor that moves
   internal modules cannot silently drop the surface.
 - [x] Tests: `policy::auto_lock::IdlePolicy` —
   `IdlePolicy::should_arm(is_encrypted: bool, settings: &VaultSettings)`
@@ -938,12 +938,12 @@ Each step lands as its own commit. Tests come first.
 ### Phase I — Import / export (Milestone 3)
 
 - [x] Tests for `import::detect` content sniffing in the fixed §4.6 order
-  (Paladin magic, image magic, Aegis JSON shape, otpauth text/JSON, then
+  (Paladin Auth magic, image magic, Aegis JSON shape, otpauth text/JSON, then
   `Unknown`) → `ImportFormat` for each
   of: single `otpauth://` URI (with surrounding whitespace), `otpauth://`
   line list (blank lines tolerated), JSON array of URIs, Aegis JSON
-  (plaintext + encrypted shapes both return `Aegis`), Paladin files by magic
-  (plaintext + encrypted shapes both return `Paladin`), QR image magic
+  (plaintext + encrypted shapes both return `Aegis`), Paladin Auth files by magic
+  (plaintext + encrypted shapes both return `Paladin Auth`), QR image magic
   bytes (PNG, JPEG, GIF, BMP, WebP);
   non-matching inputs return `Unknown`. Detection inspects shape only and
   never rejects on emptiness — `detect(b"")` returns `Unknown` without
@@ -971,7 +971,7 @@ Each step lands as its own commit. Tests come first.
 - [x] Tests for zero-account inputs rejected uniformly with
   `no_entries_to_import` at the importer call site: empty JSON `otpauth`
   array, blank / whitespace-only otpauth file, Aegis with empty
-  `entries`, Paladin bundle that decodes to zero accounts, and image with
+  `entries`, Paladin Auth bundle that decodes to zero accounts, and image with
   no decoded QRs.
 - [x] Tests for `import::otpauth`, `import::aegis_plaintext` (encrypted
   Aegis → typed `unsupported_encrypted_aegis`; non-`totp`/`hotp` entry →
@@ -981,7 +981,7 @@ Each step lands as its own commit. Tests come first.
   30; HOTP counter required; missing required `name` or `info.secret`
   rejected with `validation_error` + `source_index`; Aegis icon fields ignored
   and `icon_hint` derived from issuer),
-  `import::paladin` (encrypted bundle round-trip; plaintext-mode Paladin
+  `import::paladin_auth` (encrypted bundle round-trip; plaintext-mode Paladin Auth
   file → `unsupported_plaintext_vault`; wrong bundle passphrase →
   `decrypt_failed`; stored `icon_hint` values preserved; source
   `VaultSettings` discarded),
@@ -992,7 +992,7 @@ Each step lands as its own commit. Tests come first.
   `QR_RGBA_MAX_BYTES` (64 MiB) before decoding, then return
   `no_entries_to_import` when no QR decodes), including
   `otpauth`, QR, and Aegis imports setting `created_at = updated_at =
-  import_time`; timestamps preserved for Paladin bundle imports and fresh IDs
+  import_time`; timestamps preserved for Paladin Auth bundle imports and fresh IDs
   assigned for inserted/appended rows; replacements keep destination ID and
   `created_at` while setting `updated_at = import_time`.
 - [x] Tests for `ImportConflict` policies (`Skip` / `Replace` / `Append`)
@@ -1023,7 +1023,7 @@ Each step lands as its own commit. Tests come first.
   (encrypted under the right key) and opened with the right passphrase
   returns `invalid_payload` with `reason: "decode_failed"`. The three
   failure modes are distinct from `unsupported_plaintext_vault`
-  (plaintext-mode Paladin file detected and rejected without
+  (plaintext-mode Paladin Auth file detected and rejected without
   decrypting).
 - [x] Tests: plaintext-export → re-import round-trip — write
   `export::otpauth_list(&vault)` to bytes, route those bytes through
@@ -1037,14 +1037,14 @@ Each step lands as its own commit. Tests come first.
   every bundle imports successfully with the passphrase, and the exported
   account set is identical. This catches fixed-salt / fixed-nonce regressions
   in the export-only crypto path, which is separate from `Store` saves.
-- [x] Tests for `classify_paladin_import_precheck(path, forced_format)`:
+- [x] Tests for `classify_paladin_auth_import_precheck(path, forced_format)`:
   forced `otpauth` / `aegis` / `qr` return `NoPrompt` without probing for a
-  Paladin passphrase; auto-detect and forced `paladin` return
-  `PromptForPassphrase` for encrypted Paladin headers; return
-  `Reject(unsupported_plaintext_vault)` for plaintext Paladin headers;
+  Paladin Auth passphrase; auto-detect and forced `paladin-auth` return
+  `PromptForPassphrase` for encrypted Paladin Auth headers; return
+  `Reject(unsupported_plaintext_vault)` for plaintext Paladin Auth headers;
   return `Reject(invalid_header)` / `Reject(unsupported_format_version)` for
-  malformed Paladin headers that start with `PALADIN\0`; and return
-  `NoPrompt` for missing files, unreadable files, and non-Paladin magic so
+  malformed Paladin Auth headers that start with `PALAUTH\0`; and return
+  `NoPrompt` for missing files, unreadable files, and non-Paladin Auth magic so
   `import::from_file` remains the owner of `read_import_file`,
   auto-detect, and `unsupported_import_format` errors.
 - [x] Tests for import facade dispatch: `import::from_file` and
@@ -1053,26 +1053,26 @@ Each step lands as its own commit. Tests come first.
   with `format: "unknown"` and for invalid forced/source combinations with
   `format` set to the requested forced format, decode encoded image bytes as QR
   input in `from_bytes`, use the path form for QR files in `from_file`,
-  and return `invalid_state` with `operation: "import_paladin"` /
-  `state: "missing_passphrase"` when Paladin dispatch lacks a bundle
+  and return `invalid_state` with `operation: "import_paladin_auth"` /
+  `state: "missing_passphrase"` when Paladin Auth dispatch lacks a bundle
   passphrase.
 - [x] Implement format-specific importers (`import::otpauth`,
-  `import::aegis_plaintext`, `import::paladin`, `import::qr_image`, and
+  `import::aegis_plaintext`, `import::paladin_auth`, `import::qr_image`, and
   `import::qr_image_bytes`) plus the `Vault::import_accounts` merge-policy
   engine that produces `ImportReport`.
 - [x] Implement `ImportOptions`, `import::from_file`, and
   `import::from_bytes` as the public facade over `detect` and the
   format-specific importers. `from_bytes` decodes image-format bytes with
   `image` to RGBA8 before routing through `read_qr_image_bytes`.
-- [x] Implement `PaladinImportPrecheck` and
-  `classify_paladin_import_precheck(path, forced_format)` in the import
+- [x] Implement `PaladinAuthImportPrecheck` and
+  `classify_paladin_auth_import_precheck(path, forced_format)` in the import
   facade module, re-exported at the crate root. It reads only enough bytes to
-  classify Paladin magic/header state and returns `NoPrompt`,
-  `PromptForPassphrase`, or `Reject(PaladinError)` per the test table above
-  so CLI / TUI / GUI import flows never duplicate Paladin bundle prompt logic.
+  classify Paladin Auth magic/header state and returns `NoPrompt`,
+  `PromptForPassphrase`, or `Reject(PaladinAuthError)` per the test table above
+  so CLI / TUI / GUI import flows never duplicate Paladin Auth bundle prompt logic.
 - [x] Implement `export::otpauth_list(&Vault)` using the internal
   `otpauth://` emitter and `export::encrypted(&Vault, EncryptionOptions)`
-  using the Paladin encrypted bundle format with default `VaultSettings`.
+  using the Paladin Auth encrypted bundle format with default `VaultSettings`.
 - [x] Implement `read_qr_image(path: &Path) -> Result<Vec<String>>` and
   `read_qr_image_bytes(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<String>>` in
   `import/qr.rs`. The path form loads the image from disk; the byte form
@@ -1094,7 +1094,7 @@ Each step lands as its own commit. Tests come first.
   else is `pub(crate)`. The §4.7 surface explicitly includes the
   Phase B / E / G / I additions: `parse_icon_hint_token`, `IconHintInput`
   (already), `classify_init_precheck`, `InitPrecheck`,
-  `classify_paladin_import_precheck`, `PaladinImportPrecheck`,
+  `classify_paladin_auth_import_precheck`, `PaladinAuthImportPrecheck`,
   `select_after_filter`, `policy::auto_lock::IdlePolicy`,
   `policy::clipboard_clear::ClipboardClearPolicy`,
   `policy::clipboard_clear::ClipboardClearToken`,
@@ -1103,7 +1103,7 @@ Each step lands as its own commit. Tests come first.
   `CLIPBOARD_CLEAR_SECS_MIN`, `CLIPBOARD_CLEAR_SECS_MAX`.
 - [x] Run `cargo public-api` (the `cargo-public-api` crate, pinned in
   `xtask/dev-tools.toml`) to capture the surface; commit the
-  snapshot under `crates/paladin-core/public-api.txt` and gate it in CI
+  snapshot under `crates/paladin-auth-core/public-api.txt` and gate it in CI
   so unintended surface changes fail the build.
 - [x] Tests: `tests/error_matrix.rs` produces every core-returnable §5
   `error_kind` at least once and asserts the kind plus every stable
@@ -1116,7 +1116,7 @@ Each step lands as its own commit. Tests come first.
   account_not_found`, `totp_code / account_not_found`, `totp_code /
   not_totp`, `hotp_peek / account_not_found`, `hotp_peek / not_hotp`,
   `hotp_advance / account_not_found`, `hotp_advance / not_hotp`,
-  `import_paladin / missing_passphrase`), `vault_missing`,
+  `import_paladin_auth / missing_passphrase`), `vault_missing`,
   `vault_exists`, `unsafe_permissions` (one row per subject:
   `vault_dir`, `vault_file`, `backup_file`),
   `wrong_vault_lock` (both directions), `decrypt_failed`,
@@ -1137,8 +1137,8 @@ Each step lands as its own commit. Tests come first.
   regressions where an `error_kind` is renamed or an extra field is
   dropped from a JSON-relevant variant.
 - [x] Document and test that the public types front ends move across
-  thread boundaries (notably `paladin-gtk` via `gio::spawn_blocking`,
-  and `paladin-tui` via the import worker thread) are all `Send`.
+  thread boundaries (notably `paladin-auth-gtk` via `gio::spawn_blocking`,
+  and `paladin-auth-tui` via the import worker thread) are all `Send`.
   Static `Send` assertions (`fn assert_send<T: Send>() {}` calls
   in `tests/send_assertions.rs`) gate the full set in CI so a
   future change introducing `Rc` or another non-`Send` field fails
@@ -1151,8 +1151,8 @@ Each step lands as its own commit. Tests come first.
   `EncryptionOptions`, `Argon2Params`, `VaultLock`, `VaultInit`,
   `VaultStatus`, `VaultSettings`, `SettingKey`, `SettingPatch`,
   `AccountKindInput`, `IconHintInput`, `AccountInput`,
-  `AccountQuery`, `InitPrecheck`, `PaladinImportPrecheck`, and
-  `PaladinError`.
+  `AccountQuery`, `InitPrecheck`, `PaladinAuthImportPrecheck`, and
+  `PaladinAuthError`.
 - [x] Tests: `Sync` posture — pin which of the above types are
   `Sync` and which are not, in the same `tests/send_assertions.rs`
   module. Every type in the J.3 worker-boundary set is asserted
@@ -1162,7 +1162,7 @@ Each step lands as its own commit. Tests come first.
   posture is locked with `static_assertions::assert_not_impl_all!(
   Store: Sync)`. The secret-bearing types (`Vault`, `Account`,
   `Secret`, `EncryptionOptions`, `AccountInput`, `ValidatedAccount`,
-  `VaultLock`, `VaultInit`, `PaladinError`) are `Sync` because
+  `VaultLock`, `VaultInit`, `PaladinAuthError`) are `Sync` because
   `secrecy::SecretString` is `Sync` in `secrecy = "0.10"` —
   `SecretBox<String>` is `Sync` whenever `String: Sync`, and zeroize
   semantics fire on drop, not on read. The file's top doc comment
@@ -1170,7 +1170,7 @@ Each step lands as its own commit. Tests come first.
   (or demoting `Store` to `Sync`) breaks the `cargo public-api`
   snapshot in CI and requires explicit review.
 - [x] Tests: `tests/no_network.rs` is a source-level guard that scans the
-  `paladin-core` manifest and production source tree (`src/`) and fails
+  `paladin-auth-core` manifest and production source tree (`src/`) and fails
   on direct references to network APIs (`std::net`, `TcpStream`,
   `UdpSocket`, `ToSocketAddrs`, `tokio`, `reqwest`, `hyper`, and similar
   denylisted spellings). It also reads the workspace `Cargo.lock` and
@@ -1198,7 +1198,7 @@ Each step lands as its own commit. Tests come first.
 - [x] Add a `test-fault-injection` cargo feature (off by default) that
   exposes, only under `cfg(feature = "test-fault-injection")`, a test-only
   `Store` constructor and shared atomic-write fault hook honoring the
-  `PALADIN_FAULT_INJECT=pre_commit|post_commit` env var: `pre_commit`
+  `PALADIN_AUTH_FAULT_INJECT=pre_commit|post_commit` env var: `pre_commit`
   fails the save before the primary rename (surfaces
   `save_not_committed`); `post_commit` fails the parent-directory
   `fsync` after the primary rename (surfaces
@@ -1206,7 +1206,7 @@ Each step lands as its own commit. Tests come first.
   the regular save pipeline, `create_force`, passphrase transitions, and
   `write_secret_file_atomic`. The feature is gated so production builds
   never link the hook; only the binary crates' test builds opt in. Internal
-  `paladin-core` rollback/durability tests already exercise these
+  `paladin-auth-core` rollback/durability tests already exercise these
   paths in-process — this feature is the cross-crate surface so CLI
   and TUI integration tests can drive them end-to-end. The feature-gated
   constructor and hook are excluded from the default public-API snapshot and are
@@ -1215,7 +1215,7 @@ Each step lands as its own commit. Tests come first.
 ### Phase K — Test coverage hardening (Milestone 6 prep)
 
 Closes residual gaps surfaced by a post-Phase J coverage review of
-`paladin-core`. Every entry below targets a real semantic invariant
+`paladin-auth-core`. Every entry below targets a real semantic invariant
 that is **not** redundant with prior-phase tests. Each item names the
 file the new test lives in, the failure mode it pins, and the
 assertions the test must make so the implementer can land it without
@@ -1335,7 +1335,7 @@ and committed in any order.
   fallback that the existing `_returns_eight_chars_*` tests
   don't reach.
 
-- [x] **`PaladinError` `Display` snapshot.** Add
+- [x] **`PaladinAuthError` `Display` snapshot.** Add
   `tests/error_display.rs` that iterates the same variant set
   used by `tests/error_serde.rs`'s `one_per_variant()` helper
   (re-export the helper to a shared `tests/common/` module or
@@ -1343,7 +1343,7 @@ and committed in any order.
   intentional, matching the `error_matrix.rs` precedent). For
   each `(error, kind)` pair assert `format!("{error}")` equals a
   committed expected string fixture loaded from
-  `crates/paladin-core/tests/fixtures/error_display/<kind>.txt`
+  `crates/paladin-auth-core/tests/fixtures/error_display/<kind>.txt`
   (slug name from `ErrorKind::as_str()`). Commit one fixture per
   variant. Justification: `error_serde.rs` pins the machine
   surface; nothing currently pins the human-readable surface that
@@ -1402,7 +1402,7 @@ and committed in any order.
   key (`auto_lock.enabled`, `clipboard.clear_enabled`) call
   with: `""`, `"True"`, `"TRUE"`, `"yes"`, `"1"`, `"false "`
   (trailing space), `"0"`. Assert each call returns
-  `PaladinError::ValidationError` whose `field` equals the
+  `PaladinAuthError::ValidationError` whose `field` equals the
   passed-in dotted key and whose `reason` is a stable
   discriminating string (`"empty"`, `"not_a_u32"`,
   `"overflow"`, `"not_a_bool"`, etc. — match whatever stable
@@ -1502,7 +1502,7 @@ later review pass.
 ### Phase L — Per-account QR export (v0.2 / DESIGN §4.6 Milestone 8)
 
 Adds the per-account `otpauth://` QR-rendering API that the
-v0.2 GTK `ExportQrDialog`, the new CLI `paladin qr` command,
+v0.2 GTK `ExportQrDialog`, the new CLI `paladin-auth qr` command,
 and the TUI QR modal all consume. Surface-only addition: no
 behavior change for `open` / `save` / `import` / `export`
 plaintext or encrypted bundles; the public API surface grows by
@@ -1514,14 +1514,14 @@ land before the GTK / CLI / TUI work or alongside it.
 
 - [x] **`qrcode` dep promotion.** Move `qrcode` from
   `[dev-dependencies]` to `[dependencies]` in
-  `crates/paladin-core/Cargo.toml`. The existing dev-dep config is
+  `crates/paladin-auth-core/Cargo.toml`. The existing dev-dep config is
   `default-features = false, features = ["image"]`; extend it to
   `default-features = false, features = ["image", "svg"]` because
   `qrcode::render::svg::Color` (used by `export::qr_svg` below) is
   gated behind the `svg` feature in `qrcode 0.14` (see the crate's
   own `Cargo.toml` — `default = ["image", "svg", "pic"]`, with each
   renderer behind a separate feature). The `pic` feature stays off
-  (Paladin does not render to PIC). The crate is already vendored as
+  (Paladin Auth does not render to PIC). The crate is already vendored as
   a dev-dep used by the `tests/import_qr.rs` and `tests/import_facade.rs`
   fixture generators (DESIGN §10), so the supply-chain footprint does
   not grow — only the link-time footprint changes. `cargo deny check`
@@ -1640,7 +1640,7 @@ land before the GTK / CLI / TUI work or alongside it.
   so the wording stays locked across front ends.
 
 - [x] **Public-api snapshot update.** After landing the surface
-  above, regenerate `crates/paladin-core/public-api.txt` via
+  above, regenerate `crates/paladin-auth-core/public-api.txt` via
   `cargo public-api`. The diff should add exactly: the three
   `Vault::export_qr_*` methods, the three `export::qr_*` free
   functions, `QrRenderOptions` + its `Default` and `validate`
@@ -1744,7 +1744,7 @@ land before the GTK / CLI / TUI work or alongside it.
 
 - [x] **Tests — public-api snapshot diff.** Run
   `cargo public-api --diff` against the prior snapshot and commit
-  the regenerated `crates/paladin-core/public-api.txt`. The Phase
+  the regenerated `crates/paladin-auth-core/public-api.txt`. The Phase
   J CI gate then re-asserts the snapshot on every subsequent
   build.
 
@@ -1752,7 +1752,7 @@ land before the GTK / CLI / TUI work or alongside it.
 
 Adds the multi-field non-cryptographic edit mutator
 `Vault::edit_account_metadata` (label / issuer / icon_hint) that the
-v0.2 GTK `EditDialog`, the new CLI `paladin edit` command, and the
+v0.2 GTK `EditDialog`, the new CLI `paladin-auth edit` command, and the
 TUI Edit modal all consume. Surface-only addition: no behavior change
 for `add` / `remove` / `rename` / `save` / `mutate_and_save`; the
 public API surface grows by exactly the items listed below and the
@@ -1964,7 +1964,7 @@ convention used in Phase B / Phase J.
 
 - [x] **`Vault::find_duplicate_after_edit(&self, id: AccountId, edit: &AccountEdit) -> Option<&Account>`.**
   Companion to the existing `find_duplicate(&ValidatedAccount)` so
-  GTK `EditDialog`, TUI Edit modal, and CLI `paladin edit` flows
+  GTK `EditDialog`, TUI Edit modal, and CLI `paladin-auth edit` flows
   can detect `(secret, issuer, label)` collisions before
   submitting the edit. The helper computes the would-be post-edit
   `(secret, issuer, label)` for the account identified by `id`
@@ -2010,7 +2010,7 @@ convention used in Phase B / Phase J.
   `tests/send_assertions.rs` — no new Send/Sync entry is needed
   for the method itself. **Concurrency:** the helper observes
   the `&Vault` snapshot the caller currently holds; cross-process
-  races (two `paladin edit` invocations, or CLI + GTK against the
+  races (two `paladin-auth edit` invocations, or CLI + GTK against the
   same vault file) are resolved by file-locking inside
   `Vault::mutate_and_save`, last-writer-wins, with the same
   `save_durability_unconfirmed` / `save_not_committed` contract
@@ -2031,7 +2031,7 @@ convention used in Phase B / Phase J.
   pre-epoch / year-9999 cap, `validation_error` from
   `validate_label`) stays exactly `"rename"`. Public signature,
   error kinds, and stable error extra fields (including the
-  `operation` tag) all stay byte-identical so `paladin rename`,
+  `operation` tag) all stay byte-identical so `paladin-auth rename`,
   the TUI Rename modal, and existing test inventory keep passing
   without churn. The byte-identical claim relies on the refactor
   site building `AccountEdit { label: Some(label.into()),
@@ -2130,7 +2130,7 @@ convention used in Phase B / Phase J.
   In `tests/vault_edit_account_metadata.rs` (or the existing
   `tests/vault_rename.rs` as the natural home — pick one to avoid
   duplication), pin that the post-refactor `Vault::rename`
-  surfaces the same `PaladinError` variants and the same
+  surfaces the same `PaladinAuthError` variants and the same
   stable extra fields (notably the `operation` tag on
   `invalid_state` and `time_range`) as the pre-refactor
   implementation, including the **error-precedence** cases that
@@ -2171,7 +2171,7 @@ convention used in Phase B / Phase J.
   matrix and do not need duplicate rows.
 
 - [x] **Tests — `validate_icon_hint_slug` proptest.** Extend the
-  inline `proptests` module of `crates/paladin-core/src/domain/slug.rs`
+  inline `proptests` module of `crates/paladin-auth-core/src/domain/slug.rs`
   (or add a sibling block in `tests/proptest_uri_base32.rs`,
   matching that file's `proptest!` style) with a `proptest`
   asserting that any generated `[a-z0-9_-]{1,64}` string
@@ -2185,7 +2185,7 @@ convention used in Phase B / Phase J.
 
 - [x] **Tests — public-api snapshot diff.** Run
   `cargo public-api --diff` against the prior snapshot and commit
-  the regenerated `crates/paladin-core/public-api.txt`. The new
+  the regenerated `crates/paladin-auth-core/public-api.txt`. The new
   surface entries (`AccountEdit`, `validate_account_edit`,
   `validate_icon_hint_slug`, `Vault::edit_account_metadata`,
   `Vault::find_duplicate_after_edit`) and the new `invalid_state`
@@ -2235,7 +2235,7 @@ is a separate `#[test]` or table-driven case family.
 - [x] `inspect(path)` header probe: missing primary returns `Missing`, plaintext
   and encrypted headers report the correct mode without decryption, invalid
   magic errors, permission checks skipped.
-- [x] `default_vault_path()` uses `ProjectDirs::from("", "", "paladin")`,
+- [x] `default_vault_path()` uses `ProjectDirs::from("", "", "paladin-auth")`,
   returns the §4.3 `vault.bin` data path, or `io_error` with
   `operation: "resolve_default_vault_path"`.
 - [x] Header version / ID errors: unsupported `format_ver`, unknown `mode`,
@@ -2362,20 +2362,20 @@ is a separate `#[test]` or table-driven case family.
   DESIGN §4.7; zero-length new passphrase rejection with
   `reason: "zero_length"`; no trimming or Unicode normalization of non-empty
   passphrase bytes.
-- [x] `import::detect`: fixed §4.6 detection order, Paladin magic, QR image
+- [x] `import::detect`: fixed §4.6 detection order, Paladin Auth magic, QR image
   magic (PNG, JPEG, GIF, BMP, WebP), Aegis plaintext/encrypted shapes,
   single/list/JSON-array `otpauth://`, empty otpauth JSON array shape, and
   `Unknown`.
 - [x] Import facade: `from_file` / `from_bytes` auto-detect and forced-format
   dispatch, `unsupported_import_format` for unknown or invalid dispatch,
   `format` set to `"unknown"` for auto-detect failures and to the requested
-  format for forced-format failures, missing Paladin bundle passphrase as
+  format for forced-format failures, missing Paladin Auth bundle passphrase as
   `invalid_state`, and encoded image bytes routed through QR decoding.
-- [x] `classify_paladin_import_precheck`: forced non-Paladin formats skip the
-  prompt classifier; auto-detect / forced-Paladin encrypted headers return
-  `PromptForPassphrase`; plaintext or malformed Paladin headers return
+- [x] `classify_paladin_auth_import_precheck`: forced non-Paladin Auth formats skip the
+  prompt classifier; auto-detect / forced-Paladin Auth encrypted headers return
+  `PromptForPassphrase`; plaintext or malformed Paladin Auth headers return
   `Reject(...)` with the typed core error; missing files, unreadable files,
-  and non-Paladin magic return `NoPrompt` so the import facade owns final
+  and non-Paladin Auth magic return `NoPrompt` so the import facade owns final
   read/dispatch errors.
 - [x] Importers: Aegis plaintext field mapping, defaults, and required fields;
   Aegis encrypted → typed `unsupported_encrypted_aegis`; Aegis
@@ -2384,14 +2384,14 @@ is a separate `#[test]` or table-driven case family.
   rejected);
   missing required Aegis fields reject with `validation_error` +
   `source_index`; Aegis icon fields ignored and `icon_hint` derived from
-  issuer; non-Paladin `otpauth` / QR imports derive `icon_hint` from issuer;
-  Paladin bundle round-trip with timestamps and stored `icon_hint` values
-  preserved and source `VaultSettings` discarded; plaintext-mode Paladin file →
+  issuer; non-Paladin Auth `otpauth` / QR imports derive `icon_hint` from issuer;
+  Paladin Auth bundle round-trip with timestamps and stored `icon_hint` values
+  preserved and source `VaultSettings` discarded; plaintext-mode Paladin Auth file →
   `unsupported_plaintext_vault`; wrong bundle passphrase →
   `decrypt_failed`; QR image path and raw RGBA byte buffer with N codes;
   raw RGBA zero dimensions, multiplication overflow, and length mismatch;
   non-otpauth QR payloads rejected with `validation_error` + `source_index`;
-  URI-list trimming and blank-line handling; non-Paladin imports use
+  URI-list trimming and blank-line handling; non-Paladin Auth imports use
   `import_time`; zero-account inputs rejected uniformly with
   `no_entries_to_import`.
 - [x] `ImportConflict` policies (`Skip` / `Replace` / `Append`) including
@@ -2467,7 +2467,7 @@ is a separate `#[test]` or table-driven case family.
   `Sync`; secret-bearing types are deliberately not `Sync` and the
   test pins that decision.
 - [x] `tests/no_network.rs` source / metadata guard proves production
-  `paladin-core` has no direct network API use and no runtime
+  `paladin-auth-core` has no direct network API use and no runtime
   network-stack dependencies.
 - [x] `tests/error_matrix.rs` produces every core-returnable §5
   `error_kind` at least once with full extra-field assertions.
@@ -2500,7 +2500,7 @@ is a separate `#[test]` or table-driven case family.
   dimensions overflowing `usize` reject with
   `reason: "dimensions_overflow"`.
 - [x] Wrong-passphrase vs corrupt-bundle vs decode-failure distinction
-  on encrypted Paladin imports (decrypt_failed on wrong key, decrypt_failed
+  on encrypted Paladin Auth imports (decrypt_failed on wrong key, decrypt_failed
   on AEAD/AAD tamper, invalid_payload on garbage-but-valid-ciphertext).
 - [x] Phase K coverage-hardening tests — each enumerated as its own
   Phase K checklist entry above: HOTP primitive algorithm × digits
@@ -2508,7 +2508,7 @@ is a separate `#[test]` or table-driven case family.
   `mutate_and_save` closure-panic safety, `ImportConflict::Skip`
   multi-collision accumulator, Aegis forward-compat unknown-field
   tolerance, `shortest_unique_id_prefix` ≥9-char collision path,
-  `PaladinError` `Display` snapshot per variant,
+  `PaladinAuthError` `Display` snapshot per variant,
   encrypted-empty-payload AEAD length boundary,
   `apply_setting_patch` repeat-application byte-identical-payload
   determinism, `parse_setting_patch` malformed-value rejection
@@ -2565,7 +2565,7 @@ doesn't drift across transitive minor versions), `base32`, `url`,
 `bincode` (v2), `serde`, `serde_json`, `directories`, `uuid`, `thiserror`,
 `rqrr`, `image`, `qrcode` (Phase L; previously `[dev-dependencies]`,
 promoted to a regular dep so `export::qr_*` can render PNG / SVG / ANSI
-QR codes inside `paladin-core` and the front ends never depend on
+QR codes inside `paladin-auth-core` and the front ends never depend on
 `qrcode` directly per the thinness contracts in
 IMPLEMENTATION_PLAN_02_CLI.md / 03_TUI.md / 04_GTK.md). No `tokio`,
 no `reqwest`, no network-touching crate.
@@ -2579,13 +2579,13 @@ scan production source and metadata for network API or dependency drift.
 
 ## Packaging support (per §11)
 
-`paladin-core` is a library and is not itself a release artifact, but
+`paladin-auth-core` is a library and is not itself a release artifact, but
 the v0.1 / v0.2 packaging pipeline depends on the workspace shape it
 defines. Implementation owes:
 
-- **Cargo.toml metadata.** `crates/paladin-core/Cargo.toml` carries
-  `description`, `repository = "https://github.com/FreedomBen/paladin"`,
-  `homepage = "https://paladin.tamx.org"`,
+- **Cargo.toml metadata.** `crates/paladin-auth-core/Cargo.toml` carries
+  `description`, `repository = "https://github.com/FreedomBen/paladin-auth"`,
+  `homepage = "https://paladin-auth.tamx.org"`,
   `license = "AGPL-3.0-or-later"`, and
   pinned `rust-version`. Binary crates inherit consistent values via
   per-field Cargo inheritance (`description.workspace = true`,
@@ -2597,13 +2597,13 @@ defines. Implementation owes:
   `cargo build --locked` is sufficient for §11.6 reproducibility.
   No build-time codegen depends on system clock, hostname, or
   network.
-- **Stable `error_kind` taxonomy.** `PaladinError` exposes the
+- **Stable `error_kind` taxonomy.** `PaladinAuthError` exposes the
   core-returnable §5 kinds verbatim (no internal renaming) so the
-  `paladin` CLI can serialize them under `--json` and the strict-output
+  `paladin-auth` CLI can serialize them under `--json` and the strict-output
   rule in §5 holds without any mapping layer. The stable
   `invalid_state.operation` / `state` pairs from DESIGN §4.7 are part of
   that contract. Add a `serde::Serialize` impl guarded by an `error-serde`
-  cargo feature, off by default, that the CLI opts into; `paladin-core`
+  cargo feature, off by default, that the CLI opts into; `paladin-auth-core`
   itself has no JSON output paths. The
   same feature flag also gates `serde::Serialize` for the public
   non-secret view/report types referenced from error variants and §5

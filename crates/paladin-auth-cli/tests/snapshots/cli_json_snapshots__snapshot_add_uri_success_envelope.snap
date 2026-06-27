@@ -1,0 +1,20 @@
+---
+source: crates/paladin-auth-cli/tests/cli_json_snapshots.rs
+expression: parse_stdout_json(&assert)
+---
+{
+  "account": {
+    "algorithm": "sha1",
+    "counter": null,
+    "created_at": "[timestamp]",
+    "digits": 6,
+    "icon_hint": "acme",
+    "id": "[uuid]",
+    "issuer": "Acme",
+    "kind": "totp",
+    "label": "alice",
+    "period": 30,
+    "updated_at": "[timestamp]"
+  },
+  "warnings": []
+}

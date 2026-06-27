@@ -2,7 +2,7 @@ name: Release
 
 # Triggered by pushing a SemVer tag (`v0.2.0`, `v0.2.0-rc1`, ...) or manually
 # via workflow_dispatch. On a tag push, builds the .rpm and .deb sets
-# (paladin, paladin-tui, paladin-gtk) and attaches them to the matching
+# (paladin-auth, paladin-auth-tui, paladin-auth-gtk) and attaches them to the matching
 # GitHub release. workflow_dispatch runs the same build end-to-end but
 # skips the upload — useful for verifying packaging changes without
 # cutting a release.
@@ -46,15 +46,15 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show
 
-      - name: Derive PALADIN_VERSION from tag or dispatch input
+      - name: Derive PALADIN_AUTH_VERSION from tag or dispatch input
         # Tag form `v0.2.0` -> `0.2.0`. The nfpm manifests reference
-        # `${PALADIN_VERSION}` directly (see packaging/{deb,rpm}/*.yaml).
+        # `${PALADIN_AUTH_VERSION}` directly (see packaging/{deb,rpm}/*.yaml).
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             REF="${GITHUB_REF_NAME}"
-            echo "PALADIN_VERSION=${REF#v}" >> "${GITHUB_ENV}"
+            echo "PALADIN_AUTH_VERSION=${REF#v}" >> "${GITHUB_ENV}"
           else
-            echo "PALADIN_VERSION=${{ inputs.version }}" >> "${GITHUB_ENV}"
+            echo "PALADIN_AUTH_VERSION=${{ inputs.version }}" >> "${GITHUB_ENV}"
           fi
 
       - name: Install nfpm (pin matches ci.yml packaging-dry-run)
@@ -70,42 +70,42 @@ jobs:
         # uses for its `cargo build --release --locked` fallback).
         run: |
           cargo build --release --locked \
-            -p paladin-cli -p paladin-tui -p paladin-gtk
+            -p paladin-auth-cli -p paladin-auth-tui -p paladin-auth-gtk
 
       - name: Render + gzip man pages (CLI + TUI)
-        # `packaging/rpm/paladin.yaml` and `packaging/rpm/paladin-tui.yaml`
+        # `packaging/rpm/paladin-auth.yaml` and `packaging/rpm/paladin-auth-tui.yaml`
         # reference `target/man/<name>.1.gz`. The xtask renders the raw
         # `.1` files; gzip with `-n` strips the filename/timestamp from
         # the header so the output stays deterministic (§11.6).
         run: |
           cargo run -p xtask --quiet -- man
-          gzip -n -9 -f target/man/paladin.1 target/man/paladin-tui.1
+          gzip -n -9 -f target/man/paladin-auth.1 target/man/paladin-auth-tui.1
           ls -l target/man/
 
       - name: Build .rpm packages via nfpm (CLI, TUI, GTK)
         run: |
           mkdir -p target/dist
-          nfpm package -f packaging/rpm/paladin.yaml      -p rpm -t target/dist/
-          nfpm package -f packaging/rpm/paladin-tui.yaml  -p rpm -t target/dist/
-          nfpm package -f packaging/rpm/paladin-gtk.yaml  -p rpm -t target/dist/
+          nfpm package -f packaging/rpm/paladin-auth.yaml      -p rpm -t target/dist/
+          nfpm package -f packaging/rpm/paladin-auth-tui.yaml  -p rpm -t target/dist/
+          nfpm package -f packaging/rpm/paladin-auth-gtk.yaml  -p rpm -t target/dist/
 
       - name: Build .deb packages via nfpm (CLI, TUI, GTK)
         run: |
           mkdir -p target/dist
-          nfpm package -f packaging/deb/paladin.yaml      -p deb -t target/dist/
-          nfpm package -f packaging/deb/paladin-tui.yaml  -p deb -t target/dist/
-          nfpm package -f packaging/deb/paladin-gtk.yaml  -p deb -t target/dist/
+          nfpm package -f packaging/deb/paladin-auth.yaml      -p deb -t target/dist/
+          nfpm package -f packaging/deb/paladin-auth-tui.yaml  -p deb -t target/dist/
+          nfpm package -f packaging/deb/paladin-auth-gtk.yaml  -p deb -t target/dist/
 
-      - name: Extract paladin-gtk .deb payload for validation
+      - name: Extract paladin-auth-gtk .deb payload for validation
         run: |
           mkdir -p target/dist/deb-extracted
-          DEB_FILE="$(ls target/dist/paladin-gtk_*.deb | head -n1)"
+          DEB_FILE="$(ls target/dist/paladin-auth-gtk_*.deb | head -n1)"
           dpkg-deb -x "${DEB_FILE}" target/dist/deb-extracted
 
-      - name: Extract paladin-gtk .rpm payload for validation
+      - name: Extract paladin-auth-gtk .rpm payload for validation
         run: |
           mkdir -p target/dist/rpm-extracted
-          RPM_FILE="$(ls target/dist/paladin-gtk-*.rpm | head -n1)"
+          RPM_FILE="$(ls target/dist/paladin-auth-gtk-*.rpm | head -n1)"
           ( cd target/dist/rpm-extracted && rpm2cpio "../../../${RPM_FILE}" | cpio -idm )
 
       - name: Validate .deb installed payload (desktop + AppStream)
@@ -114,16 +114,16 @@ jobs:
         # release before any artifact is uploaded.
         run: |
           desktop-file-validate \
-            target/dist/deb-extracted/usr/share/applications/org.tamx.Paladin.Gui.desktop
+            target/dist/deb-extracted/usr/share/applications/org.tamx.PaladinAuth.Gui.desktop
           appstreamcli validate --no-net \
-            target/dist/deb-extracted/usr/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml
+            target/dist/deb-extracted/usr/share/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml
 
       - name: Validate .rpm installed payload (desktop + AppStream)
         run: |
           desktop-file-validate \
-            target/dist/rpm-extracted/usr/share/applications/org.tamx.Paladin.Gui.desktop
+            target/dist/rpm-extracted/usr/share/applications/org.tamx.PaladinAuth.Gui.desktop
           appstreamcli validate --no-net \
-            target/dist/rpm-extracted/usr/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml
+            target/dist/rpm-extracted/usr/share/metainfo/org.tamx.PaladinAuth.Gui.metainfo.xml
 
       - name: List built artifacts
         run: ls -lh target/dist/*.rpm target/dist/*.deb

@@ -4,8 +4,8 @@
 //!
 //! Subcommands implemented in v0.2 Milestone 7:
 //!
-//! * `cargo xtask man` — render clap-derived man pages for `paladin`
-//!   and `paladin-tui` into `target/man/`. The packaging pipeline
+//! * `cargo xtask man` — render clap-derived man pages for `paladin-auth`
+//!   and `paladin-auth-tui` into `target/man/`. The packaging pipeline
 //!   sources the gzipped output from there.
 //! * `cargo xtask package --frontend <name> --format rpm|deb` — build
 //!   the release binary, render + gzip the man page when applicable,
@@ -31,7 +31,7 @@ mod package;
 #[command(
     name = "xtask",
     version,
-    about = "Paladin workspace orchestrator (see docs/DESIGN.md §11.2)"
+    about = "Paladin Auth workspace orchestrator (see docs/DESIGN.md §11.2)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -40,7 +40,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Render clap-derived man pages for `paladin` and `paladin-tui`.
+    /// Render clap-derived man pages for `paladin-auth` and `paladin-auth-tui`.
     Man(man::Args),
 
     /// Build a distributable artifact for one front-end.

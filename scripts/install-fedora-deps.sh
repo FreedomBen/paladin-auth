@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Install the system packages and Rust toolchain needed to build, test, and
-# package the paladin workspace on Fedora.
+# package the paladin-auth workspace on Fedora.
 #
 # Mirrors the three `dnf install` blocks in .github/workflows/ci.yml so a
 # local checkout can reproduce the CI environment (clippy / test / packaging
 # dry-run). The GTK 4.16 + libadwaita 1.6 floor required by
-# crates/paladin-gtk/Cargo.toml's `v4_16` / `v1_6` feature gates is satisfied
+# crates/paladin-auth-gtk/Cargo.toml's `v4_16` / `v1_6` feature gates is satisfied
 # by Fedora 42+.
 #
 # Usage:
@@ -59,12 +59,12 @@ case "${ID:-}:${ID_LIKE:-}" in
 esac
 
 # Fedora 42+ ships GTK 4.16 / libadwaita 1.6; older releases fail the
-# `v4_16` / `v1_6` feature gates in crates/paladin-gtk/Cargo.toml.
+# `v4_16` / `v1_6` feature gates in crates/paladin-auth-gtk/Cargo.toml.
 if [ "${WITH_GTK}" -eq 1 ] && [ -n "${VERSION_ID:-}" ]; then
     major="${VERSION_ID%%.*}"
     if [ "${major}" -lt 42 ] 2>/dev/null; then
         echo "warning: Fedora ${VERSION_ID} ships GTK/libadwaita older than the" >&2
-        echo "         4.16 / 1.6 floor paladin-gtk needs. paladin-gtk will" >&2
+        echo "         4.16 / 1.6 floor paladin-auth-gtk needs. paladin-auth-gtk will" >&2
         echo "         fail to build until you upgrade to Fedora 42+." >&2
     fi
 fi
@@ -90,7 +90,7 @@ PKGS_CORE=(
     ca-certificates
 )
 
-# paladin-gtk system bindings + Xvfb for the GTK smoke test.
+# paladin-auth-gtk system bindings + Xvfb for the GTK smoke test.
 # (Matches `test` job additions in .github/workflows/ci.yml.)
 PKGS_GTK=(
     gtk4-devel

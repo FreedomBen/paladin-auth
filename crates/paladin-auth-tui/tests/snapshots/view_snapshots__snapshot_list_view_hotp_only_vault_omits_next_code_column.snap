@@ -1,0 +1,16 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: rendered
+---
+┌ Paladin Auth [plaintext] ────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│   Bank (savings) (#0)               ▸ press n to advance                     │
+│ ▶ VPN (work) (#42)                  ▸ press n to advance                     │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [C] copy-next  [n] next-HOTP  [a] add  [/] find     │
+└──────────────────────────────────────────────────────────────────────────────┘

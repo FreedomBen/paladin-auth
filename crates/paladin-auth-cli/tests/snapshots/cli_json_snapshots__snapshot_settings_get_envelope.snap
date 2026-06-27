@@ -1,0 +1,14 @@
+---
+source: crates/paladin-auth-cli/tests/cli_json_snapshots.rs
+expression: parse_stdout_json(&assert)
+---
+{
+  "auto_lock": {
+    "enabled": false,
+    "timeout_secs": 300
+  },
+  "clipboard": {
+    "clear_enabled": false,
+    "clear_secs": 20
+  }
+}

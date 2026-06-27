@@ -1,0 +1,36 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: rendered
+---
+┌ Paladin Auth [plaintext] ────────────────────────────────────────────────────┐
+│ Se┌ QR Export ───────────────────────────────────────────────────────────┐   │
+│ ──│                        GitHub:ben@example.com                        │── │
+│ ▶ │                                                                      │62 │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │             █▀▀▀▀▀█  ▄█▀ ▀▀█ ▀▀▀ █▄▄▄▀▄ ▀ ▀  ▄ ▄▀ █▀▀▀▀▀█            │   │
+│   │             █ ███ █ ██▄█▄▀▀ ▄▄█▀▄▄▄██▀█  ██▄▀█ █▄ █ ███ █            │   │
+│   │             █ ▀▀▀ █ █▀▀▀▄ █▀█ █▀█▀▀▀█▀▀▄▀█▀▀▄▄▀▀▀ █ ▀▀▀ █            │   │
+│   │             ▀▀▀▀▀▀▀ █▄█ █ █ █▄█ █ ▀ █▄▀ █▄█▄█ █▄█ ▀▀▀▀▀▀▀            │   │
+│   │             ▀ ▀█▀▀▀▄▄▀ █▀ ▄█▄▄█ ▀██▀██ ▄ ██▀ ▄▀▀▄▄▀▀▀█▀▄▄            │   │
+│   │             ▀▄▄█▄█▀█▀▀█  ▄▄▄▄██▄▄▀ ▀ ▄▀█▀▄  █▀█ ▄██ ▄███▄            │   │
+│   │              ▄▄ ██▀ ██▄ ▄ ▀█▀█▀▄██▀▀ █▀█ █▄▀▄ ▀▀▄▄▀  ▀▄▀█            │   │
+│   │              ▀  ▄ ▀▄▀▀▄█  ▄█  █▄ ▄ ▀██▄█▄▄ ▄▄ ██▀ ▀▀█ █▀▄            │   │
+│   │             ▀▄▄█ █▀ ▀▄▄█  ▄ ▄██▀▀ ▄███▀▄ █▄▀    ▄█▀ ▄▄▄█▄            │   │
+│   │              ▀▄  ▀▀█ ▄█ █ █ █▄█▄██▀▀█▀▀ ▀▄█▀▄▀   █▀█▄▄█              │   │
+│   │             ▀ ▄▀█▀▀▀█ █▀▄▄  ▀▄▀▀█▀▀▀█▀ ▄▄ █▀▄▀▀██▀▀▀█▄▄▀▄            │   │
+│   │                                                                      │   │
+│   │ ▶ Destination: [ /tmp/qr.png_ ]                                      │   │
+│   │                                                                      │   │
+│   │                         Confirm       Cancel                         │   │
+│   │                      save durability unconfirmed                     │   │
+│   │ WARNING: A QR code encodes the account secret. Anyone who sees or    │   │
+│   │ photographs it can clone the OTP, so treat the displayed code and    │   │
+│   │ any saved QR file like a plaintext export. HOTP exports encode the   │   │
+│   │ current counter and do not advance it; scanning the QR into a second │   │
+│   │ device keeps both devices in sync.                                   │   │
+│   │                                                                      │   │
+│ ──│        Tab cycles fields  ·  Enter confirm  ·  Esc cancel save       │── │
+│ [↑└──────────────────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────────┘

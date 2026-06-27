@@ -1,0 +1,8 @@
+---
+source: crates/paladin-auth-cli/tests/cli_json_snapshots.rs
+expression: parse_stdout_json(&assert)
+---
+{
+  "format": "otpauth",
+  "written": "[path]"
+}

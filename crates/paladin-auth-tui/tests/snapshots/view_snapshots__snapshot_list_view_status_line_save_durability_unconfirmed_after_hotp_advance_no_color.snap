@@ -1,0 +1,19 @@
+---
+source: crates/paladin-auth-tui/tests/view_snapshots.rs
+expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
+---
+┌ Paladin Auth [plaintext] ────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ ▶ AWS (prod) (#41)                    123 456                                │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ save durability unconfirmed                                                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+─── styles ───
+(1..27, 0) " Paladin Auth [plaintext] " fg=Reset bg=Reset mod=BOLD
+(2..78, 3) "▶ AWS (prod) (#41)                    123 456                               " fg=Reset bg=Reset mod=BOLD | REVERSED
