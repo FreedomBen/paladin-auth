@@ -636,11 +636,21 @@ fn deb_manifest_script_references_point_to_existing_executable_files() {
         {
             use std::os::unix::fs::PermissionsExt;
             let bits = mode.mode() & 0o777;
-            assert_eq!(
-                bits & 0o111,
-                0o111,
-                "deb nfpm manifest script {} must be executable by user/group/other \
-                 (mode bits 0o111 set) so nfpm reads + embeds it correctly; got mode {:#o}",
+            // Assert only the owner-execute bit. Git tracks a single
+            // executable bit (`100755` vs `100644`); the group/other
+            // execute bits on disk are reconstructed from that bit
+            // masked by the checking-out user's umask. A restrictive
+            // umask (e.g. 0007) yields mode 0770 for a committed-755
+            // file, which is still executable and still readable by
+            // nfpm. Requiring 0o111 would make the test pass or fail
+            // on umask rather than on the committed mode, so pin the
+            // umask-invariant signal: owner-execute set.
+            assert_ne!(
+                bits & 0o100,
+                0,
+                "deb nfpm manifest script {} must be committed executable (git mode 100755) \
+                 so nfpm reads + embeds it correctly; got mode {:#o} with the owner-execute \
+                 bit clear",
                 full.display(),
                 bits,
             );
